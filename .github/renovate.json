@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["go", "golang"],
+      "groupName": "go-toolchain",
+      "automerge": false,
+      "schedule": ["weekly"]
+    }
+  ]
+}

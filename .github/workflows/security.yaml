@@ -1,0 +1,36 @@
+# Spec: security-hardening Requirement 5 (Go-CVE policy).
+# Runs govulncheck against setec on every PR and on every push to main.
+# Local invocation is forbidden per CLAUDE.md (CPU thrash); this workflow
+# is the canonical place to surface CVE failures.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: run govulncheck
+        run: govulncheck ./...
