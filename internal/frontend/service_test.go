@@ -283,15 +283,15 @@ type stubStreamServer struct {
 	setecv1alpha1grpc.SandboxService_StreamLogsServer
 
 	mu       sync.Mutex
-	received []*setecv1alpha1grpc.LogChunk
+	received []*setecv1alpha1grpc.StreamLogsResponse
 }
 
 func (s *stubStreamServer) Context() context.Context { return s.ctx }
 
-func (s *stubStreamServer) Send(c *setecv1alpha1grpc.LogChunk) error {
+func (s *stubStreamServer) Send(c *setecv1alpha1grpc.StreamLogsResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clone := &setecv1alpha1grpc.LogChunk{
+	clone := &setecv1alpha1grpc.StreamLogsResponse{
 		Data:   append([]byte(nil), c.GetData()...),
 		Stream: c.GetStream(),
 	}
@@ -299,10 +299,10 @@ func (s *stubStreamServer) Send(c *setecv1alpha1grpc.LogChunk) error {
 	return nil
 }
 
-func (s *stubStreamServer) Chunks() []*setecv1alpha1grpc.LogChunk {
+func (s *stubStreamServer) Chunks() []*setecv1alpha1grpc.StreamLogsResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*setecv1alpha1grpc.LogChunk, len(s.received))
+	out := make([]*setecv1alpha1grpc.StreamLogsResponse, len(s.received))
 	copy(out, s.received)
 	return out
 }
@@ -406,7 +406,7 @@ func TestStreamLogs_HappyPath(t *testing.T) {
 	}
 	chunks := stream.Chunks()
 	if len(chunks) == 0 {
-		t.Fatal("expected at least one LogChunk, got none")
+		t.Fatal("expected at least one StreamLogsResponse, got none")
 	}
 	for i, cc := range chunks {
 		if cc.GetStream() != "stdout" {
@@ -486,7 +486,7 @@ func TestStreamLogs_NoClientsetConfigured(t *testing.T) {
 
 // joinChunks concatenates chunk data back into a single string for
 // substring assertions.
-func joinChunks(chunks []*setecv1alpha1grpc.LogChunk) string {
+func joinChunks(chunks []*setecv1alpha1grpc.StreamLogsResponse) string {
 	var b strings.Builder
 	for _, cc := range chunks {
 		b.Write(cc.GetData())
@@ -580,7 +580,7 @@ type errorSendStream struct {
 }
 
 func (s *errorSendStream) Context() context.Context                 { return s.ctx }
-func (s *errorSendStream) Send(_ *setecv1alpha1grpc.LogChunk) error { return s.err }
+func (s *errorSendStream) Send(_ *setecv1alpha1grpc.StreamLogsResponse) error { return s.err }
 func errForTesting(msg string) error                                { return &simpleErr{msg} }
 
 type simpleErr struct{ s string }

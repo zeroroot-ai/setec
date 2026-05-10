@@ -396,7 +396,7 @@ func podLogsAvailable(pod *corev1.Pod) bool {
 }
 
 // relayLogStream reads the Pod log stream line-by-line and forwards
-// each line as a LogChunk over the gRPC server-streaming channel. A
+// each line as a StreamLogsResponse over the gRPC server-streaming channel. A
 // client cancel becomes a clean return (no error); a Scanner error is
 // surfaced as Internal unless it was driven by context cancellation.
 func relayLogStream(ctx context.Context, r io.Reader, stream setecv1alpha1grpc.SandboxService_StreamLogsServer) error {
@@ -408,7 +408,7 @@ func relayLogStream(ctx context.Context, r io.Reader, stream setecv1alpha1grpc.S
 
 	for scanner.Scan() {
 		line := append(scanner.Bytes(), '\n')
-		chunk := &setecv1alpha1grpc.LogChunk{
+		chunk := &setecv1alpha1grpc.StreamLogsResponse{
 			Data:   append([]byte(nil), line...),
 			Stream: "stdout",
 		}

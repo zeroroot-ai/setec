@@ -25,7 +25,7 @@ service SandboxService {
 
   // StreamLogs streams the Sandbox's backing Pod logs. Terminates when
   // the Pod terminates (or follow=false and the Pod is already terminal).
-  rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
 
   // Wait blocks until the Sandbox reaches a terminal phase and returns
   // its exit code and reason. A previously-terminated Sandbox returns
@@ -101,9 +101,9 @@ message StreamLogsRequest {
   bool follow = 2;
 }
 
-// LogChunk is a single-stream log payload. `stream` is "stdout" or
+// StreamLogsResponse is a single-stream log payload. `stream` is "stdout" or
 // "stderr".
-message LogChunk {
+message StreamLogsResponse {
   bytes data = 1;
   string stream = 2;
 }
