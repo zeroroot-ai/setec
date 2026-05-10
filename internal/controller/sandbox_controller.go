@@ -38,7 +38,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -94,7 +94,7 @@ const (
 type SandboxReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// Runtimes is the registry of enabled RuntimeDispatcher implementations.
 	// It is used by selectRuntime to pick the appropriate backend for each Sandbox.
@@ -215,8 +215,8 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("resolve tenant: %w", tenantErr))
 	}
 	if r.MultiTenancyEnabled && !tenantOK {
-		r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonTenantMissing,
-			fmt.Sprintf("namespace %q is missing tenant label %q", sb.Namespace, r.TenantLabelKey))
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTenantMissing, actionResolveTenant,
+			"namespace %q is missing tenant label %q", sb.Namespace, r.TenantLabelKey)
 		if err := r.patchPendingStatus(ctx, sb, eventReasonTenantMissing); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch TenantMissing status: %w", err)
 		}
@@ -229,7 +229,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// (no class name, no multitenancy) is explicitly back-compat-tolerated.
 	cls, classResolved, classErr := r.resolveClass(ctx, sb)
 	if classErr != nil {
-		r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonClassNotFound, classErr.Error())
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass, "%s", classErr.Error())
 		if err := r.patchPendingStatus(ctx, sb, eventReasonClassNotFound); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch ClassNotFound status: %w", err)
 		}
@@ -244,7 +244,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if classResolved {
 		if violations := class.Validate(sb, cls); len(violations) > 0 {
 			v := violations[0]
-			r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonConstraintViolated, v.String())
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonConstraintViolated, actionValidateConstraints, "%s", v.String())
 			if err := r.patchPendingStatus(ctx, sb, eventReasonConstraintViolated); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch ConstraintViolated status: %w", err)
 			}
@@ -354,7 +354,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	if desired.Phase == setecv1alpha1.SandboxPhaseFailed &&
 		desired.Reason == status.ReasonTimeout &&
 		pod.DeletionTimestamp.IsZero() {
-		r.Recorder.Eventf(sb, corev1.EventTypeWarning, eventReasonTimeout,
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTimeout, actionEnforceTimeout,
 			"Sandbox exceeded lifecycle.timeout; deleting Pod %q", pod.Name)
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after timeout: %w", err))
@@ -389,7 +389,7 @@ func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.
 			if len(prereqResult.Warnings) > 0 {
 				msg = prereqResult.Warnings[0]
 			}
-			r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, msg)
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, actionResolveRuntime, "%s", msg)
 			if err := r.patchPendingStatus(ctx, sb, eventReasonRuntimeUnavailable); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch RuntimeUnavailable status: %w", err)
 			}
@@ -408,7 +408,7 @@ func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.
 	}
 	if !prereqResult.RuntimeClassPresent {
 		msg := fmt.Sprintf(runtimeUnavailableMessage, legacyClassName)
-		r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, msg)
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, actionResolveRuntime, "%s", msg)
 		if err := r.patchPendingStatus(ctx, sb, eventReasonRuntimeUnavailable); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch RuntimeUnavailable status: %w", err)
 		}
@@ -434,7 +434,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 	getErr := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.SnapshotRef.Name}, snap)
 	switch {
 	case apierrors.IsNotFound(getErr):
-		r.Recorder.Eventf(sb, corev1.EventTypeWarning, eventReasonSnapshotUnavailable,
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotUnavailable, actionResolveSnapshot,
 			"Snapshot %q not found in namespace %q", sb.Spec.SnapshotRef.Name, sb.Namespace)
 		if perr := r.patchPendingStatus(ctx, sb, eventReasonSnapshotUnavailable); perr != nil {
 			return "", ctrl.Result{}, fmt.Errorf("patch SnapshotUnavailable status: %w", perr)
@@ -452,7 +452,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 	}
 	if snapViolations := snapshot.Validate(sb, snap, cls); len(snapViolations) > 0 {
 		sv := snapViolations[0]
-		r.Recorder.Event(sb, corev1.EventTypeWarning, eventReasonSnapshotIncompatible, sv.String())
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotIncompatible, actionResolveSnapshot, "%s", sv.String())
 		if perr := r.patchPendingStatus(ctx, sb, eventReasonSnapshotIncompatible); perr != nil {
 			return "", ctrl.Result{}, fmt.Errorf("patch SnapshotIncompatible status: %w", perr)
 		}
@@ -560,7 +560,7 @@ func (r *SandboxReconciler) selectRuntime(
 			"from", sel.FromBackend,
 			"to", sel.Backend,
 		)
-		r.Recorder.Eventf(sb, corev1.EventTypeWarning, "RuntimeFallback",
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, "RuntimeFallback", actionRunRuntimeFallback,
 			"runtime fallback: requested %q, using %q", sel.FromBackend, sel.Backend)
 		if r.MetricsCollector != nil {
 			r.MetricsCollector.IncFallback(sel.FromBackend, sel.Backend)
@@ -657,7 +657,7 @@ func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1a
 			}
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create NetworkPolicy: %w", err))
 		}
-		r.Recorder.Eventf(sb, corev1.EventTypeNormal, eventReasonNetworkPolicy,
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonNetworkPolicy, actionApplyNetworkPolicy,
 			"Created NetworkPolicy %q for Sandbox", desired.Name)
 		return ctrl.Result{}, nil
 	case err != nil:
@@ -815,7 +815,7 @@ func (r *SandboxReconciler) createPod(
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("create Pod: %w", err))
 	}
 
-	r.Recorder.Eventf(sb, corev1.EventTypeNormal, eventReasonPodCreated,
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
 		"Created Pod %q for Sandbox", pod.Name)
 	return ctrl.Result{}, nil
 }
@@ -861,7 +861,7 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 		if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhasePaused, "UserPaused", true); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch Paused: %w", err)
 		}
-		r.Recorder.Event(sb, corev1.EventTypeNormal, eventReasonPaused, "Sandbox paused on user request")
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPaused, actionPauseSandbox, "%s", "Sandbox paused on user request")
 		return ctrl.Result{}, nil
 	}
 
@@ -874,7 +874,7 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 		if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch Running: %w", err)
 		}
-		r.Recorder.Event(sb, corev1.EventTypeNormal, eventReasonResumed, "Sandbox resumed on user request")
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonResumed, actionResumeSandbox, "%s", "Sandbox resumed on user request")
 		return ctrl.Result{}, nil
 	}
 
@@ -899,7 +899,7 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 		if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseSnapshotting, "SnapshotInProgress", true); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch Snapshotting: %w", err)
 		}
-		r.Recorder.Eventf(sb, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted,
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
 			"creating Snapshot %q", sb.Spec.Snapshot.Name)
 		if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
 			// Roll back to Running if the Coordinator could not complete
@@ -962,7 +962,7 @@ func (r *SandboxReconciler) recordAndReturnErr(
 	err error,
 ) (ctrl.Result, error) {
 	if r.Recorder != nil {
-		r.Recorder.Event(sb, corev1.EventTypeWarning, reason, err.Error())
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, reason, actionFinalizeSandbox, "%s", err.Error())
 	}
 	return ctrl.Result{}, err
 }

@@ -38,12 +38,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	classpkg "github.com/zero-day-ai/setec/internal/class"
+	"github.com/zero-day-ai/setec/internal/controller/testutil"
 	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
 )
 
@@ -77,7 +77,7 @@ func newRSReconciler(
 	r := &SandboxReconciler{
 		Client:        c,
 		Scheme:        s,
-		Recorder:      record.NewFakeRecorder(32),
+		Recorder:      testutil.NewFakeEventsRecorder(32),
 		ClassResolver: classpkg.NewResolver(c),
 		Runtimes:      reg,
 		RuntimeCfg:    cfg,

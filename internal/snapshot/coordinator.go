@@ -31,7 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
@@ -87,7 +87,7 @@ type Coordinator struct {
 
 	// Recorder is used to emit Events on the parent Sandbox when a
 	// step fails.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// Metrics is optional; nil disables all collector invocations.
 	Metrics *metrics.Collectors
@@ -125,6 +125,11 @@ const (
 // defaultKataSocketPattern is used when the Coordinator's
 // KataSocketPattern field is empty.
 const defaultKataSocketPattern = "/run/kata-containers/%s/firecracker.socket"
+
+// actionRecordSnapshotPhase is the action constant for events emitted
+// by the Coordinator. Defined locally to avoid an import cycle with
+// internal/controller (which imports this package).
+const actionRecordSnapshotPhase = "RecordSnapshotPhase"
 
 // defaultStorageBackend is the Phase 3 default and is forwarded to
 // the node-agent when StorageBackendName is empty.
@@ -490,12 +495,12 @@ func (c *Coordinator) emit(obj any, eventType, reason, message string) {
 	if c.Recorder == nil {
 		return
 	}
-	if k8sObj, ok := obj.(interface {
+	if _, ok := obj.(interface {
 		GetName() string
 		GetNamespace() string
-	}); ok && k8sObj != nil {
+	}); ok {
 		if r, ok := obj.(*setecv1alpha1.Sandbox); ok {
-			c.Recorder.Event(r, eventType, reason, message)
+			c.Recorder.Eventf(r, nil, eventType, reason, actionRecordSnapshotPhase, "%s", message)
 			return
 		}
 	}

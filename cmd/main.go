@@ -307,8 +307,7 @@ func main() {
 			os.Exit(1)
 		}
 		dialer.TLSConfig = tlsConfig
-		//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
-		snapshotCoordRecorder := mgr.GetEventRecorderFor("snapshot-coordinator")
+		snapshotCoordRecorder := mgr.GetEventRecorder("snapshot-coordinator")
 		coordinator = &snapshot.Coordinator{
 			Client:            mgr.GetClient(),
 			Dialer:            dialer,
@@ -319,8 +318,7 @@ func main() {
 		}
 	}
 
-	//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
-	sandboxRecorder := mgr.GetEventRecorderFor("sandbox-controller")
+	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{
 		Client:              mgr.GetClient(),
 		Scheme:              mgr.GetScheme(),
@@ -341,8 +339,7 @@ func main() {
 
 	// Phase 3: register the SnapshotReconciler when enabled.
 	if snapshotsEnabled {
-		//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
-		snapshotCtrlRecorder := mgr.GetEventRecorderFor("snapshot-controller")
+		snapshotCtrlRecorder := mgr.GetEventRecorder("snapshot-controller")
 		if err := (&controller.SnapshotReconciler{
 			Client:      mgr.GetClient(),
 			Scheme:      mgr.GetScheme(),
