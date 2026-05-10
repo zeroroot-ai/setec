@@ -49,7 +49,7 @@ type SandboxServiceClient interface {
 	Launch(ctx context.Context, in *LaunchRequest, opts ...grpc.CallOption) (*LaunchResponse, error)
 	// StreamLogs streams the Sandbox's backing Pod logs. Terminates when
 	// the Pod terminates (or follow=false and the Pod is already terminal).
-	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLogsResponse], error)
 	// Wait blocks until the Sandbox reaches a terminal phase and returns
 	// its exit code and reason. A previously-terminated Sandbox returns
 	// immediately.
@@ -77,13 +77,13 @@ func (c *sandboxServiceClient) Launch(ctx context.Context, in *LaunchRequest, op
 	return out, nil
 }
 
-func (c *sandboxServiceClient) StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
+func (c *sandboxServiceClient) StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLogsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &SandboxService_ServiceDesc.Streams[0], SandboxService_StreamLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamLogsRequest, LogChunk]{ClientStream: stream}
+	x := &grpc.GenericClientStream[StreamLogsRequest, StreamLogsResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (c *sandboxServiceClient) StreamLogs(ctx context.Context, in *StreamLogsReq
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type SandboxService_StreamLogsClient = grpc.ServerStreamingClient[LogChunk]
+type SandboxService_StreamLogsClient = grpc.ServerStreamingClient[StreamLogsResponse]
 
 func (c *sandboxServiceClient) Wait(ctx context.Context, in *WaitRequest, opts ...grpc.CallOption) (*WaitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -132,7 +132,7 @@ type SandboxServiceServer interface {
 	Launch(context.Context, *LaunchRequest) (*LaunchResponse, error)
 	// StreamLogs streams the Sandbox's backing Pod logs. Terminates when
 	// the Pod terminates (or follow=false and the Pod is already terminal).
-	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error
+	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[StreamLogsResponse]) error
 	// Wait blocks until the Sandbox reaches a terminal phase and returns
 	// its exit code and reason. A previously-terminated Sandbox returns
 	// immediately.
@@ -153,7 +153,7 @@ type UnimplementedSandboxServiceServer struct{}
 func (UnimplementedSandboxServiceServer) Launch(context.Context, *LaunchRequest) (*LaunchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Launch not implemented")
 }
-func (UnimplementedSandboxServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
+func (UnimplementedSandboxServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[StreamLogsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamLogs not implemented")
 }
 func (UnimplementedSandboxServiceServer) Wait(context.Context, *WaitRequest) (*WaitResponse, error) {
@@ -206,11 +206,11 @@ func _SandboxService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStrea
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(SandboxServiceServer).StreamLogs(m, &grpc.GenericServerStream[StreamLogsRequest, LogChunk]{ServerStream: stream})
+	return srv.(SandboxServiceServer).StreamLogs(m, &grpc.GenericServerStream[StreamLogsRequest, StreamLogsResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type SandboxService_StreamLogsServer = grpc.ServerStreamingServer[LogChunk]
+type SandboxService_StreamLogsServer = grpc.ServerStreamingServer[StreamLogsResponse]
 
 func _SandboxService_Wait_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(WaitRequest)
