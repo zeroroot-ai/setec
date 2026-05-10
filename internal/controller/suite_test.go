@@ -252,15 +252,17 @@ func TestMain(m *testing.M) {
 	// reconciler itself.
 	testDialer = &fakeNodeAgentDialer{client: &fakeNodeAgentClient{}}
 	testCoordinator = &snapshotpkg.Coordinator{
-		Client:   mgr.GetClient(),
-		Dialer:   testDialer,
+		Client: mgr.GetClient(),
+		Dialer: testDialer,
+		//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
 		Recorder: mgr.GetEventRecorderFor("snapshot-coordinator"),
 		Metrics:  testCollectors,
 	}
 
 	reconciler := &SandboxReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
 		Recorder:          mgr.GetEventRecorderFor("sandbox-controller"),
 		NodeSelectorLabel: testNodeSelectorLabel,
 		Runtimes:          testRuntimeRegistry,
@@ -282,8 +284,9 @@ func TestMain(m *testing.M) {
 	}
 
 	snapshotReconciler := &SnapshotReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // GetEventRecorderFor: controller-runtime API change, follow-up
 		Recorder:    mgr.GetEventRecorderFor("snapshot-controller"),
 		Coordinator: testCoordinator,
 	}
