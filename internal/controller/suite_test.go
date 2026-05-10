@@ -254,14 +254,14 @@ func TestMain(m *testing.M) {
 	testCoordinator = &snapshotpkg.Coordinator{
 		Client:   mgr.GetClient(),
 		Dialer:   testDialer,
-		Recorder: mgr.GetEventRecorderFor("snapshot-coordinator"),
+		Recorder: mgr.GetEventRecorder("snapshot-coordinator"),
 		Metrics:  testCollectors,
 	}
 
 	reconciler := &SandboxReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
-		Recorder:          mgr.GetEventRecorderFor("sandbox-controller"),
+		Recorder:          mgr.GetEventRecorder("sandbox-controller"),
 		NodeSelectorLabel: testNodeSelectorLabel,
 		Runtimes:          testRuntimeRegistry,
 		RuntimeCfg:        testRuntimeCfg,
@@ -284,7 +284,7 @@ func TestMain(m *testing.M) {
 	snapshotReconciler := &SnapshotReconciler{
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
-		Recorder:    mgr.GetEventRecorderFor("snapshot-controller"),
+		Recorder:    mgr.GetEventRecorder("snapshot-controller"),
 		Coordinator: testCoordinator,
 	}
 	if err := snapshotReconciler.SetupWithManager(mgr); err != nil {

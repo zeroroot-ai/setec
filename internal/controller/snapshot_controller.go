@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,7 +62,7 @@ const (
 type SnapshotReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
-	Recorder    record.EventRecorder
+	Recorder    events.EventRecorder
 	Coordinator *snapshot.Coordinator
 }
 
@@ -121,7 +121,7 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				// Retry on next reconcile. Finalizer remains so the
 				// CR doesn't vanish with storage still present.
 				if r.Recorder != nil {
-					r.Recorder.Event(snap, corev1.EventTypeWarning, eventReasonSnapshotDel, err.Error())
+					r.Recorder.Eventf(snap, nil, corev1.EventTypeWarning, eventReasonSnapshotDel, actionDeleteSnapshot, "%s", err.Error())
 				}
 				return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
 			}

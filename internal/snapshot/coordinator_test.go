@@ -27,12 +27,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	"github.com/zero-day-ai/setec/internal/controller/testutil"
 	"github.com/zero-day-ai/setec/internal/metrics"
 	"github.com/zero-day-ai/setec/internal/snapshot/storage"
 )
@@ -158,7 +158,7 @@ func newPodForSandbox(sb *setecv1alpha1.Sandbox, node string) *corev1.Pod {
 // node-agent dialer. Metrics are always enabled (isolated registry)
 // so recording is exercised alongside the other behaviour.
 func newCoord(c client.Client, dialer NodeAgentDialer) *Coordinator {
-	rec := record.NewFakeRecorder(32)
+	rec := testutil.NewFakeEventsRecorder(32)
 	return &Coordinator{
 		Client:   c,
 		Storage:  nil, // operator-side Coordinator doesn't call Save/Open
@@ -258,7 +258,7 @@ func TestCreateSnapshot_InsufficientStorage(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{createErr: errors.New("wrapped: " + storage.ErrInsufficientStorage.Error())}
-	rec := record.NewFakeRecorder(32)
+	rec := testutil.NewFakeEventsRecorder(32)
 	coord := &Coordinator{Client: c, Dialer: &fakeDialer{client: na}, Recorder: rec}
 
 	if err := coord.CreateSnapshot(context.Background(), sb); err == nil {

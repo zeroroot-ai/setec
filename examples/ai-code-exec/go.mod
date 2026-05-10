@@ -1,6 +1,6 @@
 module github.com/zero-day-ai/setec/examples/ai-code-exec
 
-go 1.25.3
+go 1.25.10
 
 require (
 	github.com/zero-day-ai/setec v0.0.0-00010101000000-000000000000
