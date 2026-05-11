@@ -424,8 +424,8 @@ func TestSandbox_ZZ_NoRuntimeClass(t *testing.T) {
 				Labels:      orig.Labels,
 				Annotations: orig.Annotations,
 			},
-			Handler:   orig.Handler,
-			Overhead:  orig.Overhead,
+			Handler:    orig.Handler,
+			Overhead:   orig.Overhead,
 			Scheduling: orig.Scheduling,
 		}
 		// Wait for the delete to propagate, then recreate. Loop because
@@ -475,4 +475,3 @@ func TestSandbox_ZZ_NoRuntimeClass(t *testing.T) {
 		t.Fatalf("expected RuntimeUnavailable event on sandbox %q", sb.Name)
 	}
 }
-
