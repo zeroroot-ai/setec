@@ -579,9 +579,9 @@ type errorSendStream struct {
 	err error
 }
 
-func (s *errorSendStream) Context() context.Context                 { return s.ctx }
+func (s *errorSendStream) Context() context.Context                           { return s.ctx }
 func (s *errorSendStream) Send(_ *setecv1alpha1grpc.StreamLogsResponse) error { return s.err }
-func errForTesting(msg string) error                                { return &simpleErr{msg} }
+func errForTesting(msg string) error                                          { return &simpleErr{msg} }
 
 type simpleErr struct{ s string }
 
