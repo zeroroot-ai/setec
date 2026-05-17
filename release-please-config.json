@@ -4,6 +4,8 @@
   "include-component-in-tag": false,
   "tag-separator": "v",
   "packages": {
-    ".": {}
+    ".": {
+      "bump-minor-pre-major": true
+    }
   }
 }
