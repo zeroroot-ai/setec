@@ -93,6 +93,39 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # --- pre-existing findings (176 total) tracked at zero-day-ai/setec#35 ---
+      # TODO: fix and remove these exclusions once setec#35 is addressed.
+      # wrapcheck: 78 findings — error wrapping across the codebase
+      - linters:
+          - wrapcheck
+        path: ".*\\.go$"
+      # gosec: 41 findings — security patterns
+      - linters:
+          - gosec
+        path: ".*\\.go$"
+      # gocritic: 20 findings — style issues
+      - linters:
+          - gocritic
+        path: ".*\\.go$"
+      # perfsprint: 9 findings, errorlint: 7 findings
+      - linters:
+          - perfsprint
+          - errorlint
+        path: ".*\\.go$"
+      # exhaustive: 6 findings — missing switch cases
+      - linters:
+          - exhaustive
+        path: ".*\\.go$"
+      # thelper: 4, contextcheck: 2, gocyclo: 2, staticcheck: 2, fatcontext: 1, mirror: 1, intrange: 1
+      - linters:
+          - thelper
+          - contextcheck
+          - gocyclo
+          - staticcheck
+          - fatcontext
+          - mirror
+          - intrange
+        path: ".*\\.go$"
 
 issues:
   max-issues-per-linter: 0
@@ -110,4 +143,9 @@ formatters:
       - examples$
 
 # allowlist:
-# Per-repo opt-outs go here with a TODO referencing a follow-up issue.
+# Per-repo opt-outs with TODO referencing the follow-up issue.
+#
+# depguard: disabled — requires explicit rules config. See zero-day-ai/.github#93.
+#
+# 176 pre-existing findings suppressed via exclusions.rules above.
+# TODO: zero-day-ai/setec#35 — fix all findings and remove the exclusion rules.
