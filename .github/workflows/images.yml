@@ -1,0 +1,72 @@
+name: images
+
+# Builds + pushes setec, setec-node-agent, and setec-frontend to GHCR.
+# Adopts the org reusable image-build workflow (slice 1.2, .github#47).
+#
+# All three images share a single Dockerfile; CMD build-arg selects the binary.
+# The smoke-test gate and draft GitHub Release creation live in release.yml.
+# Example Dockerfiles under examples/ are NOT published as releases (skipped).
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setec:
+    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    with:
+      component_name: setec
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zero-day-ai/setec
+      tag_pattern: v(.*)
+      build_args: |
+        CMD=manager
+
+  setec-node-agent:
+    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    with:
+      component_name: setec-node-agent
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zero-day-ai/setec-node-agent
+      tag_pattern: v(.*)
+      build_args: |
+        CMD=node-agent
+
+  setec-frontend:
+    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    with:
+      component_name: setec-frontend
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zero-day-ai/setec-frontend
+      tag_pattern: v(.*)
+      build_args: |
+        CMD=frontend

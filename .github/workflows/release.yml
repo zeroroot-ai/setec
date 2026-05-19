@@ -1,16 +1,10 @@
 # Tag-driven release workflow for Setec.
 #
-# Triggers on semver-shaped tag pushes (v* — including pre-releases like
-# v0.1.0-alpha.1). Produces three signed, multi-arch container images
-# (setec, setec-node-agent, setec-frontend) published to GitHub Container
-# Registry (GHCR) plus a draft GitHub Release with one SPDX SBOM per image
-# attached.
+# Image builds have moved to images.yml (org reusable, slice 1.2, .github#47).
+# This workflow handles the v0.1.0 smoke-test gate and the draft GitHub Release.
 #
-# Supply-chain requirements (from setec-mvp NFR Security):
-#   - Every image SHALL be signed with cosign using keyless OIDC.
-#   - One SBOM per image SHALL be published.
-#   - No long-lived registry credentials: GHCR login uses the job's
-#     ${{ secrets.GITHUB_TOKEN }} only.
+# Triggers on semver-shaped tag pushes (v* — including pre-releases like
+# v0.1.0-alpha.1).
 
 name: release
 
@@ -21,11 +15,7 @@ on:
 
 permissions:
   contents: write
-  packages: write
   id-token: write
-
-env:
-  REGISTRY: ghcr.io
 
 jobs:
   # Pre-build gate: for exact v0.1.0 tags only, refuse the release until
@@ -60,118 +50,18 @@ jobs:
             exit 1
           fi
 
-  release:
-    name: Build, sign, and release
+  draft-release:
+    name: Create draft GitHub Release
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    # Require the smoke-test gate to have succeeded (or been skipped
-    # because this tag isn't v0.1.0). GitHub Actions evaluates skipped
-    # needs as satisfied when the dependent job uses an explicit if
-    # allowing skipped upstreams.
+    timeout-minutes: 10
     needs: [smoke-test-result-gate]
     if: always() && (needs.smoke-test-result-gate.result == 'success' || needs.smoke-test-result-gate.result == 'skipped')
-    # Matrix of Setec images — each row produces a signed multi-arch
-    # image and a dedicated SBOM artifact. `cmd` selects which binary
-    # the shared Dockerfile builds (see Dockerfile ARG CMD).
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: zero-day-ai/setec
-            cmd: manager
-          - image: zero-day-ai/setec-node-agent
-            cmd: node-agent
-          - image: zero-day-ai/setec-frontend
-            cmd: frontend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run tests
-        run: make test
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: zero-day-ai/.github/.github/actions/ghcr-login@main
-        with:
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Derive image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ matrix.image }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-
-      - name: Build and push multi-arch image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          provenance: true
-          sbom: false
-          build-args: |
-            CMD=${{ matrix.cmd }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.cmd }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cmd }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: v2.4.1
-
-      # Keyless signing: cosign mints a short-lived certificate from Fulcio
-      # using the workflow's OIDC token (id-token: write).
-      - name: Sign the image (keyless)
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r tag; do
-            [ -n "$tag" ] || continue
-            echo "Signing ${tag}@${DIGEST}"
-            cosign sign --yes "${tag}@${DIGEST}"
-          done <<< "${TAGS}"
-
-      - name: Install syft
-        uses: anchore/sbom-action/download-syft@v0
-
-      - name: Generate SBOM (SPDX JSON)
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          IMAGE="${REGISTRY}/${{ matrix.image }}@${DIGEST}"
-          OUT="sbom.${{ matrix.cmd }}.spdx.json"
-          echo "Generating SBOM for ${IMAGE} → ${OUT}"
-          syft "${IMAGE}" -o spdx-json > "${OUT}"
-          ls -l "${OUT}"
-
-      # Uploads as a draft-release asset. softprops/action-gh-release
-      # is idempotent across matrix shards: each shard appends its own
-      # SBOM to the same draft release.
       - name: Create or update draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -179,4 +69,3 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: true
           generate_release_notes: true
-          files: sbom.${{ matrix.cmd }}.spdx.json
