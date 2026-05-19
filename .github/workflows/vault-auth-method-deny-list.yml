@@ -1,0 +1,15 @@
+# Calls the org-level reusable ADR-0009 deny-list workflow.
+# See zero-day-ai/.github/.github/workflows/vault-auth-method-deny-list.yml
+# for the scanner logic and ADR-0009 (zero-day-ai/docs) for the deny-list itself.
+#
+# Required check name: vault-auth-method-deny-list
+
+name: vault-auth-method-deny-list
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+jobs:
+  vault-auth-method-deny-list:
+    uses: zero-day-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@main
