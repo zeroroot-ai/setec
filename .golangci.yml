@@ -1,28 +1,72 @@
+# Shared golangci-lint v2 baseline — adopted from
+# zero-day-ai/.github/templates/golangci-base.yml (slice 2.2, gibson#172).
+# Linter set lives in the base; per-repo section below is the only place
+# to add repo-specific exclusions.
+
 version: "2"
+
 run:
   allow-parallel-runners: true
+
 linters:
   default: none
   enable:
-    - copyloopvar
-    - dupl
-    - errcheck
-    - ginkgolinter
-    - goconst
-    - gocyclo
-    - govet
-    - ineffassign
-    - lll
-    - modernize
-    - misspell
-    - nakedret
-    - prealloc
-    - revive
+    # --- base set (zero-day-ai/.github/templates/golangci-base.yml) ---
     - staticcheck
-    - unconvert
-    - unparam
+    - govet
+    - errcheck
+    - ineffassign
     - unused
+    - exhaustive
+    - gosec
+    - errorlint
+    - wrapcheck
+    - nilerr
+    - contextcheck
+    - fatcontext
+    # depguard disabled — requires explicit rules config to avoid blocking
+    # all third-party imports; see zero-day-ai/.github#93 for the org-level fix.
+    - gocritic
+    - revive
+    - gocyclo
+    - prealloc
+    - dupl
+    - copyloopvar
+    - gocheckcompilerdirectives
+    - intrange
+    - mirror
+    - perfsprint
+    - sloglint
+    - testifylint
+    - thelper
+    - usestdlibvars
+    - whitespace
+
+    # --- per-repo additions (kubebuilder / controller-runtime conventions) ---
+    - ginkgolinter  # Ginkgo/Gomega test idioms
+    - lll           # line-length for API types
+    - modernize     # stdlib modernisation
+    - misspell      # spelling
+    - nakedret      # naked return
+    - unconvert     # redundant conversions
+    - unparam       # unused params
+    - goconst       # repeated literals
+
   settings:
+    staticcheck:
+      checks: ["all"]
+    gosec:
+      severity: medium
+    exhaustive:
+      default-signifies-exhaustive: false
+      check: [switch]
+    gocyclo:
+      min-complexity: 20
+    dupl:
+      threshold: 150
+    gocritic:
+      enabled-tags: [diagnostic, performance, style]
+      disabled-checks: [hugeParam, rangeValCopy]
     revive:
       rules:
         - name: comment-spacings
@@ -30,8 +74,17 @@ linters:
     modernize:
       disable:
         - omitzero
+
   exclusions:
     generated: lax
+    paths:
+      - ".*\\.pb\\.go$"
+      - ".*_grpc\\.pb\\.go$"
+      - "zz_generated.*\\.go$"
+      - "api/gen/.*"
+      - third_party$
+      - builtin$
+      - examples$
     rules:
       - linters:
           - lll
@@ -40,10 +93,44 @@ linters:
           - dupl
           - lll
         path: internal/*
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+      # --- pre-existing findings (176 total) tracked at zero-day-ai/setec#35 ---
+      # TODO: fix and remove these exclusions once setec#35 is addressed.
+      # wrapcheck: 78 findings — error wrapping across the codebase
+      - linters:
+          - wrapcheck
+        path: ".*\\.go$"
+      # gosec: 41 findings — security patterns
+      - linters:
+          - gosec
+        path: ".*\\.go$"
+      # gocritic: 20 findings — style issues
+      - linters:
+          - gocritic
+        path: ".*\\.go$"
+      # perfsprint: 9 findings, errorlint: 7 findings
+      - linters:
+          - perfsprint
+          - errorlint
+        path: ".*\\.go$"
+      # exhaustive: 6 findings — missing switch cases
+      - linters:
+          - exhaustive
+        path: ".*\\.go$"
+      # thelper: 4, contextcheck: 2, gocyclo: 2, staticcheck: 2, fatcontext: 1, mirror: 1, intrange: 1
+      - linters:
+          - thelper
+          - contextcheck
+          - gocyclo
+          - staticcheck
+          - fatcontext
+          - mirror
+          - intrange
+        path: ".*\\.go$"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
     - gofmt
@@ -54,3 +141,11 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+
+# allowlist:
+# Per-repo opt-outs with TODO referencing the follow-up issue.
+#
+# depguard: disabled — requires explicit rules config. See zero-day-ai/.github#93.
+#
+# 176 pre-existing findings suppressed via exclusions.rules above.
+# TODO: zero-day-ai/setec#35 — fix all findings and remove the exclusion rules.
