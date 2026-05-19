@@ -1,28 +1,71 @@
+# Shared golangci-lint v2 baseline — adopted from
+# zero-day-ai/.github/templates/golangci-base.yml (slice 2.2, gibson#172).
+# Linter set lives in the base; per-repo section below is the only place
+# to add repo-specific exclusions.
+
 version: "2"
+
 run:
   allow-parallel-runners: true
+
 linters:
   default: none
   enable:
-    - copyloopvar
-    - dupl
-    - errcheck
-    - ginkgolinter
-    - goconst
-    - gocyclo
-    - govet
-    - ineffassign
-    - lll
-    - modernize
-    - misspell
-    - nakedret
-    - prealloc
-    - revive
+    # --- base set (zero-day-ai/.github/templates/golangci-base.yml) ---
     - staticcheck
-    - unconvert
-    - unparam
+    - govet
+    - errcheck
+    - ineffassign
     - unused
+    - exhaustive
+    - gosec
+    - errorlint
+    - wrapcheck
+    - nilerr
+    - contextcheck
+    - fatcontext
+    - depguard
+    - gocritic
+    - revive
+    - gocyclo
+    - prealloc
+    - dupl
+    - copyloopvar
+    - gocheckcompilerdirectives
+    - intrange
+    - mirror
+    - perfsprint
+    - sloglint
+    - testifylint
+    - thelper
+    - usestdlibvars
+    - whitespace
+
+    # --- per-repo additions (kubebuilder / controller-runtime conventions) ---
+    - ginkgolinter  # Ginkgo/Gomega test idioms
+    - lll           # line-length for API types
+    - modernize     # stdlib modernisation
+    - misspell      # spelling
+    - nakedret      # naked return
+    - unconvert     # redundant conversions
+    - unparam       # unused params
+    - goconst       # repeated literals
+
   settings:
+    staticcheck:
+      checks: ["all"]
+    gosec:
+      severity: medium
+    exhaustive:
+      default-signifies-exhaustive: false
+      check: [switch]
+    gocyclo:
+      min-complexity: 20
+    dupl:
+      threshold: 150
+    gocritic:
+      enabled-tags: [diagnostic, performance, style]
+      disabled-checks: [hugeParam, rangeValCopy]
     revive:
       rules:
         - name: comment-spacings
@@ -30,8 +73,17 @@ linters:
     modernize:
       disable:
         - omitzero
+
   exclusions:
     generated: lax
+    paths:
+      - ".*\\.pb\\.go$"
+      - ".*_grpc\\.pb\\.go$"
+      - "zz_generated.*\\.go$"
+      - "api/gen/.*"
+      - third_party$
+      - builtin$
+      - examples$
     rules:
       - linters:
           - lll
@@ -40,10 +92,11 @@ linters:
           - dupl
           - lll
         path: internal/*
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
     - gofmt
@@ -54,3 +107,6 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+
+# allowlist:
+# Per-repo opt-outs go here with a TODO referencing a follow-up issue.
