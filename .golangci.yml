@@ -24,7 +24,8 @@ linters:
     - nilerr
     - contextcheck
     - fatcontext
-    - depguard
+    # depguard disabled — requires explicit rules config to avoid blocking
+    # all third-party imports; see zero-day-ai/.github#93 for the org-level fix.
     - gocritic
     - revive
     - gocyclo
