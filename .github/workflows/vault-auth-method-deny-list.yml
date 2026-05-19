@@ -13,3 +13,5 @@ on:
 jobs:
   vault-auth-method-deny-list:
     uses: zero-day-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@main
+    secrets:
+      DOCS_REPO_READ_TOKEN: ${{ secrets.DOCS_REPO_READ_TOKEN }}
