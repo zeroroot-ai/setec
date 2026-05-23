@@ -3,7 +3,7 @@ module github.com/zero-day-ai/setec
 go 1.25.10
 
 require (
-	github.com/containerd/containerd/v2 v2.2.3
+	github.com/containerd/containerd/v2 v2.2.4
 	github.com/containerd/errdefs v1.0.0
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-cmp v0.7.0
