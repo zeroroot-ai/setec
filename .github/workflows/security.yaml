@@ -34,3 +34,15 @@ jobs:
 
       - name: run govulncheck
         run: govulncheck ./...
+
+      - name: run govulncheck on examples/ai-code-exec
+        working-directory: examples/ai-code-exec
+        run: govulncheck ./...
+
+      - name: run govulncheck on examples/ci-sandbox
+        working-directory: examples/ci-sandbox
+        run: govulncheck ./...
+
+      - name: run govulncheck on examples/sec-research
+        working-directory: examples/sec-research
+        run: govulncheck ./...
