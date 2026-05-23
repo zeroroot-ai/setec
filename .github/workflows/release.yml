@@ -30,7 +30,7 @@ jobs:
     if: github.ref == 'refs/tags/v0.1.0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Verify smoke-test result file exists
         run: |
@@ -58,12 +58,12 @@ jobs:
     if: always() && (needs.smoke-test-result-gate.result == 'success' || needs.smoke-test-result-gate.result == 'skipped')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Create or update draft GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
