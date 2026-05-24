@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
@@ -159,13 +158,14 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		SandboxLabelKey: sb.Name,
 	}
 
+	ctrl, bod := true, true
 	ownerRef := metav1.OwnerReference{
 		APIVersion:         setecv1alpha1.GroupVersion.String(),
 		Kind:               sandboxKind,
 		Name:               sb.Name,
 		UID:                sb.UID,
-		Controller:         ptr.To(true),
-		BlockOwnerDeletion: ptr.To(true),
+		Controller:         &ctrl,
+		BlockOwnerDeletion: &bod,
 	}
 
 	container := corev1.Container{
@@ -176,6 +176,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		Resources: buildResourceRequirements(sb.Spec.Resources),
 	}
 
+	rcName := effectiveRCName
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            podName,
@@ -184,7 +185,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptr.To(effectiveRCName),
+			RuntimeClassName: &rcName,
 			RestartPolicy:    corev1.RestartPolicyNever,
 			Containers:       []corev1.Container{container},
 		},
@@ -311,4 +312,3 @@ func buildResourceRequirements(r setecv1alpha1.Resources) corev1.ResourceRequire
 		Limits:   rl.DeepCopy(),
 	}
 }
-

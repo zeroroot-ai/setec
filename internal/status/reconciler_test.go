@@ -34,8 +34,10 @@ var (
 	tMin = func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 )
 
-// ptrInt32 is a tiny helper to take the address of an int32 literal.
-func ptrInt32(v int32) *int32 { return &v }
+// ptrInt32 takes the address of an int32 value.
+func ptrInt32(v int32) *int32 {
+	return &v
+}
 
 // newSandbox builds a Sandbox with reasonable defaults. Mutators customize.
 func newSandbox(mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {

@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
@@ -194,13 +193,14 @@ func TestBuild_Success_OwnerReference(t *testing.T) {
 		t.Fatalf("ownerReferences = %d, want 1", len(pod.OwnerReferences))
 	}
 	ref := pod.OwnerReferences[0]
+	ctrl, bod := true, true
 	want := metav1.OwnerReference{
 		APIVersion:         setecv1alpha1.GroupVersion.String(),
 		Kind:               "Sandbox",
 		Name:               "demo",
 		UID:                types.UID("11111111-2222-3333-4444-555555555555"),
-		Controller:         ptr.To(true),
-		BlockOwnerDeletion: ptr.To(true),
+		Controller:         &ctrl,
+		BlockOwnerDeletion: &bod,
 	}
 	if diff := cmp.Diff(want, ref); diff != "" {
 		t.Errorf("owner reference mismatch (-want +got):\n%s", diff)
@@ -395,7 +395,6 @@ func TestBuildWithOptions_NodeNamePinning(t *testing.T) {
 		t.Fatalf("zero-value options must not pin, got %q", pod3.Spec.NodeName)
 	}
 }
-
 
 // ---------------------------------------------------------------------------
 // WithRuntimeSelection tests (task 12)
