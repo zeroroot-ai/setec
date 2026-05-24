@@ -29,6 +29,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	"github.com/zero-day-ai/setec/internal/podspec"
@@ -151,12 +152,12 @@ func egressAllowList(sb *setecv1alpha1.Sandbox) *networkingv1.NetworkPolicy {
 	// blocked and every allow-list becomes functionally a deny-all.
 	// The rule matches TCP and UDP 53 egress to any address.
 	dnsUDP := networkingv1.NetworkPolicyPort{
-		Protocol: protoPtr(corev1.ProtocolUDP),
-		Port:     intOrStrPtr(intstr.FromInt32(53)),
+		Protocol: ptr.To(corev1.ProtocolUDP),
+		Port:     ptr.To(intstr.FromInt32(53)),
 	}
 	dnsTCP := networkingv1.NetworkPolicyPort{
-		Protocol: protoPtr(corev1.ProtocolTCP),
-		Port:     intOrStrPtr(intstr.FromInt32(53)),
+		Protocol: ptr.To(corev1.ProtocolTCP),
+		Port:     ptr.To(intstr.FromInt32(53)),
 	}
 	dnsRule := networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{
@@ -179,8 +180,8 @@ func egressAllowList(sb *setecv1alpha1.Sandbox) *networkingv1.NetworkPolicy {
 				IPBlock: &networkingv1.IPBlock{CIDR: allCIDR},
 			}},
 			Ports: []networkingv1.NetworkPolicyPort{{
-				Protocol: protoPtr(corev1.ProtocolTCP),
-				Port:     intOrStrPtr(port),
+				Protocol: ptr.To(corev1.ProtocolTCP),
+				Port:     ptr.To(port),
 			}},
 		}
 		// Annotate rule with host for operator-facing clarity. K8s
@@ -210,10 +211,3 @@ func appendAnnotation(m map[string]string, k, v string) map[string]string {
 	return m
 }
 
-// protoPtr and intOrStrPtr take the address of a literal so the
-// NetworkPolicyPort fields (which are pointer-typed) can be populated
-// without intermediate variables in every call site.
-func protoPtr(p corev1.Protocol) *corev1.Protocol { return &p }
-func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString {
-	return &v
-}

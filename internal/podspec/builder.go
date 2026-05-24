@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
@@ -163,8 +164,8 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		Kind:               sandboxKind,
 		Name:               sb.Name,
 		UID:                sb.UID,
-		Controller:         ptrBool(true),
-		BlockOwnerDeletion: ptrBool(true),
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
 	}
 
 	container := corev1.Container{
@@ -183,7 +184,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptrString(effectiveRCName),
+			RuntimeClassName: ptr.To(effectiveRCName),
 			RestartPolicy:    corev1.RestartPolicyNever,
 			Containers:       []corev1.Container{container},
 		},
@@ -311,8 +312,3 @@ func buildResourceRequirements(r setecv1alpha1.Resources) corev1.ResourceRequire
 	}
 }
 
-// ptrBool and ptrString are small helpers to take the address of a literal in
-// a struct initializer. We avoid pulling in k8s.io/utils/ptr to keep the
-// dependency graph of this pure package minimal.
-func ptrBool(b bool) *bool       { return &b }
-func ptrString(s string) *string { return &s }

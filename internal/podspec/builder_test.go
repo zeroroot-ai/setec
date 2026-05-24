@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
 	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
@@ -198,8 +199,8 @@ func TestBuild_Success_OwnerReference(t *testing.T) {
 		Kind:               "Sandbox",
 		Name:               "demo",
 		UID:                types.UID("11111111-2222-3333-4444-555555555555"),
-		Controller:         boolPtr(true),
-		BlockOwnerDeletion: boolPtr(true),
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
 	}
 	if diff := cmp.Diff(want, ref); diff != "" {
 		t.Errorf("owner reference mismatch (-want +got):\n%s", diff)
@@ -395,9 +396,6 @@ func TestBuildWithOptions_NodeNamePinning(t *testing.T) {
 	}
 }
 
-// boolPtr mirrors the private helper in builder.go so test tables can build
-// expected structs without importing an unexported symbol.
-func boolPtr(b bool) *bool { return &b }
 
 // ---------------------------------------------------------------------------
 // WithRuntimeSelection tests (task 12)
