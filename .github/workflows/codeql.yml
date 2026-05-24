@@ -4,8 +4,6 @@ name: CodeQL
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     # Weekly run: Tuesday 08:00 UTC.
     - cron: "0 8 * * 2"
@@ -39,9 +37,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: go
-          # Default query suite; expand to security-extended once the
-          # codebase is ready for the stricter pack.
-          queries: security-and-quality
+          queries: security-extended
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4
