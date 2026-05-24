@@ -150,13 +150,15 @@ func egressAllowList(sb *setecv1alpha1.Sandbox) *networkingv1.NetworkPolicy {
 	// traffic. Without this rule, DNS lookups to kube-dns would be
 	// blocked and every allow-list becomes functionally a deny-all.
 	// The rule matches TCP and UDP 53 egress to any address.
+	protoUDP, protoTCP := corev1.ProtocolUDP, corev1.ProtocolTCP
+	port53UDP, port53TCP := intstr.FromInt32(53), intstr.FromInt32(53)
 	dnsUDP := networkingv1.NetworkPolicyPort{
-		Protocol: protoPtr(corev1.ProtocolUDP),
-		Port:     intOrStrPtr(intstr.FromInt32(53)),
+		Protocol: &protoUDP,
+		Port:     &port53UDP,
 	}
 	dnsTCP := networkingv1.NetworkPolicyPort{
-		Protocol: protoPtr(corev1.ProtocolTCP),
-		Port:     intOrStrPtr(intstr.FromInt32(53)),
+		Protocol: &protoTCP,
+		Port:     &port53TCP,
 	}
 	dnsRule := networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{
@@ -174,13 +176,14 @@ func egressAllowList(sb *setecv1alpha1.Sandbox) *networkingv1.NetworkPolicy {
 	// Protocol field to NetworkAllow.
 	for _, a := range sb.Spec.Network.Allow {
 		port := intstr.FromInt32(a.Port)
+		proto := corev1.ProtocolTCP
 		rule := networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{
 				IPBlock: &networkingv1.IPBlock{CIDR: allCIDR},
 			}},
 			Ports: []networkingv1.NetworkPolicyPort{{
-				Protocol: protoPtr(corev1.ProtocolTCP),
-				Port:     intOrStrPtr(port),
+				Protocol: &proto,
+				Port:     &port,
 			}},
 		}
 		// Annotate rule with host for operator-facing clarity. K8s
@@ -208,12 +211,4 @@ func appendAnnotation(m map[string]string, k, v string) map[string]string {
 	}
 	m[k] = v
 	return m
-}
-
-// protoPtr and intOrStrPtr take the address of a literal so the
-// NetworkPolicyPort fields (which are pointer-typed) can be populated
-// without intermediate variables in every call site.
-func protoPtr(p corev1.Protocol) *corev1.Protocol { return &p }
-func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString {
-	return &v
 }

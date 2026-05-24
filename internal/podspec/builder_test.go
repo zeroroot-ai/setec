@@ -193,13 +193,14 @@ func TestBuild_Success_OwnerReference(t *testing.T) {
 		t.Fatalf("ownerReferences = %d, want 1", len(pod.OwnerReferences))
 	}
 	ref := pod.OwnerReferences[0]
+	ctrl, bod := true, true
 	want := metav1.OwnerReference{
 		APIVersion:         setecv1alpha1.GroupVersion.String(),
 		Kind:               "Sandbox",
 		Name:               "demo",
 		UID:                types.UID("11111111-2222-3333-4444-555555555555"),
-		Controller:         boolPtr(true),
-		BlockOwnerDeletion: boolPtr(true),
+		Controller:         &ctrl,
+		BlockOwnerDeletion: &bod,
 	}
 	if diff := cmp.Diff(want, ref); diff != "" {
 		t.Errorf("owner reference mismatch (-want +got):\n%s", diff)
@@ -394,10 +395,6 @@ func TestBuildWithOptions_NodeNamePinning(t *testing.T) {
 		t.Fatalf("zero-value options must not pin, got %q", pod3.Spec.NodeName)
 	}
 }
-
-// boolPtr mirrors the private helper in builder.go so test tables can build
-// expected structs without importing an unexported symbol.
-func boolPtr(b bool) *bool { return &b }
 
 // ---------------------------------------------------------------------------
 // WithRuntimeSelection tests (task 12)

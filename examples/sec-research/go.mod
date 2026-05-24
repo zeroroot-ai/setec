@@ -1,6 +1,6 @@
 module github.com/zero-day-ai/setec/examples/sec-research
 
-go 1.25.10
+go 1.26.3
 
 require (
 	github.com/zero-day-ai/setec v0.0.0-00010101000000-000000000000
@@ -11,8 +11,8 @@ require (
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 )
 
 // Local development: point the example at the parent repo. Drop this replace

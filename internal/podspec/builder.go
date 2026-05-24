@@ -158,13 +158,14 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		SandboxLabelKey: sb.Name,
 	}
 
+	ctrl, bod := true, true
 	ownerRef := metav1.OwnerReference{
 		APIVersion:         setecv1alpha1.GroupVersion.String(),
 		Kind:               sandboxKind,
 		Name:               sb.Name,
 		UID:                sb.UID,
-		Controller:         ptrBool(true),
-		BlockOwnerDeletion: ptrBool(true),
+		Controller:         &ctrl,
+		BlockOwnerDeletion: &bod,
 	}
 
 	container := corev1.Container{
@@ -175,6 +176,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		Resources: buildResourceRequirements(sb.Spec.Resources),
 	}
 
+	rcName := effectiveRCName
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            podName,
@@ -183,7 +185,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptrString(effectiveRCName),
+			RuntimeClassName: &rcName,
 			RestartPolicy:    corev1.RestartPolicyNever,
 			Containers:       []corev1.Container{container},
 		},
@@ -310,9 +312,3 @@ func buildResourceRequirements(r setecv1alpha1.Resources) corev1.ResourceRequire
 		Limits:   rl.DeepCopy(),
 	}
 }
-
-// ptrBool and ptrString are small helpers to take the address of a literal in
-// a struct initializer. We avoid pulling in k8s.io/utils/ptr to keep the
-// dependency graph of this pure package minimal.
-func ptrBool(b bool) *bool       { return &b }
-func ptrString(s string) *string { return &s }
