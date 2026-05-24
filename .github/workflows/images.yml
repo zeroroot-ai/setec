@@ -28,6 +28,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
+      actions: read
     with:
       component_name: setec
       component_path: .
@@ -45,6 +46,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
+      actions: read
     with:
       component_name: setec-node-agent
       component_path: .
@@ -62,6 +64,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
+      actions: read
     with:
       component_name: setec-frontend
       component_path: .
