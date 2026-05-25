@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.104.2](https://github.com/zero-day-ai/setec/compare/v0.104.1...v0.104.2) (2026-05-24)
+
+
+### Bug Fixes
+
+* **ci:** add actions:read to images.yml — resolves startup_failure ([#48](https://github.com/zero-day-ai/setec/issues/48)) ([0c42217](https://github.com/zero-day-ai/setec/commit/0c422172ba0db1db3da4d41283b1c364f73a5c35)), closes [#40](https://github.com/zero-day-ai/setec/issues/40)
+* **ci:** remove PR trigger and use security-extended for CodeQL ([#51](https://github.com/zero-day-ai/setec/issues/51)) ([2b80ea2](https://github.com/zero-day-ai/setec/commit/2b80ea2b515465d7ebaefb17f8862b3498d35f8f)), closes [#50](https://github.com/zero-day-ai/setec/issues/50)
+
 ## [0.104.1](https://github.com/zero-day-ai/setec/compare/v0.104.0...v0.104.1) (2026-05-24)
 
 
