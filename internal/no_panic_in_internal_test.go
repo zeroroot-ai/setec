@@ -21,7 +21,7 @@ import (
 	"runtime"
 	"testing"
 
-	astchecks "github.com/zero-day-ai/ast-checks"
+	astchecks "github.com/zeroroot-ai/ast-checks"
 )
 
 // panicMatcher is a local Matcher implementation that flags bare panic(...)
