@@ -170,7 +170,7 @@ metadata:
 handler: runsc
 scheduling:
   nodeSelector:
-    setec.zero-day.ai/runtime.gvisor: "true"
+    setec.zeroroot.ai/runtime.gvisor: "true"
 EOF
     green "RuntimeClass gvisor applied"
 else
@@ -184,9 +184,9 @@ if [[ -z "${NODE_NAME}" ]]; then
     exit 1
 fi
 
-green "Labelling node ${NODE_NAME} with setec.zero-day.ai/runtime.gvisor=true"
+green "Labelling node ${NODE_NAME} with setec.zeroroot.ai/runtime.gvisor=true"
 kubectl label node "${NODE_NAME}" \
-    "setec.zero-day.ai/runtime.gvisor=true" \
+    "setec.zeroroot.ai/runtime.gvisor=true" \
     --overwrite
 
 green "gVisor install complete — runsc ready, RuntimeClass gvisor registered, node labelled."

@@ -14,7 +14,7 @@ metadata:
   labels:
     app.kubernetes.io/name: setec
     app.kubernetes.io/component: frontend-nodeport
-    setec.zero-day.ai/dev-only: "true"
+    setec.zeroroot.ai/dev-only: "true"
 spec:
   type: NodePort
   selector:

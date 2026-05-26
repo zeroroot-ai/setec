@@ -34,9 +34,9 @@ import (
 
 	"github.com/google/uuid"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/firecracker"
-	"github.com/zero-day-ai/setec/internal/snapshot/storage"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 // ImagePrefetcher is the narrow hook the pool uses to ensure the

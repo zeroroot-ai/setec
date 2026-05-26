@@ -31,8 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/class"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/class"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -155,9 +155,9 @@ func TestValidateCreate(t *testing.T) {
 			// Multi-tenancy off → no-default is acceptable (Phase 1 compat).
 			// Flip multitenant to require a class.
 			multitenant: true,
-			labelKey:    "setec.zero-day.ai/tenant",
+			labelKey:    "setec.zeroroot.ai/tenant",
 			nsGetter: &stubNamespaceGetter{byName: map[string]map[string]string{
-				"team-a": {"setec.zero-day.ai/tenant": "team-a"},
+				"team-a": {"setec.zeroroot.ai/tenant": "team-a"},
 			}},
 			wantMsg: "no default SandboxClass",
 		},
@@ -185,7 +185,7 @@ func TestValidateCreate(t *testing.T) {
 			},
 			sb:          mkSandbox("standard", 2, "2Gi", ""),
 			multitenant: true,
-			labelKey:    "setec.zero-day.ai/tenant",
+			labelKey:    "setec.zeroroot.ai/tenant",
 			nsGetter: &stubNamespaceGetter{
 				byName: map[string]map[string]string{
 					"team-a": {},
@@ -201,10 +201,10 @@ func TestValidateCreate(t *testing.T) {
 			},
 			sb:          mkSandbox("standard", 2, "2Gi", ""),
 			multitenant: true,
-			labelKey:    "setec.zero-day.ai/tenant",
+			labelKey:    "setec.zeroroot.ai/tenant",
 			nsGetter: &stubNamespaceGetter{
 				byName: map[string]map[string]string{
-					"team-a": {"setec.zero-day.ai/tenant": "team-a"},
+					"team-a": {"setec.zeroroot.ai/tenant": "team-a"},
 				},
 			},
 		},
@@ -362,7 +362,7 @@ func TestValidateCreate_NamespaceGetterError(t *testing.T) {
 	v := &SandboxValidator{
 		Resolver:            class.NewResolver(c),
 		MultiTenancyEnabled: true,
-		TenantLabelKey:      "setec.zero-day.ai/tenant",
+		TenantLabelKey:      "setec.zeroroot.ai/tenant",
 		NamespaceGetter: &stubNamespaceGetter{
 			err: errors.New("api server unavailable"),
 		},
@@ -384,7 +384,7 @@ func TestValidateCreate_FailClosedWhenMultitenancyUnwired(t *testing.T) {
 	v := &SandboxValidator{
 		Resolver:            class.NewResolver(newFakeClient(t, mkClass("standard", true, "4Gi"))),
 		MultiTenancyEnabled: true,
-		TenantLabelKey:      "setec.zero-day.ai/tenant",
+		TenantLabelKey:      "setec.zeroroot.ai/tenant",
 		// NamespaceGetter deliberately unset.
 	}
 	sb := mkSandbox("standard", 1, "1Gi", "")
@@ -407,7 +407,7 @@ func TestClientNamespaceGetter_HappyPath(t *testing.T) {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "team-a",
-			Labels: map[string]string{"setec.zero-day.ai/tenant": "team-a"},
+			Labels: map[string]string{"setec.zeroroot.ai/tenant": "team-a"},
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ns).Build()
@@ -417,8 +417,8 @@ func TestClientNamespaceGetter_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNamespaceLabels: %v", err)
 	}
-	if labels["setec.zero-day.ai/tenant"] != "team-a" {
-		t.Fatalf("label = %q, want team-a", labels["setec.zero-day.ai/tenant"])
+	if labels["setec.zeroroot.ai/tenant"] != "team-a" {
+		t.Fatalf("label = %q, want team-a", labels["setec.zeroroot.ai/tenant"])
 	}
 }
 

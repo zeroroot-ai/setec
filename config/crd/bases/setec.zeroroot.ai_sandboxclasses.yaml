@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: sandboxclasses.setec.zero-day.ai
+  name: sandboxclasses.setec.zeroroot.ai
 spec:
-  group: setec.zero-day.ai
+  group: setec.zeroroot.ai
   names:
     kind: SandboxClass
     listKind: SandboxClassList
@@ -188,15 +188,55 @@ spec:
                   RootfsImage is an optional OCI reference to a custom guest rootfs
                   image. Empty means the Kata-packaged rootfs is used.
                 type: string
+              runtime:
+                description: |-
+                  Runtime selects the isolation backend and optional fallback chain for
+                  Sandboxes in this class. When nil the operator infers the backend from
+                  the legacy VMM field for backwards compatibility.
+                properties:
+                  backend:
+                    description: |-
+                      Backend is the isolation runtime to use for Sandboxes in this class.
+                      Must be one of the four supported backends. When unset the operator
+                      falls back to the cluster default declared in Helm values.
+                    enum:
+                    - kata-fc
+                    - kata-qemu
+                    - gvisor
+                    - runc
+                    type: string
+                  fallback:
+                    description: |-
+                      Fallback is an ordered list of backend names to attempt when no node
+                      advertises the requested Backend. Each entry must be one of the four
+                      supported values. The operator tries each in order; the first backend
+                      with a capable node wins. status.runtime.chosen records the final
+                      selection. When empty and the primary backend is unavailable, the
+                      Sandbox transitions to Failed with reason NoEligibleNode.
+                    items:
+                      type: string
+                    type: array
+                  params:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Params is a map of backend-specific tuning parameters forwarded to the
+                      RuntimeDispatcher. Keys and semantics vary per backend (e.g.
+                      params.vcpus, params.memory for kata-qemu). Unknown keys are ignored
+                      by backends that do not understand them.
+                    type: object
+                type: object
               runtimeClassName:
                 description: |-
+                  Deprecated: use Runtime.Backend instead.
                   RuntimeClassName optionally overrides the operator-wide default
                   RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
                   controller falls back to its --runtime-class-name flag.
                 type: string
               vmm:
-                description: VMM selects the virtual machine monitor targeted by this
-                  class.
+                description: |-
+                  Deprecated: use Runtime.Backend instead.
+                  VMM selects the virtual machine monitor targeted by this class.
                 enum:
                 - firecracker
                 - qemu

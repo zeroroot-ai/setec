@@ -22,7 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // newSandbox is a small builder keeping test cases readable.

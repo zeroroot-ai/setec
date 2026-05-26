@@ -2,9 +2,9 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/setec.zero-day.ai_sandboxes.yaml
-- bases/setec.zero-day.ai_sandboxclasses.yaml
-- bases/setec.zero-day.ai_snapshots.yaml
+- bases/setec.zeroroot.ai_sandboxes.yaml
+- bases/setec.zeroroot.ai_sandboxclasses.yaml
+- bases/setec.zeroroot.ai_snapshots.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -27,8 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // defaultRuntimeClass is the RuntimeClass name used by tests that do not
@@ -405,7 +405,7 @@ func TestBuildWithOptions_NodeNamePinning(t *testing.T) {
 // pre-existing NodeAffinity terms already set on the Sandbox.
 //
 // It builds a pod using a gVisor dispatcher (which adds the
-// setec.zero-day.ai/runtime.gvisor=true required term) and confirms:
+// setec.zeroroot.ai/runtime.gvisor=true required term) and confirms:
 //   - The dispatcher's term is appended.
 //   - A pre-existing affinity term from the test is not discarded.
 //   - RuntimeClassName reflects the dispatcher's value.
@@ -432,8 +432,8 @@ func TestWithRuntimeSelection_MergesNodeAffinity(t *testing.T) {
 		t.Fatalf("BuildWithOptions: %v", err)
 	}
 
-	// runc dispatcher adds setec.zero-day.ai/isolation=container-only.
-	if got := pod.Labels["setec.zero-day.ai/isolation"]; got != "container-only" {
+	// runc dispatcher adds setec.zeroroot.ai/isolation=container-only.
+	if got := pod.Labels["setec.zeroroot.ai/isolation"]; got != "container-only" {
 		t.Errorf("isolation label = %q, want container-only", got)
 	}
 
@@ -467,7 +467,7 @@ func TestWithRuntimeSelection_AffinityMerge_PreservesExisting(t *testing.T) {
 
 	sb := newSandbox()
 
-	// GVisor dispatcher: adds setec.zero-day.ai/runtime.gvisor=true term.
+	// GVisor dispatcher: adds setec.zeroroot.ai/runtime.gvisor=true term.
 	gvisorCfg := runtimepkg.BackendConfig{
 		Enabled:          true,
 		RuntimeClassName: "gvisor",

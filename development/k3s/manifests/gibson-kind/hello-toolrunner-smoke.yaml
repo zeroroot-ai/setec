@@ -19,7 +19,7 @@ data:
     go 1.25
 
     require (
-        github.com/zero-day-ai/setec v0.0.2
+        github.com/zeroroot-ai/setec v0.0.2
         google.golang.org/grpc v1.72.2
         google.golang.org/protobuf v1.36.11
     )
@@ -39,7 +39,7 @@ data:
         "strings"
         "time"
 
-        sandboxv1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
+        sandboxv1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
         "google.golang.org/grpc"
         "google.golang.org/grpc/credentials"
         "google.golang.org/protobuf/encoding/protojson"
@@ -84,7 +84,7 @@ data:
 
         fmt.Printf("dispatching hello tool with input=%q\n", reqMsg.GetValue())
         launch, err := cli.Launch(ctx, &sandboxv1.LaunchRequest{
-            Image:   "ghcr.io/zero-day-ai/gibson-tool-runner:hello-dev",
+            Image:   "ghcr.io/zeroroot-ai/gibson-tool-runner:hello-dev",
             Command: []string{"/tool-runner"},
             Env: map[string]string{
                 "GIBSON_TOOL_INPUT_B64": b64In,

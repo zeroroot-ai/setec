@@ -1,4 +1,4 @@
-apiVersion: setec.setec.zero-day.ai/v1alpha1
+apiVersion: setec.setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   labels:

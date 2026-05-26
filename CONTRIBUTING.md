@@ -30,7 +30,7 @@ run fine on any workstation.
 ### Clone and build
 
 ```bash
-git clone https://github.com/zero-day-ai/setec.git
+git clone https://github.com/zeroroot-ai/setec.git
 cd setec
 make generate        # regenerate deepcopy code
 make manifests       # regenerate CRD manifests
@@ -127,7 +127,7 @@ We do not require a CLA.
 
 Anything beyond a small fix or documentation tweak starts with a
 specification, not code. Setec uses a lightweight
-[spec-workflow](https://github.com/zero-day-ai/setec/tree/main/.spec-workflow)
+[spec-workflow](https://github.com/zeroroot-ai/setec/tree/main/.spec-workflow)
 directory pattern:
 
 1. Open an issue describing the problem.

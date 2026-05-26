@@ -25,7 +25,7 @@ limitations under the License.
 //     isolation and should never be used in production.
 //
 //  2. The namespace "setec-runc-dev" must exist and carry the label
-//     setec.zero-day.ai/allow-dev-runtimes=true. The admission webhook rejects
+//     setec.zeroroot.ai/allow-dev-runtimes=true. The admission webhook rejects
 //     runc SandboxClass objects for namespaces (or, for cluster-scoped
 //     SandboxClasses, the "default" namespace) that lack this label. The test
 //     creates the SandboxClass in the "setec-runc-dev" namespace convention.
@@ -33,7 +33,7 @@ limitations under the License.
 // To run this test:
 //
 //	kubectl create ns setec-runc-dev
-//	kubectl label ns setec-runc-dev setec.zero-day.ai/allow-dev-runtimes=true
+//	kubectl label ns setec-runc-dev setec.zeroroot.ai/allow-dev-runtimes=true
 //	SETEC_E2E_ALLOW_RUNC=1 go test -tags=e2e ./test/e2e -run TestRunc
 
 package e2e
@@ -50,7 +50,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 const (
@@ -62,11 +62,11 @@ const (
 	// permit runc SandboxClass objects. It must be "true" on devGateNamespace
 	// ("default") for the admission to pass — and on runcDevNamespace here for
 	// documentation clarity.
-	allowDevRuntimesLabel = "setec.zero-day.ai/allow-dev-runtimes"
+	allowDevRuntimesLabel = "setec.zeroroot.ai/allow-dev-runtimes"
 
 	// isolationContainerOnlyLabel is the pod label MutatePod adds for runc
 	// pods (see internal/runtime/runc.go). Its value is "container-only".
-	isolationContainerOnlyLabel = "setec.zero-day.ai/isolation"
+	isolationContainerOnlyLabel = "setec.zeroroot.ai/isolation"
 	isolationContainerOnlyValue = "container-only"
 )
 
@@ -77,7 +77,7 @@ const (
 //     runcDevNamespace is where the Sandbox lives).
 //  2. A Sandbox is created in the runcDevNamespace.
 //  3. The Pod becomes Ready.
-//  4. The Pod carries the label setec.zero-day.ai/isolation=container-only.
+//  4. The Pod carries the label setec.zeroroot.ai/isolation=container-only.
 func TestRunc_ContainerOnly(t *testing.T) {
 	// Hard gate: skip unless explicitly opted in.
 	if os.Getenv("SETEC_E2E_ALLOW_RUNC") != "1" {

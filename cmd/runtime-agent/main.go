@@ -50,10 +50,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/metrics"
-	internalruntime "github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/runtimeagent/probe"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/metrics"
+	internalruntime "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 var scheme = runtime.NewScheme()

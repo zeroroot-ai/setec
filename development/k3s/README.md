@@ -53,7 +53,7 @@ make down
 
 `scripts/40-install-setec.sh` creates two namespaces:
 - `setec-system` (privileged PSS) — Setec operator + frontend
-- `gibson-dev` (the tenant namespace) — labelled `setec.zero-day.ai/tenant=gibson-dev` so the frontend resolves the `gibson-dev` client CN to it
+- `gibson-dev` (the tenant namespace) — labelled `setec.zeroroot.ai/tenant=gibson-dev` so the frontend resolves the `gibson-dev` client CN to it
 
 It then materialises the TLS Secret and runs `helm upgrade --install setec ../../charts/setec -f values-local.yaml`. A NodePort wrapper Service is applied separately at `manifests/setec-nodeport.yaml` (the Setec chart does not yet expose a NodePort knob; we keep this concern out of the chart and bolt it on via a sibling Service in dev only).
 

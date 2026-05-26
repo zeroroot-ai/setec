@@ -126,7 +126,7 @@ func Check(
 //  1. Get on a nodev1.RuntimeClass named classNames[backend]. NotFound appends
 //     a vendor-neutral warning; other errors are returned.
 //  2. List on corev1.Node filtered by the label
-//     "setec.zero-day.ai/runtime.<backend>=true". Zero matches appends a
+//     "setec.zeroroot.ai/runtime.<backend>=true". Zero matches appends a
 //     warning; other errors are returned.
 //
 // CheckResult.RuntimeClassPresent is true only when ALL enabled backends have
@@ -184,7 +184,7 @@ func CheckMulti(
 		}
 
 		// Check that at least one Node advertises this backend.
-		backendLabel := "setec.zero-day.ai/runtime." + backend
+		backendLabel := "setec.zeroroot.ai/runtime." + backend
 		nodes := &corev1.NodeList{}
 		if err := c.List(ctx, nodes, client.MatchingLabels{backendLabel: "true"}); err != nil {
 			return result, fmt.Errorf("prereq: list Nodes with label %q: %w", backendLabel, err)

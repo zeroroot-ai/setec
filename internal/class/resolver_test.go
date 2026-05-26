@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // newScheme builds a runtime.Scheme with just the v1alpha1 types registered.

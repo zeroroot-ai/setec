@@ -24,7 +24,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/zero-day-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // ErrNoEligibleRuntime is returned by Registry.Select when no backend in the

@@ -39,7 +39,7 @@ rules:
       - get
       - list
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - sandboxes
     verbs:
@@ -51,13 +51,13 @@ rules:
       - update
       - watch
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - sandboxes/finalizers
     verbs:
       - update
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - sandboxes/status
     verbs:
@@ -66,7 +66,7 @@ rules:
       - update
   # Phase 2: cluster-scoped SandboxClass read.
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - sandboxclasses
     verbs:
@@ -109,7 +109,7 @@ rules:
 {{- if .Values.snapshots.enabled }}
   # Phase 3: Snapshot CRD lifecycle.
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - snapshots
     verbs:
@@ -121,7 +121,7 @@ rules:
       - update
       - watch
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - snapshots/status
     verbs:
@@ -129,7 +129,7 @@ rules:
       - patch
       - update
   - apiGroups:
-      - setec.zero-day.ai
+      - setec.zeroroot.ai
     resources:
       - snapshots/finalizers
     verbs:

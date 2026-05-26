@@ -34,10 +34,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/class"
-	"github.com/zero-day-ai/setec/internal/snapshot"
-	"github.com/zero-day-ai/setec/internal/tenancy"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/snapshot"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -60,7 +60,7 @@ func (s *shimNamespace) toCoreNamespace() *corev1.Namespace {
 	}
 }
 
-// +kubebuilder:webhook:path=/validate-setec-zero-day-ai-v1alpha1-sandbox,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zero-day.ai,resources=sandboxes,verbs=create;update,versions=v1alpha1,name=vsandbox.setec.zero-day.ai,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-setec-zeroroot-ai-v1alpha1-sandbox,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=sandboxes,verbs=create;update,versions=v1alpha1,name=vsandbox.setec.zeroroot.ai,admissionReviewVersions=v1
 
 // SandboxValidator is the controller-runtime CustomValidator for
 // v1alpha1.Sandbox. It rejects Sandboxes that either fail SandboxClass

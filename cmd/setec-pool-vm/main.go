@@ -52,7 +52,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zero-day-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
 )
 
 const (

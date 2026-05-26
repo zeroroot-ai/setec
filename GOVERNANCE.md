@@ -80,7 +80,7 @@ If you disagree with a decision or experience a conflict:
 
 1. Raise it directly with the maintainer or reviewer involved, on the pull request or issue.
 2. If that does not resolve it, open a GitHub Discussion (or issue if Discussions is not enabled) and tag the maintainers group.
-3. If the concern involves conduct covered by [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md), contact `conduct@setec.zero-day.ai` instead. Conduct concerns bypass this escalation chain.
+3. If the concern involves conduct covered by [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md), contact `conduct@setec.zeroroot.ai` instead. Conduct concerns bypass this escalation chain.
 
 We will make a good-faith effort to respond in public unless privacy is warranted.
 

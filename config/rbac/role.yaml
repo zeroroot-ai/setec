@@ -58,7 +58,7 @@ rules:
   - get
   - list
 - apiGroups:
-  - setec.zero-day.ai
+  - setec.zeroroot.ai
   resources:
   - sandboxclasses
   verbs:
@@ -66,7 +66,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - setec.zero-day.ai
+  - setec.zeroroot.ai
   resources:
   - sandboxes
   - snapshots
@@ -79,14 +79,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - setec.zero-day.ai
+  - setec.zeroroot.ai
   resources:
   - sandboxes/finalizers
   - snapshots/finalizers
   verbs:
   - update
 - apiGroups:
-  - setec.zero-day.ai
+  - setec.zeroroot.ai
   resources:
   - sandboxes/status
   - snapshots/status

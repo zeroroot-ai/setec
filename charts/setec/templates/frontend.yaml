@@ -101,7 +101,7 @@ metadata:
   labels:
     {{- include "setec.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["setec.zero-day.ai"]
+  - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxes]
     verbs: [create, delete, get, list, watch]
   - apiGroups: [""]

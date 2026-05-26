@@ -20,7 +20,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zero-day-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // buildAllBackendsRegistry returns a Registry pre-populated with all four real

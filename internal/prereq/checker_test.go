@@ -289,10 +289,10 @@ func TestCheckMulti_AllEnabledAllLabelled(t *testing.T) {
 		runtimeClassObj("kata-fc"),
 		runtimeClassObj("gvisor"),
 		nodeObj("node-kata", map[string]string{
-			"setec.zero-day.ai/runtime.kata-fc": "true",
+			"setec.zeroroot.ai/runtime.kata-fc": "true",
 		}),
 		nodeObj("node-gvisor", map[string]string{
-			"setec.zero-day.ai/runtime.gvisor": "true",
+			"setec.zeroroot.ai/runtime.gvisor": "true",
 		}),
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(seed...).Build()
@@ -327,9 +327,9 @@ func TestCheckMulti_OneEnabledNoCapableNodes(t *testing.T) {
 		runtimeClassObj("kata-fc"),
 		runtimeClassObj("gvisor"),
 		nodeObj("node-kata", map[string]string{
-			"setec.zero-day.ai/runtime.kata-fc": "true",
+			"setec.zeroroot.ai/runtime.kata-fc": "true",
 		}),
-		// No node with setec.zero-day.ai/runtime.gvisor=true.
+		// No node with setec.zeroroot.ai/runtime.gvisor=true.
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(seed...).Build()
 
@@ -371,7 +371,7 @@ func TestCheckMulti_DisabledBackendSkipped(t *testing.T) {
 		nodeObj("node-kata", map[string]string{
 			// Both the new-style setec label and the legacy kata label are
 			// present so the delegate call to Check can find the node.
-			"setec.zero-day.ai/runtime.kata-fc": "true",
+			"setec.zeroroot.ai/runtime.kata-fc": "true",
 			testNodeLabel:                       "true",
 		}),
 		// No runc RuntimeClass; if CheckMulti tried to Get it, the test
@@ -409,7 +409,7 @@ func TestCheckMulti_SingleKataFCDelegates(t *testing.T) {
 		// Both labels for full compatibility.
 		nodeObj("node-kata", map[string]string{
 			testNodeLabel:                       "true",
-			"setec.zero-day.ai/runtime.kata-fc": "true",
+			"setec.zeroroot.ai/runtime.kata-fc": "true",
 		}),
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(seed...).Build()

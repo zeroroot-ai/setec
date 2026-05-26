@@ -79,7 +79,7 @@ func (panicMatcher) Match(fset *token.FileSet, node ast.Node, src []byte) (bool,
 // tag and a follow-up issue reference, then open the fix as a separate PR.
 //
 // Implements slice 3.3 of the production-readiness epic
-// (zero-day-ai/.github#50).
+// (zeroroot-ai/.github#50).
 func TestNoPanicInInternal(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	// thisFile is at internal/no_panic_in_internal_test.go; repo root is

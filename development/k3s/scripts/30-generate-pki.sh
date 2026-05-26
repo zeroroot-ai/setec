@@ -22,7 +22,7 @@ else
     green "Generating dev CA at ${PKI}/ca.{crt,key}"
     openssl genrsa -out "${PKI}/ca.key" 4096 2>/dev/null
     openssl req -x509 -new -key "${PKI}/ca.key" -days 3650 -sha256 \
-        -subj "/CN=Setec Dev CA/O=zero-day-ai/OU=dev" \
+        -subj "/CN=Setec Dev CA/O=zeroroot-ai/OU=dev" \
         -out "${PKI}/ca.crt"
     chmod 0600 "${PKI}/ca.key"
 fi
@@ -35,7 +35,7 @@ distinguished_name=req_distinguished_name
 prompt=no
 [req_distinguished_name]
 CN=setec-frontend.setec-system.svc
-O=zero-day-ai
+O=zeroroot-ai
 [v3]
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment
@@ -67,7 +67,7 @@ distinguished_name=req_distinguished_name
 prompt=no
 [req_distinguished_name]
 CN=gibson-dev
-O=zero-day-ai
+O=zeroroot-ai
 [v3]
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment

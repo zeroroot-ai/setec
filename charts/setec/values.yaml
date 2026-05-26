@@ -1,7 +1,7 @@
 # -- Container image for the Setec operator.
 image:
   # -- Image repository. Override to pull from a private mirror.
-  repository: ghcr.io/zero-day-ai/setec
+  repository: ghcr.io/zeroroot-ai/setec
   # -- Image tag. Defaults to the chart's appVersion when left empty.
   tag: "0.1.0"
   # -- Image pull policy. One of Always, Never, IfNotPresent.
@@ -123,7 +123,7 @@ runtimes:
       cpu: 50m
   # -- runc is plain Linux container namespaces — the default Kubernetes
   # runtime. NO isolation beyond namespaces and seccomp. DEV/DEBUG ONLY;
-  # gated behind the namespace label setec.zero-day.ai/allow-dev-runtimes
+  # gated behind the namespace label setec.zeroroot.ai/allow-dev-runtimes
   # by the admission webhook. Never use in production tenancy scenarios.
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
@@ -136,7 +136,7 @@ runtimes:
     install: true
     # -- devOnly is the admission-webhook gate. The webhook will reject
     # SandboxClass specs referencing runc unless the target namespace
-    # carries setec.zero-day.ai/allow-dev-runtimes=true. Do not set to
+    # carries setec.zeroroot.ai/allow-dev-runtimes=true. Do not set to
     # false without understanding the tenancy implications.
     devOnly: true
 
@@ -157,7 +157,7 @@ defaults:
     # surfaces the unschedulable condition instead.
     fallback: []
     # -- probeInterval is how often the node-agent DaemonSet re-probes node
-    # capabilities and refreshes the setec.zero-day.ai/runtime.<backend>
+    # capabilities and refreshes the setec.zeroroot.ai/runtime.<backend>
     # labels. Shorter intervals detect KVM removal faster at the cost of
     # extra node-agent wake-ups. Parsed as a Go duration.
     probeInterval: 5m
@@ -176,14 +176,14 @@ defaults:
     staticCapabilities: {}
 
 # -- runtimeAgent configures the per-node capabilities probing DaemonSet that
-# writes setec.zero-day.ai/runtime.<backend>=true|false labels and the
+# writes setec.zeroroot.ai/runtime.<backend>=true|false labels and the
 # SetecRuntimes Node status condition. Only rendered when
 # defaults.runtime.nodeCapabilitiesMode != "static".
 runtimeAgent:
   image:
     # -- repository is the runtime-agent image. Override for private
     # mirrors.
-    repository: ghcr.io/zero-day-ai/setec-runtime-agent
+    repository: ghcr.io/zeroroot-ai/setec-runtime-agent
     # -- tag defaults to .Chart.AppVersion when left empty. Pin explicitly
     # for reproducible deploys.
     tag: ""
@@ -282,7 +282,7 @@ affinity: {}
 multiTenancy:
   enabled: false
   # tenantLabelKey is the label key checked on the namespace.
-  tenantLabelKey: setec.zero-day.ai/tenant
+  tenantLabelKey: setec.zeroroot.ai/tenant
 
 # -- observability controls OpenTelemetry tracing and Prometheus scraping
 # options.
@@ -327,7 +327,7 @@ webhook:
 nodeAgent:
   enabled: false
   image:
-    repository: ghcr.io/zero-day-ai/setec-node-agent
+    repository: ghcr.io/zeroroot-ai/setec-node-agent
     tag: "0.2.0"
     pullPolicy: IfNotPresent
   # Kata-runtime node selector. Must match the label the cluster admin
@@ -354,7 +354,7 @@ nodeAgent:
 frontend:
   enabled: false
   image:
-    repository: ghcr.io/zero-day-ai/setec-frontend
+    repository: ghcr.io/zeroroot-ai/setec-frontend
     tag: "0.2.0"
     pullPolicy: IfNotPresent
   # listenAddr is the gRPC bind address inside the Pod.

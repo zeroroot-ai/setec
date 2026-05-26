@@ -27,13 +27,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/runtime"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // defaultAllowDevLabel is the namespace label key that gates dev-only runtimes
 // such as runc. Operators may override it via SandboxClassWebhook.AllowDevLabel.
-const defaultAllowDevLabel = "setec.zero-day.ai/allow-dev-runtimes"
+const defaultAllowDevLabel = "setec.zeroroot.ai/allow-dev-runtimes"
 
 // devGateNamespace is the cluster-level namespace consulted for the dev-only
 // runtime gate. SandboxClass is cluster-scoped and therefore has no namespace of
@@ -42,8 +42,8 @@ const defaultAllowDevLabel = "setec.zero-day.ai/allow-dev-runtimes"
 // sentinel resource.
 const devGateNamespace = "default"
 
-// +kubebuilder:webhook:path=/mutate-setec-zero-day-ai-v1alpha1-sandboxclass,mutating=true,failurePolicy=fail,sideEffects=None,groups=setec.zero-day.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=msandboxclass.setec.zero-day.ai,admissionReviewVersions=v1
-// +kubebuilder:webhook:path=/validate-setec-zero-day-ai-v1alpha1-sandboxclass,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zero-day.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=vsandboxclass.setec.zero-day.ai,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-setec-zeroroot-ai-v1alpha1-sandboxclass,mutating=true,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=msandboxclass.setec.zeroroot.ai,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-setec-zeroroot-ai-v1alpha1-sandboxclass,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=vsandboxclass.setec.zeroroot.ai,admissionReviewVersions=v1
 
 // SandboxClassWebhook implements both the defaulting and validating admission
 // webhooks for v1alpha1.SandboxClass. It is registered once per manager and

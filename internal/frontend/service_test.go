@@ -35,9 +35,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1grpc "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/tenancy"
+	setecv1alpha1grpc "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

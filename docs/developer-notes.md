@@ -8,8 +8,8 @@ Internal conventions for Setec contributors. These are deliberately narrow; most
 | Thing                              | Canonical form    | Notes                                                   |
 |------------------------------------|-------------------|---------------------------------------------------------|
 | Project name (prose, docs, titles) | `Setec`           | Capital S, lowercase rest. Never `SETEC`, never `setec`. |
-| CRD API group                      | `setec.zero-day.ai`        | Lowercase; matches `api/v1alpha1` Go types.             |
-| Go module path                     | `github.com/zero-day-ai/setec` | Lowercase; GitHub org convention.             |
+| CRD API group                      | `setec.zeroroot.ai`        | Lowercase; matches `api/v1alpha1` Go types.             |
+| Go module path                     | `github.com/zeroroot-ai/setec` | Lowercase; GitHub org convention.             |
 | Helm release name (examples)       | `setec`           | Lowercase, matches DNS naming rules.                    |
 | Default namespace                  | `setec-system`    | Lowercase with hyphen.                                  |
 | Operator binary (in prose)         | `setec-operator`  | The container image and the product name in sentences.  |

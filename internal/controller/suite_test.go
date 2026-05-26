@@ -52,12 +52,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	classpkg "github.com/zero-day-ai/setec/internal/class"
-	metricspkg "github.com/zero-day-ai/setec/internal/metrics"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
-	snapshotpkg "github.com/zero-day-ai/setec/internal/snapshot"
+	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	classpkg "github.com/zeroroot-ai/setec/internal/class"
+	metricspkg "github.com/zeroroot-ai/setec/internal/metrics"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
+	snapshotpkg "github.com/zeroroot-ai/setec/internal/snapshot"
 )
 
 // Process-wide state populated by TestMain and consumed by every test
@@ -354,7 +354,7 @@ func TestMain(m *testing.M) {
 // never actually be "ready", but prereq.Check only inspects labels.
 //
 // The Node carries both the legacy katacontainers.io/kata-runtime label
-// (for backward compatibility) and the new setec.zero-day.ai/runtime.kata-fc
+// (for backward compatibility) and the new setec.zeroroot.ai/runtime.kata-fc
 // label (for the multi-backend prereq check and selectRuntime).
 func ensurePrereqs(ctx context.Context, c client.Client) error {
 	rc := &nodev1.RuntimeClass{
@@ -370,7 +370,7 @@ func ensurePrereqs(ctx context.Context, c client.Client) error {
 			Name: "kata-node-1",
 			Labels: map[string]string{
 				testNodeSelectorLabel:               "true",
-				"setec.zero-day.ai/runtime.kata-fc": "true",
+				"setec.zeroroot.ai/runtime.kata-fc": "true",
 			},
 		},
 	}

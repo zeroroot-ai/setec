@@ -25,7 +25,7 @@ import (
 // SnapshotReconciler removes the finalizer once the reference count
 // drops to zero AND the backend Delete has successfully reclaimed the
 // state files.
-const SnapshotInUseFinalizer = "setec.zero-day.ai/snapshot-in-use"
+const SnapshotInUseFinalizer = "setec.zeroroot.ai/snapshot-in-use"
 
 // SnapshotPhase is the high-level lifecycle state of a Snapshot.
 // +kubebuilder:validation:Enum=Creating;Ready;Failed;Terminating

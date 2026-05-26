@@ -39,10 +39,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/firecracker"
-	"github.com/zero-day-ai/setec/internal/nodeagent/pool"
-	"github.com/zero-day-ai/setec/internal/snapshot/storage"
+	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 // Server implements NodeAgentServiceServer.

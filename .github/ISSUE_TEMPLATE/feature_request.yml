@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before opening a feature request, please check the [documentation](https://github.com/zero-day-ai/setec/tree/main/docs) and existing issues. For larger proposals, see the spec-workflow reference in [CONTRIBUTING.md](https://github.com/zero-day-ai/setec/blob/main/CONTRIBUTING.md).
+        Before opening a feature request, please check the [documentation](https://github.com/zeroroot-ai/setec/tree/main/docs) and existing issues. For larger proposals, see the spec-workflow reference in [CONTRIBUTING.md](https://github.com/zeroroot-ai/setec/blob/main/CONTRIBUTING.md).
   - type: textarea
     id: problem
     attributes:

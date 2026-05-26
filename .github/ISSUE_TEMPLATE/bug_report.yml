@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for taking the time to file a bug. Please search existing issues first; if you find one that matches, add a comment there instead.
 
-        For security vulnerabilities do **not** use this form. Follow [SECURITY.md](https://github.com/zero-day-ai/setec/blob/main/SECURITY.md) for private reporting.
+        For security vulnerabilities do **not** use this form. Follow [SECURITY.md](https://github.com/zeroroot-ai/setec/blob/main/SECURITY.md) for private reporting.
   - type: textarea
     id: what-happened
     attributes:

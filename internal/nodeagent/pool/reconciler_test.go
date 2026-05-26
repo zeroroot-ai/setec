@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 func TestTickReconciler_FiresImmediatelyAndOnTick(t *testing.T) {

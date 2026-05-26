@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   setec:
-    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
     permissions:
       contents: write
       packages: write
@@ -33,13 +33,13 @@ jobs:
       component_name: setec
       component_path: .
       dockerfile_path: Dockerfile
-      image_name: ghcr.io/zero-day-ai/setec
+      image_name: ghcr.io/zeroroot-ai/setec
       tag_pattern: v(.*)
       build_args: |
         CMD=manager
 
   setec-node-agent:
-    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
     permissions:
       contents: write
       packages: write
@@ -51,13 +51,13 @@ jobs:
       component_name: setec-node-agent
       component_path: .
       dockerfile_path: Dockerfile
-      image_name: ghcr.io/zero-day-ai/setec-node-agent
+      image_name: ghcr.io/zeroroot-ai/setec-node-agent
       tag_pattern: v(.*)
       build_args: |
         CMD=node-agent
 
   setec-frontend:
-    uses: zero-day-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
     permissions:
       contents: write
       packages: write
@@ -69,7 +69,7 @@ jobs:
       component_name: setec-frontend
       component_path: .
       dockerfile_path: Dockerfile
-      image_name: ghcr.io/zero-day-ai/setec-frontend
+      image_name: ghcr.io/zeroroot-ai/setec-frontend
       tag_pattern: v(.*)
       build_args: |
         CMD=frontend

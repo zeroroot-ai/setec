@@ -72,7 +72,7 @@ func (d *GVisorDispatcher) Name() string { return BackendGVisor }
 func (d *GVisorDispatcher) RuntimeClassName() string { return d.cfg.RuntimeClassName }
 
 // NodeAffinity implements Dispatcher.  It requires the node label
-// setec.zero-day.ai/runtime.gvisor=true and kubernetes.io/os=linux.
+// setec.zeroroot.ai/runtime.gvisor=true and kubernetes.io/os=linux.
 func (d *GVisorDispatcher) NodeAffinity() *corev1.NodeAffinity {
 	return requiredRuntimeNodeAffinity(runtimeAffinityLabel(BackendGVisor))
 }

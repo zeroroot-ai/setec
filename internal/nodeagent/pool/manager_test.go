@@ -28,9 +28,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/firecracker"
-	"github.com/zero-day-ai/setec/internal/snapshot/storage"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 func TestMain(m *testing.M) {

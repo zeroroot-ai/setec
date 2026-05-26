@@ -38,7 +38,7 @@ Plus an operator that reconciles all three, a node-agent DaemonSet that talks to
 A minimal Sandbox looks like this:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: hello
@@ -129,5 +129,5 @@ Setec is one maintainer and a growing set of reviewers. Help makes it better. Se
 ## Notes for the maintainer
 
 - Replace every `___` in the Benchmarks section with real numbers from the final smoke-test result file.
-- If the post is syndicated, keep the CTA links absolute (github.com/zero-day-ai/setec/...).
+- If the post is syndicated, keep the CTA links absolute (github.com/zeroroot-ai/setec/...).
 - Target publish time: the same day as the HN post, 1-2 hours after.

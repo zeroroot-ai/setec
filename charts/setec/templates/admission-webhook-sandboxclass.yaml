@@ -6,9 +6,9 @@ server. Reuses the existing Service ({fullname}-webhook) and cert source
 managed by the chart's webhook.yaml; no new PKI flow is introduced here.
 
 Paths match controller-runtime's defaulting convention for a resource in
-the setec.zero-day.ai/v1alpha1 API group:
-  /mutate-setec-zero-day-ai-v1alpha1-sandboxclass
-  /validate-setec-zero-day-ai-v1alpha1-sandboxclass
+the setec.zeroroot.ai/v1alpha1 API group:
+  /mutate-setec-zeroroot-ai-v1alpha1-sandboxclass
+  /validate-setec-zeroroot-ai-v1alpha1-sandboxclass
 */ -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
@@ -22,12 +22,12 @@ metadata:
     cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
   {{- end }}
 webhooks:
-  - name: vsandboxclass.setec.zero-day.ai
+  - name: vsandboxclass.setec.zeroroot.ai
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail
     rules:
-      - apiGroups: ["setec.zero-day.ai"]
+      - apiGroups: ["setec.zeroroot.ai"]
         apiVersions: ["v1alpha1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["sandboxclasses"]
@@ -36,7 +36,7 @@ webhooks:
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}
-        path: /validate-setec-zero-day-ai-v1alpha1-sandboxclass
+        path: /validate-setec-zeroroot-ai-v1alpha1-sandboxclass
         port: 443
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -51,13 +51,13 @@ metadata:
     cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
   {{- end }}
 webhooks:
-  - name: msandboxclass.setec.zero-day.ai
+  - name: msandboxclass.setec.zeroroot.ai
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail
     reinvocationPolicy: Never
     rules:
-      - apiGroups: ["setec.zero-day.ai"]
+      - apiGroups: ["setec.zeroroot.ai"]
         apiVersions: ["v1alpha1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["sandboxclasses"]
@@ -66,6 +66,6 @@ webhooks:
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}
-        path: /mutate-setec-zero-day-ai-v1alpha1-sandboxclass
+        path: /mutate-setec-zeroroot-ai-v1alpha1-sandboxclass
         port: 443
 {{- end }}

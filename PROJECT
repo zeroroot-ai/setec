@@ -3,18 +3,18 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.13.1
-domain: setec.zero-day.ai
+domain: setec.zeroroot.ai
 layout:
 - go.kubebuilder.io/v4
 projectName: setec
-repo: github.com/zero-day-ai/setec
+repo: github.com/zeroroot-ai/setec
 resources:
 - api:
     crdVersion: v1
     namespaced: true
-  domain: setec.zero-day.ai
+  domain: setec.zeroroot.ai
   group: setec
   kind: Sandbox
-  path: github.com/zero-day-ai/setec/api/v1alpha1
+  path: github.com/zeroroot-ai/setec/api/v1alpha1
   version: v1alpha1
 version: "3"

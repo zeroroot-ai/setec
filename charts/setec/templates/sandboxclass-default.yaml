@@ -1,5 +1,5 @@
 {{- if .Values.defaultClass.enabled -}}
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
   name: {{ .Values.defaultClass.name }}

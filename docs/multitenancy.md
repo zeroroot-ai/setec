@@ -25,7 +25,7 @@ Install the chart with `multiTenancy.enabled=true`:
 ```bash
 helm upgrade --install setec charts/setec \
   --set multiTenancy.enabled=true \
-  --set multiTenancy.tenantLabelKey=setec.zero-day.ai/tenant
+  --set multiTenancy.tenantLabelKey=setec.zeroroot.ai/tenant
 ```
 
 When this flag is on, the operator refuses to reconcile a Sandbox in any
@@ -36,7 +36,7 @@ recorded.
 Label each tenant namespace:
 
 ```bash
-kubectl label namespace team-a setec.zero-day.ai/tenant=team-a
+kubectl label namespace team-a setec.zeroroot.ai/tenant=team-a
 ```
 
 The label value is opaque to Setec apart from DNS-1123 validation: any
@@ -57,7 +57,7 @@ spec:
   hard:
     requests.cpu: "8"
     requests.memory: 16Gi
-    count/sandboxes.setec.zero-day.ai: "50"
+    count/sandboxes.setec.zeroroot.ai: "50"
 ```
 
 When the quota would be exceeded the backing Pod is not scheduled. The
@@ -77,7 +77,7 @@ Each `Sandbox.spec.network.mode` maps to a specific NetworkPolicy shape:
   (UDP/TCP 53 to any CIDR), and adds one egress rule per
   `allow` entry (TCP to the requested port against `0.0.0.0/0`).
   Hostnames in the allow list are recorded as
-  `setec.zero-day.ai/allow-<port>` annotations but are NOT resolved to CIDRs —
+  `setec.zeroroot.ai/allow-<port>` annotations but are NOT resolved to CIDRs —
   operators who need hostname-based filtering should layer a CNI
   with DNS-aware policy (e.g. Cilium) or pre-resolve.
 
@@ -107,7 +107,7 @@ and tenants reference by name. A class carries:
 Example:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
   name: standard

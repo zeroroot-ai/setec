@@ -10,7 +10,7 @@ syntax = "proto3";
 
 package setec.v1alpha1;
 
-option go_package = "github.com/zero-day-ai/setec/api/grpc/v1alpha1;setecv1alpha1grpc";
+option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1alpha1;setecv1alpha1grpc";
 
 // SandboxService is the gRPC frontend for launching and observing Setec
 // Sandboxes. Every operation is tenant-scoped via mTLS client certificate

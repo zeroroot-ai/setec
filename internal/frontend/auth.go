@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	"github.com/zero-day-ai/setec/internal/tenancy"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
 // ErrNoPeerCert is returned when a request arrives without a TLS peer

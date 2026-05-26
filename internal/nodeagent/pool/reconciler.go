@@ -21,7 +21,7 @@ import (
 	"log"
 	"time"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // SandboxClassLister is the lookup surface the TickReconciler depends

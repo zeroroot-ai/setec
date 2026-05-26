@@ -8,11 +8,11 @@
 <p align="center"><strong>microVM isolation as a Kubernetes primitive.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/zero-day-ai/setec/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/zero-day-ai/setec/ci.yml?branch=main&label=ci"></a>
-  <a href="https://github.com/zero-day-ai/setec/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/zero-day-ai/setec?include_prereleases&sort=semver"></a>
+  <a href="https://github.com/zeroroot-ai/setec/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/zeroroot-ai/setec/ci.yml?branch=main&label=ci"></a>
+  <a href="https://github.com/zeroroot-ai/setec/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/zeroroot-ai/setec?include_prereleases&sort=semver"></a>
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="https://api.scorecard.dev/projects/github.com/zero-day-ai/setec"><img alt="OSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/zero-day-ai/setec/badge"></a>
-  <a href="https://github.com/zero-day-ai/setec/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/zero-day-ai/setec/codeql.yml?branch=main&label=codeql"></a>
+  <a href="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec"><img alt="OSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec/badge"></a>
+  <a href="https://github.com/zeroroot-ai/setec/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/zeroroot-ai/setec/codeql.yml?branch=main&label=codeql"></a>
   <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-1.28%2B-blue">
 </p>
 
@@ -26,7 +26,7 @@ Setec is a Kubernetes operator that runs workloads inside isolated runtimes — 
 
 - **Single-CRD API.** `kubectl apply -f sandbox.yaml` and you have a sandbox. No separate CLI, no dashboard, no SaaS.
 - **Four runtime backends.** `kata-fc` (Firecracker microVMs, the default), `kata-qemu` (QEMU microVMs where nested-virt is available but Firecracker isn't), `gvisor` (user-space kernel, no KVM needed), and `runc` (dev clusters only). See [`docs/runtime-backends/`](docs/runtime-backends/README.md) for the isolation / CVE-surface / overhead matrix and platform-specific playbooks for EKS / AKS / GKE.
-- **Node-level capability detection.** A lightweight DaemonSet (`runtime-agent`) probes each node for backend prerequisites and labels it `setec.zero-day.ai/runtime.<backend>=true`. The scheduler picks the highest-isolation backend a node supports from the `SandboxClass` fallback chain.
+- **Node-level capability detection.** A lightweight DaemonSet (`runtime-agent`) probes each node for backend prerequisites and labels it `setec.zeroroot.ai/runtime.<backend>=true`. The scheduler picks the highest-isolation backend a node supports from the `SandboxClass` fallback chain.
 - **Firecracker snapshots.** Capture, restore, and reuse paused VM state through the `Snapshot` resource (kata-fc / kata-qemu only).
 - **Pre-warm pool.** Each node keeps a configurable pool of paused sandboxes ready; pool-claimed sandboxes target sub-100ms P50 cold start on prepared hosts.
 - **Multi-tenant.** Tenant identity from namespace labels or mTLS; per-Sandbox `NetworkPolicy`; tenant scoping on the gRPC frontend.
@@ -38,7 +38,7 @@ Setec is a Kubernetes operator that runs workloads inside isolated runtimes — 
 ## Quick install
 
 ```bash
-helm install setec oci://ghcr.io/zero-day-ai/charts/setec \
+helm install setec oci://ghcr.io/zeroroot-ai/charts/setec \
   --namespace setec-system \
   --create-namespace
 ```
@@ -73,7 +73,7 @@ Setec makes the boundary declarative, reusable, and operable by anyone who alrea
 ## Example: a complete Sandbox
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: hello

@@ -44,17 +44,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/class"
-	"github.com/zero-day-ai/setec/internal/metrics"
-	"github.com/zero-day-ai/setec/internal/netpol"
-	"github.com/zero-day-ai/setec/internal/podspec"
-	"github.com/zero-day-ai/setec/internal/prereq"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/snapshot"
-	"github.com/zero-day-ai/setec/internal/status"
-	"github.com/zero-day-ai/setec/internal/tenancy"
-	"github.com/zero-day-ai/setec/internal/tracing"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/netpol"
+	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/prereq"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/snapshot"
+	"github.com/zeroroot-ai/setec/internal/status"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
+	"github.com/zeroroot-ai/setec/internal/tracing"
 )
 
 const (
@@ -137,7 +137,7 @@ type SandboxReconciler struct {
 	MultiTenancyEnabled bool
 
 	// TenantLabelKey is the label key consulted when
-	// MultiTenancyEnabled. Default "setec.zero-day.ai/tenant".
+	// MultiTenancyEnabled. Default "setec.zeroroot.ai/tenant".
 	TenantLabelKey string
 
 	// --- Phase 3 optional dependencies ---
@@ -158,10 +158,10 @@ type SandboxReconciler struct {
 // v0.20+ recognises +kubebuilder:rbac markers at package level; binding
 // them to a func's doc comment suppresses generation.
 //
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=sandboxes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=sandboxes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=sandboxclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list
@@ -507,7 +507,7 @@ func (r *SandboxReconciler) selectRuntime(
 	}
 
 	// Gather capabilities: list all Nodes and collect the union of backends
-	// they advertise via setec.zero-day.ai/runtime.<backend>=true labels.
+	// they advertise via setec.zeroroot.ai/runtime.<backend>=true labels.
 	// We take a cluster-wide union because we cannot pre-pick a node (the
 	// scheduler does that); we only need to know whether any capable node
 	// exists for each candidate backend.
@@ -518,7 +518,7 @@ func (r *SandboxReconciler) selectRuntime(
 	capSet := make(map[string]bool)
 	for _, node := range nodeList.Items {
 		for _, backend := range runtimepkg.AllKnownBackends {
-			label := "setec.zero-day.ai/runtime." + backend
+			label := "setec.zeroroot.ai/runtime." + backend
 			if val, ok := node.Labels[label]; ok && val == "true" {
 				capSet[backend] = true
 			}

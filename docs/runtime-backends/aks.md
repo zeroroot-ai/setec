@@ -28,7 +28,7 @@ kubectl debug node/<node-name> -it --image=alpine -- sh -c \
 AKS does not install `runsc` for you. You must install `runsc` on the worker nodes (typically via a DaemonSet-driven installer) and register a `gvisor` `RuntimeClass`. Then deploy Setec:
 
 ```bash
-helm upgrade --install setec oci://ghcr.io/zero-day-ai/charts/setec \
+helm upgrade --install setec oci://ghcr.io/zeroroot-ai/charts/setec \
   --namespace setec-system --create-namespace \
   --set runtimes.kata-fc.enabled=false \
   --set runtimes.kata-qemu.enabled=false \

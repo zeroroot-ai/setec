@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: setec
-Upstream-Contact: security@setec.zero-day.ai
-Source: https://github.com/zero-day-ai/setec
+Upstream-Contact: security@setec.zeroroot.ai
+Source: https://github.com/zeroroot-ai/setec
 
 # Binary brand assets: SVG, PNG, ICO. REUSE expects copyright/license
 # information for every file; PNG/ICO cannot carry SPDX comments, so

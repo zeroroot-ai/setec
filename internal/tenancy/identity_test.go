@@ -87,10 +87,10 @@ func TestFromNamespace(t *testing.T) {
 			ns: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "tenant-a",
-					Labels: map[string]string{"setec.zero-day.ai/tenant": "tenant-a"},
+					Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
 				},
 			},
-			labelKey: "setec.zero-day.ai/tenant",
+			labelKey: "setec.zeroroot.ai/tenant",
 			want:     "tenant-a",
 		},
 		{
@@ -101,7 +101,7 @@ func TestFromNamespace(t *testing.T) {
 					Labels: map[string]string{"other": "value"},
 				},
 			},
-			labelKey:  "setec.zero-day.ai/tenant",
+			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantLabelMissing,
 		},
 		{
@@ -109,10 +109,10 @@ func TestFromNamespace(t *testing.T) {
 			ns: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "empty",
-					Labels: map[string]string{"setec.zero-day.ai/tenant": ""},
+					Labels: map[string]string{"setec.zeroroot.ai/tenant": ""},
 				},
 			},
-			labelKey:  "setec.zero-day.ai/tenant",
+			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantLabelMissing,
 		},
 		{
@@ -120,16 +120,16 @@ func TestFromNamespace(t *testing.T) {
 			ns: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "bad",
-					Labels: map[string]string{"setec.zero-day.ai/tenant": "NOT_VALID"},
+					Labels: map[string]string{"setec.zeroroot.ai/tenant": "NOT_VALID"},
 				},
 			},
-			labelKey:  "setec.zero-day.ai/tenant",
+			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantInvalid,
 		},
 		{
 			name:      "nil namespace",
 			ns:        nil,
-			labelKey:  "setec.zero-day.ai/tenant",
+			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantLabelMissing,
 		},
 		{
@@ -137,7 +137,7 @@ func TestFromNamespace(t *testing.T) {
 			ns: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "ns",
-					Labels: map[string]string{"setec.zero-day.ai/tenant": "tenant-a"},
+					Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
 				},
 			},
 			labelKey:  "",

@@ -2,10 +2,10 @@
 
 `Sandbox` is the sole custom resource Setec defines. This document is the
 authoritative field reference. It is derived from the generated
-`config/crd/bases/setec.zero-day.ai_sandboxes.yaml` and the Go types in
+`config/crd/bases/setec.zeroroot.ai_sandboxes.yaml` and the Go types in
 `api/v1alpha1/sandbox_types.go`.
 
-- **Group / version / kind:** `setec.zero-day.ai/v1alpha1` / `Sandbox`
+- **Group / version / kind:** `setec.zeroroot.ai/v1alpha1` / `Sandbox`
 - **Scope:** Namespaced
 - **Short name:** `sbx`
 - **Printer columns:** `Phase`, `Image`, `Age`, `Exit-Code` (wide view)
@@ -13,7 +13,7 @@ authoritative field reference. It is derived from the generated
 ## Example
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: example
@@ -176,7 +176,7 @@ Administrators author classes; tenants reference them by name in
 - `spec.allowedNetworkModes` — subset of `[full, egress-allow-list, none]`.
   Empty list means all modes allowed.
 - `spec.nodeSelector` — additive per-Sandbox node selector, merged with
-  the backend's own `NodeAffinity` from `setec.zero-day.ai/runtime.<backend>=true`.
+  the backend's own `NodeAffinity` from `setec.zeroroot.ai/runtime.<backend>=true`.
 - `spec.default` — boolean. Exactly zero or one class may carry this.
 
 ### Validation rules (enforced by the SandboxClass webhook)
@@ -193,7 +193,7 @@ Administrators author classes; tenants reference them by name in
 ### Example (multi-backend with fallback)
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
   name: standard
@@ -221,7 +221,7 @@ spec:
 ### Example (dev-only runc class)
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
   name: dev-fast
@@ -242,7 +242,7 @@ spec:
 kubectl get sbxcls
 
 # Printer columns show Backend, Default, Max-VCPU, Max-Memory, Age.
-kubectl get sandboxclasses.setec.zero-day.ai
+kubectl get sandboxclasses.setec.zeroroot.ai
 ```
 
 ### Sandbox.status.runtime.chosen
@@ -267,7 +267,7 @@ via `spec.snapshotRef`.
 Short name: `snap`.
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Snapshot
 metadata:
   name: my-state
