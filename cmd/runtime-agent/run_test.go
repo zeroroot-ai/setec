@@ -31,10 +31,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/prometheus/client_golang/prometheus"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/metrics"
-	internalruntime "github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/runtimeagent/probe"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/metrics"
+	internalruntime "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 // fakeProbe is a test double for probe.Probe that returns a predetermined
@@ -122,8 +122,8 @@ func TestRunSingleCycle(t *testing.T) {
 		t.Fatalf("get node: %v", err)
 	}
 	want := map[string]string{
-		"setec.zero-day.ai/runtime.kata-qemu": "true",
-		"setec.zero-day.ai/runtime.runc":      "false",
+		"setec.zeroroot.ai/runtime.kata-qemu": "true",
+		"setec.zeroroot.ai/runtime.runc":      "false",
 	}
 	for k, v := range want {
 		if got.Labels[k] != v {

@@ -71,7 +71,7 @@ The operator's `/readyz` body includes a `kata_runtime_available` field; if
 
 ```bash
 # 1. Apply any CRD schema changes shipped with the new chart version.
-kubectl apply -f charts/setec/crds/setec.zero-day.ai_sandboxes.yaml
+kubectl apply -f charts/setec/crds/setec.zeroroot.ai_sandboxes.yaml
 
 # 2. Upgrade the release.
 helm upgrade setec ./charts/setec --namespace setec-system
@@ -94,7 +94,7 @@ To fully remove Setec, including the CRD (which also deletes every `Sandbox`
 in the cluster because the CRD owns them), run the follow-up command:
 
 ```bash
-kubectl delete crd sandboxes.setec.zero-day.ai
+kubectl delete crd sandboxes.setec.zeroroot.ai
 ```
 
 If you used `createNamespace=true` and want the namespace gone too:
@@ -107,7 +107,7 @@ kubectl delete namespace setec-system
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` | `ghcr.io/zero-day-ai/setec` | Container image repository. |
+| `image.repository` | `ghcr.io/zeroroot-ai/setec` | Container image repository. |
 | `image.tag` | `"0.1.0"` | Image tag; falls back to `.Chart.AppVersion` when empty. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Pull secrets for private registries. |
@@ -143,7 +143,7 @@ kubectl delete namespace setec-system
 After the chart is installed, apply a minimal Sandbox:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: hello
@@ -191,7 +191,7 @@ verify the expected new manifests appear via `helm template`.
 
 - `multiTenancy.enabled=true` — the operator rejects Sandboxes in namespaces
   missing the configured `multiTenancy.tenantLabelKey` (default
-  `setec.zero-day.ai/tenant`). Combine with `ResourceQuota` and the node-agent
+  `setec.zeroroot.ai/tenant`). Combine with `ResourceQuota` and the node-agent
   `NetworkPolicy` enforcement for full per-tenant isolation.
 - `observability.enabled=true` plus `observability.otlpEndpoint` enables
   OpenTelemetry trace export. Traces go over TLS by default using the pod's
@@ -231,7 +231,7 @@ feature incrementally:
 2. Install the `SandboxClass` CRD (shipped in `crds/`) and apply at least
    one class, then opt in to `webhook.enabled=true`.
 3. Enable multi-tenancy only after labelling each tenant namespace with
-   `setec.zero-day.ai/tenant=<tenant>`.
+   `setec.zeroroot.ai/tenant=<tenant>`.
 4. Turn on `nodeAgent.enabled=true` after provisioning `thinpool`-ready
    block devices on worker nodes.
 5. Enable `frontend.enabled=true` last; it is the thinnest layer.

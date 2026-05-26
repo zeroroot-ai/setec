@@ -110,10 +110,10 @@ Setec ships a DaemonSet named `runtime-agent` that probes each Node for
 each enabled backend's prerequisites and writes labels:
 
 ```
-setec.zero-day.ai/runtime.kata-fc=true
-setec.zero-day.ai/runtime.kata-qemu=true
-setec.zero-day.ai/runtime.gvisor=true
-setec.zero-day.ai/runtime.runc=true
+setec.zeroroot.ai/runtime.kata-fc=true
+setec.zeroroot.ai/runtime.kata-qemu=true
+setec.zeroroot.ai/runtime.gvisor=true
+setec.zeroroot.ai/runtime.runc=true
 ```
 
 Absent a backend's prerequisites, the corresponding label is NOT written
@@ -123,10 +123,10 @@ highest-isolation backend each `Sandbox` can run on, per the
 
 ```bash
 kubectl get nodes \
-  -L setec.zero-day.ai/runtime.kata-fc \
-  -L setec.zero-day.ai/runtime.kata-qemu \
-  -L setec.zero-day.ai/runtime.gvisor \
-  -L setec.zero-day.ai/runtime.runc
+  -L setec.zeroroot.ai/runtime.kata-fc \
+  -L setec.zeroroot.ai/runtime.kata-qemu \
+  -L setec.zeroroot.ai/runtime.gvisor \
+  -L setec.zeroroot.ai/runtime.runc
 ```
 
 Setec does not detect, depend on, or favor any cloud or vendor. Any

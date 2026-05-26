@@ -40,7 +40,7 @@ metadata:
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
 rules:
-  - apiGroups: ["setec.zero-day.ai"]
+  - apiGroups: ["setec.zeroroot.ai"]
     resources: ["sandboxclasses"]
     verbs: ["get", "list"]
 ---
@@ -85,7 +85,7 @@ data:
     enabled="${ENABLED_BACKENDS:-}"
     echo "pre-upgrade runtime check: enabled backends after upgrade: [${enabled# }]"
     # List SandboxClass names, then inspect each one.
-    names="$(kubectl get sandboxclasses.setec.zero-day.ai -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+    names="$(kubectl get sandboxclasses.setec.zeroroot.ai -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
     if [ -z "${names}" ]; then
       echo "pre-upgrade runtime check: no SandboxClass objects found; nothing to warn about."
       exit 0
@@ -93,9 +93,9 @@ data:
     warnings=0
     for name in ${names}; do
       # Prefer the new spec.runtime.backend field; fall back to the legacy spec.vmm value.
-      backend="$(kubectl get sandboxclass.setec.zero-day.ai "${name}" -o jsonpath='{.spec.runtime.backend}' 2>/dev/null || true)"
+      backend="$(kubectl get sandboxclass.setec.zeroroot.ai "${name}" -o jsonpath='{.spec.runtime.backend}' 2>/dev/null || true)"
       if [ -z "${backend}" ]; then
-        vmm="$(kubectl get sandboxclass.setec.zero-day.ai "${name}" -o jsonpath='{.spec.vmm}' 2>/dev/null || true)"
+        vmm="$(kubectl get sandboxclass.setec.zeroroot.ai "${name}" -o jsonpath='{.spec.vmm}' 2>/dev/null || true)"
         case "${vmm}" in
           firecracker|Firecracker) backend="kata-fc" ;;
           qemu|QEMU)               backend="kata-qemu" ;;

@@ -19,7 +19,7 @@ As the project matures, this policy will be updated to cover multiple minor vers
 Please do **not** open a public GitHub issue or pull request for security problems. Use one of the two private channels below:
 
 1. **GitHub private vulnerability reporting** (preferred): open the repository's `Security` tab and select `Report a vulnerability`. This creates a draft advisory that only the maintainers and invited collaborators can see.
-2. **Email:** `security@setec.zero-day.ai`. If you need to encrypt the message, request a PGP key in the first email and we will reply with a current fingerprint.
+2. **Email:** `security@setec.zeroroot.ai`. If you need to encrypt the message, request a PGP key in the first email and we will reply with a current fingerprint.
 
 Useful details to include:
 

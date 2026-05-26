@@ -12,7 +12,7 @@ package setec.v1alpha1;
 
 import "api/grpc/v1alpha1/sandbox.proto";
 
-option go_package = "github.com/zero-day-ai/setec/api/grpc/v1alpha1;setecv1alpha1grpc";
+option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1alpha1;setecv1alpha1grpc";
 
 // NodeAgentService is the internal gRPC surface the Setec operator
 // calls on each node-agent DaemonSet pod to drive snapshot, restore,

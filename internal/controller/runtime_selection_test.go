@@ -41,10 +41,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	classpkg "github.com/zero-day-ai/setec/internal/class"
-	"github.com/zero-day-ai/setec/internal/controller/testutil"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	classpkg "github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/controller/testutil"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // newRSScheme builds a minimal scheme for the runtime selection unit tests.
@@ -210,7 +210,7 @@ func TestSelectRuntime_Fallback(t *testing.T) {
 
 	// Only a gvisor-capable node; no kata-qemu node.
 	gvisorNode := newNodeWithLabels("gvisor-node", map[string]string{
-		"setec.zero-day.ai/runtime.gvisor": "true",
+		"setec.zeroroot.ai/runtime.gvisor": "true",
 	})
 
 	cls := newSandboxClassForRS("fallback-class", runtimepkg.BackendKataQEMU, []string{runtimepkg.BackendGVisor})
@@ -257,9 +257,9 @@ func TestSelectRuntime_Exhaustion(t *testing.T) {
 	reg := runtimepkg.NewRegistry()
 	reg.Register(runtimepkg.NewRuncDispatcher(cfg.Runtimes[runtimepkg.BackendRunc]))
 
-	// No node carries setec.zero-day.ai/runtime.runc=true.
+	// No node carries setec.zeroroot.ai/runtime.runc=true.
 	unrelatedNode := newNodeWithLabels("kata-node", map[string]string{
-		"setec.zero-day.ai/runtime.kata-fc": "true",
+		"setec.zeroroot.ai/runtime.kata-fc": "true",
 	})
 
 	cls := newSandboxClassForRS("exhaust-class", runtimepkg.BackendRunc, nil)
@@ -302,7 +302,7 @@ func TestSelectRuntime_NilRuntimeDefaultsToConfig(t *testing.T) {
 	reg.Register(runtimepkg.NewKataFCDispatcher(cfg.Runtimes[runtimepkg.BackendKataFC]))
 
 	kataNode := newNodeWithLabels("kata-node", map[string]string{
-		"setec.zero-day.ai/runtime.kata-fc": "true",
+		"setec.zeroroot.ai/runtime.kata-fc": "true",
 	})
 
 	// cls has no Runtime field.

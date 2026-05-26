@@ -33,7 +33,7 @@ spec:
               No Setec operator pod has been up for 5 minutes. Sandbox
               reconciliation and admission will drift. Check the deployment
               in namespace setec-system.
-            runbook_url: "https://github.com/zero-day-ai/setec/blob/main/docs/observability.md#alerts"
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
         - alert: SetecNodeAgentDown
           expr: absent_over_time(up{job=~".*setec.*node-agent.*"}[10m])
           for: 10m
@@ -46,7 +46,7 @@ spec:
               No node-agent has reported up in the last 10 minutes, or at
               least one node-agent pod is absent. Pool management on that
               node is stalled.
-            runbook_url: "https://github.com/zero-day-ai/setec/blob/main/docs/observability.md#alerts"
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
     - name: setec.slo
       interval: 30s
       rules:
@@ -62,7 +62,7 @@ spec:
               The 95th-percentile cold-start time for sandbox class
               {{ $labels.sandbox_class }} has been above one second for ten
               minutes. Check pool fill and node-level pressure.
-            runbook_url: "https://github.com/zero-day-ai/setec/blob/main/docs/observability.md#alerts"
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
         - alert: SetecSnapshotFailureHigh
           expr: |
             sum by (operation) (rate(setec_snapshot_duration_seconds_count{operation=~"create|restore"}[10m]))
@@ -86,7 +86,7 @@ spec:
               More than five percent of snapshot {{ $labels.operation }}
               operations have failed over the last ten minutes. Inspect the
               node-agent and storage backend logs.
-            runbook_url: "https://github.com/zero-day-ai/setec/blob/main/docs/observability.md#alerts"
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
     - name: setec.pool
       interval: 30s
       rules:
@@ -107,4 +107,4 @@ spec:
               The pre-warm pool for sandbox class {{ $labels.sandbox_class }}
               on node {{ $labels.node }} has fewer entries than its target
               for ten minutes. Check node-agent logs and storage pressure.
-            runbook_url: "https://github.com/zero-day-ai/setec/blob/main/docs/observability.md#alerts"
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"

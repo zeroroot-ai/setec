@@ -27,10 +27,10 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/zero-day-ai/setec/internal/metrics"
-	"github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/runtimeagent"
-	"github.com/zero-day-ai/setec/internal/runtimeagent/probe"
+	"github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 const (

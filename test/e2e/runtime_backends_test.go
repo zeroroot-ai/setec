@@ -22,8 +22,8 @@ limitations under the License.
 //
 // Prerequisites (applied before this suite runs):
 //   - development/k3s/ manifests applied: kata-fc, gvisor RuntimeClasses present.
-//   - Node labels: setec.zero-day.ai/runtime.kata-fc=true,
-//     setec.zero-day.ai/runtime.gvisor=true on at least one node each.
+//   - Node labels: setec.zeroroot.ai/runtime.kata-fc=true,
+//     setec.zeroroot.ai/runtime.gvisor=true on at least one node each.
 //   - The Setec operator running in testNamespace with the metrics service
 //     exposed as "setec-metrics" on port 8080.
 //
@@ -45,7 +45,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // backendSmokeDuration is the total time each per-backend smoke sub-test may
@@ -57,7 +57,7 @@ const backendSmokeDuration = 60 * time.Second
 const metricsScrapeDuration = 30 * time.Second
 
 // runtimeLabelPrefix is the node-label key prefix set by the node-agent DaemonSet.
-const runtimeLabelPrefix = "setec.zero-day.ai/runtime."
+const runtimeLabelPrefix = "setec.zeroroot.ai/runtime."
 
 // TestRuntimeBackends_Smoke runs a per-backend smoke test for each of
 // {kata-fc, kata-qemu, gvisor}. kata-qemu is skipped when no node in the

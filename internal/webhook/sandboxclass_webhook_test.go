@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	setecruntime "github.com/zero-day-ai/setec/internal/runtime"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	setecruntime "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // schemeWithCore returns a scheme that includes both the setec CRDs and the

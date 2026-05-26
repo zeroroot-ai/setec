@@ -41,7 +41,7 @@ unset. There is no insecure fallback.
 ## Tenant resolution
 
 The frontend reads namespaces carrying the configured tenant label
-(default `setec.zero-day.ai/tenant=<tenant>`) and picks the first match as the
+(default `setec.zeroroot.ai/tenant=<tenant>`) and picks the first match as the
 tenant's namespace. Every RPC verifies the requested sandbox id's
 namespace matches the caller's resolved namespace; cross-tenant access
 returns gRPC `PERMISSION_DENIED`.
@@ -58,7 +58,7 @@ import (
   "log"
   "os"
 
-  pb "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
+  pb "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
   "google.golang.org/grpc"
   "google.golang.org/grpc/credentials"
 )

@@ -1,9 +1,9 @@
-module github.com/zero-day-ai/setec/examples/ai-code-exec
+module github.com/zeroroot-ai/setec/examples/ai-code-exec
 
 go 1.26.3
 
 require (
-	github.com/zero-day-ai/setec v0.0.0-00010101000000-000000000000
+	github.com/zeroroot-ai/setec v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.81.1
 )
 
@@ -17,4 +17,4 @@ require (
 
 // Local development: point the example at the parent repo. Drop this replace
 // line before consuming the example outside the Setec source tree.
-replace github.com/zero-day-ai/setec => ../..
+replace github.com/zeroroot-ai/setec => ../..

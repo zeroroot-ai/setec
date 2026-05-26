@@ -212,7 +212,7 @@ metadata:
 handler: kata-qemu
 scheduling:
   nodeSelector:
-    setec.zero-day.ai/runtime.kata-qemu: "true"
+    setec.zeroroot.ai/runtime.kata-qemu: "true"
 EOF
     green "RuntimeClass kata-qemu applied"
 fi
@@ -220,7 +220,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # Node labels — capability detection for the multi-runtime operator.
 #
-# Label schema: setec.zero-day.ai/runtime.<backend>=true
+# Label schema: setec.zeroroot.ai/runtime.<backend>=true
 #
 # The legacy katacontainers.io/kata-runtime label is preserved for compat
 # (pre-existing Setec SandboxClasses reference it until the operator upgrade
@@ -236,9 +236,9 @@ green "Node: ${NODE_NAME}"
 # kata-fc label (set whether or not this node has KVM — kata-fc requires KVM
 # but the RuntimeClass must still be reachable; the node-agent will set the
 # label to false on KVM-absent nodes during capability probing).
-green "Labelling node with setec.zero-day.ai/runtime.kata-fc=true"
+green "Labelling node with setec.zeroroot.ai/runtime.kata-fc=true"
 kubectl label node "${NODE_NAME}" \
-    "setec.zero-day.ai/runtime.kata-fc=true" \
+    "setec.zeroroot.ai/runtime.kata-fc=true" \
     --overwrite
 
 # kata-qemu label.  kata-qemu supports TCG fallback when KVM is absent, so
@@ -252,9 +252,9 @@ else
     yellow "         Performance will be significantly degraded."
     yellow "         For production use, ensure KVM is available."
 fi
-green "Labelling node with setec.zero-day.ai/runtime.kata-qemu=true"
+green "Labelling node with setec.zeroroot.ai/runtime.kata-qemu=true"
 kubectl label node "${NODE_NAME}" \
-    "setec.zero-day.ai/runtime.kata-qemu=true" \
+    "setec.zeroroot.ai/runtime.kata-qemu=true" \
     --overwrite
 
 green "kata install complete — RuntimeClasses kata-fc + kata-qemu registered, node labelled."

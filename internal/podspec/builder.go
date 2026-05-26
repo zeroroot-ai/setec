@@ -28,8 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 const (
@@ -40,7 +40,7 @@ const (
 	// SandboxLabelKey is the label applied to the owned Pod whose value is
 	// the owning Sandbox's name. Callers (e.g. the controller) use this label
 	// for owner-ref indexing and to filter events.
-	SandboxLabelKey = "setec.zero-day.ai/sandbox"
+	SandboxLabelKey = "setec.zeroroot.ai/sandbox"
 
 	// ContainerName is the name of the single workload container inside the
 	// Pod. Kept as a constant so tests and the status reconciler can agree.
@@ -112,7 +112,7 @@ type BuildOptions struct {
 // The returned Pod has:
 //   - metadata.name = "<sandbox-name>-vm"
 //   - metadata.namespace mirrors the Sandbox namespace
-//   - metadata.labels includes setec.zero-day.ai/sandbox=<sandbox-name>
+//   - metadata.labels includes setec.zeroroot.ai/sandbox=<sandbox-name>
 //   - metadata.ownerReferences contains a single controller-owning reference
 //     back to the Sandbox with BlockOwnerDeletion=true
 //   - spec.runtimeClassName = runtimeClassName

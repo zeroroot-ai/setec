@@ -50,15 +50,15 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	webhookserver "sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/class"
-	"github.com/zero-day-ai/setec/internal/controller"
-	"github.com/zero-day-ai/setec/internal/metrics"
-	"github.com/zero-day-ai/setec/internal/prereq"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/snapshot"
-	"github.com/zero-day-ai/setec/internal/tracing"
-	"github.com/zero-day-ai/setec/internal/webhook"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/controller"
+	"github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/prereq"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/snapshot"
+	"github.com/zeroroot-ai/setec/internal/tracing"
+	"github.com/zeroroot-ai/setec/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -146,7 +146,7 @@ func main() {
 	// Phase 2 flags. Zero values reproduce Phase 1 behaviour exactly.
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
-	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zero-day.ai/tenant",
+	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
 		"Namespace label key consulted when multi-tenancy is enabled.")
 	pflag.StringVar(&otlpEndpoint, "otlp-endpoint", "",
 		"OTLP/gRPC collector endpoint for trace export. Empty disables tracing.")
@@ -257,7 +257,7 @@ func main() {
 			BindAddress: metricsBindAddr,
 		},
 		LeaderElection:                enableLeaderElect,
-		LeaderElectionID:              "setec.zero-day.ai",
+		LeaderElectionID:              "setec.zeroroot.ai",
 		LeaderElectionReleaseOnCancel: true,
 	}
 	if webhookEnabled {

@@ -23,7 +23,7 @@ import (
 // isolationLabel is the pod label that MutatePod adds to pods scheduled on
 // the runc backend to make the isolation level visible to admission policies,
 // audit logs, and security scanners.
-const isolationLabel = "setec.zero-day.ai/isolation"
+const isolationLabel = "setec.zeroroot.ai/isolation"
 
 // isolationContainerOnly is the value written to isolationLabel for runc pods.
 // It signals that the workload has container-only isolation (no hypervisor or
@@ -41,14 +41,14 @@ const isolationContainerOnly = "container-only"
 // the container process itself.  Override via BackendConfig.DefaultOverhead in
 // Helm values if accounting requires it.
 //
-// MutatePod adds the label setec.zero-day.ai/isolation=container-only to
+// MutatePod adds the label setec.zeroroot.ai/isolation=container-only to
 // pod.ObjectMeta.Labels (creating the map if it is nil).  This label is
 // idempotent and intentionally visible to the Kubernetes API server so that
 // admission webhooks, OPA policies, and audit systems can identify workloads
 // running with container-only isolation.
 //
 // The devOnly gate (restricting runc to namespaces carrying
-// setec.zero-day.ai/allow-dev-runtimes=true) is enforced by the admission
+// setec.zeroroot.ai/allow-dev-runtimes=true) is enforced by the admission
 // webhook (task 13), not here.
 type RuncDispatcher struct {
 	cfg BackendConfig
@@ -66,7 +66,7 @@ func (d *RuncDispatcher) Name() string { return BackendRunc }
 func (d *RuncDispatcher) RuntimeClassName() string { return d.cfg.RuntimeClassName }
 
 // NodeAffinity implements Dispatcher.  It requires the node label
-// setec.zero-day.ai/runtime.runc=true and kubernetes.io/os=linux.
+// setec.zeroroot.ai/runtime.runc=true and kubernetes.io/os=linux.
 func (d *RuncDispatcher) NodeAffinity() *corev1.NodeAffinity {
 	return requiredRuntimeNodeAffinity(runtimeAffinityLabel(BackendRunc))
 }
@@ -81,7 +81,7 @@ func (d *RuncDispatcher) Overhead() corev1.ResourceList {
 }
 
 // MutatePod implements Dispatcher.  It adds the label
-// setec.zero-day.ai/isolation=container-only to pod.ObjectMeta.Labels,
+// setec.zeroroot.ai/isolation=container-only to pod.ObjectMeta.Labels,
 // creating the labels map if it is nil.  The operation is idempotent.
 func (d *RuncDispatcher) MutatePod(pod *corev1.Pod, _ map[string]string) error {
 	if pod.Labels == nil {

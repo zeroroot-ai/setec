@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: snapshots.setec.zero-day.ai
+  name: snapshots.setec.zeroroot.ai
 spec:
-  group: setec.zero-day.ai
+  group: setec.zeroroot.ai
   names:
     kind: Snapshot
     listKind: SnapshotList

@@ -102,7 +102,7 @@ For every scenario below, record:
 ### Scenario 1: successful run, exit 0
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-success
@@ -122,7 +122,7 @@ spec:
 ### Scenario 2: failure, exit 1
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-failure
@@ -142,7 +142,7 @@ spec:
 ### Scenario 3: timeout
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-timeout
@@ -168,7 +168,7 @@ spec:
 Reuse the `smoke-timeout` manifest with a longer sleep:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-deletion
@@ -206,7 +206,7 @@ kubectl delete runtimeclass kata-fc
 Apply:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-no-runtime
@@ -239,7 +239,7 @@ Apply a long-running Sandbox and restart the operator while it is
 `Running`:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: smoke-restart
@@ -270,7 +270,7 @@ kubectl -n setec-system rollout status deployment/setec --timeout=1m
 ```bash
 kubectl delete namespace setec-smoke
 helm uninstall setec --namespace setec-system
-kubectl delete crd sandboxes.setec.zero-day.ai
+kubectl delete crd sandboxes.setec.zeroroot.ai
 kubectl delete namespace setec-system
 ```
 
@@ -371,8 +371,8 @@ helm upgrade --install setec charts/setec \
 ## Scenario P1: Multi-tenant ResourceQuota
 
 1. `kubectl create ns tenant-a tenant-b && kubectl label ns tenant-a
-   setec.zero-day.ai/tenant=tenant-a && kubectl label ns tenant-b
-   setec.zero-day.ai/tenant=tenant-b`.
+   setec.zeroroot.ai/tenant=tenant-a && kubectl label ns tenant-b
+   setec.zeroroot.ai/tenant=tenant-b`.
 2. Apply a tight ResourceQuota (1 cpu / 1Gi) to tenant-a.
 3. Apply two Sandboxes in tenant-a each requesting 1 cpu / 512Mi.
 4. Apply one Sandbox in tenant-b.

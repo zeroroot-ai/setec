@@ -3,7 +3,7 @@
 # Equivalent kubectl-apply form of the example. The client program above
 # launches the same workload programmatically via the gRPC frontend; this
 # manifest is for users who prefer `kubectl apply`.
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: ai-code-exec-sample

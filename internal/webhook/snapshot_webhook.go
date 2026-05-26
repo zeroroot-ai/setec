@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // SnapshotResourceName is the ResourceQuota counter name that
@@ -41,8 +41,8 @@ import (
 //	kind: ResourceQuota
 //	spec:
 //	  hard:
-//	    count/snapshots.setec.zero-day.ai: "10"
-const SnapshotResourceName = corev1.ResourceName("count/snapshots.setec.zero-day.ai")
+//	    count/snapshots.setec.zeroroot.ai: "10"
+const SnapshotResourceName = corev1.ResourceName("count/snapshots.setec.zeroroot.ai")
 
 // minSnapshotTTL is the lower bound we enforce on Snapshot.spec.ttl.
 // A 30-second TTL would race with creation and produce thrash; an
@@ -50,13 +50,13 @@ const SnapshotResourceName = corev1.ResourceName("count/snapshots.setec.zero-day
 // expressiveness and operational sanity.
 const minSnapshotTTL = time.Minute
 
-// +kubebuilder:webhook:path=/validate-setec-zero-day-ai-v1alpha1-snapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zero-day.ai,resources=snapshots,verbs=create;update,versions=v1alpha1,name=vsnapshot.setec.zero-day.ai,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-setec-zeroroot-ai-v1alpha1-snapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=snapshots,verbs=create;update,versions=v1alpha1,name=vsnapshot.setec.zeroroot.ai,admissionReviewVersions=v1
 
 // SnapshotValidator is the controller-runtime CustomValidator for
 // v1alpha1.Snapshot. It rejects:
 //   - Snapshots with TTL below a sane minimum (1 minute).
 //   - Snapshots whose creation would exceed a namespace ResourceQuota
-//     on count/snapshots.setec.zero-day.ai.
+//     on count/snapshots.setec.zeroroot.ai.
 //   - Duplicate-name creates (best-effort; the API server is the
 //     authoritative uniqueness guarantor).
 type SnapshotValidator struct {
@@ -113,7 +113,7 @@ func (v *SnapshotValidator) validate(ctx context.Context, snap *setecv1alpha1.Sn
 		}
 
 		// Rule 3: per-tenant ResourceQuota check. If a ResourceQuota in
-		// the namespace caps count/snapshots.setec.zero-day.ai and the current
+		// the namespace caps count/snapshots.setec.zeroroot.ai and the current
 		// total (admission is non-atomic; be defensive) would exceed
 		// it, reject.
 		if err := v.checkQuota(ctx, snap); err != nil {

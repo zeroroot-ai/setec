@@ -24,7 +24,7 @@ import (
 // NodeSelectorTerm containing two MatchExpressions:
 //
 //  1. label=value with operator In (the backend-specific capability label, e.g.
-//     "setec.zero-day.ai/runtime.kata-fc" = "true").
+//     "setec.zeroroot.ai/runtime.kata-fc" = "true").
 //  2. "kubernetes.io/os" In ["linux"] — all Setec backends require Linux nodes.
 //
 // The returned value is always non-nil and is freshly allocated so callers may
@@ -53,7 +53,7 @@ func requiredRuntimeNodeAffinity(label string) *corev1.NodeAffinity {
 }
 
 // runtimeAffinityLabel returns the standard Setec node-capability label for a
-// given backend name, e.g. "setec.zero-day.ai/runtime.kata-fc".
+// given backend name, e.g. "setec.zeroroot.ai/runtime.kata-fc".
 func runtimeAffinityLabel(backend string) string {
-	return "setec.zero-day.ai/runtime." + backend
+	return "setec.zeroroot.ai/runtime." + backend
 }

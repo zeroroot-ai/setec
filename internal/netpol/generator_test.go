@@ -27,8 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/podspec"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 )
 
 // sb returns a baseline Sandbox used by every case; individual tests
@@ -156,7 +156,7 @@ func TestGenerate_ModeEgressAllowListSinglePort(t *testing.T) {
 			Namespace: "team-a",
 			Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
 			Annotations: map[string]string{
-				"setec.zero-day.ai/allow-443": "api.example.com",
+				"setec.zeroroot.ai/allow-443": "api.example.com",
 			},
 		},
 		Spec: networkingv1.NetworkPolicySpec{
@@ -208,10 +208,10 @@ func TestGenerate_ModeEgressAllowListMultiplePorts(t *testing.T) {
 	if want := "my-sb-netpol"; got.Name != want {
 		t.Errorf("Name = %q, want %q", got.Name, want)
 	}
-	if got.Annotations["setec.zero-day.ai/allow-443"] != "api.example.com" {
+	if got.Annotations["setec.zeroroot.ai/allow-443"] != "api.example.com" {
 		t.Errorf("missing annotation for 443")
 	}
-	if got.Annotations["setec.zero-day.ai/allow-50051"] != "grpc.example.com" {
+	if got.Annotations["setec.zeroroot.ai/allow-50051"] != "grpc.example.com" {
 		t.Errorf("missing annotation for 50051")
 	}
 	// 1 DNS baseline + 2 user rules = 3 egress rules.
@@ -242,7 +242,7 @@ func TestGenerate_ModeEgressAllowListDNSSoundingHost(t *testing.T) {
 		t.Fatalf("Generate() err: %v", err)
 	}
 
-	if got.Annotations["setec.zero-day.ai/allow-8080"] != "private.internal.corp" {
+	if got.Annotations["setec.zeroroot.ai/allow-8080"] != "private.internal.corp" {
 		t.Fatalf("DNS host should be recorded as annotation, got %v", got.Annotations)
 	}
 	// The egress rule should use 0.0.0.0/0 (not a resolved CIDR) because

@@ -8,7 +8,7 @@
 #
 # The Go source is mounted from a ConfigMap and built via `go run` inside the
 # job pod. Self-contained — no remote module dependency at runtime aside from
-# fetching github.com/zero-day-ai/setec for the gRPC client stubs.
+# fetching github.com/zeroroot-ai/setec for the gRPC client stubs.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,7 +21,7 @@ data:
     go 1.25
 
     require (
-        github.com/zero-day-ai/setec v0.0.2
+        github.com/zeroroot-ai/setec v0.0.2
         google.golang.org/grpc v1.72.2
     )
   main.go: |
@@ -37,7 +37,7 @@ data:
         "os"
         "time"
 
-        sandboxv1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
+        sandboxv1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
         "google.golang.org/grpc"
         "google.golang.org/grpc/credentials"
     )

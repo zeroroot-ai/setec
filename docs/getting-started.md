@@ -80,7 +80,7 @@ helm install setec ./charts/setec \
   --create-namespace
 ```
 
-Helm prints a summary showing the release name, namespace, and the resources it created. There is a `Deployment` for the operator, a `DaemonSet` for the node-agent, a second `DaemonSet` for the `runtime-agent` (probes each node's runtime backends and writes `setec.zero-day.ai/runtime.<backend>=true` labels), a `ClusterRole`, a `ClusterRoleBinding`, a few `ServiceAccounts`, and the `Sandbox`, `SandboxClass`, and `Snapshot` `CustomResourceDefinitions`.
+Helm prints a summary showing the release name, namespace, and the resources it created. There is a `Deployment` for the operator, a `DaemonSet` for the node-agent, a second `DaemonSet` for the `runtime-agent` (probes each node's runtime backends and writes `setec.zeroroot.ai/runtime.<backend>=true` labels), a `ClusterRole`, a `ClusterRoleBinding`, a few `ServiceAccounts`, and the `Sandbox`, `SandboxClass`, and `Snapshot` `CustomResourceDefinitions`.
 
 Check the operator is healthy:
 
@@ -95,10 +95,10 @@ Both the operator pod and the node-agent pod should be `Running`. Read a few lin
 kubectl -n setec-system logs deployment/setec | head -40
 ```
 
-Look for a line like `enabled_backends: [kata-fc]` (or whichever backend you enabled) and a count of capable nodes. Check that at least one node carries the `setec.zero-day.ai/runtime.<backend>=true` label written by `runtime-agent`:
+Look for a line like `enabled_backends: [kata-fc]` (or whichever backend you enabled) and a count of capable nodes. Check that at least one node carries the `setec.zeroroot.ai/runtime.<backend>=true` label written by `runtime-agent`:
 
 ```bash
-kubectl get nodes -L setec.zero-day.ai/runtime.kata-fc
+kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc
 ```
 
 If the column is empty, go back to step 2; Setec will accept your Sandboxes but nothing will schedule.
@@ -112,7 +112,7 @@ You installed a Kubernetes operator that watches a set of custom resources, a no
 Save this manifest as `hello.yaml`:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: hello
@@ -211,7 +211,7 @@ helm uninstall setec --namespace setec-system
 To remove Setec entirely, including the CRDs (and any remaining `Sandbox` objects with them):
 
 ```bash
-kubectl delete crd sandboxes.setec.zero-day.ai sandboxclasses.setec.zero-day.ai snapshots.setec.zero-day.ai
+kubectl delete crd sandboxes.setec.zeroroot.ai sandboxclasses.setec.zeroroot.ai snapshots.setec.zeroroot.ai
 ```
 
 Kata can stay; it's harmless on its own. If you want it gone, follow the upstream [kata-deploy uninstall](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy) procedure.

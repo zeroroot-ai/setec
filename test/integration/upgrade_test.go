@@ -51,9 +51,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	runtimepkg "github.com/zero-day-ai/setec/internal/runtime"
-	"github.com/zero-day-ai/setec/internal/webhook"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/webhook"
 )
 
 // upgradeTestEnv is process-wide state for the upgrade integration suite.

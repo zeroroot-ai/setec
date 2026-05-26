@@ -48,7 +48,7 @@ type CapabilityResult struct {
 type Probe interface {
 	// Name returns a short, lowercase, hyphen-separated identifier for the
 	// backend, e.g. "kata-fc", "kata-qemu", "gvisor", "runc". The value is
-	// used as the label suffix: setec.zero-day.ai/runtime.<Name()>.
+	// used as the label suffix: setec.zeroroot.ai/runtime.<Name()>.
 	Name() string
 
 	// Check performs the capability detection and returns a result whose

@@ -1,7 +1,7 @@
 # This rule is not used by the project setec itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants full permissions ('*') over setec.setec.zero-day.ai.
+# Grants full permissions ('*') over setec.setec.zeroroot.ai.
 # This role is intended for users authorized to modify roles and bindings within the cluster,
 # enabling them to delegate specific permissions to other users or groups as needed.
 
@@ -14,13 +14,13 @@ metadata:
   name: sandbox-admin-role
 rules:
 - apiGroups:
-  - setec.setec.zero-day.ai
+  - setec.setec.zeroroot.ai
   resources:
   - sandboxes
   verbs:
   - '*'
 - apiGroups:
-  - setec.setec.zero-day.ai
+  - setec.setec.zeroroot.ai
   resources:
   - sandboxes/status
   verbs:

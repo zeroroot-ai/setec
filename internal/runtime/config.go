@@ -69,7 +69,7 @@ type BackendConfig struct {
 	RuntimeClassName string `yaml:"runtimeClassName" json:"runtimeClassName"`
 
 	// DevOnly gates the backend so it is only usable from namespaces carrying
-	// the label setec.zero-day.ai/allow-dev-runtimes=true.  Intended for runc.
+	// the label setec.zeroroot.ai/allow-dev-runtimes=true.  Intended for runc.
 	DevOnly bool `yaml:"devOnly,omitempty" json:"devOnly,omitempty"`
 
 	// DefaultOverhead is the resource overhead the backend's Dispatcher returns

@@ -1,6 +1,6 @@
 # Setec - AI Agent Guide
 
-> **Org-level rules first:** see [`zero-day-ai/.github` → `AGENTS.md`](https://github.com/zero-day-ai/.github/blob/main/AGENTS.md) for branch / PR / commit / release / rebase rules that apply to every `zero-day-ai/*` repo. The repo-specific guide below covers setec architecture only.
+> **Org-level rules first:** see [`zeroroot-ai/.github` → `AGENTS.md`](https://github.com/zeroroot-ai/.github/blob/main/AGENTS.md) for branch / PR / commit / release / rebase rules that apply to every `zeroroot-ai/*` repo. The repo-specific guide below covers setec architecture only.
 
 ## Project Structure
 

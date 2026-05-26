@@ -78,7 +78,7 @@ func (d *KataQEMUDispatcher) Name() string { return BackendKataQEMU }
 func (d *KataQEMUDispatcher) RuntimeClassName() string { return d.cfg.RuntimeClassName }
 
 // NodeAffinity implements Dispatcher.  It requires the node label
-// setec.zero-day.ai/runtime.kata-qemu=true and kubernetes.io/os=linux.
+// setec.zeroroot.ai/runtime.kata-qemu=true and kubernetes.io/os=linux.
 func (d *KataQEMUDispatcher) NodeAffinity() *corev1.NodeAffinity {
 	return requiredRuntimeNodeAffinity(runtimeAffinityLabel(BackendKataQEMU))
 }

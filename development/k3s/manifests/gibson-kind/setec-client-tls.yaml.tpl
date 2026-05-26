@@ -6,7 +6,7 @@ metadata:
   name: setec-client-tls
   namespace: gibson
   labels:
-    setec.zero-day.ai/dev-only: "true"
+    setec.zeroroot.ai/dev-only: "true"
 type: Opaque
 data:
   ca.crt: __CA_B64__

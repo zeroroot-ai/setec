@@ -27,12 +27,12 @@ metadata:
     cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
   {{- end }}
 webhooks:
-  - name: vsandbox.setec.zero-day.ai
+  - name: vsandbox.setec.zeroroot.ai
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: {{ .Values.webhook.failurePolicy }}
     rules:
-      - apiGroups: ["setec.zero-day.ai"]
+      - apiGroups: ["setec.zeroroot.ai"]
         apiVersions: ["v1alpha1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["sandboxes"]
@@ -41,7 +41,7 @@ webhooks:
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}
-        path: /validate-setec-zero-day-ai-v1alpha1-sandbox
+        path: /validate-setec-zeroroot-ai-v1alpha1-sandbox
         port: 443
 {{- if .Values.webhook.certManager.enabled }}
 ---

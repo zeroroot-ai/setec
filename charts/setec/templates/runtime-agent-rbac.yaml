@@ -17,11 +17,11 @@ metadata:
     app.kubernetes.io/component: runtime-agent
 rules:
   # The runtime-agent reads the node it runs on and writes the
-  # setec.zero-day.ai/runtime.<backend>=true|false labels.
+  # setec.zeroroot.ai/runtime.<backend>=true|false labels.
   #
   # Note: RBAC cannot restrict WHICH labels a client may set on nodes —
   # label scoping is not representable in the RBAC policy language.
-  # The agent is trusted to only touch its own setec.zero-day.ai/runtime.*
+  # The agent is trusted to only touch its own setec.zeroroot.ai/runtime.*
   # label prefix; see internal/nodeagent/labels.go for the strategic-merge
   # patch that enforces this in code.
   - apiGroups: [""]

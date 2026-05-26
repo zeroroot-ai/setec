@@ -51,13 +51,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/firecracker"
-	"github.com/zero-day-ai/setec/internal/nodeagent"
-	"github.com/zero-day-ai/setec/internal/nodeagent/grpcserver"
-	"github.com/zero-day-ai/setec/internal/nodeagent/pool"
-	"github.com/zero-day-ai/setec/internal/snapshot/storage"
+	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 const (

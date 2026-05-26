@@ -42,10 +42,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1grpc "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/frontend"
-	"github.com/zero-day-ai/setec/internal/tenancy"
+	setecv1alpha1grpc "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/frontend"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -65,7 +65,7 @@ func main() {
 	flag.StringVar(&tlsCert, "tls-cert", "", "Path to server TLS certificate. Required.")
 	flag.StringVar(&tlsKey, "tls-key", "", "Path to server TLS key. Required.")
 	flag.StringVar(&tlsClientCA, "tls-client-ca", "", "Path to client-CA bundle enabling mTLS. Required.")
-	flag.StringVar(&tenantLabelKey, "tenant-namespace-label", "setec.zero-day.ai/tenant",
+	flag.StringVar(&tenantLabelKey, "tenant-namespace-label", "setec.zeroroot.ai/tenant",
 		"Label key used to map tenant → namespace.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
 	flag.DurationVar(&shutdownGraceTime, "shutdown-grace", 30*time.Second,

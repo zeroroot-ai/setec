@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
 )
 
 // GRPCDialer is the production NodeAgentDialer that opens mTLS

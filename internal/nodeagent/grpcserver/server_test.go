@@ -35,11 +35,11 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	setecgrpcv1alpha1 "github.com/zero-day-ai/setec/api/grpc/v1alpha1"
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/firecracker"
-	"github.com/zero-day-ai/setec/internal/nodeagent/pool"
-	"github.com/zero-day-ai/setec/internal/snapshot/storage"
+	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 // fakeFirecracker records calls and optionally returns errors.

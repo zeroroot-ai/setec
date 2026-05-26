@@ -6,7 +6,7 @@
 #
 # Fuzzing is CPU-hungry; set resources accordingly and keep network mode
 # set to "none" unless the target specifically needs it.
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: sec-research-sample

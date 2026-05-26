@@ -36,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/snapshot"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/snapshot"
 )
 
 const (
@@ -68,9 +68,9 @@ type SnapshotReconciler struct {
 
 // RBAC markers for the Snapshot controller.
 //
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=snapshots,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=snapshots/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=setec.zero-day.ai,resources=snapshots/finalizers,verbs=update
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=snapshots,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=snapshots/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=snapshots/finalizers,verbs=update
 
 // Reconcile drives one Snapshot CR toward its desired state.
 //

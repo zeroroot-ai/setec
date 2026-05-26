@@ -43,9 +43,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/podspec"
-	"github.com/zero-day-ai/setec/internal/status"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/status"
 )
 
 // Tunables for the Eventually-based convergence assertions. Ten seconds is

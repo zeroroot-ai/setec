@@ -28,7 +28,7 @@ kubectl debug node/<node-name> -it --image=alpine -- sh -c \
 Copy-paste starting point. Kata backends are disabled because `/dev/kvm` is not present. `runc` is installed but devOnly-gated.
 
 ```bash
-helm upgrade --install setec oci://ghcr.io/zero-day-ai/charts/setec \
+helm upgrade --install setec oci://ghcr.io/zeroroot-ai/charts/setec \
   --namespace setec-system --create-namespace \
   --set runtimes.kata-fc.enabled=false \
   --set runtimes.kata-qemu.enabled=false \
@@ -44,7 +44,7 @@ You must still install `runsc` and register a `gvisor` `RuntimeClass` on the wor
 
 ## Creating a metal pool for kata-fc
 
-If you need `kata-fc` for a subset of workloads (for example, untrusted model-agent code), run those on a dedicated bare-metal node group and leave the rest of the fleet on the default pool. Create a managed node group with a `.metal` instance type (verify current availability — `m7i.metal-24xl`, `c7i.metal-*`, `r7i.metal-*` are common at time of writing; check current vendor docs), taint it so only Sandboxes land there, and set the matching SandboxClass to request `kata-fc` with `fallback: [gvisor]`. Setec's node-agent will label the metal nodes `setec.zero-day.ai/runtime.kata-fc=true` once KVM is detected, and the scheduler will place Sandboxes accordingly. See the top-level Kata installation docs for `runsc`- and `kata-runtime`-on-EKS procedures; verify against vendor docs for your EKS version.
+If you need `kata-fc` for a subset of workloads (for example, untrusted model-agent code), run those on a dedicated bare-metal node group and leave the rest of the fleet on the default pool. Create a managed node group with a `.metal` instance type (verify current availability — `m7i.metal-24xl`, `c7i.metal-*`, `r7i.metal-*` are common at time of writing; check current vendor docs), taint it so only Sandboxes land there, and set the matching SandboxClass to request `kata-fc` with `fallback: [gvisor]`. Setec's node-agent will label the metal nodes `setec.zeroroot.ai/runtime.kata-fc=true` once KVM is detected, and the scheduler will place Sandboxes accordingly. See the top-level Kata installation docs for `runsc`- and `kata-runtime`-on-EKS procedures; verify against vendor docs for your EKS version.
 
 ## References
 

@@ -96,7 +96,7 @@ cannot run workloads without it.
 Install from the OCI chart registry:
 
 ```bash
-helm install setec oci://ghcr.io/zero-day-ai/charts/setec \
+helm install setec oci://ghcr.io/zeroroot-ai/charts/setec \
   --namespace setec-system \
   --create-namespace
 ```
@@ -127,7 +127,7 @@ kubectl -n setec-system logs deployment/setec | head -40
 
 You should see a startup log line reporting `enabled_backends: [kata-fc]`
 (or your chosen backends) and a count of capable Nodes — determined by
-the `setec.zero-day.ai/runtime.<backend>=true` labels the `runtime-agent`
+the `setec.zeroroot.ai/runtime.<backend>=true` labels the `runtime-agent`
 DaemonSet writes on each Node. If the count is zero, go back to step 2 —
 Setec will start anyway, but any `Sandbox` you apply will stay in
 `Pending` with a `NoEligibleNode` event.
@@ -135,7 +135,7 @@ Setec will start anyway, but any `Sandbox` you apply will stay in
 Check Node labels directly:
 
 ```bash
-kubectl get nodes -L setec.zero-day.ai/runtime.kata-fc
+kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc
 ```
 
 ## 4. Apply your first Sandbox
@@ -143,7 +143,7 @@ kubectl get nodes -L setec.zero-day.ai/runtime.kata-fc
 Save the following as `hello.yaml`:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: hello
@@ -228,7 +228,7 @@ Remove the CRD (this also deletes every `Sandbox` in the cluster because
 the CRD owns them):
 
 ```bash
-kubectl delete crd sandboxes.setec.zero-day.ai
+kubectl delete crd sandboxes.setec.zeroroot.ai
 ```
 
 Remove Kata Containers if you no longer need it — follow the

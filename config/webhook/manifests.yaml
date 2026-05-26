@@ -10,12 +10,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-setec-zero-day-ai-v1alpha1-sandboxclass
+      path: /mutate-setec-zeroroot-ai-v1alpha1-sandboxclass
   failurePolicy: Fail
-  name: msandboxclass.setec.zero-day.ai
+  name: msandboxclass.setec.zeroroot.ai
   rules:
   - apiGroups:
-    - setec.zero-day.ai
+    - setec.zeroroot.ai
     apiVersions:
     - v1alpha1
     operations:
@@ -36,12 +36,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-setec-zero-day-ai-v1alpha1-sandbox
+      path: /validate-setec-zeroroot-ai-v1alpha1-sandbox
   failurePolicy: Fail
-  name: vsandbox.setec.zero-day.ai
+  name: vsandbox.setec.zeroroot.ai
   rules:
   - apiGroups:
-    - setec.zero-day.ai
+    - setec.zeroroot.ai
     apiVersions:
     - v1alpha1
     operations:
@@ -56,12 +56,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-setec-zero-day-ai-v1alpha1-sandboxclass
+      path: /validate-setec-zeroroot-ai-v1alpha1-sandboxclass
   failurePolicy: Fail
-  name: vsandboxclass.setec.zero-day.ai
+  name: vsandboxclass.setec.zeroroot.ai
   rules:
   - apiGroups:
-    - setec.zero-day.ai
+    - setec.zeroroot.ai
     apiVersions:
     - v1alpha1
     operations:
@@ -76,12 +76,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-setec-zero-day-ai-v1alpha1-snapshot
+      path: /validate-setec-zeroroot-ai-v1alpha1-snapshot
   failurePolicy: Fail
-  name: vsnapshot.setec.zero-day.ai
+  name: vsnapshot.setec.zeroroot.ai
   rules:
   - apiGroups:
-    - setec.zero-day.ai
+    - setec.zeroroot.ai
     apiVersions:
     - v1alpha1
     operations:

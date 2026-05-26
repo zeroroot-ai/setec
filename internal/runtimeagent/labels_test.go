@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/zero-day-ai/setec/internal/runtimeagent/probe"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 const (
@@ -246,7 +246,7 @@ func TestApply_Transition(t *testing.T) {
 }
 
 // TestApply_PreservesUnrelatedLabels verifies that Apply does not remove
-// labels that do not share the setec.zero-day.ai/runtime. prefix.
+// labels that do not share the setec.zeroroot.ai/runtime. prefix.
 func TestApply_PreservesUnrelatedLabels(t *testing.T) {
 	t.Parallel()
 

@@ -30,7 +30,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZERODAY_ROOT="$(cd "${ROOT}/../../.." && pwd)"
 KIND_CONTEXT="${KIND_CONTEXT:-kind-gibson}"
 KUBECONFIG_K3S="${ROOT}/kubeconfig"
-RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/zero-day-ai/gibson-tool-runner:dev}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/zeroroot-ai/gibson-tool-runner:dev}"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[0;33m%s\033[0m\n' "$*"; }

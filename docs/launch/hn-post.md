@@ -35,11 +35,11 @@ Positioning against the neighbours:
 
 Setec is pre-1.0 (`v0.1.0` today). The known limitations are listed in the release notes, including that the pre-warm pool is node-local and the API is `v1alpha1`. We would rather ship honest limitations than hide them.
 
-Repo: https://github.com/zero-day-ai/setec
+Repo: https://github.com/zeroroot-ai/setec
 
-Quickstart: https://github.com/zero-day-ai/setec/blob/main/docs/quickstart.md
+Quickstart: https://github.com/zeroroot-ai/setec/blob/main/docs/quickstart.md
 
-A 15-minute narrative walkthrough: https://github.com/zero-day-ai/setec/blob/main/docs/getting-started.md
+A 15-minute narrative walkthrough: https://github.com/zeroroot-ai/setec/blob/main/docs/getting-started.md
 
 The name is a 1990s-movie reference. The goal is not to make that cute; the goal is to make hardware-isolated workloads boring infrastructure.
 

@@ -50,7 +50,7 @@ make -C "${ZERODAY_ROOT}/core/sdk" tool-runner-image TOOL=hello
 
 # 3. Load the image into k3s containerd (requires sudo).
 green "Loading image into k3s containerd (sudo required)"
-docker save ghcr.io/zero-day-ai/gibson-tool-runner:hello-dev | \
+docker save ghcr.io/zeroroot-ai/gibson-tool-runner:hello-dev | \
     sudo KUBECONFIG="${KUBECONFIG_K3S}" k3s ctr images import -
 
 # 4. Regenerate + apply mTLS client Secret to the Kind cluster (idempotent).
@@ -88,7 +88,7 @@ kubectl --context="${KIND_CONTEXT}" -n gibson logs job/hello-toolrunner-smoke
 
 # 8. Confirm a Sandbox CR appeared in k3s/gibson-dev (proves it reached Setec).
 green "Sandbox CRs observed in k3s/gibson-dev (most recent 5):"
-KUBECONFIG="${KUBECONFIG_K3S}" kubectl -n gibson-dev get sandboxes.setec.zero-day.ai \
+KUBECONFIG="${KUBECONFIG_K3S}" kubectl -n gibson-dev get sandboxes.setec.zeroroot.ai \
     --sort-by=.metadata.creationTimestamp 2>/dev/null | tail -5 || {
     red "No Sandbox CRs observed. Either the smoke did not fire or Setec did not receive it."
     exit 1

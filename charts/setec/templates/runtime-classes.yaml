@@ -20,10 +20,10 @@ metadata:
   labels:
     {{- include "setec.labels" $ | nindent 4 }}
     app.kubernetes.io/component: runtime-class
-    setec.zero-day.ai/runtime: {{ $name | quote }}
+    setec.zeroroot.ai/runtime: {{ $name | quote }}
 handler: {{ include "setec.runtimeHandler" $name }}
 scheduling:
   nodeSelector:
-    setec.zero-day.ai/runtime.{{ $name }}: "true"
+    setec.zeroroot.ai/runtime.{{ $name }}: "true"
 {{- end }}
 {{- end }}

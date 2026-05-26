@@ -8,10 +8,10 @@ type: application
 version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.28.0-0"
-home: https://github.com/zero-day-ai/setec
+home: https://github.com/zeroroot-ai/setec
 sources:
-  - https://github.com/zero-day-ai/setec
-icon: https://raw.githubusercontent.com/zero-day-ai/setec/main/docs/assets/logo-128.png
+  - https://github.com/zeroroot-ai/setec
+icon: https://raw.githubusercontent.com/zeroroot-ai/setec/main/docs/assets/logo-128.png
 keywords:
   - microvm
   - firecracker
@@ -21,4 +21,4 @@ keywords:
   - operator
 maintainers:
   - name: The Setec Authors
-    url: https://github.com/zero-day-ai/setec
+    url: https://github.com/zeroroot-ai/setec

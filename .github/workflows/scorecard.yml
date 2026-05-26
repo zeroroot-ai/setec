@@ -6,7 +6,7 @@
 # permissions to be granted at the org level. Results are uploaded as
 # SARIF to the Security tab; the badge URL after the first run will be
 #
-#   https://api.scorecard.dev/projects/github.com/zero-day-ai/setec/badge
+#   https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec/badge
 #
 # and can be placed in README.md.
 name: OSSF Scorecard

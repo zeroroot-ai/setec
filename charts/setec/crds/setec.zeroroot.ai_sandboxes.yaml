@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: sandboxes.setec.zero-day.ai
+  name: sandboxes.setec.zeroroot.ai
 spec:
-  group: setec.zero-day.ai
+  group: setec.zeroroot.ai
   names:
     kind: Sandbox
     listKind: SandboxList
@@ -19,6 +19,9 @@ spec:
   - additionalPrinterColumns:
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.runtime.chosen
+      name: Runtime
       type: string
     - jsonPath: .spec.sandboxClassName
       name: Class
@@ -434,6 +437,18 @@ spec:
                   phase. Populated on Failed (e.g. "Timeout", "ImagePullFailure",
                   "RuntimeUnavailable", "ContainerExitedNonZero").
                 type: string
+              runtime:
+                description: |-
+                  Runtime records the isolation backend selected for this Sandbox.
+                  Populated by the reconciler after backend selection; nil while Pending.
+                properties:
+                  chosen:
+                    description: |-
+                      Chosen is the name of the backend selected after evaluating the
+                      SandboxClass's primary backend and any fallback chain. One of
+                      kata-fc, kata-qemu, gvisor, or runc.
+                    type: string
+                type: object
               startedAt:
                 description: |-
                   StartedAt is the time the underlying Pod first transitioned to

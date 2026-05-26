@@ -37,7 +37,7 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
 // ServiceName is the service.name resource attribute stamped on every
@@ -48,7 +48,7 @@ const ServiceName = "setec-operator"
 // TracerName is the instrumentation-library identifier used when obtaining
 // a tracer from the TracerProvider. Keeping it constant across call sites
 // means span queries can filter on otel.library.name = setec-operator.
-const TracerName = "github.com/zero-day-ai/setec"
+const TracerName = "github.com/zeroroot-ai/setec"
 
 // TracerSandboxAttrClass is the span attribute key carrying the resolved
 // SandboxClass name.

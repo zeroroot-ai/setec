@@ -38,8 +38,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	setecv1alpha1 "github.com/zero-day-ai/setec/api/v1alpha1"
-	"github.com/zero-day-ai/setec/internal/netpol"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/netpol"
 )
 
 // TestPhase2_MultiTenantQuota installs Setec with multi-tenancy enabled,
@@ -275,7 +275,7 @@ kind: Namespace
 metadata:
   name: %s
   labels:
-    setec.zero-day.ai/tenant: %s
+    setec.zeroroot.ai/tenant: %s
 `, name, name))
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), briefWait)

@@ -4,7 +4,7 @@
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 # WARNING: runc is dev-only — it provides NO isolation beyond a standard Linux
 # container.  DO NOT enable this script in production clusters.  The runc
-# RuntimeClass carries the label setec.zero-day.ai/isolation=container-only
+# RuntimeClass carries the label setec.zeroroot.ai/isolation=container-only
 # which the Setec admission webhook uses to gate runc to dev namespaces only
 # (see internal/admission/sandboxclass_webhook.go).
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -47,12 +47,12 @@ metadata:
   labels:
     # Marks this RuntimeClass as providing container-level isolation only.
     # The Setec admission webhook enforces that only namespaces bearing
-    # setec.zero-day.ai/allow-dev-runtimes=true may reference this class.
-    setec.zero-day.ai/isolation: container-only
+    # setec.zeroroot.ai/allow-dev-runtimes=true may reference this class.
+    setec.zeroroot.ai/isolation: container-only
 handler: runc
 scheduling:
   nodeSelector:
-    setec.zero-day.ai/runtime.runc: "true"
+    setec.zeroroot.ai/runtime.runc: "true"
 EOF
 green "RuntimeClass runc applied"
 
@@ -63,9 +63,9 @@ if [[ -z "${NODE_NAME}" ]]; then
     exit 1
 fi
 
-green "Labelling node ${NODE_NAME} with setec.zero-day.ai/runtime.runc=true"
+green "Labelling node ${NODE_NAME} with setec.zeroroot.ai/runtime.runc=true"
 kubectl label node "${NODE_NAME}" \
-    "setec.zero-day.ai/runtime.runc=true" \
+    "setec.zeroroot.ai/runtime.runc=true" \
     --overwrite
 
 green "runc profile complete — RuntimeClass runc registered, node labelled."

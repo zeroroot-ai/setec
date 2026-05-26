@@ -39,7 +39,7 @@ gcloud container node-pools create setec-gvisor \
   --num-nodes 2
 
 # 2. Deploy Setec
-helm upgrade --install setec oci://ghcr.io/zero-day-ai/charts/setec \
+helm upgrade --install setec oci://ghcr.io/zeroroot-ai/charts/setec \
   --namespace setec-system --create-namespace \
   --set runtimes.kata-fc.enabled=false \
   --set runtimes.kata-qemu.enabled=false \

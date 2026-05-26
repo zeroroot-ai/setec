@@ -56,7 +56,7 @@ Set `spec.snapshot.create=true` with a `spec.snapshot.name` on any
 running Sandbox:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: workload-a
@@ -90,7 +90,7 @@ Launch a Sandbox with `spec.snapshotRef.name` pointing at the
 Snapshot:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: workload-a-restored
@@ -129,7 +129,7 @@ remain Paused before the operator transitions it to Failed with
 Declare a pool on a SandboxClass:
 
 ```yaml
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
   name: fast
@@ -183,7 +183,7 @@ the `storage.StorageBackend` interface without operator changes.
 - **GC policy**: the SnapshotReconciler deletes Snapshots whose
   TTL has elapsed AND whose reference count is zero. A Snapshot
   with live Sandbox references is never deleted automatically.
-- **Per-tenant quota**: set a `count/snapshots.setec.zero-day.ai` counter on
+- **Per-tenant quota**: set a `count/snapshots.setec.zeroroot.ai` counter on
   a namespace `ResourceQuota` to cap snapshots per tenant. The
   admission webhook enforces the quota at create time.
 - **mTLS**: the operator-to-node-agent channel is always mTLS —

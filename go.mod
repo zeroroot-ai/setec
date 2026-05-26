@@ -1,4 +1,4 @@
-module github.com/zero-day-ai/setec
+module github.com/zeroroot-ai/setec
 
 go 1.26.3
 

@@ -4,7 +4,7 @@
 # builds and injects the project tarball programmatically; this manifest is
 # for users who prefer to manage test runs as declarative Sandbox resources
 # (for example from a GitOps repository).
-apiVersion: setec.zero-day.ai/v1alpha1
+apiVersion: setec.zeroroot.ai/v1alpha1
 kind: Sandbox
 metadata:
   name: ci-sandbox-sample

@@ -34,13 +34,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/zero-day-ai/setec/internal/runtimeagent/probe"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 const (
 	// labelPrefix is the key prefix for all runtime capability labels
 	// applied by the Setec node-agent.
-	labelPrefix = "setec.zero-day.ai/runtime."
+	labelPrefix = "setec.zeroroot.ai/runtime."
 
 	// conditionType is the Kubernetes Node condition type set by Apply.
 	conditionType = "SetecRuntimes"
@@ -49,7 +49,7 @@ const (
 // Apply patches a Node with Setec runtime capability labels and a SetecRuntimes
 // status condition derived from results.
 //
-// Label key format: setec.zero-day.ai/runtime.<backend>
+// Label key format: setec.zeroroot.ai/runtime.<backend>
 // Label value: "true" when Available, "false" otherwise.
 //
 // Apply only touches labels whose keys begin with labelPrefix — it never

@@ -7,7 +7,7 @@ Six tweets. First is the headline. Middle four walk the story. Last is the ask.
 
 > We just shipped Setec v0.1.0: a Kubernetes operator that runs workloads inside Firecracker microVMs via Kata Containers. Apache 2.0, cloud-agnostic, self-hostable. `kubectl apply -f sandbox.yaml` and you have hardware isolation.
 >
-> https://github.com/zero-day-ai/setec
+> https://github.com/zeroroot-ai/setec
 
 ## 2. The problem
 
@@ -35,8 +35,8 @@ Six tweets. First is the headline. Middle four walk the story. Last is the ask.
 
 > Try it, open issues, send PRs. Non-trivial changes go through `.spec-workflow/` for visible design. Governance is in `GOVERNANCE.md`; security disclosure is in `SECURITY.md`.
 >
-> Repo: https://github.com/zero-day-ai/setec
-> Getting started: https://github.com/zero-day-ai/setec/blob/main/docs/getting-started.md
+> Repo: https://github.com/zeroroot-ai/setec
+> Getting started: https://github.com/zeroroot-ai/setec/blob/main/docs/getting-started.md
 
 ## Notes for the maintainer
 
