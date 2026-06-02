@@ -1,6 +1,19 @@
 # Setec - AI Agent Guide
 
-> **Org-level rules first:** see [`zeroroot-ai/.github` → `AGENTS.md`](https://github.com/zeroroot-ai/.github/blob/main/AGENTS.md) for branch / PR / commit / release / rebase rules that apply to every `zeroroot-ai/*` repo. The repo-specific guide below covers setec architecture only.
+> **Org-level rules first:** see [`zeroroot-ai/.github` → `AGENTS.md`](https://github.com/zeroroot-ai/.github/blob/main/AGENTS.md) for branch / PR / commit / release / rebase rules that apply to every `zeroroot-ai/*` repo.
+
+## What setec is
+
+A standalone, self-hostable Kubernetes operator that runs workloads inside
+isolated runtimes — Kata Containers with Firecracker or QEMU microVMs, gVisor,
+or `runc` (dev only). Declare a `Sandbox` CR and the operator materialises an
+isolated sandbox with lifecycle control, a gRPC frontend, snapshot/restore, and
+a pre-warm pool. Core CRDs: `Sandbox`, `SandboxClass` (selects the runtime
+backend + fallback chain), `Snapshot` (paused-VM capture; kata-fc/kata-qemu
+only). A `runtime-agent` DaemonSet probes each node and labels it
+`setec.zeroroot.ai/runtime.<backend>=true`. See `README.md` and
+`docs/runtime-backends/` for the full architecture; everything below is the
+generic kubebuilder operator workflow.
 
 ## Project Structure
 
@@ -269,32 +282,20 @@ make build-installer IMG=<registry>/<project>:tag
 kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/install.yaml
 ```
 
-### Option 2: Helm Chart
+### Option 2: kustomize deploy (controller into a live cluster)
+
+This repo does not use the kubebuilder `helm/v2-alpha` plugin — `make
+helm-deploy` / `helm-status` / `helm-uninstall` / `helm-history` /
+`helm-rollback` do not exist. The actual targets are the standard
+kustomize ones:
 
 ```bash
-kubebuilder edit --plugins=helm/v2-alpha                      # Generates dist/chart/ (default)
-kubebuilder edit --plugins=helm/v2-alpha --output-dir=charts  # Generates charts/chart/
+make install                 # apply CRDs to the cluster in ~/.kube/config
+make deploy   IMG=<img>      # deploy the controller (kustomize)
+make undeploy                # remove the controller
+make uninstall               # remove the CRDs
+make helm-lint               # lint the packaged chart, if present
 ```
-
-**For development:**
-```bash
-make helm-deploy IMG=<registry>/<project>:<tag>          # Deploy manager via Helm
-make helm-deploy IMG=$IMG HELM_EXTRA_ARGS="--set ..."    # Deploy with custom values
-make helm-status                                         # Show release status
-make helm-uninstall                                      # Remove release
-make helm-history                                        # View release history
-make helm-rollback                                       # Rollback to previous version
-```
-
-**For end users/production:**
-```bash
-helm install my-release ./<output-dir>/chart/ --namespace <ns> --create-namespace
-```
-
-**Important:** If you add webhooks or modify manifests after initial chart generation:
-1. Backup any customizations in `<output-dir>/chart/values.yaml` and `<output-dir>/chart/manager/manager.yaml`
-2. Re-run: `kubebuilder edit --plugins=helm/v2-alpha --force` (use same `--output-dir` if customized)
-3. Manually restore your custom values from the backup
 
 ### Publish Container Image
 
