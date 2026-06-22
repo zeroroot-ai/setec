@@ -1,6 +1,6 @@
 module github.com/zeroroot-ai/setec
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/containerd/containerd/v2 v2.3.1

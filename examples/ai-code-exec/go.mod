@@ -1,6 +1,6 @@
 module github.com/zeroroot-ai/setec/examples/ai-code-exec
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/zeroroot-ai/setec v0.0.0-00010101000000-000000000000
