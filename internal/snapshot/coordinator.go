@@ -34,7 +34,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -46,12 +46,12 @@ import (
 // against a hand-rolled mock, and so the controller layer can compose
 // a NodeAgentDialer that picks the right client per node.
 type NodeAgentClient interface {
-	CreateSnapshot(ctx context.Context, in *setecgrpcv1alpha1.CreateSnapshotRequest) (*setecgrpcv1alpha1.CreateSnapshotResponse, error)
-	RestoreSandbox(ctx context.Context, in *setecgrpcv1alpha1.RestoreSandboxRequest) (*setecgrpcv1alpha1.RestoreSandboxResponse, error)
-	PauseSandbox(ctx context.Context, in *setecgrpcv1alpha1.PauseSandboxRequest) (*setecgrpcv1alpha1.PauseSandboxResponse, error)
-	ResumeSandbox(ctx context.Context, in *setecgrpcv1alpha1.ResumeSandboxRequest) (*setecgrpcv1alpha1.ResumeSandboxResponse, error)
-	QueryPool(ctx context.Context, in *setecgrpcv1alpha1.QueryPoolRequest) (*setecgrpcv1alpha1.QueryPoolResponse, error)
-	DeleteSnapshot(ctx context.Context, in *setecgrpcv1alpha1.DeleteSnapshotRequest) (*setecgrpcv1alpha1.DeleteSnapshotResponse, error)
+	CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error)
+	RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error)
+	PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error)
+	ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error)
+	QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error)
+	DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error)
 }
 
 // NodeAgentDialer resolves a node name (as reported by
@@ -202,7 +202,7 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 
 	// 3. Issue the CreateSnapshot RPC.
 	socket := c.socketForPod(pod)
-	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1alpha1.CreateSnapshotRequest{
+	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
 		SandboxId:        sb.Namespace + "/" + sb.Name,
 		SnapshotId:       sb.Namespace + "-" + sb.Spec.Snapshot.Name,
 		StorageBackend:   c.backendName(),
@@ -321,7 +321,7 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: dial node-agent: %w", dialErr)
 	}
 
-	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1alpha1.RestoreSandboxRequest{
+	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId:       snap.Namespace + "-" + snap.Name,
 		StorageRef:       snap.Spec.StorageRef,
 		StorageBackend:   snap.Spec.StorageBackend,
@@ -358,7 +358,7 @@ func (c *Coordinator) Pause(ctx context.Context, sb *setecv1alpha1.Sandbox) erro
 		setSpanErr(span, dialErr.Error())
 		return dialErr
 	}
-	resp, rpcErr := na.PauseSandbox(ctx, &setecgrpcv1alpha1.PauseSandboxRequest{
+	resp, rpcErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
 		SandboxId:        sb.Namespace + "/" + sb.Name,
 		KataSocketTarget: c.socketForPod(pod),
 	})
@@ -393,7 +393,7 @@ func (c *Coordinator) DeleteSnapshot(ctx context.Context, snap *setecv1alpha1.Sn
 		setSpanErr(span, dialErr.Error())
 		return fmt.Errorf("coordinator: dial node-agent: %w", dialErr)
 	}
-	resp, rpcErr := na.DeleteSnapshot(ctx, &setecgrpcv1alpha1.DeleteSnapshotRequest{
+	resp, rpcErr := na.DeleteSnapshot(ctx, &setecgrpcv1.DeleteSnapshotRequest{
 		SnapshotId:     snap.Namespace + "-" + snap.Name,
 		StorageRef:     snap.Spec.StorageRef,
 		StorageBackend: snap.Spec.StorageBackend,
@@ -425,7 +425,7 @@ func (c *Coordinator) Resume(ctx context.Context, sb *setecv1alpha1.Sandbox) err
 		setSpanErr(span, dialErr.Error())
 		return dialErr
 	}
-	resp, rpcErr := na.ResumeSandbox(ctx, &setecgrpcv1alpha1.ResumeSandboxRequest{
+	resp, rpcErr := na.ResumeSandbox(ctx, &setecgrpcv1.ResumeSandboxRequest{
 		SandboxId:        sb.Namespace + "/" + sb.Name,
 		KataSocketTarget: c.socketForPod(pod),
 	})

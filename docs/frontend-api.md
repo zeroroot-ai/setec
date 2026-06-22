@@ -1,7 +1,7 @@
 # gRPC frontend
 
 The Setec frontend is an optional Deployment that exposes the
-`setec.v1alpha1.SandboxService` gRPC API. Clients that cannot (or prefer
+`setec.v1.SandboxService` gRPC API. Clients that cannot (or prefer
 not to) speak Kubernetes directly use the frontend to launch sandboxes,
 wait for completion, and tear them down. Every RPC remains subject to
 cluster-side policy: SandboxClass constraints, ResourceQuota, and
@@ -19,7 +19,7 @@ service SandboxService {
 }
 ```
 
-See `api/grpc/v1alpha1/sandbox.proto` for the full message schema.
+See `api/grpc/v1/sandbox.proto` for the full message schema.
 
 ## Authentication
 
@@ -58,7 +58,7 @@ import (
   "log"
   "os"
 
-  pb "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+  pb "github.com/zeroroot-ai/setec/api/grpc/v1"
   "google.golang.org/grpc"
   "google.golang.org/grpc/credentials"
 )

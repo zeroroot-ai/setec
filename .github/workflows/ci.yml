@@ -50,6 +50,41 @@ jobs:
       - name: Run buf lint
         run: buf lint
 
+  proto-breaking:
+    name: Proto WIRE-breaking gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history so buf can diff the proto against the merge base.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+
+      - name: Buf breaking (WIRE) vs main
+        # The setec.v1 SandboxService ABI is wire-stable. This gate rejects
+        # any change that breaks an existing wire encoding (changed field
+        # numbers/types, removed fields). Additive fields, renames, and doc
+        # edits pass. On the base branch (push to main) there is no diff so
+        # the gate is a no-op.
+        run: |
+          git fetch origin "${GITHUB_BASE_REF:-main}" --depth=1 || true
+          base="origin/${GITHUB_BASE_REF:-main}"
+          if git rev-parse --verify "$base" >/dev/null 2>&1; then
+            buf breaking --against ".git#ref=$base"
+          else
+            echo "No base ref to diff against; skipping breaking check."
+          fi
+
   test:
     name: Unit + envtest
     runs-on: ubuntu-latest

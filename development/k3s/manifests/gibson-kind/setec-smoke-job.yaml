@@ -37,7 +37,7 @@ data:
         "os"
         "time"
 
-        sandboxv1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+        sandboxv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
         "google.golang.org/grpc"
         "google.golang.org/grpc/credentials"
     )

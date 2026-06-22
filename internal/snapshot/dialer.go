@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 )
 
 // GRPCDialer is the production NodeAgentDialer that opens mTLS
@@ -92,35 +92,35 @@ func (d *GRPCDialer) Dial(_ context.Context, nodeName string) (NodeAgentClient, 
 	return wrapGRPC(conn), nil
 }
 
-// grpcShim adapts the generated setecv1alpha1grpc.NodeAgentServiceClient
+// grpcShim adapts the generated setecv1grpc.NodeAgentServiceClient
 // (which takes variadic grpc.CallOption) to the narrower
 // snapshot.NodeAgentClient used by the Coordinator. The adapter drops
 // the options — Phase 3 callers never set them — and is the cleanest
 // way to keep the Coordinator testable without importing gRPC.
 type grpcShim struct {
-	inner setecgrpcv1alpha1.NodeAgentServiceClient
+	inner setecgrpcv1.NodeAgentServiceClient
 }
 
 func wrapGRPC(conn *grpc.ClientConn) NodeAgentClient {
-	return &grpcShim{inner: setecgrpcv1alpha1.NewNodeAgentServiceClient(conn)}
+	return &grpcShim{inner: setecgrpcv1.NewNodeAgentServiceClient(conn)}
 }
 
-func (s *grpcShim) CreateSnapshot(ctx context.Context, in *setecgrpcv1alpha1.CreateSnapshotRequest) (*setecgrpcv1alpha1.CreateSnapshotResponse, error) {
+func (s *grpcShim) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	return s.inner.CreateSnapshot(ctx, in)
 }
-func (s *grpcShim) RestoreSandbox(ctx context.Context, in *setecgrpcv1alpha1.RestoreSandboxRequest) (*setecgrpcv1alpha1.RestoreSandboxResponse, error) {
+func (s *grpcShim) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	return s.inner.RestoreSandbox(ctx, in)
 }
-func (s *grpcShim) PauseSandbox(ctx context.Context, in *setecgrpcv1alpha1.PauseSandboxRequest) (*setecgrpcv1alpha1.PauseSandboxResponse, error) {
+func (s *grpcShim) PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error) {
 	return s.inner.PauseSandbox(ctx, in)
 }
-func (s *grpcShim) ResumeSandbox(ctx context.Context, in *setecgrpcv1alpha1.ResumeSandboxRequest) (*setecgrpcv1alpha1.ResumeSandboxResponse, error) {
+func (s *grpcShim) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
 	return s.inner.ResumeSandbox(ctx, in)
 }
-func (s *grpcShim) QueryPool(ctx context.Context, in *setecgrpcv1alpha1.QueryPoolRequest) (*setecgrpcv1alpha1.QueryPoolResponse, error) {
+func (s *grpcShim) QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	return s.inner.QueryPool(ctx, in)
 }
-func (s *grpcShim) DeleteSnapshot(ctx context.Context, in *setecgrpcv1alpha1.DeleteSnapshotRequest) (*setecgrpcv1alpha1.DeleteSnapshotResponse, error) {
+func (s *grpcShim) DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	return s.inner.DeleteSnapshot(ctx, in)
 }
 

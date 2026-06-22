@@ -39,7 +39,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -47,7 +47,7 @@ import (
 
 // Server implements NodeAgentServiceServer.
 type Server struct {
-	setecgrpcv1alpha1.UnimplementedNodeAgentServiceServer
+	setecgrpcv1.UnimplementedNodeAgentServiceServer
 
 	// Storage is the backend all snapshot state is persisted to.
 	Storage storage.StorageBackend
@@ -96,7 +96,7 @@ const frameHeaderSize = 16
 // state+memory files to tempdir, concatenates them with a framing
 // header, streams the concat into Storage.Save, and returns the
 // resulting storage ref.
-func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1alpha1.CreateSnapshotRequest) (*setecgrpcv1alpha1.CreateSnapshotResponse, error) {
+func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	ctx, span := s.tracer().Start(ctx, "nodeagent.CreateSnapshot")
 	defer span.End()
 	span.SetAttributes(
@@ -150,7 +150,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1alpha1.Creat
 		return nil, status.Errorf(codes.Internal, "storage: %v", saveErr)
 	}
 
-	return &setecgrpcv1alpha1.CreateSnapshotResponse{
+	return &setecgrpcv1.CreateSnapshotResponse{
 		StorageRef: ref,
 		SizeBytes:  size,
 		Sha256:     "", // Local-disk backend writes sidecar; operator re-reads if needed.
@@ -159,7 +159,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1alpha1.Creat
 
 // RestoreSandbox reads the framed payload from storage, writes the
 // two temp files, and asks Firecracker to LoadSnapshot.
-func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1alpha1.RestoreSandboxRequest) (*setecgrpcv1alpha1.RestoreSandboxResponse, error) {
+func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	ctx, span := s.tracer().Start(ctx, "nodeagent.RestoreSandbox")
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.snapshot_id", in.GetSnapshotId()))
@@ -197,17 +197,17 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1alpha1.Resto
 
 	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
 	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
-		return &setecgrpcv1alpha1.RestoreSandboxResponse{
+		return &setecgrpcv1.RestoreSandboxResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, status.Errorf(codes.Internal, "firecracker loadSnapshot: %v", err)
 	}
 
-	return &setecgrpcv1alpha1.RestoreSandboxResponse{Success: true}, nil
+	return &setecgrpcv1.RestoreSandboxResponse{Success: true}, nil
 }
 
 // PauseSandbox is a direct wrap of firecracker.Pause.
-func (s *Server) PauseSandbox(ctx context.Context, in *setecgrpcv1alpha1.PauseSandboxRequest) (*setecgrpcv1alpha1.PauseSandboxResponse, error) {
+func (s *Server) PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error) {
 	ctx, span := s.tracer().Start(ctx, "nodeagent.PauseSandbox")
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
@@ -217,16 +217,16 @@ func (s *Server) PauseSandbox(ctx context.Context, in *setecgrpcv1alpha1.PauseSa
 	}
 	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
 	if err := fc.Pause(ctx); err != nil {
-		return &setecgrpcv1alpha1.PauseSandboxResponse{
+		return &setecgrpcv1.PauseSandboxResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, status.Errorf(codes.Internal, "firecracker pause: %v", err)
 	}
-	return &setecgrpcv1alpha1.PauseSandboxResponse{Success: true}, nil
+	return &setecgrpcv1.PauseSandboxResponse{Success: true}, nil
 }
 
 // ResumeSandbox is a direct wrap of firecracker.Resume.
-func (s *Server) ResumeSandbox(ctx context.Context, in *setecgrpcv1alpha1.ResumeSandboxRequest) (*setecgrpcv1alpha1.ResumeSandboxResponse, error) {
+func (s *Server) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
 	ctx, span := s.tracer().Start(ctx, "nodeagent.ResumeSandbox")
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
@@ -236,17 +236,17 @@ func (s *Server) ResumeSandbox(ctx context.Context, in *setecgrpcv1alpha1.Resume
 	}
 	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
 	if err := fc.Resume(ctx); err != nil {
-		return &setecgrpcv1alpha1.ResumeSandboxResponse{
+		return &setecgrpcv1.ResumeSandboxResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, status.Errorf(codes.Internal, "firecracker resume: %v", err)
 	}
-	return &setecgrpcv1alpha1.ResumeSandboxResponse{Success: true}, nil
+	return &setecgrpcv1.ResumeSandboxResponse{Success: true}, nil
 }
 
 // DeleteSnapshot invokes Storage.Delete so the state files are
 // securely erased.
-func (s *Server) DeleteSnapshot(ctx context.Context, in *setecgrpcv1alpha1.DeleteSnapshotRequest) (*setecgrpcv1alpha1.DeleteSnapshotResponse, error) {
+func (s *Server) DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	ctx, span := s.tracer().Start(ctx, "nodeagent.DeleteSnapshot")
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.storage_ref", in.GetStorageRef()))
@@ -257,30 +257,30 @@ func (s *Server) DeleteSnapshot(ctx context.Context, in *setecgrpcv1alpha1.Delet
 		if errors.Is(err, storage.ErrNotFound) {
 			// Idempotent: treat missing state as success so repeated
 			// reconciles don't churn.
-			return &setecgrpcv1alpha1.DeleteSnapshotResponse{Success: true}, nil
+			return &setecgrpcv1.DeleteSnapshotResponse{Success: true}, nil
 		}
-		return &setecgrpcv1alpha1.DeleteSnapshotResponse{
+		return &setecgrpcv1.DeleteSnapshotResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, status.Errorf(codes.Internal, "storage delete: %v", err)
 	}
-	return &setecgrpcv1alpha1.DeleteSnapshotResponse{Success: true}, nil
+	return &setecgrpcv1.DeleteSnapshotResponse{Success: true}, nil
 }
 
 // QueryPool delegates to Pool.QueryAvailable.
-func (s *Server) QueryPool(ctx context.Context, in *setecgrpcv1alpha1.QueryPoolRequest) (*setecgrpcv1alpha1.QueryPoolResponse, error) {
+func (s *Server) QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	_, span := s.tracer().Start(ctx, "nodeagent.QueryPool")
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.class", in.GetSandboxClass()))
 
 	if s.Pool == nil {
-		return &setecgrpcv1alpha1.QueryPoolResponse{}, nil
+		return &setecgrpcv1.QueryPoolResponse{}, nil
 	}
 	entries := s.Pool.QueryAvailable(in.GetSandboxClass(), in.GetImageRef())
 	now := time.Now()
-	resp := &setecgrpcv1alpha1.QueryPoolResponse{}
+	resp := &setecgrpcv1.QueryPoolResponse{}
 	for _, e := range entries {
-		resp.Entries = append(resp.Entries, &setecgrpcv1alpha1.PoolEntry{
+		resp.Entries = append(resp.Entries, &setecgrpcv1.PoolEntry{
 			EntryId:    e.ID,
 			ImageRef:   e.ImageRef,
 			Available:  true,

@@ -51,7 +51,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
@@ -410,7 +410,7 @@ func serveGRPC(ctx context.Context, addr string, srv *grpcserver.Server, opts ..
 		os.Exit(1)
 	}
 	s := grpc.NewServer(opts...)
-	setecgrpcv1alpha1.RegisterNodeAgentServiceServer(s, srv)
+	setecgrpcv1.RegisterNodeAgentServiceServer(s, srv)
 	fmt.Fprintf(os.Stderr, "node-agent: NodeAgentService listening on %s\n", addr)
 
 	go func() {

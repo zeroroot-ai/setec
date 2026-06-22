@@ -3,8 +3,8 @@ plugins:
   # Local plugins: assumes protoc-gen-go and protoc-gen-go-grpc on
   # PATH. `make proto` installs both with pinned versions if missing.
   # paths=source_relative keeps the generated files next to the
-  # .proto under api/grpc/v1alpha1/ so consumers import
-  # "github.com/zeroroot-ai/setec/api/grpc/v1alpha1" without indirection.
+  # .proto under api/grpc/v1/ so consumers import
+  # "github.com/zeroroot-ai/setec/api/grpc/v1" without indirection.
   - local: protoc-gen-go
     out: .
     opt:

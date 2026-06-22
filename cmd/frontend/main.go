@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Command frontend is the Setec gRPC frontend service. It wraps the
-// controller-runtime client, speaks setec.v1alpha1.SandboxService, and
+// controller-runtime client, speaks setec.v1.SandboxService, and
 // enforces tenant scoping on every RPC.
 package main
 
@@ -42,7 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1grpc "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/frontend"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
@@ -114,7 +114,7 @@ func main() {
 	grpcOpts := []grpc.ServerOption{grpc.Creds(creds)}
 
 	grpcServer := grpc.NewServer(grpcOpts...)
-	setecv1alpha1grpc.RegisterSandboxServiceServer(grpcServer, srv)
+	setecv1grpc.RegisterSandboxServiceServer(grpcServer, srv)
 
 	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {

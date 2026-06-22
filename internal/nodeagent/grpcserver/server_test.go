@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
@@ -104,11 +104,11 @@ func newServer(t *testing.T, fc *fakeFirecracker, p *pool.Manager) *Server {
 
 // newBufconnClient starts a gRPC server backed by srv on a bufconn
 // listener and returns a connected client.
-func newBufconnClient(t *testing.T, srv *Server) setecgrpcv1alpha1.NodeAgentServiceClient {
+func newBufconnClient(t *testing.T, srv *Server) setecgrpcv1.NodeAgentServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
 	grpcSrv := grpc.NewServer()
-	setecgrpcv1alpha1.RegisterNodeAgentServiceServer(grpcSrv, srv)
+	setecgrpcv1.RegisterNodeAgentServiceServer(grpcSrv, srv)
 	go func() { _ = grpcSrv.Serve(lis) }()
 	t.Cleanup(func() {
 		grpcSrv.Stop()
@@ -124,7 +124,7 @@ func newBufconnClient(t *testing.T, srv *Server) setecgrpcv1alpha1.NodeAgentServ
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return setecgrpcv1alpha1.NewNodeAgentServiceClient(conn)
+	return setecgrpcv1.NewNodeAgentServiceClient(conn)
 }
 
 func TestCreateSnapshot_Happy(t *testing.T) {
@@ -134,7 +134,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := cli.CreateSnapshot(ctx, &setecgrpcv1alpha1.CreateSnapshotRequest{
+	resp, err := cli.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
 		SandboxId:        "ns/s",
 		SnapshotId:       "snap-1",
 		StorageBackend:   "local-disk",
@@ -170,7 +170,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 func TestCreateSnapshot_MissingSnapshotID(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1alpha1.CreateSnapshotRequest{
+	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SourceKataSocket: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
@@ -181,7 +181,7 @@ func TestCreateSnapshot_MissingSnapshotID(t *testing.T) {
 func TestCreateSnapshot_MissingSocket(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1alpha1.CreateSnapshotRequest{
+	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SnapshotId: "s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
@@ -192,7 +192,7 @@ func TestCreateSnapshot_MissingSocket(t *testing.T) {
 func TestCreateSnapshot_PauseErrorPropagates(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("already paused")}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1alpha1.CreateSnapshotRequest{
+	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SnapshotId: "s", SourceKataSocket: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
@@ -206,7 +206,7 @@ func TestCreateSnapshot_InsufficientStorage(t *testing.T) {
 	// Swap backend for one that always returns ErrInsufficientStorage.
 	srv.Storage = &stubBackend{saveErr: storage.ErrInsufficientStorage}
 	cli := newBufconnClient(t, srv)
-	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1alpha1.CreateSnapshotRequest{
+	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SnapshotId: "x", SourceKataSocket: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.ResourceExhausted {
@@ -225,7 +225,7 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	if _, _, err := srv.Storage.Save(ctx, "snap-r", bytes.NewReader(framed)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1alpha1.RestoreSandboxRequest{
+	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId:       "snap-r",
 		StorageRef:       "snap-r",
 		StorageBackend:   "local-disk",
@@ -245,11 +245,11 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 func TestRestoreSandbox_MissingArgs(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1alpha1.RestoreSandboxRequest{})
+	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
 	}
-	_, err = cli.RestoreSandbox(context.Background(), &setecgrpcv1alpha1.RestoreSandboxRequest{StorageRef: "r"})
+	_, err = cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{StorageRef: "r"})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
 	}
@@ -258,7 +258,7 @@ func TestRestoreSandbox_MissingArgs(t *testing.T) {
 func TestRestoreSandbox_NotFound(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1alpha1.RestoreSandboxRequest{
+	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId: "ghost", StorageRef: "ghost", KataSocketTarget: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.NotFound {
@@ -271,7 +271,7 @@ func TestRestoreSandbox_Corrupted(t *testing.T) {
 	srv := newServer(t, fc, nil)
 	srv.Storage = &stubBackend{openErr: storage.ErrCorrupted}
 	cli := newBufconnClient(t, srv)
-	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1alpha1.RestoreSandboxRequest{
+	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId: "s", StorageRef: "r", KataSocketTarget: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.DataLoss {
@@ -288,7 +288,7 @@ func TestRestoreSandbox_LoadSnapshotError(t *testing.T) {
 	if _, _, err := srv.Storage.Save(ctx, "snap-b", bytes.NewReader(framed)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1alpha1.RestoreSandboxRequest{
+	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId: "snap-b", StorageRef: "snap-b", KataSocketTarget: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
@@ -299,7 +299,7 @@ func TestRestoreSandbox_LoadSnapshotError(t *testing.T) {
 func TestPauseSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	resp, err := cli.PauseSandbox(context.Background(), &setecgrpcv1alpha1.PauseSandboxRequest{
+	resp, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
 		SandboxId: "ns/s", KataSocketTarget: "/s",
 	})
 	if err != nil {
@@ -315,7 +315,7 @@ func TestPauseSandbox_Happy(t *testing.T) {
 
 func TestPauseSandbox_MissingSocket(t *testing.T) {
 	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
-	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1alpha1.PauseSandboxRequest{})
+	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
 	}
@@ -324,7 +324,7 @@ func TestPauseSandbox_MissingSocket(t *testing.T) {
 func TestPauseSandbox_FirecrackerError(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("nope")}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1alpha1.PauseSandboxRequest{
+	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
 		KataSocketTarget: "/s",
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
@@ -335,7 +335,7 @@ func TestPauseSandbox_FirecrackerError(t *testing.T) {
 func TestResumeSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
-	resp, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1alpha1.ResumeSandboxRequest{
+	resp, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1.ResumeSandboxRequest{
 		KataSocketTarget: "/s",
 	})
 	if err != nil || !resp.Success {
@@ -345,7 +345,7 @@ func TestResumeSandbox_Happy(t *testing.T) {
 
 func TestResumeSandbox_MissingSocket(t *testing.T) {
 	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
-	_, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1alpha1.ResumeSandboxRequest{})
+	_, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1.ResumeSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
 	}
@@ -354,7 +354,7 @@ func TestResumeSandbox_MissingSocket(t *testing.T) {
 func TestQueryPool_Empty(t *testing.T) {
 	// No pool wired — returns empty response.
 	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
-	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1alpha1.QueryPoolRequest{SandboxClass: "x"})
+	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1.QueryPoolRequest{SandboxClass: "x"})
 	if err != nil {
 		t.Fatalf("QueryPool: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestQueryPool_ReturnsEntries(t *testing.T) {
 
 	srv := newServer(t, &fakeFirecracker{}, pm)
 	cli := newBufconnClient(t, srv)
-	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1alpha1.QueryPoolRequest{SandboxClass: "std"})
+	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1.QueryPoolRequest{SandboxClass: "std"})
 	if err != nil {
 		t.Fatalf("QueryPool: %v", err)
 	}

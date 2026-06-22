@@ -8,9 +8,9 @@
 
 syntax = "proto3";
 
-package setec.v1alpha1;
+package setec.v1;
 
-option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1alpha1;setecv1alpha1grpc";
+option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1;setecv1grpc";
 
 // SandboxService is the gRPC frontend for launching and observing Setec
 // Sandboxes. Every operation is tenant-scoped via mTLS client certificate
@@ -18,6 +18,13 @@ option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1alpha1;setecv1alpha
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
+//
+// This is the stable v1 (setec.v1) isolation ABI. It is a general-purpose
+// microVM isolation surface and carries NO datastore, workspace-binding,
+// or zeroroot-platform coupling: Setec is a standalone OSS sandbox runtime
+// (ADR-0056) and holds no data plane. The surface is WIRE-stable — guarded
+// by `buf breaking` (WIRE) in CI — so existing wire encodings remain
+// compatible across releases.
 service SandboxService {
   // Launch creates a Sandbox CR in the caller's tenant namespace and
   // returns a sandbox id the caller can use for subsequent operations.

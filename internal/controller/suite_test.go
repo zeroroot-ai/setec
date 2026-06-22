@@ -52,7 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	classpkg "github.com/zeroroot-ai/setec/internal/class"
 	metricspkg "github.com/zeroroot-ai/setec/internal/metrics"
@@ -104,50 +104,50 @@ var (
 // individual tests can mutate behaviour through the package-wide
 // testDialer.
 type fakeNodeAgentClient struct {
-	CreateResp *setecgrpcv1alpha1.CreateSnapshotResponse
+	CreateResp *setecgrpcv1.CreateSnapshotResponse
 	CreateErr  error
-	RestoreRes *setecgrpcv1alpha1.RestoreSandboxResponse
+	RestoreRes *setecgrpcv1.RestoreSandboxResponse
 	RestoreErr error
-	PauseRes   *setecgrpcv1alpha1.PauseSandboxResponse
+	PauseRes   *setecgrpcv1.PauseSandboxResponse
 	PauseErr   error
-	ResumeRes  *setecgrpcv1alpha1.ResumeSandboxResponse
+	ResumeRes  *setecgrpcv1.ResumeSandboxResponse
 	ResumeErr  error
-	DeleteRes  *setecgrpcv1alpha1.DeleteSnapshotResponse
+	DeleteRes  *setecgrpcv1.DeleteSnapshotResponse
 	DeleteErr  error
 }
 
-func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, _ *setecgrpcv1alpha1.CreateSnapshotRequest) (*setecgrpcv1alpha1.CreateSnapshotResponse, error) {
+func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, _ *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	if f.CreateResp == nil && f.CreateErr == nil {
-		return &setecgrpcv1alpha1.CreateSnapshotResponse{
+		return &setecgrpcv1.CreateSnapshotResponse{
 			StorageRef: "test-ref", SizeBytes: 1024, Sha256: "cafe",
 		}, nil
 	}
 	return f.CreateResp, f.CreateErr
 }
-func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, _ *setecgrpcv1alpha1.RestoreSandboxRequest) (*setecgrpcv1alpha1.RestoreSandboxResponse, error) {
+func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, _ *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	if f.RestoreRes == nil && f.RestoreErr == nil {
-		return &setecgrpcv1alpha1.RestoreSandboxResponse{Success: true}, nil
+		return &setecgrpcv1.RestoreSandboxResponse{Success: true}, nil
 	}
 	return f.RestoreRes, f.RestoreErr
 }
-func (f *fakeNodeAgentClient) PauseSandbox(_ context.Context, _ *setecgrpcv1alpha1.PauseSandboxRequest) (*setecgrpcv1alpha1.PauseSandboxResponse, error) {
+func (f *fakeNodeAgentClient) PauseSandbox(_ context.Context, _ *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error) {
 	if f.PauseRes == nil && f.PauseErr == nil {
-		return &setecgrpcv1alpha1.PauseSandboxResponse{Success: true}, nil
+		return &setecgrpcv1.PauseSandboxResponse{Success: true}, nil
 	}
 	return f.PauseRes, f.PauseErr
 }
-func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, _ *setecgrpcv1alpha1.ResumeSandboxRequest) (*setecgrpcv1alpha1.ResumeSandboxResponse, error) {
+func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, _ *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
 	if f.ResumeRes == nil && f.ResumeErr == nil {
-		return &setecgrpcv1alpha1.ResumeSandboxResponse{Success: true}, nil
+		return &setecgrpcv1.ResumeSandboxResponse{Success: true}, nil
 	}
 	return f.ResumeRes, f.ResumeErr
 }
-func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1alpha1.QueryPoolRequest) (*setecgrpcv1alpha1.QueryPoolResponse, error) {
-	return &setecgrpcv1alpha1.QueryPoolResponse{}, nil
+func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
+	return &setecgrpcv1.QueryPoolResponse{}, nil
 }
-func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1alpha1.DeleteSnapshotRequest) (*setecgrpcv1alpha1.DeleteSnapshotResponse, error) {
+func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	if f.DeleteRes == nil && f.DeleteErr == nil {
-		return &setecgrpcv1alpha1.DeleteSnapshotResponse{Success: true}, nil
+		return &setecgrpcv1.DeleteSnapshotResponse{Success: true}, nil
 	}
 	return f.DeleteRes, f.DeleteErr
 }

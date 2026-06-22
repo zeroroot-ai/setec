@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package frontend hosts the gRPC server that translates
-// setec.v1alpha1.SandboxService RPCs into Sandbox CR operations. Auth
+// setec.v1.SandboxService RPCs into Sandbox CR operations. Auth
 // extraction is in this file; the service logic is in service.go.
 package frontend
 

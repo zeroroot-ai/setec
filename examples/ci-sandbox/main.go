@@ -39,7 +39,7 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	pb "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )

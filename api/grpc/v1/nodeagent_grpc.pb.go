@@ -10,9 +10,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: api/grpc/v1alpha1/nodeagent.proto
+// source: api/grpc/v1/nodeagent.proto
 
-package setecv1alpha1grpc
+package setecv1grpc
 
 import (
 	context "context"
@@ -27,12 +27,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeAgentService_CreateSnapshot_FullMethodName = "/setec.v1alpha1.NodeAgentService/CreateSnapshot"
-	NodeAgentService_RestoreSandbox_FullMethodName = "/setec.v1alpha1.NodeAgentService/RestoreSandbox"
-	NodeAgentService_PauseSandbox_FullMethodName   = "/setec.v1alpha1.NodeAgentService/PauseSandbox"
-	NodeAgentService_ResumeSandbox_FullMethodName  = "/setec.v1alpha1.NodeAgentService/ResumeSandbox"
-	NodeAgentService_QueryPool_FullMethodName      = "/setec.v1alpha1.NodeAgentService/QueryPool"
-	NodeAgentService_DeleteSnapshot_FullMethodName = "/setec.v1alpha1.NodeAgentService/DeleteSnapshot"
+	NodeAgentService_CreateSnapshot_FullMethodName = "/setec.v1.NodeAgentService/CreateSnapshot"
+	NodeAgentService_RestoreSandbox_FullMethodName = "/setec.v1.NodeAgentService/RestoreSandbox"
+	NodeAgentService_PauseSandbox_FullMethodName   = "/setec.v1.NodeAgentService/PauseSandbox"
+	NodeAgentService_ResumeSandbox_FullMethodName  = "/setec.v1.NodeAgentService/ResumeSandbox"
+	NodeAgentService_QueryPool_FullMethodName      = "/setec.v1.NodeAgentService/QueryPool"
+	NodeAgentService_DeleteSnapshot_FullMethodName = "/setec.v1.NodeAgentService/DeleteSnapshot"
 )
 
 // NodeAgentServiceClient is the client API for NodeAgentService service.
@@ -340,7 +340,7 @@ func _NodeAgentService_DeleteSnapshot_Handler(srv interface{}, ctx context.Conte
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var NodeAgentService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "setec.v1alpha1.NodeAgentService",
+	ServiceName: "setec.v1.NodeAgentService",
 	HandlerType: (*NodeAgentServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -369,5 +369,5 @@ var NodeAgentService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/grpc/v1alpha1/nodeagent.proto",
+	Metadata: "api/grpc/v1/nodeagent.proto",
 }
