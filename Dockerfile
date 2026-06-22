@@ -11,7 +11,13 @@
 # ----------------------------------------------------------------------------
 # Build stage
 # ----------------------------------------------------------------------------
-FROM golang:1.26 AS builder
+# Base images are mirror-sourced and digest-pinned for reproducibility
+# (RESTRUCTURE-QUALITY-BARS §1). Toolchain pinned to go 1.26.4 to match
+# go.mod / .tool-versions and the rest of the platform (gibson#777). To
+# refresh, mirror the new tag in zeroroot-ai/.github mirror-list.yaml,
+# then re-resolve the digest with:
+#   docker buildx imagetools inspect ghcr.io/zeroroot-ai/mirror/golang:<tag> --format '{{.Manifest.Digest}}'
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.4@sha256:792443b89f65105abba56b9bd5e97f680a80074ac62fc844a584212f8c8102c3 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG CMD=manager
@@ -46,7 +52,8 @@ RUN set -eux; \
 # Runtime stage
 # ----------------------------------------------------------------------------
 # Distroless static on Debian 12, nonroot by default (UID/GID 65532).
-FROM gcr.io/distroless/static-debian12:nonroot
+# Mirror-sourced + digest-pinned (mirror dest: distroless-static-debian12).
+FROM ghcr.io/zeroroot-ai/mirror/distroless-static-debian12:nonroot@sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1
 ARG CMD=manager
 
 WORKDIR /

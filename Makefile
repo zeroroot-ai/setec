@@ -114,6 +114,9 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+.PHONY: image
+image: docker-build ## Uniform-contract alias for docker-build (RESTRUCTURE-QUALITY-BARS §1).
+
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
@@ -193,6 +196,10 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
+
+.PHONY: bootstrap
+bootstrap: kustomize controller-gen setup-envtest golangci-lint buf ## Install all local build/test/lint tooling (uniform-contract entrypoint, RESTRUCTURE-QUALITY-BARS §1).
+	go mod download
 
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
