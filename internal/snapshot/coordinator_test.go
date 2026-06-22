@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecgrpcv1alpha1 "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/controller/testutil"
 	"github.com/zeroroot-ai/setec/internal/metrics"
@@ -43,44 +43,44 @@ import (
 // the configured response/error. Individual test cases swap the
 // response or error via the constructor.
 type fakeNodeAgentClient struct {
-	createResp *setecgrpcv1alpha1.CreateSnapshotResponse
+	createResp *setecgrpcv1.CreateSnapshotResponse
 	createErr  error
-	restoreRes *setecgrpcv1alpha1.RestoreSandboxResponse
+	restoreRes *setecgrpcv1.RestoreSandboxResponse
 	restoreErr error
-	pauseRes   *setecgrpcv1alpha1.PauseSandboxResponse
+	pauseRes   *setecgrpcv1.PauseSandboxResponse
 	pauseErr   error
-	resumeRes  *setecgrpcv1alpha1.ResumeSandboxResponse
+	resumeRes  *setecgrpcv1.ResumeSandboxResponse
 	resumeErr  error
-	deleteRes  *setecgrpcv1alpha1.DeleteSnapshotResponse
+	deleteRes  *setecgrpcv1.DeleteSnapshotResponse
 	deleteErr  error
 
 	// last request captures for assertions.
-	lastCreate  *setecgrpcv1alpha1.CreateSnapshotRequest
-	lastRestore *setecgrpcv1alpha1.RestoreSandboxRequest
-	lastPause   *setecgrpcv1alpha1.PauseSandboxRequest
-	lastResume  *setecgrpcv1alpha1.ResumeSandboxRequest
+	lastCreate  *setecgrpcv1.CreateSnapshotRequest
+	lastRestore *setecgrpcv1.RestoreSandboxRequest
+	lastPause   *setecgrpcv1.PauseSandboxRequest
+	lastResume  *setecgrpcv1.ResumeSandboxRequest
 }
 
-func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1alpha1.CreateSnapshotRequest) (*setecgrpcv1alpha1.CreateSnapshotResponse, error) {
+func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	f.lastCreate = in
 	return f.createResp, f.createErr
 }
-func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, in *setecgrpcv1alpha1.RestoreSandboxRequest) (*setecgrpcv1alpha1.RestoreSandboxResponse, error) {
+func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	f.lastRestore = in
 	return f.restoreRes, f.restoreErr
 }
-func (f *fakeNodeAgentClient) PauseSandbox(_ context.Context, in *setecgrpcv1alpha1.PauseSandboxRequest) (*setecgrpcv1alpha1.PauseSandboxResponse, error) {
+func (f *fakeNodeAgentClient) PauseSandbox(_ context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error) {
 	f.lastPause = in
 	return f.pauseRes, f.pauseErr
 }
-func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, in *setecgrpcv1alpha1.ResumeSandboxRequest) (*setecgrpcv1alpha1.ResumeSandboxResponse, error) {
+func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
 	f.lastResume = in
 	return f.resumeRes, f.resumeErr
 }
-func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1alpha1.QueryPoolRequest) (*setecgrpcv1alpha1.QueryPoolResponse, error) {
+func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	return nil, nil
 }
-func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1alpha1.DeleteSnapshotRequest) (*setecgrpcv1alpha1.DeleteSnapshotResponse, error) {
+func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	return f.deleteRes, f.deleteErr
 }
 
@@ -175,7 +175,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{
-		createResp: &setecgrpcv1alpha1.CreateSnapshotResponse{
+		createResp: &setecgrpcv1.CreateSnapshotResponse{
 			StorageRef: "t-a-snap-1", SizeBytes: 1024, Sha256: "cafe",
 		},
 	}
@@ -329,7 +329,7 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1alpha1.RestoreSandboxResponse{Success: true},
+		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true},
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
 
@@ -364,7 +364,7 @@ func TestRestoreSandbox_RPCError(t *testing.T) {
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1alpha1.RestoreSandboxResponse{Success: false, Error: "kernel mismatch"},
+		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: "kernel mismatch"},
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
 	if err := coord.RestoreSandbox(context.Background(), sb, snap); err == nil {
@@ -384,7 +384,7 @@ func TestPauseSandbox_Happy(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
-	na := &fakeNodeAgentClient{pauseRes: &setecgrpcv1alpha1.PauseSandboxResponse{Success: true}}
+	na := &fakeNodeAgentClient{pauseRes: &setecgrpcv1.PauseSandboxResponse{Success: true}}
 	coord := newCoord(c, &fakeDialer{client: na})
 	if err := coord.Pause(context.Background(), sb); err != nil {
 		t.Fatalf("Pause: %v", err)
@@ -398,7 +398,7 @@ func TestPauseSandbox_Failure(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
-	na := &fakeNodeAgentClient{pauseRes: &setecgrpcv1alpha1.PauseSandboxResponse{Success: false, Error: "vm creating"}}
+	na := &fakeNodeAgentClient{pauseRes: &setecgrpcv1.PauseSandboxResponse{Success: false, Error: "vm creating"}}
 	coord := newCoord(c, &fakeDialer{client: na})
 	if err := coord.Pause(context.Background(), sb); err == nil {
 		t.Fatalf("expected error")
@@ -409,7 +409,7 @@ func TestResumeSandbox_Happy(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
-	na := &fakeNodeAgentClient{resumeRes: &setecgrpcv1alpha1.ResumeSandboxResponse{Success: true}}
+	na := &fakeNodeAgentClient{resumeRes: &setecgrpcv1.ResumeSandboxResponse{Success: true}}
 	coord := newCoord(c, &fakeDialer{client: na})
 	if err := coord.Resume(context.Background(), sb); err != nil {
 		t.Fatalf("Resume: %v", err)
@@ -420,7 +420,7 @@ func TestResumeSandbox_Failure(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
-	na := &fakeNodeAgentClient{resumeRes: &setecgrpcv1alpha1.ResumeSandboxResponse{Success: false, Error: "corrupt"}}
+	na := &fakeNodeAgentClient{resumeRes: &setecgrpcv1.ResumeSandboxResponse{Success: false, Error: "corrupt"}}
 	coord := newCoord(c, &fakeDialer{client: na})
 	if err := coord.Resume(context.Background(), sb); err == nil {
 		t.Fatalf("expected error")

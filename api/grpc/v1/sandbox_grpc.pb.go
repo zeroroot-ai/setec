@@ -10,9 +10,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: api/grpc/v1alpha1/sandbox.proto
+// source: api/grpc/v1/sandbox.proto
 
-package setecv1alpha1grpc
+package setecv1grpc
 
 import (
 	context "context"
@@ -27,10 +27,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxService_Launch_FullMethodName     = "/setec.v1alpha1.SandboxService/Launch"
-	SandboxService_StreamLogs_FullMethodName = "/setec.v1alpha1.SandboxService/StreamLogs"
-	SandboxService_Wait_FullMethodName       = "/setec.v1alpha1.SandboxService/Wait"
-	SandboxService_Kill_FullMethodName       = "/setec.v1alpha1.SandboxService/Kill"
+	SandboxService_Launch_FullMethodName     = "/setec.v1.SandboxService/Launch"
+	SandboxService_StreamLogs_FullMethodName = "/setec.v1.SandboxService/StreamLogs"
+	SandboxService_Wait_FullMethodName       = "/setec.v1.SandboxService/Wait"
+	SandboxService_Kill_FullMethodName       = "/setec.v1.SandboxService/Kill"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -43,6 +43,13 @@ const (
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
+//
+// This is the stable v1 (setec.v1) isolation ABI. It is a general-purpose
+// microVM isolation surface and carries NO datastore, workspace-binding,
+// or zeroroot-platform coupling: Setec is a standalone OSS sandbox runtime
+// (ADR-0056) and holds no data plane. The surface is WIRE-stable — guarded
+// by `buf breaking` (WIRE) in CI — so existing wire encodings remain
+// compatible across releases.
 type SandboxServiceClient interface {
 	// Launch creates a Sandbox CR in the caller's tenant namespace and
 	// returns a sandbox id the caller can use for subsequent operations.
@@ -126,6 +133,13 @@ func (c *sandboxServiceClient) Kill(ctx context.Context, in *KillRequest, opts .
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
+//
+// This is the stable v1 (setec.v1) isolation ABI. It is a general-purpose
+// microVM isolation surface and carries NO datastore, workspace-binding,
+// or zeroroot-platform coupling: Setec is a standalone OSS sandbox runtime
+// (ADR-0056) and holds no data plane. The surface is WIRE-stable — guarded
+// by `buf breaking` (WIRE) in CI — so existing wire encodings remain
+// compatible across releases.
 type SandboxServiceServer interface {
 	// Launch creates a Sandbox CR in the caller's tenant namespace and
 	// returns a sandbox id the caller can use for subsequent operations.
@@ -252,7 +266,7 @@ func _SandboxService_Kill_Handler(srv interface{}, ctx context.Context, dec func
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var SandboxService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "setec.v1alpha1.SandboxService",
+	ServiceName: "setec.v1.SandboxService",
 	HandlerType: (*SandboxServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -275,5 +289,5 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "api/grpc/v1alpha1/sandbox.proto",
+	Metadata: "api/grpc/v1/sandbox.proto",
 }

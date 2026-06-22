@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	setecv1alpha1grpc "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -72,7 +72,7 @@ type TenantResolver interface {
 // no matter what sandbox_id a caller passes, the service confirms the
 // CR is in the caller's tenant namespace before acting.
 type Service struct {
-	setecv1alpha1grpc.UnimplementedSandboxServiceServer
+	setecv1grpc.UnimplementedSandboxServiceServer
 
 	// Client is the controller-runtime client used for CR operations.
 	// Required.
@@ -139,7 +139,7 @@ func parseSandboxID(id string) (ns, name string, err error) {
 }
 
 // Launch translates LaunchRequest into a Sandbox CR create.
-func (s *Service) Launch(ctx context.Context, req *setecv1alpha1grpc.LaunchRequest) (*setecv1alpha1grpc.LaunchResponse, error) {
+func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*setecv1grpc.LaunchResponse, error) {
 	ns, err := s.resolveNamespace(ctx)
 	if err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1alpha1grpc.LaunchReque
 			"create Sandbox: %v", err)
 	}
 
-	return &setecv1alpha1grpc.LaunchResponse{
+	return &setecv1grpc.LaunchResponse{
 		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
 		Name:      sb.Name,
 		Namespace: sb.Namespace,
@@ -216,7 +216,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1alpha1grpc.LaunchReque
 
 // Wait polls the Sandbox until it reaches a terminal phase and returns.
 // The caller's context controls the timeout; no server-side deadline.
-func (s *Service) Wait(ctx context.Context, req *setecv1alpha1grpc.WaitRequest) (*setecv1alpha1grpc.WaitResponse, error) {
+func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*setecv1grpc.WaitResponse, error) {
 	ns, name, err := parseSandboxID(req.GetSandboxId())
 	if err != nil {
 		return nil, err
@@ -231,7 +231,7 @@ func (s *Service) Wait(ctx context.Context, req *setecv1alpha1grpc.WaitRequest) 
 			return nil, status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
 		}
 		if isTerminal(sb.Status.Phase) {
-			resp := &setecv1alpha1grpc.WaitResponse{
+			resp := &setecv1grpc.WaitResponse{
 				Phase:  string(sb.Status.Phase),
 				Reason: sb.Status.Reason,
 			}
@@ -250,7 +250,7 @@ func (s *Service) Wait(ctx context.Context, req *setecv1alpha1grpc.WaitRequest) 
 
 // Kill deletes the Sandbox CR. Owner-reference GC collects the Pod and
 // any NetworkPolicy.
-func (s *Service) Kill(ctx context.Context, req *setecv1alpha1grpc.KillRequest) (*setecv1alpha1grpc.KillResponse, error) {
+func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*setecv1grpc.KillResponse, error) {
 	ns, name, err := parseSandboxID(req.GetSandboxId())
 	if err != nil {
 		return nil, err
@@ -264,11 +264,11 @@ func (s *Service) Kill(ctx context.Context, req *setecv1alpha1grpc.KillRequest) 
 	}
 	if err := s.Client.Delete(ctx, sb); err != nil {
 		if apierrors.IsNotFound(err) {
-			return &setecv1alpha1grpc.KillResponse{}, nil
+			return &setecv1grpc.KillResponse{}, nil
 		}
 		return nil, status.Errorf(grpcCodeFor(err), "delete Sandbox: %v", err)
 	}
-	return &setecv1alpha1grpc.KillResponse{}, nil
+	return &setecv1grpc.KillResponse{}, nil
 }
 
 // StreamLogs streams the Pod's workload-container log bytes to the
@@ -281,7 +281,7 @@ func (s *Service) Kill(ctx context.Context, req *setecv1alpha1grpc.KillRequest) 
 // stream open until either the underlying container exits, the client
 // cancels, or streamLogsPodPollTimeout elapses waiting for the Pod to
 // reach a loggable phase.
-func (s *Service) StreamLogs(req *setecv1alpha1grpc.StreamLogsRequest, stream setecv1alpha1grpc.SandboxService_StreamLogsServer) error {
+func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1grpc.SandboxService_StreamLogsServer) error {
 	ctx := stream.Context()
 
 	ns, name, err := parseSandboxID(req.GetSandboxId())
@@ -399,7 +399,7 @@ func podLogsAvailable(pod *corev1.Pod) bool {
 // each line as a StreamLogsResponse over the gRPC server-streaming channel. A
 // client cancel becomes a clean return (no error); a Scanner error is
 // surfaced as Internal unless it was driven by context cancellation.
-func relayLogStream(ctx context.Context, r io.Reader, stream setecv1alpha1grpc.SandboxService_StreamLogsServer) error {
+func relayLogStream(ctx context.Context, r io.Reader, stream setecv1grpc.SandboxService_StreamLogsServer) error {
 	scanner := bufio.NewScanner(r)
 	// 1 MiB per line upper bound — matches kubelet's log line limit
 	// and avoids an OOM if a workload ever emits something huge on
@@ -408,7 +408,7 @@ func relayLogStream(ctx context.Context, r io.Reader, stream setecv1alpha1grpc.S
 
 	for scanner.Scan() {
 		line := append(scanner.Bytes(), '\n')
-		chunk := &setecv1alpha1grpc.StreamLogsResponse{
+		chunk := &setecv1grpc.StreamLogsResponse{
 			Data:   append([]byte(nil), line...),
 			Stream: "stdout",
 		}

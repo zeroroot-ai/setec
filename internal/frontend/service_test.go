@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	setecv1alpha1grpc "github.com/zeroroot-ai/setec/api/grpc/v1alpha1"
+	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -75,11 +75,11 @@ func TestLaunch_AuthDisabledCreatesSandbox(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 
-	req := &setecv1alpha1grpc.LaunchRequest{
+	req := &setecv1grpc.LaunchRequest{
 		SandboxClass: "standard",
 		Image:        "alpine:3.19",
 		Command:      []string{"sh", "-c", "true"},
-		Resources:    &setecv1alpha1grpc.Resources{Vcpu: 1, Memory: "256Mi"},
+		Resources:    &setecv1grpc.Resources{Vcpu: 1, Memory: "256Mi"},
 	}
 	resp, err := s.Launch(context.Background(), req)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestLaunch_AuthDisabledCreatesSandbox(t *testing.T) {
 func TestLaunch_AuthDisabledWithoutDefault(t *testing.T) {
 	t.Parallel()
 	s := &Service{Client: newClient(t), AuthDisabled: true}
-	_, err := s.Launch(context.Background(), &setecv1alpha1grpc.LaunchRequest{
+	_, err := s.Launch(context.Background(), &setecv1grpc.LaunchRequest{
 		Image: "x", Command: []string{"x"},
 	})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -107,18 +107,18 @@ func TestLaunch_InvalidArgs(t *testing.T) {
 
 	cases := []struct {
 		name string
-		req  *setecv1alpha1grpc.LaunchRequest
+		req  *setecv1grpc.LaunchRequest
 		want codes.Code
 	}{
-		{"missing image", &setecv1alpha1grpc.LaunchRequest{Command: []string{"x"}}, codes.InvalidArgument},
-		{"missing command", &setecv1alpha1grpc.LaunchRequest{Image: "x"}, codes.InvalidArgument},
-		{"bad memory", &setecv1alpha1grpc.LaunchRequest{
+		{"missing image", &setecv1grpc.LaunchRequest{Command: []string{"x"}}, codes.InvalidArgument},
+		{"missing command", &setecv1grpc.LaunchRequest{Image: "x"}, codes.InvalidArgument},
+		{"bad memory", &setecv1grpc.LaunchRequest{
 			Image: "x", Command: []string{"x"},
-			Resources: &setecv1alpha1grpc.Resources{Vcpu: 1, Memory: "garbage"},
+			Resources: &setecv1grpc.Resources{Vcpu: 1, Memory: "garbage"},
 		}, codes.InvalidArgument},
-		{"bad timeout", &setecv1alpha1grpc.LaunchRequest{
+		{"bad timeout", &setecv1grpc.LaunchRequest{
 			Image: "x", Command: []string{"x"},
-			Lifecycle: &setecv1alpha1grpc.Lifecycle{Timeout: "notaduration"},
+			Lifecycle: &setecv1grpc.Lifecycle{Timeout: "notaduration"},
 		}, codes.InvalidArgument},
 	}
 	for _, tc := range cases {
@@ -144,7 +144,7 @@ func TestKill_TenantScopingEnforced(t *testing.T) {
 		DefaultNamespace: "team-b", // caller's tenant is b, sb is in a
 	}
 
-	_, err := s.Kill(context.Background(), &setecv1alpha1grpc.KillRequest{
+	_, err := s.Kill(context.Background(), &setecv1grpc.KillRequest{
 		SandboxId: "team-a/sb/uid-1",
 	})
 	if got := status.Code(err); got != codes.PermissionDenied {
@@ -164,7 +164,7 @@ func TestKill_HappyPath(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 
-	_, err := s.Kill(context.Background(), &setecv1alpha1grpc.KillRequest{
+	_, err := s.Kill(context.Background(), &setecv1grpc.KillRequest{
 		SandboxId: "team-a/sb/uid-1",
 	})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestKill_NotFoundIsIdempotent(t *testing.T) {
 	t.Parallel()
 	c := newClient(t)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
-	_, err := s.Kill(context.Background(), &setecv1alpha1grpc.KillRequest{
+	_, err := s.Kill(context.Background(), &setecv1grpc.KillRequest{
 		SandboxId: "team-a/missing/uid-x",
 	})
 	if err != nil {
@@ -193,7 +193,7 @@ func TestKill_NotFoundIsIdempotent(t *testing.T) {
 func TestKill_InvalidID(t *testing.T) {
 	t.Parallel()
 	s := &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: "team-a"}
-	_, err := s.Kill(context.Background(), &setecv1alpha1grpc.KillRequest{SandboxId: "malformed"})
+	_, err := s.Kill(context.Background(), &setecv1grpc.KillRequest{SandboxId: "malformed"})
 	if got := status.Code(err); got != codes.InvalidArgument {
 		t.Fatalf("code = %s, want InvalidArgument", got)
 	}
@@ -213,7 +213,7 @@ func TestWait_TerminalReturnsImmediately(t *testing.T) {
 	c := newClient(t, sb)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
 
-	resp, err := s.Wait(context.Background(), &setecv1alpha1grpc.WaitRequest{
+	resp, err := s.Wait(context.Background(), &setecv1grpc.WaitRequest{
 		SandboxId: "team-a/sb/u-1",
 	})
 	if err != nil {
@@ -248,7 +248,7 @@ func TestWait_PollsUntilTerminal(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	resp, err := s.Wait(ctx, &setecv1alpha1grpc.WaitRequest{SandboxId: "team-a/sb/u-1"})
+	resp, err := s.Wait(ctx, &setecv1grpc.WaitRequest{SandboxId: "team-a/sb/u-1"})
 	if err != nil {
 		t.Fatalf("Wait(): %v", err)
 	}
@@ -268,7 +268,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := s.Wait(ctx, &setecv1alpha1grpc.WaitRequest{SandboxId: "team-a/sb/u-1"})
+	_, err := s.Wait(ctx, &setecv1grpc.WaitRequest{SandboxId: "team-a/sb/u-1"})
 	if err == nil {
 		t.Fatal("expected deadline error")
 	}
@@ -280,18 +280,18 @@ func TestWait_ContextCancellation(t *testing.T) {
 // service emits so assertions can inspect them after the RPC returns.
 type stubStreamServer struct {
 	ctx context.Context
-	setecv1alpha1grpc.SandboxService_StreamLogsServer
+	setecv1grpc.SandboxService_StreamLogsServer
 
 	mu       sync.Mutex
-	received []*setecv1alpha1grpc.StreamLogsResponse
+	received []*setecv1grpc.StreamLogsResponse
 }
 
 func (s *stubStreamServer) Context() context.Context { return s.ctx }
 
-func (s *stubStreamServer) Send(c *setecv1alpha1grpc.StreamLogsResponse) error {
+func (s *stubStreamServer) Send(c *setecv1grpc.StreamLogsResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clone := &setecv1alpha1grpc.StreamLogsResponse{
+	clone := &setecv1grpc.StreamLogsResponse{
 		Data:   append([]byte(nil), c.GetData()...),
 		Stream: c.GetStream(),
 	}
@@ -299,10 +299,10 @@ func (s *stubStreamServer) Send(c *setecv1alpha1grpc.StreamLogsResponse) error {
 	return nil
 }
 
-func (s *stubStreamServer) Chunks() []*setecv1alpha1grpc.StreamLogsResponse {
+func (s *stubStreamServer) Chunks() []*setecv1grpc.StreamLogsResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*setecv1alpha1grpc.StreamLogsResponse, len(s.received))
+	out := make([]*setecv1grpc.StreamLogsResponse, len(s.received))
 	copy(out, s.received)
 	return out
 }
@@ -311,7 +311,7 @@ func TestStreamLogs_InvalidID(t *testing.T) {
 	t.Parallel()
 	s := &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: "team-a"}
 	stream := &stubStreamServer{ctx: context.Background()}
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{SandboxId: "malformed"}, stream)
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{SandboxId: "malformed"}, stream)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("code = %s, want InvalidArgument", status.Code(err))
 	}
@@ -321,7 +321,7 @@ func TestStreamLogs_CrossTenantDenied(t *testing.T) {
 	t.Parallel()
 	s := &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: "team-b"}
 	stream := &stubStreamServer{ctx: context.Background()}
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/uid",
 	}, stream)
 	if status.Code(err) != codes.PermissionDenied {
@@ -342,7 +342,7 @@ func TestStreamLogs_SandboxNotFound(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 	stream := &stubStreamServer{ctx: context.Background()}
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/missing/uid",
 	}, stream)
 	if status.Code(err) != codes.NotFound {
@@ -367,7 +367,7 @@ func TestStreamLogs_PodNotYetCreated(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 	stream := &stubStreamServer{ctx: context.Background()}
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/u-1",
 	}, stream)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -398,7 +398,7 @@ func TestStreamLogs_HappyPath(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 	stream := &stubStreamServer{ctx: context.Background()}
-	if err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	if err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/u-1",
 		Follow:    false,
 	}, stream); err != nil {
@@ -451,7 +451,7 @@ func TestStreamLogs_ClientCancel(t *testing.T) {
 	cancel() // cancel immediately so relay returns promptly
 	stream := &stubStreamServer{ctx: ctx}
 
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/u-1",
 		Follow:    true,
 	}, stream)
@@ -476,7 +476,7 @@ func TestStreamLogs_NoClientsetConfigured(t *testing.T) {
 		DefaultNamespace: "team-a",
 	}
 	stream := &stubStreamServer{ctx: context.Background()}
-	err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/u-1",
 	}, stream)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -486,7 +486,7 @@ func TestStreamLogs_NoClientsetConfigured(t *testing.T) {
 
 // joinChunks concatenates chunk data back into a single string for
 // substring assertions.
-func joinChunks(chunks []*setecv1alpha1grpc.StreamLogsResponse) string {
+func joinChunks(chunks []*setecv1grpc.StreamLogsResponse) string {
 	var b strings.Builder
 	for _, cc := range chunks {
 		b.Write(cc.GetData())
@@ -529,7 +529,7 @@ func TestStreamLogs_FollowPodTransitions(t *testing.T) {
 	}()
 
 	stream := &stubStreamServer{ctx: context.Background()}
-	if err := s.StreamLogs(&setecv1alpha1grpc.StreamLogsRequest{
+	if err := s.StreamLogs(&setecv1grpc.StreamLogsRequest{
 		SandboxId: "team-a/sb/u-1",
 		Follow:    true,
 	}, stream); err != nil {
@@ -575,13 +575,13 @@ func TestPodLogsAvailable_Phases(t *testing.T) {
 // of relayLogStream.
 type errorSendStream struct {
 	ctx context.Context
-	setecv1alpha1grpc.SandboxService_StreamLogsServer
+	setecv1grpc.SandboxService_StreamLogsServer
 	err error
 }
 
-func (s *errorSendStream) Context() context.Context                           { return s.ctx }
-func (s *errorSendStream) Send(_ *setecv1alpha1grpc.StreamLogsResponse) error { return s.err }
-func errForTesting(msg string) error                                          { return &simpleErr{msg} }
+func (s *errorSendStream) Context() context.Context                     { return s.ctx }
+func (s *errorSendStream) Send(_ *setecv1grpc.StreamLogsResponse) error { return s.err }
+func errForTesting(msg string) error                                    { return &simpleErr{msg} }
 
 type simpleErr struct{ s string }
 

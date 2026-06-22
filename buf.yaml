@@ -1,15 +1,28 @@
 version: v2
 modules:
   - path: .
+    # BSR module for the standalone OSS SandboxService v1 ABI. Published on
+    # release; the WIRE breaking gate (below) checks PRs against the prior
+    # state so the v1 wire format never breaks.
+    name: buf.build/zeroroot-ai/setec
+    excludes:
+      # development/k3s/.cache holds vendored kata-containers protos pulled
+      # in by the dev k3s harness. They are .gitignored build artifacts, not
+      # part of this module, and define duplicate gogoproto symbols that
+      # break `buf generate`. Keep buf scoped to the api/ tree only.
+      - development
 lint:
   use:
     - STANDARD
   except:
-    # The proto file lives under api/grpc/v1alpha1/sandbox.proto with
-    # package setec.v1alpha1. Buf's DEFAULT rule expects the directory
-    # path to match the package; we intentionally prefix with api/grpc
-    # to keep Go stubs segregated from the CRD api/ tree.
+    # The proto files live under api/grpc/v1/ with package setec.v1. Buf's
+    # DEFAULT rule expects the directory path to match the package; we
+    # intentionally prefix with api/grpc to keep Go stubs segregated from
+    # the CRD api/ tree.
     - PACKAGE_DIRECTORY_MATCH
 breaking:
+  # WIRE: the v1 ABI is wire-stable. Renames, doc edits, and additive
+  # fields are permitted; anything that breaks an existing wire encoding
+  # (changed field numbers/types, removed fields) is rejected.
   use:
-    - FILE
+    - WIRE
