@@ -92,10 +92,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	resolver := &labelTenantResolver{client: k8sClient, labelKey: tenantLabelKey}
 	srv := &frontend.Service{
 		Client:         k8sClient,
 		Clientset:      clientset,
-		TenantResolver: &labelTenantResolver{client: k8sClient, labelKey: tenantLabelKey},
+		TenantResolver: resolver,
+	}
+	leaseSrv := &frontend.LeaseService{
+		Client:         k8sClient,
+		Clientset:      clientset,
+		TenantResolver: resolver,
 	}
 
 	// mTLS is mandatory. All three flags must be populated; missing
@@ -115,6 +121,7 @@ func main() {
 
 	grpcServer := grpc.NewServer(grpcOpts...)
 	setecv1grpc.RegisterSandboxServiceServer(grpcServer, srv)
+	setecv1grpc.RegisterLeaseServiceServer(grpcServer, leaseSrv)
 
 	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -128,6 +135,10 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Bind the lease-pool background replenish loops to the process
+	// lifetime; they stop when ctx is cancelled on shutdown.
+	leaseSrv.Start(ctx)
 
 	go func() {
 		<-ctx.Done()

@@ -162,6 +162,60 @@ for {
 }
 ```
 
+## Warm-pool lease layer (`setec.v1.LeaseService`)
+
+`SandboxService.Launch` cold-boots a fresh microVM per call. For latency-
+sensitive callers the frontend also serves `setec.v1.LeaseService`, a
+warm-pool lease layer over the same isolation ABI. It keeps a pool of
+pre-warmed Sandboxes per `SandboxClass` (restored from a `Snapshot` when
+the class declares one) so a caller can claim one without paying the
+cold-boot cost.
+
+```proto
+service LeaseService {
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+  rpc Exec(ExecRequest) returns (stream ExecResponse);
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+  rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
+}
+```
+
+The contract is **Lease → Exec → Release**:
+
+- **Lease** claims a ready (warm) Sandbox for a `SandboxClass`. The pool is
+  keyed by class and sized from the class's `spec.preWarmPoolSize`, booting
+  the class's `spec.preWarmImage`. When the pool has a ready entry the call
+  is fast (`warm=true`); when empty it cold-launches on demand
+  (`warm=false`) unless `fail_if_empty` is set, in which case it returns
+  `RESOURCE_EXHAUSTED`. A class with no `preWarmImage` is rejected with
+  `FAILED_PRECONDITION`.
+- **Exec** runs the caller's command in the leased Sandbox and streams its
+  output to a terminal `done` message carrying the exit code. Exactly one
+  Exec is permitted per lease.
+- **Release** destroys the leased Sandbox — **destroy-on-release**: a dirty
+  sandbox is never reused — and replenishes the pool back to its warm
+  target. Releasing an unknown (but well-formed) lease token is an
+  idempotent no-op so cleanup paths are safe to retry.
+
+Lease tokens are tenant-scoped: a token minted for one tenant's namespace
+is rejected (`PERMISSION_DENIED`) on any other tenant's RPCs, mirroring
+`SandboxService`'s per-call namespace scoping. Pools are maintained per
+resolved tenant namespace and never cross tenant boundaries.
+
+`PoolStatus` reports the `ready` / `target` / `leased` counts for a class.
+The frontend also exports `setec_lease_pool_ready{namespace,sandbox_class}`
+and `setec_lease_pool_leased{namespace,sandbox_class}` gauges.
+
+> **Note on the runtime model.** Setec Sandboxes are one-shot: a microVM
+> runs its immutable `spec.command` then terminates, and the v1 ABI exposes
+> no in-VM exec channel. `Exec` therefore launches the caller's command as
+> a fresh workload Sandbox in the leased entry's class (snapshot-restored
+> from the class snapshot when one is configured, so it inherits the warm
+> base) rather than injecting a command into an already-running VM. The
+> warm-pool benefit is that image prefetch, scheduling, and (with a
+> snapshot) restore are already paid down. A future ADR may add an in-VM
+> exec channel to run directly inside the leased microVM.
+
 ## Rate limiting and concurrency
 
 The frontend does not itself rate-limit; it applies whatever limits
