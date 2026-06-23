@@ -120,6 +120,27 @@ type SandboxClassSpec struct {
 	// +optional
 	AllowedNetworkModes []NetworkMode `json:"allowedNetworkModes,omitempty"`
 
+	// DefaultNetworkMode is the egress posture applied to Sandboxes in
+	// this class that do not declare their own spec.network. Setting
+	// this to "none" or "egress-allow-list" makes egress DEFAULT-DENY
+	// for the class: a Sandbox that says nothing about networking is
+	// isolated rather than granted unrestricted egress (ADR-0052,
+	// setec#66). When unset the operator preserves the historical
+	// default of "full" (unrestricted) for back-compat; operators
+	// hardening a class set this to "none" to fail closed.
+	// +kubebuilder:validation:Enum=full;egress-allow-list;none
+	// +optional
+	DefaultNetworkMode NetworkMode `json:"defaultNetworkMode,omitempty"`
+
+	// DefaultEgressAllow is the class-level egress allowlist applied
+	// when DefaultNetworkMode is "egress-allow-list" and a Sandbox does
+	// not declare its own network block. It lets an administrator open a
+	// small, audited set of destinations (e.g. a package mirror) for
+	// every Sandbox in the class while keeping everything else denied.
+	// Ignored unless DefaultNetworkMode is "egress-allow-list".
+	// +optional
+	DefaultEgressAllow []NetworkAllow `json:"defaultEgressAllow,omitempty"`
+
 	// NodeSelector is injected into every Sandbox Pod produced under this
 	// class. It is additive to any Pod-level selectors the controller sets
 	// for RuntimeClass affinity.

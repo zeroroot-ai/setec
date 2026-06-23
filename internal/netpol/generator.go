@@ -101,6 +101,48 @@ func Generate(sb *setecv1alpha1.Sandbox) (*networkingv1.NetworkPolicy, error) {
 	}
 }
 
+// GenerateForClass is the default-deny-aware entry point (ADR-0052,
+// setec#66). It resolves the Sandbox's effective network posture, applying
+// the SandboxClass default when the Sandbox does not declare its own
+// spec.network, then delegates to Generate.
+//
+// The security goal is default-deny egress per SandboxClass: when a class
+// sets spec.defaultNetworkMode to "none" or "egress-allow-list", a Sandbox
+// that says nothing about networking inherits that closed posture instead of
+// the historical unrestricted-egress default. A Sandbox that DOES declare
+// spec.network always wins — the class default only fills the gap, it never
+// overrides an explicit tenant choice (which the admission webhook
+// separately constrains to the class's AllowedNetworkModes).
+//
+// GenerateForClass never mutates sb or class. A nil class behaves exactly
+// like Generate(sb): no default to apply.
+func GenerateForClass(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.SandboxClass) (*networkingv1.NetworkPolicy, error) {
+	if sb == nil {
+		return nil, ErrNilSandbox
+	}
+
+	// An explicit Sandbox network block is authoritative.
+	if sb.Spec.Network != nil {
+		return Generate(sb)
+	}
+
+	// No class, or a class with no default posture: preserve historical
+	// behaviour (mode=full → no policy → namespace default egress).
+	if class == nil || class.Spec.DefaultNetworkMode == "" || class.Spec.DefaultNetworkMode == setecv1alpha1.NetworkModeFull {
+		return Generate(sb)
+	}
+
+	// Apply the class default onto a shallow copy so the caller's object is
+	// untouched. Generate reads only sb.Spec.Network, so synthesising that
+	// block is sufficient.
+	effective := sb.DeepCopy()
+	effective.Spec.Network = &setecv1alpha1.Network{
+		Mode:  class.Spec.DefaultNetworkMode,
+		Allow: append([]setecv1alpha1.NetworkAllow(nil), class.Spec.DefaultEgressAllow...),
+	}
+	return Generate(effective)
+}
+
 // policyFor returns a NetworkPolicy skeleton with the standard metadata
 // the operator stamps on every generated policy, plus the pod selector
 // that ties the policy to the Sandbox's backing Pod.

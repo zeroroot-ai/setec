@@ -36,6 +36,61 @@ Useful details to include:
 - **Fix target:** for issues classified as Critical or High we target a patched release within 30 days of the initial assessment. Medium and Low issues are batched into the next regular release.
 - **Public disclosure:** we coordinate timing with the reporter. The default window is 90 days from the original report, or sooner if a fix ships and is broadly available. We will request a short extension only when active exploitation or a deeply invasive fix makes it necessary, and we will explain why.
 
+## Snapshot & sandbox security invariants
+
+Setec warms pools by restoring microVMs from shared Snapshots. A Snapshot is
+restored across every warm-pool claim of a SandboxClass, which creates three
+distinct risks. The invariants below are enforced in code (ADR-0052).
+
+### No secrets in a Snapshot
+
+A Snapshot is shared across every warm-pool claim, so any secret baked into
+snapshot state would leak to every future tenant that restores it. The rule
+is therefore: **secrets are injected per-lease POST-restore over the control
+plane, never present at snapshot time.**
+
+- Pre-warm pool entries (the VMs that get snapshotted) are booted purely from
+  kernel/rootfs/image. No environment variables, credentials, or secret
+  material enter the pool launch path (`internal/nodeagent/pool`). A
+  regression test (`TestLaunchOptions_CarriesNoSecretMaterial`) fails the
+  build if a secret-shaped field is ever added to the launch options.
+- Per-Sandbox secrets live only on the per-lease Pod's `env`, applied after a
+  pool entry is claimed — never on the snapshotted VM.
+- A CI **scan-gate** (`no-secrets-in-snapshot` workflow, backed by
+  `internal/snapshot/secretscan` and the `setec-snapshot-scan` CLI) fails the
+  build if a snapshot artifact contains secret-shaped material (PEM private
+  keys, provider key prefixes, JWTs, secret-shaped env assignments). The gate
+  self-tests that it rejects a known-leaky fixture, so it cannot silently
+  pass.
+
+### Default-deny egress per SandboxClass
+
+Network egress is default-deny, opened only per SandboxClass policy. A
+SandboxClass declares `spec.defaultNetworkMode` (`none` or
+`egress-allow-list`); a Sandbox in that class that does not declare its own
+`spec.network` inherits the closed posture rather than unrestricted egress
+(`internal/netpol.GenerateForClass`). An optional class-level
+`spec.defaultEgressAllow` opens a small, audited destination set for the whole
+class while keeping everything else denied. A Sandbox that explicitly declares
+its own network is constrained to the class's `allowedNetworkModes` by the
+admission webhook.
+
+The control plane between the operator and the node-agent is vsock-only /
+mTLS-only and is never reachable from the sandboxed workload's egress path.
+
+### Entropy reseed on restore (in progress)
+
+A microVM restored from a snapshot must re-seed its CSPRNG so two VMs restored
+from the same snapshot do not share RNG state (catastrophic for keys and
+nonces). A faithful reseed requires injecting fresh entropy into the guest
+over the vsock control plane post-restore, which depends on an in-guest agent
+that the current setec runtime does not yet expose. This invariant is tracked
+as a scoped follow-up; until it lands, operators MUST NOT treat a
+restored-from-snapshot VM as having a freshly-seeded CSPRNG, and workloads
+that mint keys/nonces should seed from a per-lease secret injected
+post-restore rather than relying on guest entropy alone. Setec does not ship a
+stub that falsely claims to reseed.
+
 ## Scope
 
 In scope for coordinated disclosure:

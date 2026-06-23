@@ -310,7 +310,7 @@ func (r *SandboxReconciler) handleMissingPod(
 	if res, err := r.createPod(ctx, sb, cls, pinnedNode, sel); err != nil || res.RequeueAfter > 0 {
 		return res, err
 	}
-	return r.applyNetworkPolicy(ctx, sb)
+	return r.applyNetworkPolicy(ctx, sb, cls)
 }
 
 // reconcileExistingPod handles the case where the owned Pod already exists:
@@ -326,7 +326,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	tenantID string,
 ) (ctrl.Result, error) {
 	// (9) Ensure NetworkPolicy (idempotent).
-	if _, err := r.applyNetworkPolicy(ctx, sb); err != nil {
+	if _, err := r.applyNetworkPolicy(ctx, sb, cls); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -629,11 +629,15 @@ func (r *SandboxReconciler) resolveClass(ctx context.Context, sb *setecv1alpha1.
 }
 
 // applyNetworkPolicy generates the desired NetworkPolicy from the
-// Sandbox's network intent and creates or patches it. A nil desired
-// policy (mode=full or network absent) results in a no-op — the
-// namespace default policy applies.
-func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
-	desired, err := netpol.Generate(sb)
+// Sandbox's network intent (and the resolved SandboxClass default-deny
+// posture) and creates or patches it. A nil desired policy (effective
+// mode=full or network absent with no class default) results in a no-op —
+// the namespace default policy applies. When the resolved class declares
+// spec.defaultNetworkMode=none|egress-allow-list, a Sandbox that does not
+// declare its own spec.network inherits that closed posture so egress is
+// default-deny per class (ADR-0052, setec#66).
+func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) (ctrl.Result, error) {
+	desired, err := netpol.GenerateForClass(sb, cls)
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("generate NetworkPolicy: %w", err))
 	}

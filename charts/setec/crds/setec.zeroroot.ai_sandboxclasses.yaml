@@ -85,6 +85,56 @@ spec:
                   produce a startup warning and cause the resolver to reject
                   defaulting until the ambiguity is resolved.
                 type: boolean
+              defaultEgressAllow:
+                description: |-
+                  DefaultEgressAllow is the class-level egress allowlist applied
+                  when DefaultNetworkMode is "egress-allow-list" and a Sandbox does
+                  not declare its own network block. It lets an administrator open a
+                  small, audited set of destinations (e.g. a package mirror) for
+                  every Sandbox in the class while keeping everything else denied.
+                  Ignored unless DefaultNetworkMode is "egress-allow-list".
+                items:
+                  description: |-
+                    NetworkAllow describes a single permitted egress destination when
+                    NetworkMode is egress-allow-list.
+                  properties:
+                    host:
+                      description: Host is the DNS name or IP address permitted as
+                        an egress target.
+                      minLength: 1
+                      type: string
+                    port:
+                      description: Port is the destination TCP port permitted for
+                        this host.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                  required:
+                  - host
+                  - port
+                  type: object
+                type: array
+              defaultNetworkMode:
+                allOf:
+                - enum:
+                  - full
+                  - egress-allow-list
+                  - none
+                - enum:
+                  - full
+                  - egress-allow-list
+                  - none
+                description: |-
+                  DefaultNetworkMode is the egress posture applied to Sandboxes in
+                  this class that do not declare their own spec.network. Setting
+                  this to "none" or "egress-allow-list" makes egress DEFAULT-DENY
+                  for the class: a Sandbox that says nothing about networking is
+                  isolated rather than granted unrestricted egress (ADR-0052,
+                  setec#66). When unset the operator preserves the historical
+                  default of "full" (unrestricted) for back-compat; operators
+                  hardening a class set this to "none" to fail closed.
+                type: string
               defaultResources:
                 description: |-
                   DefaultResources is the resource budget applied to Sandboxes that do

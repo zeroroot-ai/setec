@@ -145,14 +145,36 @@ func (w *SandboxClassWebhook) ValidateDelete(_ context.Context, _ *setecv1alpha1
 // validate is the shared create/update path. It aggregates all field errors so
 // users see every violation at once rather than playing whack-a-mole.
 func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
-	// Runtime may be nil when a SandboxClass without a Runtime block is applied
-	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
-	// webhooks bypassed). Treat it as "no runtime constraint to validate".
-	if class.Spec.Runtime == nil {
-		return nil, nil
+	var allErrs field.ErrorList
+
+	// Default-deny egress consistency (ADR-0052, setec#66): when a class
+	// both restricts the allowed network modes and declares a default mode,
+	// the default it would silently apply to a Sandbox MUST itself be an
+	// allowed mode. Otherwise the operator would synthesise a posture the
+	// class forbids tenants from requesting explicitly. Evaluated before the
+	// Runtime nil-check so the consistency rule holds for every SandboxClass.
+	if class.Spec.DefaultNetworkMode != "" &&
+		len(class.Spec.AllowedNetworkModes) > 0 &&
+		!slices.Contains(class.Spec.AllowedNetworkModes, class.Spec.DefaultNetworkMode) {
+		allErrs = append(allErrs, field.Invalid(
+			field.NewPath("spec", "defaultNetworkMode"),
+			class.Spec.DefaultNetworkMode,
+			fmt.Sprintf("defaultNetworkMode %q is not in allowedNetworkModes %v",
+				class.Spec.DefaultNetworkMode, class.Spec.AllowedNetworkModes),
+		))
 	}
 
-	var allErrs field.ErrorList
+	// Runtime may be nil when a SandboxClass without a Runtime block is applied
+	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
+	// webhooks bypassed). Treat it as "no runtime constraint to validate" —
+	// but still surface any network-default error accumulated above.
+	if class.Spec.Runtime == nil {
+		if len(allErrs) == 0 {
+			return nil, nil
+		}
+		return nil, allErrs.ToAggregate()
+	}
+
 	rtPath := field.NewPath("spec", "runtime")
 
 	// Rule 1: primary backend must be in the enabled set.

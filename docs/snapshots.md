@@ -191,6 +191,36 @@ the `storage.StorageBackend` interface without operator changes.
   refuse to start without their TLS cert/key/client-ca triple, and
   the Helm chart always renders the corresponding Secret mounts.
 
+## Snapshot security
+
+Snapshots are shared across warm-pool claims, so Setec enforces three
+hardening invariants (ADR-0052; full detail in `SECURITY.md`):
+
+- **No secrets in a Snapshot.** Pool entries are booted with no secret
+  material, and a CI scan-gate (`no-secrets-in-snapshot`, backed by the
+  `setec-snapshot-scan` CLI) fails the build if a snapshot artifact contains
+  secret-shaped material. Inject per-lease secrets via the Sandbox Pod `env`
+  POST-restore, never into the snapshotted VM.
+- **Default-deny egress per SandboxClass.** Set
+  `SandboxClass.spec.defaultNetworkMode: none` (or `egress-allow-list` with
+  `spec.defaultEgressAllow`) so a Sandbox that declares no `spec.network`
+  inherits a closed egress posture instead of unrestricted egress:
+
+  ```yaml
+  apiVersion: setec.zeroroot.ai/v1alpha1
+  kind: SandboxClass
+  metadata:
+    name: hardened
+  spec:
+    vmm: firecracker
+    defaultNetworkMode: egress-allow-list
+    defaultEgressAllow:
+      - {host: mirror.internal, port: 443}
+  ```
+
+- **Entropy reseed on restore** is a tracked follow-up (needs an in-guest
+  vsock agent the current runtime does not expose); see `SECURITY.md`.
+
 ## Metrics reference
 
 Phase 3 adds two collectors to the existing Prometheus suite:
