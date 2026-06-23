@@ -65,6 +65,11 @@ type PoolTemplate struct {
 	// Target is the number of warm entries the pool maintains. When zero
 	// the pool holds no standby entries and every Lease cold-launches.
 	Target int
+	// VCPU and Memory carry the resource budget warm entries are launched
+	// with (the class's DefaultResources). VCPU<=0 leaves resources unset
+	// so the operator applies the class default at admission.
+	VCPU   int32
+	Memory string
 }
 
 // SandboxRef identifies a launched Sandbox.

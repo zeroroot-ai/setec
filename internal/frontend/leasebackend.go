@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,6 +67,14 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 			Image:            tmpl.Image,
 			Command:          appendStrings(tmpl.Command, b.idleCommand),
 		},
+	}
+	if tmpl.VCPU > 0 {
+		sb.Spec.Resources = setecv1alpha1.Resources{VCPU: tmpl.VCPU}
+		if tmpl.Memory != "" {
+			if q, err := resource.ParseQuantity(tmpl.Memory); err == nil {
+				sb.Spec.Resources.Memory = q
+			}
+		}
 	}
 	if tmpl.SnapshotName != "" {
 		sb.Spec.SnapshotRef = &setecv1alpha1.SandboxSnapshotRef{Name: tmpl.SnapshotName}

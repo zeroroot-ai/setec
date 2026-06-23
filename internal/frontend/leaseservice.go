@@ -171,6 +171,10 @@ func (s *LeaseService) templateForClass(ctx context.Context, ns, className strin
 		Image:        sc.Spec.PreWarmImage,
 		Target:       int(sc.Spec.PreWarmPoolSize),
 	}
+	if sc.Spec.DefaultResources != nil {
+		tmpl.VCPU = sc.Spec.DefaultResources.VCPU
+		tmpl.Memory = sc.Spec.DefaultResources.Memory.String()
+	}
 	return tmpl, nil
 }
 
@@ -278,7 +282,13 @@ func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.Lea
 		return status.Error(codes.FailedPrecondition, "lease already has a running Exec")
 	}
 
-	// Launch the workload Sandbox carrying the caller's command.
+	// Launch the workload Sandbox carrying the caller's command, built
+	// from the leased entry's class so it inherits the same image and
+	// resource budget.
+	sc := &setecv1alpha1.SandboxClass{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: className}, sc); err != nil {
+		return status.Errorf(grpcCodeFor(err), "get SandboxClass: %v", err)
+	}
 	workload := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "exec-",
@@ -287,14 +297,15 @@ func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.Lea
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
+			Image:            sc.Spec.PreWarmImage,
 			Command:          append([]string(nil), req.GetCommand()...),
 		},
 	}
-	sc := &setecv1alpha1.SandboxClass{}
-	if err := s.Client.Get(ctx, types.NamespacedName{Name: className}, sc); err != nil {
-		return status.Errorf(grpcCodeFor(err), "get SandboxClass: %v", err)
+	// Inherit the class default resource budget so admission does not
+	// reject a Sandbox for a class that requires resources.
+	if sc.Spec.DefaultResources != nil {
+		workload.Spec.Resources = *sc.Spec.DefaultResources
 	}
-	workload.Spec.Image = sc.Spec.PreWarmImage
 	for k, v := range req.GetEnv() {
 		workload.Spec.Env = append(workload.Spec.Env, corev1.EnvVar{Name: k, Value: v})
 	}
