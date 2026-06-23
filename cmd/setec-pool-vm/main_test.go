@@ -140,6 +140,7 @@ func defaultHandler() http.Handler {
 	mux.HandleFunc("/boot-source", ok)
 	mux.HandleFunc("/drives/rootfs", ok)
 	mux.HandleFunc("/machine-config", ok)
+	mux.HandleFunc("/entropy", ok)
 	mux.HandleFunc("/actions", ok)
 	return mux
 }
@@ -390,6 +391,53 @@ func TestRunLauncher_BringUpHTTPError(t *testing.T) {
 	}
 	if !spawner.process.sentSignal(syscall.SIGTERM) {
 		t.Fatal("firecracker must be SIGTERM'd when bring-up fails")
+	}
+}
+
+// TestConfigureAndBoot_AttachesEntropyBeforeStart asserts the launcher attaches
+// the virtio-rng entropy device, and does so BEFORE InstanceStart (devices are
+// pre-boot configuration). This is the snapshot RNG-safety mechanism: a VM
+// restored from a Snapshot must reseed its CRNG from fresh host entropy rather
+// than resume with the predictable, shared RNG state captured at snapshot time
+// (ADR-0052, setec#66).
+func TestConfigureAndBoot_AttachesEntropyBeforeStart(t *testing.T) {
+	opts := tempOpts(t)
+
+	var mu sync.Mutex
+	var order []string
+	rec := func(path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			mu.Lock()
+			order = append(order, path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/boot-source", rec("/boot-source"))
+	mux.HandleFunc("/drives/rootfs", rec("/drives/rootfs"))
+	mux.HandleFunc("/machine-config", rec("/machine-config"))
+	mux.HandleFunc("/entropy", rec("/entropy"))
+	mux.HandleFunc("/actions", rec("/actions"))
+	spawner := &fakeSpawner{socketPath: opts.SocketPath, produceSocket: true, handler: mux}
+	defer spawner.closeListener()
+
+	fc := &fakeFC{snapshotWriter: goodSnapshotWriter}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runLauncher(ctx, opts, spawner, factoryReturning(fc)); err != nil {
+		t.Fatalf("runLauncher: unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	idxEntropy := slices.Index(order, "/entropy")
+	idxActions := slices.Index(order, "/actions")
+	if idxEntropy < 0 {
+		t.Fatalf("virtio-rng entropy device was not configured during bring-up; order=%v", order)
+	}
+	if idxActions < 0 || idxEntropy > idxActions {
+		t.Fatalf("entropy device must be attached before InstanceStart; order=%v", order)
 	}
 }
 
