@@ -78,18 +78,30 @@ admission webhook.
 The control plane between the operator and the node-agent is vsock-only /
 mTLS-only and is never reachable from the sandboxed workload's egress path.
 
-### Entropy reseed on restore (in progress)
+### Entropy reseed on restore
 
 A microVM restored from a snapshot must re-seed its CSPRNG so two VMs restored
 from the same snapshot do not share RNG state (catastrophic for keys and
-nonces). A faithful reseed requires injecting fresh entropy into the guest
-over the vsock control plane post-restore, which depends on an in-guest agent
-that the current setec runtime does not yet expose. This invariant is tracked
-as a scoped follow-up; until it lands, operators MUST NOT treat a
-restored-from-snapshot VM as having a freshly-seeded CSPRNG, and workloads
-that mint keys/nonces should seed from a per-lease secret injected
-post-restore rather than relying on guest entropy alone. Setec does not ship a
-stub that falsely claims to reseed.
+nonces).
+
+Every microVM is launched with a **virtio-rng (entropy) device** attached
+before `InstanceStart` (`cmd/setec-pool-vm` `configureAndBoot`; regression test
+`TestConfigureAndBoot_AttachesEntropyBeforeStart`). The device is part of the VM
+configuration, so it is captured in the snapshot and re-established on restore.
+A restored guest therefore has a continuous **host-backed** entropy source: the
+Linux `virtio-rng` driver feeds fresh host entropy into the kernel via
+`add_hwgenerator_randomness`, which reseeds the CRNG after resume rather than
+leaving it frozen at the snapshot's captured pool state. This breaks the
+shared-RNG-across-clones property without any in-guest agent.
+
+A complementary **active** reseed — pushing fresh entropy into the guest over
+the vsock control plane at the *instant* of restore (closing the brief window
+before the guest next pulls from virtio-rng) — requires an in-guest agent that
+the current setec runtime does not yet expose; it is a scoped follow-up gated
+on the runtime agent (open-core E5). Until it lands, workloads that mint
+keys/nonces immediately on resume should also seed from the per-lease secret
+injected post-restore. Setec does not ship a stub that falsely claims to
+actively reseed.
 
 ## Scope
 

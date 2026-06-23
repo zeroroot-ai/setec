@@ -337,6 +337,20 @@ func configureAndBoot(ctx context.Context, _ firecracker.Client, o Options) erro
 		return fmt.Errorf("/machine-config: %w", err)
 	}
 
+	// Attach a virtio-rng (entropy) device so the guest kernel has a
+	// continuous host-backed entropy source. This is the snapshot RNG-safety
+	// mechanism (ADR-0052, setec#66): a microVM restored from a Snapshot would
+	// otherwise resume with the exact CRNG state captured at snapshot time —
+	// every clone shares it, making nonces/keys/IDs predictable across
+	// restores. With virtio-rng present, the guest's add_hwgenerator_randomness
+	// path reseeds the kernel CRNG from fresh host entropy after resume. The
+	// device is part of the VM config, so it is captured in the snapshot and
+	// re-established on restore. No rate limiter — entropy must never be the
+	// bottleneck. Configured before InstanceStart like every other device.
+	if err := ec.do(ctx, "/entropy", map[string]any{}); err != nil {
+		return fmt.Errorf("/entropy: %w", err)
+	}
+
 	actionBody := map[string]any{"action_type": "InstanceStart"}
 	if err := ec.do(ctx, "/actions", actionBody); err != nil {
 		return fmt.Errorf("/actions InstanceStart: %w", err)
