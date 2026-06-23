@@ -233,6 +233,11 @@ func (in *SandboxClassSpec) DeepCopyInto(out *SandboxClassSpec) {
 		*out = make([]NetworkMode, len(*in))
 		copy(*out, *in)
 	}
+	if in.DefaultEgressAllow != nil {
+		in, out := &in.DefaultEgressAllow, &out.DefaultEgressAllow
+		*out = make([]NetworkAllow, len(*in))
+		copy(*out, *in)
+	}
 	if in.NodeSelector != nil {
 		in, out := &in.NodeSelector, &out.NodeSelector
 		*out = make(map[string]string, len(*in))
