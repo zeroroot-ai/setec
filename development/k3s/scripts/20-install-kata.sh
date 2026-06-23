@@ -59,25 +59,56 @@ fi
 # runtime registrations AND no imports line), skip both phases.
 # ─────────────────────────────────────────────────────────────────────────
 K3S_CONTAINERD_DIR=/var/lib/rancher/k3s/agent/etc/containerd
-K3S_TMPL="${K3S_CONTAINERD_DIR}/config.toml.tmpl"
 K3S_CONFIG="${K3S_CONTAINERD_DIR}/config.toml"
 KATA_DROPIN="${K3S_CONTAINERD_DIR}/config.toml.d/kata-deploy.toml"
 IMPORTS_LINE='imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/*.toml"]'
 
-# Has Phase B already run (template contains kata-fc runtime inline)?
+# k3s renders containerd's config.toml from a template whose FILENAME depends
+# on the containerd config version. k3s shipping containerd v2 (config
+# version 3 — k3s >= ~v1.31) renders from `config-v3.toml.tmpl`; older k3s
+# used `config.toml.tmpl`. Writing the wrong filename is silently ignored:
+# k3s regenerates a DEFAULT config.toml with no `imports` line, and
+# kata-deploy's pre-install check hard-fails ("does not import the drop-in
+# dir 'config.toml.d'"). So pick the name k3s actually consumes from the
+# version of the config it generates.
+TMPL_V3="${K3S_CONTAINERD_DIR}/config-v3.toml.tmpl"
+TMPL_V2="${K3S_CONTAINERD_DIR}/config.toml.tmpl"
+pick_tmpl_for_version() {
+    # echo the template path k3s renders from, given a containerd config version.
+    [[ "${1:-2}" -ge 3 ]] && echo "${TMPL_V3}" || echo "${TMPL_V2}"
+}
+detect_cfg_version() {
+    # containerd config version from the rendered config.toml (default 2).
+    local v
+    v=$(sudo grep -oE '^version[[:space:]]*=[[:space:]]*[0-9]+' "${K3S_CONFIG}" 2>/dev/null \
+        | grep -oE '[0-9]+$' | head -1)
+    echo "${v:-2}"
+}
+
+# Best-effort initial guess from whatever config exists now; refined in Phase A
+# once k3s has regenerated a fresh config.
+K3S_TMPL="$(pick_tmpl_for_version "$(detect_cfg_version)")"
+
+# Has Phase B already run (a template contains kata-fc runtime inline + no
+# imports line)? Check BOTH possible template filenames.
 ALREADY_INLINED=0
-if sudo test -f "${K3S_TMPL}" && \
-   sudo grep -Fq 'containerd.runtimes.kata-fc' "${K3S_TMPL}" && \
-   ! sudo grep -q '^imports = ' "${K3S_TMPL}"; then
-    ALREADY_INLINED=1
-fi
+for _t in "${TMPL_V3}" "${TMPL_V2}"; do
+    if sudo test -f "${_t}" && \
+       sudo grep -Fq 'containerd.runtimes.kata-fc' "${_t}" && \
+       ! sudo grep -q '^imports = ' "${_t}"; then
+        ALREADY_INLINED=1
+        K3S_TMPL="${_t}"
+        break
+    fi
+done
 
 if [[ ${ALREADY_INLINED} -eq 1 ]]; then
     yellow "Containerd template already contains inlined kata runtimes — skipping template writes"
 else
     green "Phase A: write imports-enabled template (required for kata-deploy pre-install check)"
     # Wipe any prior state so we start from a clean default-generated config.
-    sudo rm -f "${K3S_TMPL}" "${K3S_CONFIG}"
+    # Remove BOTH template variants — we don't yet know which one k3s renders.
+    sudo rm -f "${TMPL_V3}" "${TMPL_V2}" "${K3S_CONFIG}"
     sudo rm -rf "${K3S_CONTAINERD_DIR}/config.toml.d/"
     sudo mkdir -p "${K3S_CONTAINERD_DIR}/config.toml.d/"
     sudo systemctl restart k3s
@@ -88,6 +119,24 @@ else
         [[ $(date +%s) -gt $deadline ]] && { red "FAIL: node not Ready within 2m"; exit 1; }
         sleep 3
     done
+
+    # The node can report Ready (old k3s API answers during the restart window)
+    # before containerd has regenerated config.toml. Poll for the regenerated
+    # config so version-detection reads a real file and the wrap below doesn't
+    # `cat` a missing config.toml.
+    green "        waiting for containerd to regenerate ${K3S_CONFIG}..."
+    deadline=$(( $(date +%s) + 120 ))
+    until sudo test -s "${K3S_CONFIG}"; do
+        [[ $(date +%s) -gt $deadline ]] && { red "FAIL: k3s did not regenerate ${K3S_CONFIG} within 2m"; exit 1; }
+        sleep 2
+    done
+
+    # k3s has now regenerated a default config.toml. Pick the template FILENAME
+    # it renders from based on that config's version (config.toml.tmpl for
+    # containerd v1/config-v2, config-v3.toml.tmpl for containerd v2/config-v3).
+    CFG_VERSION="$(detect_cfg_version)"
+    K3S_TMPL="$(pick_tmpl_for_version "${CFG_VERSION}")"
+    green "        containerd config version ${CFG_VERSION} → rendering template ${K3S_TMPL}"
 
     # Now wrap the generated config.toml with the imports line prepended.
     sudo sh -c "
@@ -155,14 +204,41 @@ green "RuntimeClass kata-fc present"
 # ─────────────────────────────────────────────────────────────────────────
 if [[ ${ALREADY_INLINED} -eq 0 ]]; then
     green "Phase B: inline kata runtimes into template, remove drop-in + imports"
-    if ! sudo test -f "${KATA_DROPIN}"; then
-        red "FAIL: kata-deploy did not write ${KATA_DROPIN}. Can't inline."
-        exit 1
-    fi
+    # kata-deploy writes config.toml.d/kata-deploy.toml ASYNCHRONOUSLY: the
+    # daemonset reports Ready and the post-install Job registers the kata-fc
+    # RuntimeClass BEFORE the in-container installer finishes copying the
+    # drop-in to the host. A single `test -f` here races that write and aborts
+    # (observed with kata-deploy 3.28: drop-in landed ~1s after the check).
+    # Poll for it instead. Until Phase B runs, the drop-in is loaded via the
+    # imports line, which trips the containerd table-merge bug that wipes the
+    # base CRI plugin (node goes NotReady) — so getting here promptly matters.
+    green "        waiting for kata-deploy to POPULATE the drop-in (${KATA_DROPIN})..."
+    # Poll for the drop-in to exist *and contain the kata runtime tables*, not
+    # merely exist. kata-deploy creates the file and writes its content in
+    # separate steps; a test-f-only poll races the content write and captures
+    # an EMPTY drop-in, inlining nothing and leaving containerd with no kata
+    # runtime ("no runtime for kata-qemu is configured").
+    deadline=$(( $(date +%s) + 180 ))
+    until sudo test -f "${KATA_DROPIN}" && \
+          sudo grep -q 'containerd\.runtimes\.kata' "${KATA_DROPIN}"; do
+        if [[ $(date +%s) -gt $deadline ]]; then
+            red "FAIL: kata-deploy did not populate ${KATA_DROPIN} with kata runtimes within 3m."
+            echo '--- drop-in contents (if any) ---'; sudo cat "${KATA_DROPIN}" 2>&1 | head -20 || true
+            echo '--- kata-deploy pods ---'; kubectl -n kube-system get pods -l name=kata-deploy 2>&1 || true
+            exit 1
+        fi
+        sleep 3
+    done
+    green "        drop-in populated with kata runtimes — proceeding to inline."
 
     # Snapshot drop-in content, then remove the drop-in file so containerd
-    # never loads it via imports again.
+    # never loads it via imports again. Assert the capture is non-empty so we
+    # never silently inline an empty config.
     sudo cp "${KATA_DROPIN}" /tmp/kata-runtimes-captured.toml
+    if ! grep -q 'containerd\.runtimes\.kata' /tmp/kata-runtimes-captured.toml; then
+        red "FAIL: captured drop-in has no kata runtime tables — refusing to inline."
+        exit 1
+    fi
     sudo rm -f "${KATA_DROPIN}"
 
     # Rewrite template: the current config.toml without the imports line,
@@ -176,6 +252,13 @@ if [[ ${ALREADY_INLINED} -eq 0 ]]; then
             cat /tmp/kata-runtimes-captured.toml
         } > '${K3S_TMPL}'
     "
+
+    # Assert kata runtimes actually landed in the template before restarting
+    # k3s onto it — guards against a silently-empty inline.
+    if ! sudo grep -q 'containerd\.runtimes\.kata-fc' "${K3S_TMPL}"; then
+        red "FAIL: ${K3S_TMPL} has no kata-fc runtime after inline — aborting."
+        exit 1
+    fi
 
     sudo systemctl restart k3s
     green "        waiting for node Ready after inline-template restart..."

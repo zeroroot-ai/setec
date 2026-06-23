@@ -84,6 +84,9 @@ spec:
             - name: host-usr-bin
               mountPath: /host/usr/bin
               readOnly: true
+            - name: host-usr-local-bin
+              mountPath: /host/usr/local/bin
+              readOnly: true
             {{- if .Values.runtimeAgent.mountContainerdConfig }}
             - name: host-etc-containerd
               mountPath: /host/etc/containerd
@@ -105,6 +108,10 @@ spec:
         - name: host-usr-bin
           hostPath:
             path: /usr/bin
+        - name: host-usr-local-bin
+          hostPath:
+            path: /usr/local/bin
+            type: DirectoryOrCreate
         {{- if .Values.runtimeAgent.mountContainerdConfig }}
         - name: host-etc-containerd
           hostPath:

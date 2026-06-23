@@ -23,7 +23,24 @@
 set -eo pipefail
 
 TMPL_DIR=/var/lib/rancher/k3s/agent/etc/containerd
-TMPL=${TMPL_DIR}/config.toml.tmpl
+CONFIG=${TMPL_DIR}/config.toml
+# k3s renders containerd config from a version-specific template FILENAME:
+# config-v3.toml.tmpl for containerd v2 (config version 3, k3s >= ~v1.31) or
+# config.toml.tmpl for older. Earlier scripts (kata, gvisor) already wrote the
+# correct one; resolve to whichever exists, falling back to the version of the
+# rendered config. Appending to the wrong filename is silently ignored by k3s
+# and the snapshotter never registers.
+TMPL_V3=${TMPL_DIR}/config-v3.toml.tmpl
+TMPL_V2=${TMPL_DIR}/config.toml.tmpl
+TMPL=""
+for _t in "${TMPL_V3}" "${TMPL_V2}"; do
+    sudo test -f "${_t}" && { TMPL="${_t}"; break; }
+done
+if [[ -z "${TMPL}" ]]; then
+    _v=$(sudo grep -oE '^version[[:space:]]*=[[:space:]]*[0-9]+' "${CONFIG}" 2>/dev/null \
+        | grep -oE '[0-9]+$' | head -1)
+    [[ "${_v:-2}" -ge 3 ]] && TMPL="${TMPL_V3}" || TMPL="${TMPL_V2}"
+fi
 
 # Sizing — 50G data + 2G metadata is enough for ~40 concurrent Firecracker
 # sandboxes at an 8G base-image size each. Override via env vars if needed.
@@ -138,13 +155,29 @@ kubectl --kubeconfig="${KC}" -n gibson-dev delete pods --all --ignore-not-found=
 # 7. Verify snapshotter is registered.
 # ───────────────────────────────────────────────────────────────────────────
 green "Step 7/7: verify devmapper plugin registered with containerd"
-if sudo k3s ctr --address=/run/k3s/containerd/containerd.sock plugins ls 2>&1 | grep -E 'devmapper' | grep -q 'ok'; then
+# containerd initialises plugins asynchronously after the k3s restart: the
+# devmapper snapshotter can report non-ok for a second or two before it opens
+# the thin-pool and flips to ok. A single check races that init (observed: the
+# check failed while the very next invocation showed the plugin 'ok'), so poll
+# instead. Match the row whose ID column is exactly "devmapper" and whose
+# status column is "ok" — not a loose substring grep.
+deadline=$(( $(date +%s) + 90 ))
+devmapper_ok=0
+while [[ $(date +%s) -le ${deadline} ]]; do
+    if sudo k3s ctr --address=/run/k3s/containerd/containerd.sock plugins ls 2>/dev/null \
+         | awk '$2 == "devmapper" && $NF == "ok" {ok=1} END {exit ok?0:1}'; then
+        devmapper_ok=1
+        break
+    fi
+    sleep 3
+done
+if [[ ${devmapper_ok} -eq 1 ]]; then
     green "PASS: devmapper snapshotter is active."
     green "Next: make smoke-setec — the kata-fc sandbox should now launch."
 else
     yellow "devmapper plugin status:"
     sudo k3s ctr --address=/run/k3s/containerd/containerd.sock plugins ls 2>&1 | grep -i devmapper || true
-    red "devmapper did not register. Check: sudo journalctl -u k3s | grep -i devmapper | tail"
+    red "devmapper did not register within 90s. Check: sudo journalctl -u k3s | grep -i devmapper | tail"
     exit 1
 fi
 

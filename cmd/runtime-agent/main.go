@@ -35,8 +35,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -69,17 +69,32 @@ func main() {
 		nodeName       string
 		kubeconfig     string
 		metricsAddr    string
+		hostRoot       string
 	)
 
-	flag.StringVar(&runtimesConfig, "runtimes-config", "",
+	// Use a dedicated FlagSet, not the global flag.CommandLine: importing
+	// controller-runtime registers a "kubeconfig" flag on flag.CommandLine in
+	// an init(), so declaring our own there panics ("flag redefined:
+	// kubeconfig"). A private FlagSet keeps our flags collision-free.
+	fs := flag.NewFlagSet("runtime-agent", flag.ExitOnError)
+	fs.StringVar(&runtimesConfig, "runtimes-config", "",
 		"Path to the RuntimeConfig YAML file. Required.")
-	flag.StringVar(&nodeName, "node-name", os.Getenv("NODE_NAME"),
+	fs.StringVar(&nodeName, "node-name", os.Getenv("NODE_NAME"),
 		"Kubernetes Node this pod runs on. Defaults to $NODE_NAME.")
-	flag.StringVar(&kubeconfig, "kubeconfig", "",
+	fs.StringVar(&kubeconfig, "kubeconfig", "",
 		"Path to a kubeconfig file. Empty means in-cluster config.")
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
+	fs.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"Address for the Prometheus /metrics and /healthz HTTP endpoint.")
-	flag.Parse()
+	fs.StringVar(&hostRoot, "host-root", "/host",
+		"Filesystem prefix where the host root is mounted into this pod. The "+
+			"capability probes read <host-root>/dev/kvm, <host-root>/sys/module, "+
+			"and <host-root>/usr/{local/,}bin from here. The DaemonSet mounts the "+
+			"relevant host paths under /host; set to / only when running directly "+
+			"on a host (e.g. tests).")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime-agent: parse flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	// --- Validate required flags ----------------------------------------
 
@@ -124,12 +139,18 @@ func main() {
 
 	// --- Build probes ---------------------------------------------------
 
+	// Probes read host state through the DaemonSet's host mounts under
+	// <hostRoot> (default /host): KVM at <hostRoot>/dev/kvm, kernel modules
+	// at <hostRoot>/sys/module, and runtime binaries (runsc, runc) under
+	// <hostRoot>/usr/{local/,}bin. FSRoot="/" would read the *container's*
+	// root — which has no /dev/kvm and no runsc — making every backend probe
+	// report Available=false (the bug that left all nodes uncapable).
+	//
 	// AllowTCG is sourced from BackendConfig.Params["allowTcg"]. Because
-	// BackendConfig does not yet carry a Params map (not extended in this
-	// task), AllowTCG defaults to false. See summary for extension note.
+	// BackendConfig does not yet carry a Params map, AllowTCG defaults to false.
 	allProbes := probe.AllProbes(probe.Config{
-		FSRoot:   "/",
-		LookPath: exec.LookPath,
+		FSRoot:   hostRoot,
+		LookPath: hostLookPath(hostRoot),
 		AllowTCG: false,
 	})
 	filteredProbes := filterProbes(allProbes, cfg)
@@ -154,7 +175,7 @@ func main() {
 		Client:     c,
 		Probes:     filteredProbes,
 		NodeName:   nodeName,
-		Interval:   cfg.Defaults.Runtime.ProbeInterval,
+		Interval:   cfg.Defaults.Runtime.ProbeInterval.Duration,
 		Collectors: col,
 	}
 
@@ -183,6 +204,27 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 		return nil, fmt.Errorf("kubeconfig %q: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// hostLookPath returns a LookPath function for probe.Config that searches the
+// host's standard binary directories as mounted under root (e.g. /host). The
+// container's own $PATH cannot see host binaries like runsc, so the gvisor and
+// runc probes must look under the host mounts instead of using exec.LookPath.
+func hostLookPath(root string) func(string) (string, error) {
+	dirs := []string{
+		"/usr/local/sbin", "/usr/local/bin",
+		"/usr/sbin", "/usr/bin",
+		"/sbin", "/bin",
+	}
+	return func(file string) (string, error) {
+		for _, d := range dirs {
+			p := filepath.Join(root, d, file)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				return p, nil
+			}
+		}
+		return "", fmt.Errorf("%s not found under %s in %v", file, root, dirs)
+	}
 }
 
 // serveHTTP runs the Prometheus /metrics and /healthz HTTP endpoint until ctx

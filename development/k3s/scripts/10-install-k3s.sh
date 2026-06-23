@@ -34,12 +34,31 @@ else
         sh -
 fi
 
-# Wait for node Ready (up to 60s)
-deadline=$(( $(date +%s) + 60 ))
-while ! sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '; do
-    [[ $(date +%s) -gt $deadline ]] && { echo "FAIL: node did not reach Ready within 60s" >&2; exit 1; }
-    sleep 2
-done
+# Wait for node Ready. If k3s is already active but the node is stuck
+# NotReady — e.g. a prior bring-up's kata step left containerd's config
+# half-written and CNI never initialised ("cni plugin not initialized") —
+# restart k3s once to recover: with no custom config.toml.tmpl present k3s
+# regenerates a complete default containerd config (CNI included) and the node
+# comes back. This makes the bring-up self-healing instead of wedging.
+wait_ready() {
+    local deadline; deadline=$(( $(date +%s) + $1 ))
+    while ! sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '; do
+        [[ $(date +%s) -gt $deadline ]] && return 1
+        sleep 2
+    done
+    return 0
+}
+
+if ! wait_ready 60; then
+    yellow "node not Ready after 60s — restarting k3s to recover (regenerates containerd config + CNI)"
+    sudo systemctl restart k3s
+    if ! wait_ready 150; then
+        echo "FAIL: node did not reach Ready within 150s even after a k3s restart" >&2
+        sudo k3s kubectl get nodes 2>&1 || true
+        sudo k3s kubectl describe node setec-dev 2>&1 | grep -iE 'Ready|cni|NetworkReady' | head -10 || true
+        exit 1
+    fi
+fi
 green "Node Ready"
 
 # Export kubeconfig with rewritten server URL

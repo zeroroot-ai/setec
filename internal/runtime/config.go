@@ -24,9 +24,9 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -96,7 +96,10 @@ type RuntimeDefaults struct {
 
 	// ProbeInterval is the period between node-agent capability re-probes.
 	// Zero (default) means the node-agent uses its built-in default of 5m.
-	ProbeInterval time.Duration `yaml:"probeInterval,omitempty" json:"probeInterval,omitempty"`
+	// metav1.Duration so YAML/JSON values are duration strings ("5m"); a raw
+	// time.Duration only unmarshals integer nanoseconds and rejects the string
+	// form the chart emits.
+	ProbeInterval metav1.Duration `yaml:"probeInterval,omitempty" json:"probeInterval,omitempty"`
 
 	// NodeCapabilitiesMode is either "probe" (default, node-agent DaemonSet
 	// probes each node) or "static" (operator trusts StaticCapabilities and the

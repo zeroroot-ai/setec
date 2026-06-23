@@ -12,22 +12,26 @@
 
 set -euo pipefail
 
-# ── Pinned version ────────────────────────────────────────────────────────────
-# Check https://gvisor.dev/releases for the latest stable tag.
-# CLAIM: verify this version exists at https://storage.googleapis.com/gvisor/releases/
-# before pinning a new release in production workflows.
-GVISOR_VERSION="${GVISOR_VERSION:-release-20250909.0}"
-# SHA-512 of the runsc binary for the version above (amd64).
-# CLAIM: regenerate this hash when bumping GVISOR_VERSION:
-#   curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/20250909.0/x86_64/runsc.sha512"
-GVISOR_SHA512="${GVISOR_SHA512:-}"   # left empty so we log-and-continue on mismatch (dev-only)
+# ── Release channel ───────────────────────────────────────────────────────────
+# gVisor prunes old dated releases from its bucket, so a hardcoded date
+# eventually 404s. Track the `latest` stable channel by default (override with
+# GVISOR_VERSION=release-YYYYMMDD.0 to pin a specific build). The downloaded
+# runsc binary is still integrity-checked against upstream's runsc.sha512.
+GVISOR_VERSION="${GVISOR_VERSION:-latest}"
+# Optional extra pin: if set, the downloaded runsc must also match this sha512.
+GVISOR_SHA512="${GVISOR_SHA512:-}"   # empty → rely on upstream runsc.sha512 (dev-only)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 RUNSC_BIN=/usr/local/bin/runsc
 GVISOR_RELEASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION#release-}/x86_64"
 K3S_CONTAINERD_DIR=/var/lib/rancher/k3s/agent/etc/containerd
-K3S_TMPL="${K3S_CONTAINERD_DIR}/config.toml.tmpl"
 K3S_CONFIG="${K3S_CONTAINERD_DIR}/config.toml"
+# k3s renders containerd config from a version-specific template filename
+# (config-v3.toml.tmpl for containerd v2 / config-v3, config.toml.tmpl for
+# older). 20-install-kata.sh inlined the kata runtimes into the correct one;
+# K3S_TMPL is resolved to that same file in the registration section below.
+TMPL_V3="${K3S_CONTAINERD_DIR}/config-v3.toml.tmpl"
+TMPL_V2="${K3S_CONTAINERD_DIR}/config.toml.tmpl"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${ROOT}/kubeconfig"
@@ -47,15 +51,25 @@ done
 runsc_ok=0
 runtimeclass_ok=0
 
+containerd_ok=0
+
 if command -v runsc >/dev/null 2>&1 || [[ -x "${RUNSC_BIN}" ]]; then
     runsc_ok=1
 fi
 if kubectl get runtimeclass gvisor >/dev/null 2>&1; then
     runtimeclass_ok=1
 fi
+# Also require runsc to be registered in the RENDERED containerd config. The
+# binary + RuntimeClass can both exist while runsc is absent from containerd —
+# notably after 20-install-kata.sh's Phase A wipes & rewrites the containerd
+# template. Without this check the early exit skips re-registration and runsc
+# silently vanishes from containerd on the next bring-up.
+if sudo grep -q 'containerd\.runtimes\.runsc' "${K3S_CONFIG}" 2>/dev/null; then
+    containerd_ok=1
+fi
 
-if [[ ${runsc_ok} -eq 1 && ${runtimeclass_ok} -eq 1 ]]; then
-    yellow "gVisor already installed — runsc present and RuntimeClass gvisor exists. Skipping."
+if [[ ${runsc_ok} -eq 1 && ${runtimeclass_ok} -eq 1 && ${containerd_ok} -eq 1 ]]; then
+    yellow "gVisor already installed — runsc binary, RuntimeClass, and containerd registration all present. Skipping."
     exit 0
 fi
 
@@ -97,19 +111,55 @@ else
 fi
 
 # ── Register runsc with k3s containerd ────────────────────────────────────────
-# k3s uses a config.toml.tmpl overlay. We append a [plugins.*.runtimes.runsc]
-# stanza if it isn't already present. We edit the template (not the live config)
-# following the same Phase-B pattern used in 20-install-kata.sh.
-RUNSC_STANZA='
+# Append a runsc runtime stanza to the SAME versioned template kata inlined
+# into, using the SAME CRI runtimes table path kata used. That path differs
+# between containerd config v2 (io.containerd.grpc.v1.cri) and v3
+# (io.containerd.cri.v1.runtime), so we DERIVE it from an existing kata runtime
+# registration rather than hardcoding it (a wrong path is silently ignored by
+# containerd and runsc would never register).
+
+detect_cfg_version() {
+    local v
+    v=$(sudo grep -oE '^version[[:space:]]*=[[:space:]]*[0-9]+' "${K3S_CONFIG}" 2>/dev/null \
+        | grep -oE '[0-9]+$' | head -1)
+    echo "${v:-2}"
+}
+
+# Resolve the active template: prefer an existing one (kata wrote it), else
+# pick by the rendered config's version.
+K3S_TMPL=""
+for _t in "${TMPL_V3}" "${TMPL_V2}"; do
+    sudo test -f "${_t}" && { K3S_TMPL="${_t}"; break; }
+done
+if [[ -z "${K3S_TMPL}" ]]; then
+    [[ "$(detect_cfg_version)" -ge 3 ]] && K3S_TMPL="${TMPL_V3}" || K3S_TMPL="${TMPL_V2}"
+fi
+
+# Derive the CRI runtimes table prefix from an existing runtime registration
+# (e.g. kata-fc); fall back to the version-appropriate default if none found.
+RUNTIMES_PREFIX=""
+if sudo test -f "${K3S_TMPL}"; then
+    RUNTIMES_PREFIX=$(sudo grep -oE '\[plugins\.[^]]*containerd\.runtimes\.' "${K3S_TMPL}" 2>/dev/null | head -1)
+fi
+if [[ -z "${RUNTIMES_PREFIX}" ]]; then
+    if [[ "$(detect_cfg_version)" -ge 3 ]]; then
+        RUNTIMES_PREFIX="[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes."
+    else
+        RUNTIMES_PREFIX='[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.'
+    fi
+fi
+green "Registering runsc under CRI runtimes path: ${RUNTIMES_PREFIX}runsc]"
+
+RUNSC_STANZA="
 # ── gVisor / runsc runtime (added by 21-install-gvisor.sh) ──
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-'
+${RUNTIMES_PREFIX}runsc]
+  runtime_type = \"io.containerd.runsc.v1\"
+"
 
 needs_containerd_update=0
 
-# Determine which config file to check: prefer the Phase-B tmpl; fall back to
-# the live config.toml if the tmpl doesn't exist yet.
+# Check the resolved template (fall back to the live config) for an existing
+# runsc registration.
 CONFIG_TO_CHECK="${K3S_CONFIG}"
 if sudo test -f "${K3S_TMPL}"; then
     CONFIG_TO_CHECK="${K3S_TMPL}"
