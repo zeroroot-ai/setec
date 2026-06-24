@@ -85,7 +85,7 @@ After the Kind cluster has `host-gateway`, `make smoke-cross-cluster` applies th
 
 ### Phase 4 — Gibson integration
 
-`make smoke-integration` builds the hello-dev tool runner image, imports it into k3s containerd, applies the Gibson chart values overlay (`enterprise/deploy/helm/gibson/values-sandboxed-tools.yaml`), waits for the daemon to restart with the new config, invokes the `hello` tool against the daemon's tool-call gRPC, and asserts the response. The Sandbox CR lifecycle in `gibson-dev` namespace is verified, and the Jaeger trace ID is printed for manual verification of the `harness.CallToolProto → setec.launch → setec.wait` span tree.
+`make smoke-integration` pulls the published `gibson-executor` image, imports it into k3s containerd, applies the Gibson chart values overlay (`enterprise/deploy/helm/gibson/values-sandboxed-tools.yaml`), waits for the daemon to restart with the new config, invokes the `hello` tool against the daemon's tool-call gRPC, and asserts the response. The Sandbox CR lifecycle in `gibson-dev` namespace is verified, and the Jaeger trace ID is printed for manual verification of the `harness.CallToolProto → setec.launch → setec.wait` span tree.
 
 ## What lives where
 

@@ -1,4 +1,4 @@
-# End-to-end smoke: launch the gibson-tool-runner:hello-dev image via Setec,
+# End-to-end smoke: launch the gibson-executor image via Setec,
 # feed it GIBSON_TOOL_INPUT_B64 with a StringValue{"world"}, parse the
 # ===GIBSON_TOOL_OUTPUT=== stdout marker, and assert the decoded proto is
 # StringValue{"hello, world"}.
@@ -84,8 +84,8 @@ data:
 
         fmt.Printf("dispatching hello tool with input=%q\n", reqMsg.GetValue())
         launch, err := cli.Launch(ctx, &sandboxv1.LaunchRequest{
-            Image:   "ghcr.io/zeroroot-ai/gibson-tool-runner:hello-dev",
-            Command: []string{"/tool-runner"},
+            Image:   "ghcr.io/zeroroot-ai/gibson-executor:main",
+            Command: []string{"/usr/local/bin/gibson-runner"},
             Env: map[string]string{
                 "GIBSON_TOOL_INPUT_B64": b64In,
             },

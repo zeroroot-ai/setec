@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end smoke: gibson-tool-runner → catalog refresh → unified dispatch.
+# End-to-end smoke: gibson-executor → catalog refresh → unified dispatch.
 #
 # What this script verifies:
-#   1. A gibson-tool-runner image (task 8 OCI artifact) is reachable by Setec.
+#   1. A gibson-executor image (task 8 OCI artifact) is reachable by Setec.
 #   2. The Gibson daemon deployed with tool_runner.enabled=true runs its
 #      catalog refresher on startup and writes ComponentRegistry entries
 #      under _system tenant for every parser the runner advertises.
@@ -30,7 +30,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZERODAY_ROOT="$(cd "${ROOT}/../../.." && pwd)"
 KIND_CONTEXT="${KIND_CONTEXT:-kind-gibson}"
 KUBECONFIG_K3S="${ROOT}/kubeconfig"
-RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/zeroroot-ai/gibson-tool-runner:dev}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/zeroroot-ai/gibson-executor:main}"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[0;33m%s\033[0m\n' "$*"; }

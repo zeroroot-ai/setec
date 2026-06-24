@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end integration smoke: launches the gibson-tool-runner:hello-dev image
+# End-to-end integration smoke: launches the gibson-executor image
 # via Setec using the tool-runner ABI (GIBSON_TOOL_INPUT_B64 env in, marker-
 # framed base64 protojson on stdout out) — the same ABI the daemon's
 # SandboxedToolExecutor (core/gibson/internal/harness/sandboxed) speaks.
@@ -13,7 +13,7 @@
 #   - Kind cluster 'gibson' is up with LAN access to the host (default for Kind)
 #   - Dev mTLS PKI produced by `make pki` (scripts/30-gen-dev-pki.sh)
 #
-# This script is non-destructive: it rebuilds the tool-runner image, loads it
+# This script is non-destructive: it pulls the gibson-executor image, loads it
 # into k3s containerd, applies the smoke Job, waits for completion, and prints
 # the microVM's stdout + the PASS line.
 #
@@ -44,13 +44,15 @@ KUBECONFIG="${KUBECONFIG_K3S}" kubectl get nodes | head -3
 green "Verifying Kind cluster ${KIND_CONTEXT} (Gibson side)"
 kubectl --context="${KIND_CONTEXT}" get nodes | head -3
 
-# 2. Build the hello-dev tool-runner image.
-green "Building hello-dev tool-runner image"
-make -C "${ZERODAY_ROOT}/core/sdk" tool-runner-image TOOL=hello
+# 2. Pull the published gibson-executor image — the open Apache execution layer
+#    (build artifact, not a Go import; see setec#62). The single image dispatches
+#    any tool, incl. `hello`, via the GIBSON_TOOL_INPUT_B64 proto request.
+green "Pulling gibson-executor image"
+docker pull ghcr.io/zeroroot-ai/gibson-executor:main
 
 # 3. Load the image into k3s containerd (requires sudo).
 green "Loading image into k3s containerd (sudo required)"
-docker save ghcr.io/zeroroot-ai/gibson-tool-runner:hello-dev | \
+docker save ghcr.io/zeroroot-ai/gibson-executor:main | \
     sudo KUBECONFIG="${KUBECONFIG_K3S}" k3s ctr images import -
 
 # 4. Regenerate + apply mTLS client Secret to the Kind cluster (idempotent).
