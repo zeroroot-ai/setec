@@ -337,6 +337,18 @@ nodeAgent:
   thinpoolDataDevice: ""
   thinpoolMetadataDevice: ""
   fillThreshold: 80
+  # containerdSocket is the containerd Unix socket the agent dials for image
+  # prefetch and for the orphan-sandbox reaper's CRI calls. k3s uses
+  # /run/k3s/containerd/containerd.sock; stock containerd uses the default.
+  containerdSocket: /run/containerd/containerd.sock
+  # orphanReaper force-removes NotReady kata sandboxes whose microVM leaked on
+  # a failed teardown ("Agent did not stop sandbox") and still holds a
+  # containerd name reservation — otherwise the replacement Pod hangs in
+  # ContainerCreating ("failed to reserve sandbox name"). See setec#86.
+  orphanReaper:
+    enabled: true
+    # interval between reap sweeps (Go duration). 0 (or enabled:false) disables.
+    interval: 1m
   # prefetchImages is a space-separated list of OCI references the
   # agent pulls into the containerd content store on startup.
   prefetchImages: ""
