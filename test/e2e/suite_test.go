@@ -73,6 +73,11 @@ var (
 	// RuntimeClass (the admission controller requires exact equality).
 	kataOverhead corev1.ResourceList
 
+	// backendOverheads maps each enabled backend (kata-fc, kata-qemu, gvisor)
+	// to its live RuntimeClass pod overhead, captured in preflight and applied
+	// to runtimes.<backend>.defaultOverhead at install.
+	backendOverheads map[string]corev1.ResourceList
+
 	// imageTag is the tag of the locally-built setec component images that
 	// the E2E workflow builds from the working tree and imports into the
 	// cluster's container runtime. Every component (operator, runtime-agent)
@@ -192,6 +197,26 @@ func preflight() error {
 	if rc.Overhead != nil {
 		kataOverhead = rc.Overhead.PodFixed
 	}
+
+	// Capture overhead for the other backends the suite enables (kata-qemu,
+	// gvisor) so TestRuntimeBackends_Smoke's Sandboxes pass the same overhead
+	// equality check. A backend whose RuntimeClass is absent or carries no
+	// overhead simply gets no override.
+	backendOverheads = map[string]corev1.ResourceList{}
+	if kataOverhead != nil {
+		backendOverheads["kata-fc"] = kataOverhead
+	}
+	for _, b := range []string{"kata-qemu", "gvisor"} {
+		var brc nodev1.RuntimeClass
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: b}, &brc); err != nil {
+			continue
+		}
+		if brc.Overhead != nil {
+			backendOverheads[b] = brc.Overhead.PodFixed
+		} else {
+			backendOverheads[b] = corev1.ResourceList{}
+		}
+	}
 	return nil
 }
 
@@ -259,15 +284,40 @@ func installChart() error {
 		"--timeout", "5m",
 	}
 
-	// Match the chart's stamped Sandbox overhead to the live RuntimeClass's
-	// overhead (captured in preflight) so the admission controller accepts
-	// Sandbox pods. The chart key is the backend name (kata-fc), which equals
-	// the RuntimeClass name on this cluster.
-	if cpu, ok := kataOverhead[corev1.ResourceCPU]; ok {
-		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.cpu=%s", cpu.String()))
-	}
-	if mem, ok := kataOverhead[corev1.ResourceMemory]; ok {
-		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.memory=%s", mem.String()))
+	// Enable every backend TestRuntimeBackends_Smoke exercises (kata-fc is
+	// already enabled by default). With the webhook on, the vsandboxclass
+	// validator rejects a SandboxClass whose backend is not enabled. Their
+	// RuntimeClasses are provisioned externally (kata-deploy / gvisor install),
+	// so install=false avoids the same ownership conflict as kata-fc. Match
+	// each backend's stamped Sandbox overhead to its live RuntimeClass overhead
+	// (captured in preflight) so the RuntimeClass admission controller accepts
+	// the Sandbox pods.
+	for _, b := range []string{"kata-fc", "kata-qemu", "gvisor"} {
+		ovh, ok := backendOverheads[b]
+		if !ok {
+			continue // backend's RuntimeClass not present on this cluster
+		}
+		if b != "kata-fc" {
+			args = append(args,
+				"--set", fmt.Sprintf("runtimes.%s.enabled=true", b),
+				"--set", fmt.Sprintf("runtimes.%s.install=false", b),
+			)
+		}
+		if len(ovh) == 0 {
+			// RuntimeClass declares no overhead (e.g. gvisor's runsc sentry is
+			// not a VMM). The chart still defaults a non-zero defaultOverhead,
+			// which the operator would stamp — and the admission controller
+			// rejects "Pod Overhead set without corresponding RuntimeClass
+			// defined Overhead". Null it so the operator stamps none.
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead=null", b))
+			continue
+		}
+		if cpu, ok := ovh[corev1.ResourceCPU]; ok {
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.cpu=%s", b, cpu.String()))
+		}
+		if mem, ok := ovh[corev1.ResourceMemory]; ok {
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.memory=%s", b, mem.String()))
+		}
 	}
 
 	cmd := exec.Command("helm", args...)
