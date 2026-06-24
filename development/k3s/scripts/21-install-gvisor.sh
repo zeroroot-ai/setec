@@ -23,6 +23,13 @@ GVISOR_SHA512="${GVISOR_SHA512:-}"   # empty → rely on upstream runsc.sha512 (
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 RUNSC_BIN=/usr/local/bin/runsc
+# containerd resolves the gVisor runtime "io.containerd.runsc.v1" to the shim
+# binary "containerd-shim-runsc-v1" on its PATH. runsc alone is NOT enough — a
+# missing shim makes every gvisor Pod fail RunPodSandbox with
+# 'failed to resolve runtime path: ... binary not installed
+# "containerd-shim-runsc-v1": file does not exist'. The shim ships in the same
+# gVisor release bucket alongside runsc.
+SHIM_BIN=/usr/local/bin/containerd-shim-runsc-v1
 GVISOR_RELEASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION#release-}/x86_64"
 K3S_CONTAINERD_DIR=/var/lib/rancher/k3s/agent/etc/containerd
 K3S_CONFIG="${K3S_CONTAINERD_DIR}/config.toml"
@@ -49,12 +56,16 @@ done
 
 # ── Idempotence check ─────────────────────────────────────────────────────────
 runsc_ok=0
+shim_ok=0
 runtimeclass_ok=0
 
 containerd_ok=0
 
 if command -v runsc >/dev/null 2>&1 || [[ -x "${RUNSC_BIN}" ]]; then
     runsc_ok=1
+fi
+if command -v containerd-shim-runsc-v1 >/dev/null 2>&1 || [[ -x "${SHIM_BIN}" ]]; then
+    shim_ok=1
 fi
 if kubectl get runtimeclass gvisor >/dev/null 2>&1; then
     runtimeclass_ok=1
@@ -68,8 +79,8 @@ if sudo grep -q 'containerd\.runtimes\.runsc' "${K3S_CONFIG}" 2>/dev/null; then
     containerd_ok=1
 fi
 
-if [[ ${runsc_ok} -eq 1 && ${runtimeclass_ok} -eq 1 && ${containerd_ok} -eq 1 ]]; then
-    yellow "gVisor already installed — runsc binary, RuntimeClass, and containerd registration all present. Skipping."
+if [[ ${runsc_ok} -eq 1 && ${shim_ok} -eq 1 && ${runtimeclass_ok} -eq 1 && ${containerd_ok} -eq 1 ]]; then
+    yellow "gVisor already installed — runsc binary, containerd-shim-runsc-v1, RuntimeClass, and containerd registration all present. Skipping."
     exit 0
 fi
 
@@ -108,6 +119,37 @@ if [[ ${runsc_ok} -eq 0 ]]; then
     green "runsc installed to ${RUNSC_BIN}"
 else
     yellow "runsc binary already present — skipping download"
+fi
+
+# ── Install containerd-shim-runsc-v1 binary ─────────────────────────────────────
+# Required for containerd to resolve the gvisor runtime "io.containerd.runsc.v1".
+# Without it RunPodSandbox fails with 'binary not installed
+# "containerd-shim-runsc-v1": file does not exist'. Ships in the same release
+# bucket as runsc.
+if [[ ${shim_ok} -eq 0 ]]; then
+    green "Downloading containerd-shim-runsc-v1 ${GVISOR_VERSION} from gVisor release bucket"
+    TMP_SHIM=$(mktemp)
+    TMP_SHIM_SHA=$(mktemp)
+    trap 'rm -f "${TMP_RUNSC:-}" "${TMP_SHA:-}" "${TMP_SHIM}" "${TMP_SHIM_SHA}"' EXIT
+
+    curl -fsSL "${GVISOR_RELEASE_URL}/containerd-shim-runsc-v1"        -o "${TMP_SHIM}"
+    curl -fsSL "${GVISOR_RELEASE_URL}/containerd-shim-runsc-v1.sha512" -o "${TMP_SHIM_SHA}"
+
+    SHIM_UPSTREAM_HASH=$(awk '{print $1}' "${TMP_SHIM_SHA}")
+    SHIM_ACTUAL_HASH=$(sha512sum "${TMP_SHIM}" | awk '{print $1}')
+    if [[ "${SHIM_UPSTREAM_HASH}" != "${SHIM_ACTUAL_HASH}" ]]; then
+        red "WARN: sha512 mismatch for containerd-shim-runsc-v1 (upstream vs downloaded)."
+        red "  upstream: ${SHIM_UPSTREAM_HASH}"
+        red "  actual  : ${SHIM_ACTUAL_HASH}"
+        red "  Continuing anyway (dev-only environment) — verify manually."
+    else
+        green "sha512 checksum verified OK"
+    fi
+
+    sudo install -o root -g root -m 0755 "${TMP_SHIM}" "${SHIM_BIN}"
+    green "containerd-shim-runsc-v1 installed to ${SHIM_BIN}"
+else
+    yellow "containerd-shim-runsc-v1 already present — skipping download"
 fi
 
 # ── Register runsc with k3s containerd ────────────────────────────────────────
