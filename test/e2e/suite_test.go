@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,11 @@ var (
 	// operator stamps Sandbox pods with overhead that matches the
 	// RuntimeClass (the admission controller requires exact equality).
 	kataOverhead corev1.ResourceList
+
+	// backendOverheads maps each enabled backend (kata-fc, kata-qemu, gvisor)
+	// to its live RuntimeClass pod overhead, captured in preflight and applied
+	// to runtimes.<backend>.defaultOverhead at install.
+	backendOverheads map[string]corev1.ResourceList
 
 	// imageTag is the tag of the locally-built setec component images that
 	// the E2E workflow builds from the working tree and imports into the
@@ -191,6 +197,26 @@ func preflight() error {
 	if rc.Overhead != nil {
 		kataOverhead = rc.Overhead.PodFixed
 	}
+
+	// Capture overhead for the other backends the suite enables (kata-qemu,
+	// gvisor) so TestRuntimeBackends_Smoke's Sandboxes pass the same overhead
+	// equality check. A backend whose RuntimeClass is absent or carries no
+	// overhead simply gets no override.
+	backendOverheads = map[string]corev1.ResourceList{}
+	if kataOverhead != nil {
+		backendOverheads["kata-fc"] = kataOverhead
+	}
+	for _, b := range []string{"kata-qemu", "gvisor"} {
+		var brc nodev1.RuntimeClass
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: b}, &brc); err != nil {
+			continue
+		}
+		if brc.Overhead != nil {
+			backendOverheads[b] = brc.Overhead.PodFixed
+		} else {
+			backendOverheads[b] = corev1.ResourceList{}
+		}
+	}
 	return nil
 }
 
@@ -207,6 +233,18 @@ func installChart() error {
 	nsObj.Name = testNamespace
 	if err := k8sClient.Create(ctx, nsObj); err != nil {
 		return fmt.Errorf("create namespace %q: %w", testNamespace, err)
+	}
+
+	// Provision the webhook serving cert before install so the operator can
+	// mount it on startup (the chart's fullname is the release name here, so
+	// the Service is <release>-webhook and the cert Secret is
+	// <release>-webhook-cert). caBundle is fed to the
+	// ValidatingWebhookConfiguration so the API server trusts the webhook.
+	webhookSvc := helmReleaseName + "-webhook"
+	webhookCertSecret := helmReleaseName + "-webhook-cert"
+	caBundle, err := createWebhookCertSecret(ctx, webhookCertSecret, webhookSvc, testNamespace)
+	if err != nil {
+		return err
 	}
 
 	args := []string{
@@ -234,19 +272,52 @@ func installChart() error {
 		"--set", "image.pullPolicy=Never",
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
 		"--set", "runtimeAgent.image.pullPolicy=Never",
+		// Enable the SandboxClass/Sandbox admission webhook with the
+		// self-signed serving cert created above, so TestPhase2_WebhookRejects
+		// exercises real admission. failurePolicy stays Fail (the chart
+		// default) — the cert + caBundle must be correct or Sandbox creation
+		// fails closed.
+		"--set", "webhook.enabled=true",
+		"--set", fmt.Sprintf("webhook.certSecret=%s", webhookCertSecret),
+		"--set-string", fmt.Sprintf("webhook.caBundle=%s", caBundle),
 		"--wait",
 		"--timeout", "5m",
 	}
 
-	// Match the chart's stamped Sandbox overhead to the live RuntimeClass's
-	// overhead (captured in preflight) so the admission controller accepts
-	// Sandbox pods. The chart key is the backend name (kata-fc), which equals
-	// the RuntimeClass name on this cluster.
-	if cpu, ok := kataOverhead[corev1.ResourceCPU]; ok {
-		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.cpu=%s", cpu.String()))
-	}
-	if mem, ok := kataOverhead[corev1.ResourceMemory]; ok {
-		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.memory=%s", mem.String()))
+	// Enable every backend TestRuntimeBackends_Smoke exercises (kata-fc is
+	// already enabled by default). With the webhook on, the vsandboxclass
+	// validator rejects a SandboxClass whose backend is not enabled. Their
+	// RuntimeClasses are provisioned externally (kata-deploy / gvisor install),
+	// so install=false avoids the same ownership conflict as kata-fc. Match
+	// each backend's stamped Sandbox overhead to its live RuntimeClass overhead
+	// (captured in preflight) so the RuntimeClass admission controller accepts
+	// the Sandbox pods.
+	for _, b := range []string{"kata-fc", "kata-qemu", "gvisor"} {
+		ovh, ok := backendOverheads[b]
+		if !ok {
+			continue // backend's RuntimeClass not present on this cluster
+		}
+		if b != "kata-fc" {
+			args = append(args,
+				"--set", fmt.Sprintf("runtimes.%s.enabled=true", b),
+				"--set", fmt.Sprintf("runtimes.%s.install=false", b),
+			)
+		}
+		if len(ovh) == 0 {
+			// RuntimeClass declares no overhead (e.g. gvisor's runsc sentry is
+			// not a VMM). The chart still defaults a non-zero defaultOverhead,
+			// which the operator would stamp — and the admission controller
+			// rejects "Pod Overhead set without corresponding RuntimeClass
+			// defined Overhead". Null it so the operator stamps none.
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead=null", b))
+			continue
+		}
+		if cpu, ok := ovh[corev1.ResourceCPU]; ok {
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.cpu=%s", b, cpu.String()))
+		}
+		if mem, ok := ovh[corev1.ResourceMemory]; ok {
+			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.memory=%s", b, mem.String()))
+		}
 	}
 
 	cmd := exec.Command("helm", args...)
@@ -255,7 +326,45 @@ func installChart() error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helm install: %w", err)
 	}
+
+	// The operator's /readyz gates on prereqs, not on the webhook server
+	// having begun serving on :9443. With the webhook enabled + failurePolicy
+	// Fail, a Sandbox/SandboxClass create issued before the server is up gets
+	// a 502 "failed calling webhook". Block until the webhook actually admits
+	// a request so test bodies don't race it.
+	if err := waitForWebhookReady(ctx); err != nil {
+		return fmt.Errorf("webhook did not become ready: %w", err)
+	}
 	return nil
+}
+
+// waitForWebhookReady polls until the admission webhook is serving by issuing a
+// real admission request (create+delete a throwaway SandboxClass, which the
+// mutating msandboxclass webhook intercepts). A 502 / "failed calling webhook"
+// means the server is not up yet; any other outcome (success, or a validation
+// rejection) proves the webhook responded.
+func waitForWebhookReady(ctx context.Context) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	probe := &setecv1alpha1.SandboxClass{}
+	probe.Name = "webhook-readiness-probe"
+	probe.Spec = setecv1alpha1.SandboxClassSpec{VMM: setecv1alpha1.VMMFirecracker}
+	for {
+		err := k8sClient.Create(ctx, probe)
+		if err == nil {
+			_ = k8sClient.Delete(ctx, probe)
+			return nil
+		}
+		// A webhook that responded (even to reject) proves it is serving.
+		if !strings.Contains(err.Error(), "failed calling webhook") &&
+			!strings.Contains(err.Error(), "connection refused") &&
+			!strings.Contains(err.Error(), "502") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("webhook still unavailable after 2m: %w", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // uninstallChart removes the Helm release and then deletes the namespace.

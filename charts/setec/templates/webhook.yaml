@@ -10,6 +10,11 @@ metadata:
 spec:
   selector:
     {{- include "setec.selectorLabels" . | nindent 4 }}
+    # Scope to the operator Pod only — the webhook server runs there. Without
+    # this, the selectorLabels (name+instance) also match the runtime-agent /
+    # frontend / node-agent Pods, so the Service load-balances admission
+    # requests onto Pods that don't serve :9443 → intermittent 502s.
+    app.kubernetes.io/component: operator
   ports:
     - name: webhook
       port: 443
@@ -38,6 +43,12 @@ webhooks:
         resources: ["sandboxes"]
         scope: "Namespaced"
     clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      # Without cert-manager (which injects the CA via the annotation above),
+      # the API server needs the CA that signed the webhook serving cert to
+      # verify the TLS connection. Supplied as base64-encoded PEM.
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}

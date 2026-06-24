@@ -33,6 +33,9 @@ webhooks:
         resources: ["sandboxclasses"]
         scope: "Cluster"
     clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}
@@ -63,6 +66,9 @@ webhooks:
         resources: ["sandboxclasses"]
         scope: "Cluster"
     clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
       service:
         name: {{ include "setec.fullname" . }}-webhook
         namespace: {{ .Values.namespace }}
