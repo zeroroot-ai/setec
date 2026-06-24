@@ -35,6 +35,12 @@ spec:
             - --thinpool-metadata-device={{ .Values.nodeAgent.thinpoolMetadataDevice }}
             - --fill-threshold={{ .Values.nodeAgent.fillThreshold }}
             - --metrics-addr=:9090
+            - --containerd-socket={{ .Values.nodeAgent.containerdSocket }}
+            {{- if .Values.nodeAgent.orphanReaper.enabled }}
+            - --orphan-reap-interval={{ .Values.nodeAgent.orphanReaper.interval }}
+            {{- else }}
+            - --orphan-reap-interval=0
+            {{- end }}
             {{- if .Values.nodeAgent.prefetchImages }}
             - --prefetch-images={{ .Values.nodeAgent.prefetchImages }}
             {{- end }}

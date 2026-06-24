@@ -57,6 +57,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/reaper"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -95,6 +96,7 @@ func main() {
 		snapshotFillFraction float64
 		kataSocketPattern    string
 		poolReconcileTick    time.Duration
+		orphanReapTick       time.Duration
 	)
 	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
 		"Name of the devicemapper thin-pool to manage.")
@@ -137,6 +139,10 @@ func main() {
 		"Phase 3: format string used to render the Firecracker API socket path for a given sandbox id.")
 	flag.DurationVar(&poolReconcileTick, "pool-reconcile-interval", 30*time.Second,
 		"Phase 3: interval between pre-warm pool reconciles. 0 disables the pool loop.")
+	flag.DurationVar(&orphanReapTick, "orphan-reap-interval", time.Minute,
+		"Interval between sweeps that force-remove orphaned NotReady kata sandboxes "+
+			"(microVMs leaked by a failed teardown that still hold a containerd "+
+			"name reservation). 0 disables the reaper.")
 	flag.Parse()
 
 	fmt.Fprintf(os.Stderr, "setec node-agent starting on node=%q pool=%q\n", nodeName, poolName)
@@ -174,7 +180,15 @@ func main() {
 		Name: "setec_node_image_prefetch_errors_total",
 		Help: "Total number of OCI image prefetch failures, labeled by error class.",
 	}, []string{"reason"})
-	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors)
+	orphansReaped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "setec_node_orphan_sandboxes_reaped_total",
+		Help: "Total orphaned kata sandboxes force-removed by the reaper, labeled by runtime handler.",
+	}, []string{"handler"})
+	orphanReapErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "setec_node_orphan_reap_errors_total",
+		Help: "Total errors encountered while listing or removing orphaned kata sandboxes.",
+	})
+	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors)
 	// Presence of /dev/kvm is our local ready signal; deeper health
 	// checks require the controller-side runtime class and are out
 	// of scope for the node agent.
@@ -201,6 +215,32 @@ func main() {
 			fmt.Fprintf(os.Stderr, "node-agent: close containerd client: %v\n", cerr)
 		}
 	}()
+
+	// Orphan-sandbox reaper: force-remove NotReady kata sandboxes whose
+	// microVM leaked on a failed teardown ("Agent did not stop sandbox") and
+	// still holds a containerd name reservation. Independent of the pool/gRPC
+	// path — the leak can happen for any kata Sandbox. Uses the CRI service on
+	// the same containerd socket.
+	if orphanReapTick > 0 {
+		criClient, err := reaper.NewCRIClient(containerdSocket)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "node-agent: build CRI client for reaper: %v (reaper disabled)\n", err)
+		} else {
+			defer func() { _ = criClient.Close() }()
+			orphanReaper := &reaper.OrphanReaper{
+				Client:   criClient,
+				Interval: orphanReapTick,
+				Metrics: reaper.Metrics{
+					Reaped: func(handler string) { orphansReaped.WithLabelValues(handler).Inc() },
+					Errors: orphanReapErrors.Inc,
+				},
+			}
+			go orphanReaper.Run(ctx)
+			fmt.Fprintf(os.Stderr, "node-agent: orphan-sandbox reaper started at %s interval\n", orphanReapTick)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "node-agent: orphan-sandbox reaper disabled (--orphan-reap-interval=0)")
+	}
 
 	// Phase 3: construct the storage backend, pool manager, and gRPC
 	// server when the operator has enabled the feature (by setting
