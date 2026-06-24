@@ -173,6 +173,15 @@ jobs:
           # 3) Kill stray firecracker VMs (exact comm match — never matches this
           #    shell). containerd reaps a sandbox's shim when its VM is gone.
           sudo pkill -9 -x firecracker 2>/dev/null
+          # 4) Delete orphaned cluster-scoped webhook configs from a prior run.
+          #    These are NOT namespaced, so dropping the namespace (step 1) does
+          #    not remove them; left behind (failurePolicy: Fail, matching
+          #    sandboxes/sandboxclasses cluster-wide) they point at a deleted
+          #    Service and break every Sandbox/SandboxClass create in the next
+          #    run with "service ... not found".
+          for w in $(kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name 2>/dev/null | grep -E 'setec-e2e-'); do
+            kubectl delete "$w" --wait=false 2>/dev/null
+          done
           echo "clean-slate reap done; firecracker VMs now: $(pgrep -cx firecracker 2>/dev/null || echo 0)"
           exit 0
 
