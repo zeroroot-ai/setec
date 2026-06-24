@@ -193,6 +193,15 @@ func installChart() error {
 		"--namespace", testNamespace,
 		"--set", fmt.Sprintf("namespace=%s", testNamespace),
 		"--set", fmt.Sprintf("runtimeClassName=%s", kataRuntimeClass),
+		// The E2E cluster gets its kata-fc RuntimeClass from kata-deploy
+		// (preflight requires it to pre-exist; scenario 5 deletes/restores
+		// it). The chart must therefore NOT render its own kata-fc
+		// RuntimeClass — otherwise helm refuses the install with an
+		// ownership conflict ("cannot be imported into the current release"
+		// because the object is already owned by the kata-deploy release).
+		// runtimes.<backend>.install=false is the chart's documented knob
+		// for "an external process owns the RuntimeClass lifecycle".
+		"--set", "runtimes.kata-fc.install=false",
 		"--wait",
 		"--timeout", "5m",
 	}
