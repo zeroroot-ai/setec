@@ -110,15 +110,43 @@ jobs:
             echo "::warning::no NetworkPolicy-enforcing CNI detected; Phase 2 netpol tests will Skip."
           fi
 
-      - name: Build operator image
-        # Built locally to avoid registry dependencies; the test harness
-        # picks up the tag via SETEC_E2E_IMAGE so Helm renders the local
-        # tag instead of the chart default.
-        run: make docker-build IMG=setec-e2e:${{ github.sha }}
+      - name: Build and import component images
+        # The chart deploys the operator (Deployment) and runtime-agent
+        # (DaemonSet); node-agent is disabled by default. Build both from the
+        # working tree as :dev images — the Dockerfile is multi-call via the
+        # CMD build-arg (manager -> ghcr.io/zeroroot-ai/setec, others ->
+        # ghcr.io/zeroroot-ai/setec-<cmd>) — matching development/k3s.
+        #
+        # docker build writes into docker's store, but the bare-metal cluster
+        # runs on containerd (k3s) with no registry to pull from. Without the
+        # containerd import the Pods sit in ErrImageNeverPull (the suite sets
+        # pullPolicy=Never) and the chart's helm --wait times out. Import into
+        # the k8s.io containerd namespace (the one k3s pulls Pod images from).
+        # `sudo k3s ctr` is granted to the self-hosted runner via a sudoers
+        # drop-in. No-op import on non-k3s clusters.
+        run: |
+          set -euo pipefail
+          for c in manager runtime-agent; do
+            img=ghcr.io/zeroroot-ai/setec
+            [ "$c" != manager ] && img="ghcr.io/zeroroot-ai/setec-${c}"
+            echo "::group::build ${img}:dev (CMD=${c})"
+            docker build --build-arg CMD="${c}" -t "${img}:dev" .
+            echo "::endgroup::"
+            if command -v k3s >/dev/null 2>&1 && [ -S /run/k3s/containerd/containerd.sock ]; then
+              docker save "${img}:dev" | sudo k3s ctr -n k8s.io images import -
+            fi
+          done
+          if command -v k3s >/dev/null 2>&1 && [ -S /run/k3s/containerd/containerd.sock ]; then
+            echo "Imaged in k3s containerd (k8s.io):"
+            sudo k3s ctr -n k8s.io images ls -q | grep -E 'zeroroot-ai/setec(-runtime-agent)?:dev'
+          else
+            echo "k3s containerd not detected; assuming the cluster runtime can already see the :dev images."
+          fi
 
       - name: Run e2e suite
-        env:
-          SETEC_E2E_IMAGE: setec-e2e:${{ github.sha }}
+        # The suite installs the chart with image.tag=dev + pullPolicy=Never
+        # for every deployed component (see SETEC_E2E_IMAGE_TAG default in
+        # test/e2e/suite_test.go), using the images imported above.
         run: make e2e
 
       - name: Collect diagnostics on failure

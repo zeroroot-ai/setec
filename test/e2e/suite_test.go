@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -67,10 +66,20 @@ var (
 	// it). Scenario 5 temporarily removes and restores this resource.
 	kataRuntimeClass string
 
-	// operatorImage, if set, overrides the image used by the chart. Leave
-	// empty to use the chart default (ghcr.io/zeroroot-ai/setec:<appVersion>)
-	// or an image that the runner has pre-pulled / locally built.
-	operatorImage string
+	// kataOverhead is the kata-fc RuntimeClass's pod overhead, read from the
+	// live cluster in preflight. installChart passes it to the chart so the
+	// operator stamps Sandbox pods with overhead that matches the
+	// RuntimeClass (the admission controller requires exact equality).
+	kataOverhead corev1.ResourceList
+
+	// imageTag is the tag of the locally-built setec component images that
+	// the E2E workflow builds from the working tree and imports into the
+	// cluster's container runtime. Every component (operator, runtime-agent)
+	// shares this tag. Defaults to "dev", matching development/k3s. The chart
+	// repositories are left at their defaults; only the tag is overridden,
+	// and pullPolicy is forced to Never so a missed import fails loud
+	// (ErrImageNeverPull) instead of silently pulling a stale/absent image.
+	imageTag string
 
 	// k8sClient is a typed controller-runtime client bound to the real
 	// cluster. Tests use it for all in-cluster assertions.
@@ -98,7 +107,7 @@ func TestMain(m *testing.M) {
 	testNamespace = envOr("SETEC_E2E_NAMESPACE", fmt.Sprintf("setec-e2e-%s", stamp))
 	chartPath = envOr("SETEC_E2E_CHART", resolveChartPath())
 	kataRuntimeClass = envOr("SETEC_E2E_RUNTIMECLASS", "kata-fc")
-	operatorImage = os.Getenv("SETEC_E2E_IMAGE") // optional
+	imageTag = envOr("SETEC_E2E_IMAGE_TAG", "dev")
 
 	if err := buildClient(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: failed to build Kubernetes client: %v\n", err)
@@ -170,6 +179,18 @@ func preflight() error {
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: kataRuntimeClass}, &rc); err != nil {
 		return fmt.Errorf("RuntimeClass %q not found on cluster: %w (install kata-deploy before running E2E)", kataRuntimeClass, err)
 	}
+
+	// Capture the RuntimeClass's pod overhead. The operator stamps Sandbox
+	// VM pods with the chart's runtimes.<backend>.defaultOverhead, and the
+	// RuntimeClass admission controller rejects any pod whose overhead does
+	// not EQUAL the RuntimeClass's own overhead ("Pod's Overhead doesn't
+	// match RuntimeClass's defined Overhead"). The chart default (128Mi)
+	// will not match a kata-deploy-provisioned RuntimeClass (130Mi), so we
+	// read the live overhead here and pass it through to helm (installChart)
+	// instead of hard-coding a value that drifts with kata-deploy.
+	if rc.Overhead != nil {
+		kataOverhead = rc.Overhead.PodFixed
+	}
 	return nil
 }
 
@@ -193,16 +214,39 @@ func installChart() error {
 		"--namespace", testNamespace,
 		"--set", fmt.Sprintf("namespace=%s", testNamespace),
 		"--set", fmt.Sprintf("runtimeClassName=%s", kataRuntimeClass),
+		// The E2E cluster gets its kata-fc RuntimeClass from kata-deploy
+		// (preflight requires it to pre-exist; scenario 5 deletes/restores
+		// it). The chart must therefore NOT render its own kata-fc
+		// RuntimeClass — otherwise helm refuses the install with an
+		// ownership conflict ("cannot be imported into the current release"
+		// because the object is already owned by the kata-deploy release).
+		// runtimes.<backend>.install=false is the chart's documented knob
+		// for "an external process owns the RuntimeClass lifecycle".
+		"--set", "runtimes.kata-fc.install=false",
+		// The component images are built from the working tree and imported
+		// into the cluster runtime by the E2E workflow (there is no registry
+		// to pull them from on the bare-metal runner). Point every deployed
+		// component at the locally-built tag and force pullPolicy=Never so a
+		// missed import fails loud instead of silently pulling from a
+		// registry. node-agent is disabled by default, so only the operator
+		// (image.*) and runtime-agent (runtimeAgent.image.*) need overriding.
+		"--set", fmt.Sprintf("image.tag=%s", imageTag),
+		"--set", "image.pullPolicy=Never",
+		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
+		"--set", "runtimeAgent.image.pullPolicy=Never",
 		"--wait",
 		"--timeout", "5m",
 	}
-	if operatorImage != "" {
-		// operatorImage is expected as repo:tag. Split on the last colon.
-		repo, tag := splitImageRef(operatorImage)
-		args = append(args,
-			"--set", fmt.Sprintf("image.repository=%s", repo),
-			"--set", fmt.Sprintf("image.tag=%s", tag),
-		)
+
+	// Match the chart's stamped Sandbox overhead to the live RuntimeClass's
+	// overhead (captured in preflight) so the admission controller accepts
+	// Sandbox pods. The chart key is the backend name (kata-fc), which equals
+	// the RuntimeClass name on this cluster.
+	if cpu, ok := kataOverhead[corev1.ResourceCPU]; ok {
+		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.cpu=%s", cpu.String()))
+	}
+	if mem, ok := kataOverhead[corev1.ResourceMemory]; ok {
+		args = append(args, "--set", fmt.Sprintf("runtimes.kata-fc.defaultOverhead.memory=%s", mem.String()))
 	}
 
 	cmd := exec.Command("helm", args...)
@@ -253,17 +297,6 @@ func resolveChartPath() string {
 	}
 	// Fall through; helm will fail with a clear error if the path is wrong.
 	return "../../charts/setec"
-}
-
-// splitImageRef splits "repo/name:tag" into ("repo/name", "tag"). If there
-// is no tag it returns ("repo/name", "latest"), which matches Docker's
-// default and produces a predictable Helm --set value.
-func splitImageRef(ref string) (string, string) {
-	i := strings.LastIndex(ref, ":")
-	if i < 0 || strings.Contains(ref[i:], "/") {
-		return ref, "latest"
-	}
-	return ref[:i], ref[i+1:]
 }
 
 func envOr(key, fallback string) string {
