@@ -337,11 +337,16 @@ func TestSandbox_OperatorRestartMidRun(t *testing.T) {
 }
 
 // operatorLabels returns the label selector used to find the operator Pod.
-// The Helm chart templates selector labels as {app.kubernetes.io/name: setec,
-// app.kubernetes.io/instance: <release>}; the name label alone is enough to
-// uniquely identify the operator within the release's namespace.
+// All setec components share {app.kubernetes.io/name: setec,
+// app.kubernetes.io/instance: <release>}, so the name label alone also matches
+// the runtime-agent / frontend / node-agent Pods. The operator Deployment
+// additionally carries app.kubernetes.io/component=operator, which uniquely
+// identifies it within the release's namespace.
 func operatorLabels() client.MatchingLabels {
-	return client.MatchingLabels{"app.kubernetes.io/name": "setec"}
+	return client.MatchingLabels{
+		"app.kubernetes.io/name":      "setec",
+		"app.kubernetes.io/component": "operator",
+	}
 }
 
 // currentOperatorPodName returns the name of the Ready operator Pod in the
