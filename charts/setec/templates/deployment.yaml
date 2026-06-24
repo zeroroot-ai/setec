@@ -14,6 +14,11 @@ spec:
     metadata:
       labels:
         {{- include "setec.selectorLabels" . | nindent 8 }}
+        # Distinguish the operator Pod from the other components (runtime-agent,
+        # frontend, node-agent) which all share name/instance selector labels
+        # but carry their own component label. Additive only — not part of the
+        # immutable Deployment selector.
+        app.kubernetes.io/component: operator
     spec:
       serviceAccountName: {{ include "setec.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}

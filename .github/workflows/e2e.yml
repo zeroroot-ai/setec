@@ -143,6 +143,39 @@ jobs:
             echo "k3s containerd not detected; assuming the cluster runtime can already see the :dev images."
           fi
 
+      - name: Reap orphaned microVMs and sandboxes (clean slate)
+        # A crashed or cancelled prior run can leave kata-fc microVMs running
+        # and containerd holding their sandbox-name reservations. The next run
+        # then fails every kata-fc RunPodSandbox with
+        #   "failed to reserve sandbox name ... is reserved for <old-id>"
+        # → the Pod sits in ContainerCreating forever and the sandbox scenarios
+        # time out. This step guarantees an isolated starting state on the
+        # self-hosted runner: drop leftover throwaway namespaces, reap orphaned
+        # kata sandboxes (which releases the name reservations), and kill any
+        # stray firecracker VMs whose shim is already gone. Best-effort — never
+        # fails the job. No-op on a non-k3s runner.
+        run: |
+          set +e
+          if ! command -v k3s >/dev/null 2>&1 || [ ! -S /run/k3s/containerd/containerd.sock ]; then
+            echo "k3s containerd not detected; nothing to reap."
+            exit 0
+          fi
+          RE="--runtime-endpoint unix:///run/k3s/containerd/containerd.sock"
+          # 1) Drop leftover throwaway e2e namespaces from a prior crashed run.
+          for ns in $(kubectl get ns -o name 2>/dev/null | sed 's#namespace/##' | grep -E '^setec-e2e-'); do
+            kubectl delete ns "$ns" --force --grace-period=0 --wait=false 2>/dev/null
+          done
+          # 2) Reap orphaned (NotReady) kata sandboxes — releases the containerd
+          #    name reservation that otherwise blocks reuse of the Pod name.
+          for sb in $(sudo k3s crictl $RE pods --state notready -q 2>/dev/null); do
+            timeout 30 sudo k3s crictl $RE rmp -f "$sb" 2>/dev/null
+          done
+          # 3) Kill stray firecracker VMs (exact comm match — never matches this
+          #    shell). containerd reaps a sandbox's shim when its VM is gone.
+          sudo pkill -9 -x firecracker 2>/dev/null
+          echo "clean-slate reap done; firecracker VMs now: $(pgrep -cx firecracker 2>/dev/null || echo 0)"
+          exit 0
+
       - name: Run e2e suite
         # The suite installs the chart with image.tag=dev + pullPolicy=Never
         # for every deployed component (see SETEC_E2E_IMAGE_TAG default in
