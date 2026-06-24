@@ -312,6 +312,16 @@ webhook:
   enabled: false
   # failurePolicy is propagated to the ValidatingWebhookConfiguration.
   failurePolicy: Fail
+  # certSecret is the Secret (keys tls.crt/tls.key) mounted into the operator
+  # at the webhook server's cert dir (/tmp/k8s-webhook-server/serving-certs).
+  # Empty defaults to "<release>-webhook-cert". With certManager.enabled the
+  # cert-manager Certificate writes this Secret; otherwise an admin or the e2e
+  # harness creates it and sets caBundle below.
+  certSecret: ""
+  # caBundle is the base64-encoded PEM CA that signed the webhook serving cert,
+  # used by the API server to verify the TLS connection when certManager is
+  # disabled. cert-manager injects this via the inject-ca-from annotation.
+  caBundle: ""
   # certManager integration optionally issues/rotates the webhook TLS
   # cert. When disabled, an administrator must mount a Secret at
   # /tmp/k8s-webhook-server/serving-certs.

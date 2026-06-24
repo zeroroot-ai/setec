@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,6 +210,18 @@ func installChart() error {
 		return fmt.Errorf("create namespace %q: %w", testNamespace, err)
 	}
 
+	// Provision the webhook serving cert before install so the operator can
+	// mount it on startup (the chart's fullname is the release name here, so
+	// the Service is <release>-webhook and the cert Secret is
+	// <release>-webhook-cert). caBundle is fed to the
+	// ValidatingWebhookConfiguration so the API server trusts the webhook.
+	webhookSvc := helmReleaseName + "-webhook"
+	webhookCertSecret := helmReleaseName + "-webhook-cert"
+	caBundle, err := createWebhookCertSecret(ctx, webhookCertSecret, webhookSvc, testNamespace)
+	if err != nil {
+		return err
+	}
+
 	args := []string{
 		"install", helmReleaseName, chartPath,
 		"--namespace", testNamespace,
@@ -234,6 +247,14 @@ func installChart() error {
 		"--set", "image.pullPolicy=Never",
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
 		"--set", "runtimeAgent.image.pullPolicy=Never",
+		// Enable the SandboxClass/Sandbox admission webhook with the
+		// self-signed serving cert created above, so TestPhase2_WebhookRejects
+		// exercises real admission. failurePolicy stays Fail (the chart
+		// default) — the cert + caBundle must be correct or Sandbox creation
+		// fails closed.
+		"--set", "webhook.enabled=true",
+		"--set", fmt.Sprintf("webhook.certSecret=%s", webhookCertSecret),
+		"--set-string", fmt.Sprintf("webhook.caBundle=%s", caBundle),
 		"--wait",
 		"--timeout", "5m",
 	}
@@ -255,7 +276,45 @@ func installChart() error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helm install: %w", err)
 	}
+
+	// The operator's /readyz gates on prereqs, not on the webhook server
+	// having begun serving on :9443. With the webhook enabled + failurePolicy
+	// Fail, a Sandbox/SandboxClass create issued before the server is up gets
+	// a 502 "failed calling webhook". Block until the webhook actually admits
+	// a request so test bodies don't race it.
+	if err := waitForWebhookReady(ctx); err != nil {
+		return fmt.Errorf("webhook did not become ready: %w", err)
+	}
 	return nil
+}
+
+// waitForWebhookReady polls until the admission webhook is serving by issuing a
+// real admission request (create+delete a throwaway SandboxClass, which the
+// mutating msandboxclass webhook intercepts). A 502 / "failed calling webhook"
+// means the server is not up yet; any other outcome (success, or a validation
+// rejection) proves the webhook responded.
+func waitForWebhookReady(ctx context.Context) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	probe := &setecv1alpha1.SandboxClass{}
+	probe.Name = "webhook-readiness-probe"
+	probe.Spec = setecv1alpha1.SandboxClassSpec{VMM: setecv1alpha1.VMMFirecracker}
+	for {
+		err := k8sClient.Create(ctx, probe)
+		if err == nil {
+			_ = k8sClient.Delete(ctx, probe)
+			return nil
+		}
+		// A webhook that responded (even to reject) proves it is serving.
+		if !strings.Contains(err.Error(), "failed calling webhook") &&
+			!strings.Contains(err.Error(), "connection refused") &&
+			!strings.Contains(err.Error(), "502") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("webhook still unavailable after 2m: %w", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // uninstallChart removes the Helm release and then deletes the namespace.
