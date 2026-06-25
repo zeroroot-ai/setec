@@ -84,7 +84,7 @@ func TestGVisorDispatcher_NodeAffinity(t *testing.T) {
 
 func TestGVisorDispatcher_Overhead_Default(t *testing.T) {
 	t.Parallel()
-	d := NewGVisorDispatcher(BackendConfig{RuntimeClassName: "runsc"})
+	d := NewGVisorDispatcher(BackendConfig{Install: true, RuntimeClassName: "runsc"})
 	oh := d.Overhead()
 	wantMem := resource.MustParse("40Mi")
 	wantCPU := resource.MustParse("50m")
@@ -104,6 +104,7 @@ func TestGVisorDispatcher_Overhead_Custom(t *testing.T) {
 		corev1.ResourceCPU:    resource.MustParse("100m"),
 	}
 	d := NewGVisorDispatcher(BackendConfig{
+		Install:          true,
 		RuntimeClassName: "runsc",
 		DefaultOverhead:  custom,
 	})

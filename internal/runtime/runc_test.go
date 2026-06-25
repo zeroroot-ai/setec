@@ -78,7 +78,7 @@ func TestRuncDispatcher_NodeAffinity(t *testing.T) {
 
 func TestRuncDispatcher_Overhead_Default(t *testing.T) {
 	t.Parallel()
-	d := NewRuncDispatcher(BackendConfig{RuntimeClassName: "runc"})
+	d := NewRuncDispatcher(BackendConfig{Install: true, RuntimeClassName: "runc"})
 	oh := d.Overhead()
 	// Default is an empty (non-nil) ResourceList — zero overhead.
 	if oh == nil {
@@ -95,6 +95,7 @@ func TestRuncDispatcher_Overhead_Custom(t *testing.T) {
 		corev1.ResourceMemory: resource.MustParse("10Mi"),
 	}
 	d := NewRuncDispatcher(BackendConfig{
+		Install:          true,
 		RuntimeClassName: "runc",
 		DefaultOverhead:  custom,
 	})

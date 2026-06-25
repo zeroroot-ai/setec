@@ -80,7 +80,7 @@ func TestKataQEMUDispatcher_NodeAffinity(t *testing.T) {
 
 func TestKataQEMUDispatcher_Overhead_Default(t *testing.T) {
 	t.Parallel()
-	d := NewKataQEMUDispatcher(BackendConfig{RuntimeClassName: "kata-qemu"})
+	d := NewKataQEMUDispatcher(BackendConfig{Install: true, RuntimeClassName: "kata-qemu"})
 	oh := d.Overhead()
 	wantMem := resource.MustParse("128Mi")
 	wantCPU := resource.MustParse("250m")
@@ -100,6 +100,7 @@ func TestKataQEMUDispatcher_Overhead_Custom(t *testing.T) {
 		corev1.ResourceCPU:    resource.MustParse("1"),
 	}
 	d := NewKataQEMUDispatcher(BackendConfig{
+		Install:          true,
 		RuntimeClassName: "kata-qemu",
 		DefaultOverhead:  custom,
 	})

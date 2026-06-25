@@ -68,13 +68,24 @@ type BackendConfig struct {
 	// reference for this backend (e.g. "kata-fc", "gvisor").
 	RuntimeClassName string `yaml:"runtimeClassName" json:"runtimeClassName"`
 
+	// Install reports whether this chart manages the backend's RuntimeClass
+	// object. When true, the chart renders the RuntimeClass with DefaultOverhead,
+	// so the operator stamps the same overhead on Sandbox Pods (they match). When
+	// false, the RuntimeClass is externally managed (kata-deploy, a baked AMI, a
+	// separate chart) and the operator does NOT know its overhead — stamping
+	// DefaultOverhead would be rejected by RuntimeClass admission when it differs.
+	// The operator omits pod overhead in that case and lets admission apply the
+	// RuntimeClass's own (setec#78). Sourced from the chart's runtimes.<b>.install
+	// (default true); the configmap always emits it.
+	Install bool `yaml:"install" json:"install"`
+
 	// DevOnly gates the backend so it is only usable from namespaces carrying
 	// the label setec.zeroroot.ai/allow-dev-runtimes=true.  Intended for runc.
 	DevOnly bool `yaml:"devOnly,omitempty" json:"devOnly,omitempty"`
 
 	// DefaultOverhead is the resource overhead the backend's Dispatcher returns
-	// when no per-SandboxClass overhead is set.  Matches the corev1.Pod
-	// Overhead field format (resource name → quantity).
+	// when no per-SandboxClass overhead is set, and only when Install is true
+	// (see Install).  Matches the corev1.Pod Overhead field format.
 	DefaultOverhead corev1.ResourceList `yaml:"defaultOverhead,omitempty" json:"defaultOverhead,omitempty"`
 }
 
