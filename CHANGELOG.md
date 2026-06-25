@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.105.0](https://github.com/zeroroot-ai/setec/compare/v0.104.3...v0.105.0) (2026-06-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** import path github.com/zeroroot-ai/setec/api/grpc/v1alpha1 → .../api/grpc/v1; proto package setec.v1alpha1 → setec.v1. Intentional per the open-core relayout (ADR-0027 wholesale-flip).
+
+### Features
+
+* **api:** graduate SandboxService v1alpha1 → v1 (WIRE-stable, no datastore bindings) ([#70](https://github.com/zeroroot-ai/setec/issues/70)) ([8137952](https://github.com/zeroroot-ai/setec/commit/81379529086960002b45f3cbf10ab18b6cf354c8)), closes [#64](https://github.com/zeroroot-ai/setec/issues/64)
+* **frontend:** warm-pool lease layer over SandboxService + Snapshot ([#71](https://github.com/zeroroot-ai/setec/issues/71)) ([9e7242f](https://github.com/zeroroot-ai/setec/commit/9e7242ffbb194e1ac028e6b39df9a652e801792f))
+* **k3s:** consume the published gibson-executor image (setec[#62](https://github.com/zeroroot-ai/setec/issues/62)) ([#95](https://github.com/zeroroot-ai/setec/issues/95)) ([1a6319d](https://github.com/zeroroot-ai/setec/commit/1a6319d916af7e61c35676b1225c92ceeec05395))
+* **node-agent:** reap orphaned kata sandboxes whose microVM leaked on teardown ([#90](https://github.com/zeroroot-ai/setec/issues/90)) ([90b4266](https://github.com/zeroroot-ai/setec/commit/90b426661f4da0ee01889fd403a40a0f86c4d791)), closes [#86](https://github.com/zeroroot-ai/setec/issues/86)
+* **snapshot:** attach virtio-rng entropy device for snapshot RNG-safety ([#66](https://github.com/zeroroot-ai/setec/issues/66)) ([#74](https://github.com/zeroroot-ai/setec/issues/74)) ([5a326aa](https://github.com/zeroroot-ai/setec/commit/5a326aa3745772e5c7ee0673c06fc06797c50cf5))
+* **snapshot:** no-secrets-in-snapshot gate + default-deny egress per SandboxClass ([#73](https://github.com/zeroroot-ai/setec/issues/73)) ([9c7a42a](https://github.com/zeroroot-ai/setec/commit/9c7a42a3683c02f42b969787587f8dd17bbf6b31)), closes [#66](https://github.com/zeroroot-ai/setec/issues/66)
+
+
+### Bug Fixes
+
+* **chart:** reject nodeCapabilitiesMode=static at render time ([#98](https://github.com/zeroroot-ai/setec/issues/98)) ([aec3342](https://github.com/zeroroot-ai/setec/commit/aec3342f722e36d676a66f341fb53bea5cb23375))
+* **dev/k3s:** install containerd-shim-runsc-v1 for the gvisor runtime ([#92](https://github.com/zeroroot-ai/setec/issues/92)) ([83aa793](https://github.com/zeroroot-ai/setec/commit/83aa793783e433d256c7a38847fd97e6e7ace27d)), closes [#89](https://github.com/zeroroot-ai/setec/issues/89)
+* don't stamp pod overhead for externally-managed RuntimeClasses ([#97](https://github.com/zeroroot-ai/setec/issues/97)) ([2e932d3](https://github.com/zeroroot-ai/setec/commit/2e932d362910bd86e33fbeb2f1004b1ad339ecf5)), closes [#78](https://github.com/zeroroot-ai/setec/issues/78)
+* **e2e:** don't let the chart fight kata-deploy for the kata-fc RuntimeClass ([#85](https://github.com/zeroroot-ai/setec/issues/85)) ([cbb708e](https://github.com/zeroroot-ai/setec/commit/cbb708eebd96d688d2e306f5ba3693c849ace727))
+* **e2e:** isolate runs + fix operator-pod selector for runtime-agent ([#87](https://github.com/zeroroot-ai/setec/issues/87)) ([eaa4daf](https://github.com/zeroroot-ai/setec/commit/eaa4daf9553470ae02082d504f7a89027690b609))
+* make k3s dev-env bring-up and runtime-agent probe work end-to-end ([#75](https://github.com/zeroroot-ai/setec/issues/75)) ([8880353](https://github.com/zeroroot-ai/setec/commit/888035384069ee48234d319b011e2ba1cfa2e256))
+* remove the never-implemented "static" node-capabilities mode ([#96](https://github.com/zeroroot-ai/setec/issues/96)) ([1540761](https://github.com/zeroroot-ai/setec/commit/1540761ab1dec57ed4bc9ca9b677e3e71a31205c))
+* route base images through mirror, digest-pin, pin toolchain to 1.26.4 ([#67](https://github.com/zeroroot-ai/setec/issues/67)) ([a5b0ce4](https://github.com/zeroroot-ai/setec/commit/a5b0ce42dbadbd1d9b8e887a1338b98bf19f6316)), closes [#61](https://github.com/zeroroot-ai/setec/issues/61)
+* **webhook:** complete serving-cert wiring + enable the admission webhook in e2e ([#93](https://github.com/zeroroot-ai/setec/issues/93)) ([c183e6f](https://github.com/zeroroot-ai/setec/commit/c183e6f72067d776a9f351e27838f93339d96844))
+
 ## [0.104.3](https://github.com/zeroroot-ai/setec/compare/v0.104.2...v0.104.3) (2026-05-26)
 
 
