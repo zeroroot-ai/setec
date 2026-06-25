@@ -166,7 +166,7 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid config — nodeCapabilitiesMode=static",
+			name: "invalid config — nodeCapabilitiesMode=static is rejected (mode removed)",
 			cfg: &RuntimeConfig{
 				Runtimes: map[string]BackendConfig{
 					BackendKataFC: {Enabled: true, RuntimeClassName: "kata-fc"},
@@ -178,7 +178,7 @@ func TestValidate(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "valid config — nodeCapabilitiesMode=probe explicit",

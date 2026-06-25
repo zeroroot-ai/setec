@@ -101,14 +101,11 @@ type RuntimeDefaults struct {
 	// form the chart emits.
 	ProbeInterval metav1.Duration `yaml:"probeInterval,omitempty" json:"probeInterval,omitempty"`
 
-	// NodeCapabilitiesMode is either "probe" (default, node-agent DaemonSet
-	// probes each node) or "static" (operator trusts StaticCapabilities and the
-	// DaemonSet exits immediately).
+	// NodeCapabilitiesMode selects how the operator learns each node's runtime
+	// capabilities. Only "probe" (default) is supported: the runtime-agent
+	// DaemonSet probes each node and writes setec.zeroroot.ai/runtime.<backend>
+	// labels, which the operator reads for scheduling. Empty means "probe".
 	NodeCapabilitiesMode string `yaml:"nodeCapabilitiesMode,omitempty" json:"nodeCapabilitiesMode,omitempty"`
-
-	// StaticCapabilities maps node name to the list of backends it supports.
-	// Used only when NodeCapabilitiesMode is "static".
-	StaticCapabilities map[string][]string `yaml:"staticCapabilities,omitempty" json:"staticCapabilities,omitempty"`
 }
 
 // ConfigValidationError is a typed error that points at the YAML key whose
@@ -151,7 +148,7 @@ func LoadFromFile(path string) (*RuntimeConfig, error) {
 //  1. At least one backend must have enabled=true.
 //  2. defaults.runtime.backend must name a backend in the enabled set.
 //  3. Every entry in defaults.runtime.fallback must be enabled.
-//  4. defaults.runtime.nodeCapabilitiesMode must be "", "probe", or "static".
+//  4. defaults.runtime.nodeCapabilitiesMode must be "" or "probe".
 func (c *RuntimeConfig) Validate() error {
 	var errs []error
 
@@ -191,12 +188,17 @@ func (c *RuntimeConfig) Validate() error {
 
 	mode := c.Defaults.Runtime.NodeCapabilitiesMode
 	switch mode {
-	case "", "probe", "static":
+	case "", "probe":
 		// valid
+	case "static":
+		errs = append(errs, &ConfigValidationError{
+			Field:  "defaults.runtime.nodeCapabilitiesMode",
+			Detail: `"static" mode was removed — it was never implemented end-to-end (the operator only schedules from probe-written node labels, so static-mode nodes always looked uncapable). Use "probe" (or omit for the probe default).`,
+		})
 	default:
 		errs = append(errs, &ConfigValidationError{
 			Field:  "defaults.runtime.nodeCapabilitiesMode",
-			Detail: fmt.Sprintf("invalid value %q; must be one of: probe, static (or omit for probe default)", mode),
+			Detail: fmt.Sprintf("invalid value %q; must be \"probe\" (or omit for the probe default)", mode),
 		})
 	}
 

@@ -1,4 +1,3 @@
-{{- if ne (.Values.defaults.runtime.nodeCapabilitiesMode | default "probe") "static" -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -51,4 +50,3 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "setec.fullname" . }}-runtime-agent
     namespace: {{ .Values.namespace }}
-{{- end }}

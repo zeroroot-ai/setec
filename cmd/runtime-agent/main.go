@@ -19,9 +19,6 @@ limitations under the License.
 // gvisor, runc), writes the results as Node labels and a SetecRuntimes
 // condition, emits Prometheus metrics, and re-probes on the configured interval.
 //
-// In "static" NodeCapabilitiesMode the binary exits immediately with code 0;
-// the operator uses staticCapabilities from the RuntimeConfig directly.
-//
 // All business logic lives in cmd/runtime-agent/run.go and
 // internal/runtimeagent/ and is unit-tested without real system calls.
 // main.go handles only flag parsing, signal handling, client construction,
@@ -113,13 +110,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime-agent: load config: %v\n", err)
 		os.Exit(1)
-	}
-
-	// --- Handle static mode early exit ----------------------------------
-
-	if cfg.Defaults.Runtime.NodeCapabilitiesMode == "static" {
-		fmt.Fprintln(os.Stderr, "runtime-agent: static mode, exiting")
-		os.Exit(0)
 	}
 
 	fmt.Fprintf(os.Stderr, "runtime-agent: starting on node=%q runtimes-config=%q\n", nodeName, runtimesConfig)
