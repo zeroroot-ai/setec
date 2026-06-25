@@ -112,8 +112,8 @@ pre-install/upgrade.
   {{- end -}}
 {{- end -}}
 {{- $mode := .Values.defaults.runtime.nodeCapabilitiesMode | default "probe" -}}
-{{- if not (or (eq $mode "probe") (eq $mode "static")) -}}
-{{- fail (printf "runtimes validation: defaults.runtime.nodeCapabilitiesMode=%q is invalid; must be \"probe\" or \"static\"." $mode) -}}
+{{- if ne $mode "probe" -}}
+{{- fail (printf "runtimes validation: defaults.runtime.nodeCapabilitiesMode=%q is invalid; \"probe\" is the only supported mode (the never-implemented \"static\" mode was removed in #79, and the operator rejects it at config load)." $mode) -}}
 {{- end -}}
 {{- end -}}
 
