@@ -161,24 +161,16 @@ defaults:
     # labels. Shorter intervals detect KVM removal faster at the cost of
     # extra node-agent wake-ups. Parsed as a Go duration.
     probeInterval: 5m
-    # -- nodeCapabilitiesMode is either "probe" (default — node-agent
-    # DaemonSet probes each node and writes labels) or "static" (operator
-    # trusts staticCapabilities below and the DaemonSet is not rendered).
-    # Use "static" on platforms where the DaemonSet cannot mount host
-    # paths or in air-gapped clusters with a fixed hardware inventory.
+    # -- nodeCapabilitiesMode selects how the operator learns node runtime
+    # capabilities. Only "probe" (default) is supported: the node-agent
+    # DaemonSet probes each node and writes setec.zeroroot.ai/runtime.<backend>
+    # labels, which the operator reads for scheduling. (A never-implemented
+    # "static" mode was removed; the operator rejects it at config load.)
     nodeCapabilitiesMode: probe
-    # -- staticCapabilities maps nodeName -> [backends] and is consulted
-    # only when nodeCapabilitiesMode=static. Leave empty in probe mode.
-    # Example:
-    #   staticCapabilities:
-    #     worker-1: ["kata-fc", "gvisor"]
-    #     worker-2: ["gvisor"]
-    staticCapabilities: {}
 
 # -- runtimeAgent configures the per-node capabilities probing DaemonSet that
 # writes setec.zeroroot.ai/runtime.<backend>=true|false labels and the
-# SetecRuntimes Node status condition. Only rendered when
-# defaults.runtime.nodeCapabilitiesMode != "static".
+# SetecRuntimes Node status condition.
 runtimeAgent:
   image:
     # -- repository is the runtime-agent image. Override for private
