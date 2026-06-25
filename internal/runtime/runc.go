@@ -74,6 +74,11 @@ func (d *RuncDispatcher) NodeAffinity() *corev1.NodeAffinity {
 // Overhead implements Dispatcher.  Returns BackendConfig.DefaultOverhead when
 // set, otherwise an empty ResourceList (zero overhead).
 func (d *RuncDispatcher) Overhead() corev1.ResourceList {
+	if !d.cfg.Install {
+		// Externally-managed RuntimeClass: we don't control its overhead, so
+		// omit it and let RuntimeClass admission apply the class's own (setec#78).
+		return nil
+	}
 	if d.cfg.DefaultOverhead != nil {
 		return d.cfg.DefaultOverhead
 	}

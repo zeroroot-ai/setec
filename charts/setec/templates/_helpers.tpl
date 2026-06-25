@@ -130,6 +130,8 @@ runtimes:
   {{ $name }}:
     enabled: {{ $cfg.enabled | default false }}
     runtimeClassName: {{ if eq $name "kata-fc" }}{{ $katafcRC | quote }}{{ else }}{{ $cfg.runtimeClassName | default $name | quote }}{{ end }}
+    {{- /* install defaults true; hasKey so an explicit false is honoured (Helm's `default` treats false as empty). */}}
+    install: {{ if hasKey $cfg "install" }}{{ $cfg.install }}{{ else }}true{{ end }}
     {{- if $cfg.devOnly }}
     devOnly: true
     {{- end }}
@@ -147,10 +149,6 @@ defaults:
     {{- end }}
     probeInterval: {{ .Values.defaults.runtime.probeInterval | default "5m" | quote }}
     nodeCapabilitiesMode: {{ .Values.defaults.runtime.nodeCapabilitiesMode | default "probe" | quote }}
-    {{- with .Values.defaults.runtime.staticCapabilities }}
-    staticCapabilities:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
 {{- end -}}
 
 {{/*

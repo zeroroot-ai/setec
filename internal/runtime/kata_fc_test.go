@@ -81,7 +81,7 @@ func TestKataFCDispatcher_NodeAffinity(t *testing.T) {
 
 func TestKataFCDispatcher_Overhead_Default(t *testing.T) {
 	t.Parallel()
-	d := NewKataFCDispatcher(BackendConfig{RuntimeClassName: "kata-fc"})
+	d := NewKataFCDispatcher(BackendConfig{Install: true, RuntimeClassName: "kata-fc"})
 	oh := d.Overhead()
 	wantMem := resource.MustParse("128Mi")
 	wantCPU := resource.MustParse("250m")
@@ -101,6 +101,7 @@ func TestKataFCDispatcher_Overhead_Custom(t *testing.T) {
 		corev1.ResourceCPU:    resource.MustParse("500m"),
 	}
 	d := NewKataFCDispatcher(BackendConfig{
+		Install:          true,
 		RuntimeClassName: "kata-fc",
 		DefaultOverhead:  custom,
 	})
@@ -113,6 +114,23 @@ func TestKataFCDispatcher_Overhead_Custom(t *testing.T) {
 	}
 	if cpu := oh[corev1.ResourceCPU]; cpu.Cmp(wantCPU) != 0 {
 		t.Errorf("custom CPU overhead = %v, want %v", cpu, wantCPU)
+	}
+}
+
+func TestKataFCDispatcher_Overhead_ExternalRuntimeClass_Nil(t *testing.T) {
+	t.Parallel()
+	// Install:false → the RuntimeClass is externally managed; even with a
+	// DefaultOverhead set, Overhead() returns nil so the operator does not stamp
+	// a (possibly mismatching) overhead — admission applies the class's own
+	// (setec#78).
+	d := NewKataFCDispatcher(BackendConfig{
+		RuntimeClassName: "kata-fc",
+		DefaultOverhead: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	})
+	if oh := d.Overhead(); oh != nil {
+		t.Errorf("Overhead() = %v, want nil for an externally-managed RuntimeClass", oh)
 	}
 }
 

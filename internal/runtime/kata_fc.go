@@ -57,6 +57,11 @@ func (d *KataFCDispatcher) NodeAffinity() *corev1.NodeAffinity {
 // Overhead implements Dispatcher.  Returns BackendConfig.DefaultOverhead when
 // set, otherwise the documented defaults of 128Mi memory and 250m CPU.
 func (d *KataFCDispatcher) Overhead() corev1.ResourceList {
+	if !d.cfg.Install {
+		// Externally-managed RuntimeClass: we don't control its overhead, so
+		// omit it and let RuntimeClass admission apply the class's own (setec#78).
+		return nil
+	}
 	if d.cfg.DefaultOverhead != nil {
 		return d.cfg.DefaultOverhead
 	}

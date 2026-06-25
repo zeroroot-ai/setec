@@ -521,9 +521,11 @@ func TestWithRuntimeSelection_OverheadSet(t *testing.T) {
 
 	sb := newSandbox()
 
-	// kata-fc dispatcher has default overhead ~128Mi / 250m.
+	// kata-fc dispatcher has default overhead ~128Mi / 250m. Install:true marks
+	// the RuntimeClass as chart-managed, so the operator stamps overhead.
 	kataCfg := runtimepkg.BackendConfig{
 		Enabled:          true,
+		Install:          true,
 		RuntimeClassName: "kata-fc",
 	}
 	kataDispatcher := runtimepkg.NewKataFCDispatcher(kataCfg)
@@ -545,5 +547,41 @@ func TestWithRuntimeSelection_OverheadSet(t *testing.T) {
 	}
 	if _, ok := pod.Spec.Overhead[corev1.ResourceCPU]; !ok {
 		t.Error("Overhead missing cpu resource from kata-fc dispatcher")
+	}
+}
+
+// TestWithRuntimeSelection_OverheadOmittedForExternalRuntimeClass verifies that
+// for an externally-managed RuntimeClass (Install:false) the operator does NOT
+// stamp Pod.Spec.Overhead, even with a DefaultOverhead configured. The
+// Kubernetes RuntimeClass admission controller then applies the class's own
+// overhead instead of rejecting the Pod on a mismatch (setec#78).
+func TestWithRuntimeSelection_OverheadOmittedForExternalRuntimeClass(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox()
+
+	// Install:false → externally managed; DefaultOverhead is intentionally set
+	// to prove it is NOT stamped (it would otherwise mismatch the external class).
+	kataCfg := runtimepkg.BackendConfig{
+		Enabled:          true,
+		Install:          false,
+		RuntimeClassName: "kata-fc",
+		DefaultOverhead: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+			corev1.ResourceCPU:    resource.MustParse("250m"),
+		},
+	}
+	sel := &runtimepkg.Selection{
+		Backend:    runtimepkg.BackendKataFC,
+		Dispatcher: runtimepkg.NewKataFCDispatcher(kataCfg),
+	}
+
+	pod, err := BuildWithOptions(sb, "kata-fc", BuildOptions{RuntimeSelection: sel})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+
+	if pod.Spec.Overhead != nil {
+		t.Errorf("Overhead = %v, want nil for an externally-managed RuntimeClass (admission applies the class's own)", pod.Spec.Overhead)
 	}
 }
