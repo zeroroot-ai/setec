@@ -11,6 +11,14 @@ image:
 # the operator image from a private registry. Leave empty for public images.
 imagePullSecrets: []
 
+# -- kubectl configures the kubectl image used by the pre-upgrade hook Job.
+# Override this to pin to a specific version or to pull from a private
+# registry mirror in air-gapped environments.
+kubectl:
+  # -- image is the fully-qualified kubectl image reference. Leave empty to
+  # use the chart's default (docker.io/bitnami/kubectl:1.29).
+  image: ""
+
 # -- nameOverride replaces the chart name used in resource names, keeping the
 # release-name prefix. Use fullnameOverride for a full replacement.
 nameOverride: ""

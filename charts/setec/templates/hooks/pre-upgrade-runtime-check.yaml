@@ -136,10 +136,10 @@ metadata:
   annotations:
     "helm.sh/hook": pre-upgrade
     "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed,before-hook-creation
 spec:
   ttlSecondsAfterFinished: 60
-  backoffLimit: 0
+  backoffLimit: 3
   template:
     metadata:
       labels:
@@ -188,4 +188,3 @@ spec:
               - key: check.sh
                 path: check.sh
                 mode: 0755
-      activeDeadlineSeconds: 30
