@@ -27,7 +27,7 @@ spec:
       # scoped to the minimum set explained in the chart README.
       containers:
         - name: node-agent
-          image: "{{ .Values.nodeAgent.image.repository }}:{{ .Values.nodeAgent.image.tag }}"
+          image: "{{ .Values.nodeAgent.image.repository }}:{{ .Values.nodeAgent.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.nodeAgent.image.pullPolicy }}
           args:
             - --thinpool-name=setec-thinpool

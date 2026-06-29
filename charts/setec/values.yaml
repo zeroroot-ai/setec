@@ -3,7 +3,7 @@ image:
   # -- Image repository. Override to pull from a private mirror.
   repository: ghcr.io/zeroroot-ai/setec
   # -- Image tag. Defaults to the chart's appVersion when left empty.
-  tag: "0.1.0"
+  tag: ""
   # -- Image pull policy. One of Always, Never, IfNotPresent.
   pullPolicy: IfNotPresent
 
@@ -338,7 +338,9 @@ nodeAgent:
   enabled: false
   image:
     repository: ghcr.io/zeroroot-ai/setec-node-agent
-    tag: "0.2.0"
+    # -- tag defaults to .Chart.AppVersion when left empty. Pin explicitly
+    # for reproducible deploys.
+    tag: ""
     pullPolicy: IfNotPresent
   # Kata-runtime node selector. Must match the label the cluster admin
   # applies to KVM-capable nodes.
@@ -377,7 +379,9 @@ frontend:
   enabled: false
   image:
     repository: ghcr.io/zeroroot-ai/setec-frontend
-    tag: "0.2.0"
+    # -- tag defaults to .Chart.AppVersion when left empty. Pin explicitly
+    # for reproducible deploys.
+    tag: ""
     pullPolicy: IfNotPresent
   # listenAddr is the gRPC bind address inside the Pod.
   listenAddr: ":50051"
