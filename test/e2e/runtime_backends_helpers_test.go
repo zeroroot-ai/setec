@@ -48,9 +48,15 @@ import (
 // errors surface faster in CI.
 const backendPollInterval = 1 * time.Second
 
-// waitForPodReady polls until the named Pod in namespace reports all containers
-// Ready, or timeout elapses. Returns nil on success, a descriptive error on
-// timeout. Uses wait.PollUntilContextTimeout — no bare time.Sleep.
+// waitForPodReady polls until the named Pod in namespace reaches a terminal
+// success state. It accepts two success conditions:
+//
+//   - PodReady condition == ConditionTrue (Running containers all healthy)
+//   - Pod phase == Succeeded (short-lived workloads that exit 0 before the
+//     first poll sees the Ready condition — common with fast runtimes like gvisor)
+//
+// Returns nil on success, a descriptive error on timeout.
+// Uses wait.PollUntilContextTimeout — no bare time.Sleep.
 func waitForPodReady(ctx context.Context, c client.Client, namespace, name string, timeout time.Duration) error {
 	pollCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -62,6 +68,11 @@ func waitForPodReady(ctx context.Context, c client.Client, namespace, name strin
 				return false, nil // not yet created
 			}
 			return false, err
+		}
+		// Short-lived workloads (e.g. gvisor "sleep 5") may reach Succeeded
+		// before waitForPodReady observes the transient Ready condition.
+		if pod.Status.Phase == corev1.PodSucceeded {
+			return true, nil
 		}
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
@@ -163,17 +174,23 @@ func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, e
 	// Reap the process when it exits (context cancel closes the tunnel).
 	go func() { _ = pf.Wait() }()
 
-	// Allow a brief settling window for the tunnel to be ready.
-	select {
-	case <-time.After(2 * time.Second):
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	// Poll until the port-forward tunnel accepts connections. A fixed sleep is
+	// unreliable: on a loaded CI runner the tunnel may not be ready in 2 s, and
+	// on a fast machine the sleep wastes time. We retry with a short backoff
+	// instead, letting the caller's context supply the overall deadline.
+	metricsURL := fmt.Sprintf("http://127.0.0.1:%s/metrics", localPort)
+	var resp *http.Response
+	if err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 15*time.Second, true, func(ctx context.Context) (bool, error) {
+		r, e := http.Get(metricsURL) //nolint:noctx // short-lived polling probe; context applied at the outer level
+		if e != nil {
+			return false, nil // tunnel not ready yet; keep polling
+		}
+		resp = r
+		return true, nil
+	}); err != nil {
+		return nil, fmt.Errorf("port-forward to svc/setec-metrics not ready within 15s: %w", err)
 	}
 
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/metrics", localPort))
-	if err != nil {
-		return nil, fmt.Errorf("GET /metrics: %w", err)
-	}
 	defer resp.Body.Close()
 
 	var parser expfmt.TextParser
