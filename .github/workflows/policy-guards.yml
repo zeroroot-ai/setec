@@ -1,0 +1,18 @@
+# Thin caller for the org-level reusable policy guards (zeroroot-ai/.github).
+# Added alongside the cicd-efficiency runner migration (board #44 /
+# deploy#1067) so `runs-on-lint` actually runs and reports the required
+# context declared in rulesets/org/tier-core.json — it previously had no
+# caller anywhere in the org. `no-monorepo-shortcuts` is wired here too for
+# the same reason (also previously uncalled).
+
+name: policy-guards
+
+on:
+  pull_request:
+  merge_group:
+
+jobs:
+  no-monorepo-shortcuts:
+    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@main
+  runs-on-lint:
+    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@main
