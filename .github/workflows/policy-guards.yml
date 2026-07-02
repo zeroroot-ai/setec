@@ -12,7 +12,10 @@
 #     formerly its own vault-auth-method-deny-list.yml, deleted by this
 #     change)
 #
-# setec has no other standalone trivial guard workflows today.
+# Also wires (from the cicd-efficiency runner migration, deploy#1067):
+#   - runs-on-lint (ADR-0060 required context in tier rulesets; previously
+#     had no caller anywhere in the org)
+#   - no-monorepo-shortcuts (same reason)
 #
 # IMPORTANT: this exact structure (job id `policy-guards` calling the
 # reusable job id `vault-auth-method-deny-list`) is what produces the status
@@ -35,3 +38,7 @@ jobs:
   policy-guards:
     name: policy-guards
     uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@main
+  no-monorepo-shortcuts:
+    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@main
+  runs-on-lint:
+    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@main
