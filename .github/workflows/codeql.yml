@@ -1,9 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Epic: cicd-efficiency (board #44), slice S11b, .github#203. Per
+# docs/architecture/CICD-CONTEXT.md decision #9 (scanner cadence ->
+# merge_group gate + weekly deep cron, drop per-PR/push), the trigger moved
+# from `push: [main]` (post-merge-only scan) to `merge_group` (pre-merge
+# authoritative gate) plus the existing weekly cron. merge_group is inert
+# until the merge queue is enabled on setec -- until then this workflow only
+# fires on the weekly schedule, same as before.
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
+  merge_group:
   schedule:
     # Weekly run: Tuesday 08:00 UTC.
     - cron: "0 8 * * 2"
