@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.106.0](https://github.com/zeroroot-ai/setec/compare/v0.105.0...v0.106.0) (2026-07-02)
+
+
+### Features
+
+* **ci:** migrate e2e onto ephemeral ARC runner, drop self-hosted metal ([#114](https://github.com/zeroroot-ai/setec/issues/114)) ([3a678b8](https://github.com/zeroroot-ai/setec/commit/3a678b84d0b26b93e36e2a39a4a0c3b9c063a987))
+* propagate SandboxClass tolerations to Sandbox pods ([#116](https://github.com/zeroroot-ai/setec/issues/116)) ([6b97eba](https://github.com/zeroroot-ai/setec/commit/6b97eba81e81a1680d0bd29d00db47bf76b0817e)), closes [#115](https://github.com/zeroroot-ai/setec/issues/115)
+
+
+### Bug Fixes
+
+* **chart:** default component tags to AppVersion + publish runtime-agent image ([#104](https://github.com/zeroroot-ai/setec/issues/104)) ([ace9263](https://github.com/zeroroot-ai/setec/commit/ace9263b87cfd3905a45b747132dafb2d8e094c2)), closes [#81](https://github.com/zeroroot-ai/setec/issues/81)
+* **ci:** stop merge_group heavy go-ci and CodeQL red checks ([#118](https://github.com/zeroroot-ai/setec/issues/118)) ([d42a3e6](https://github.com/zeroroot-ai/setec/commit/d42a3e6eee6acbddffed5404732f88e717869a76))
+* **e2e:** accept Succeeded phase in waitForPodReady + poll port-forward readiness ([#101](https://github.com/zeroroot-ai/setec/issues/101)) ([68b5850](https://github.com/zeroroot-ai/setec/commit/68b5850af5d4aacf23a2f3e80ca2f658b0e3a01c)), closes [#94](https://github.com/zeroroot-ai/setec/issues/94)
+* **helm:** make pre-upgrade runtime-check hook resilient to slow image pulls ([#100](https://github.com/zeroroot-ai/setec/issues/100)) ([d3d6dc3](https://github.com/zeroroot-ai/setec/commit/d3d6dc335347e07dc503b90b50e1edfeccfb8280)), closes [#80](https://github.com/zeroroot-ai/setec/issues/80)
+
 ## [0.105.0](https://github.com/zeroroot-ai/setec/compare/v0.104.3...v0.105.0) (2026-06-25)
 
 
