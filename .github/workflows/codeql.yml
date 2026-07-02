@@ -53,3 +53,14 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:go
+          # merge_group's temporary gh-readonly-queue/... ref is deleted as
+          # soon as the queue entry resolves -- often before this step's
+          # SARIF upload call reaches the API, which then 404s with "ref ...
+          # not found" and fails the whole gate on a non-actionable timing
+          # error. Per decision #9 (docs/architecture/CICD-CONTEXT.md),
+          # merge_group is the pre-merge build/extraction gate; the weekly
+          # schedule run is the authoritative alert-publishing run. Only
+          # upload SARIF (and therefore only publish/refresh Security-tab
+          # alerts) on the schedule trigger; merge_group still runs the full
+          # analysis so extraction/query errors still fail the gate.
+          upload: ${{ github.event_name == 'schedule' && 'always' || 'never' }}
