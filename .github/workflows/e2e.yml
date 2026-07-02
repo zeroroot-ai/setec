@@ -114,6 +114,17 @@ jobs:
   # e2e`, go:build e2e) and have no direct replacement in this workflow.
   # ----------------------------------------------------------------------
   roundtrip:
+    # ARC readiness gate (Epic: cicd-efficiency, board #44). The
+    # staging-ephemeral runner scale-set cannot start pods until an operator
+    # seeds the ARC GitHub App secret (gibson/staging/arc-github-app) and
+    # runners come up. Until then this job would sit "queued" forever inside
+    # every merge group, stalling/ejecting queue entries. Flip the repo
+    # variable STAGING_EPHEMERAL_READY to 'true' once the secret is seeded
+    # and runners are confirmed live. build-images stays ungated above: it's
+    # a standalone ubuntu-latest build-sanity check that also publishes
+    # sha-tagged images to ghcr, not a job that exists solely to feed this
+    # one.
+    if: vars.STAGING_EPHEMERAL_READY == 'true'
     needs: build-images
     runs-on: staging-ephemeral
     timeout-minutes: 30
