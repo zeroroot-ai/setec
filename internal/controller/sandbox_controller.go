@@ -756,9 +756,10 @@ func setSpanError(span trace.Span, msg string) {
 // Pod. The next reconcile will observe the new Pod via the Owns watch.
 //
 // cls is optional: when non-nil the Pod uses the class's RuntimeClassName
-// override (if set) and inherits the class's NodeSelector. nodeName, when
-// non-empty, pins the Pod to a specific node — used by the Phase 3
-// snapshot-restore flow to land on the node holding the snapshot state.
+// override (if set) and inherits the class's NodeSelector and Tolerations.
+// nodeName, when non-empty, pins the Pod to a specific node — used by the
+// Phase 3 snapshot-restore flow to land on the node holding the snapshot
+// state.
 // sel carries the dispatcher-selected backend and is applied via
 // podspec.WithRuntimeSelection as the last option in the build pipeline.
 func (r *SandboxReconciler) createPod(
@@ -798,6 +799,18 @@ func (r *SandboxReconciler) createPod(
 				pod.Spec.NodeSelector[k] = v
 			}
 		}
+	}
+
+	// Append class-level Tolerations onto the Pod. Tolerations have no
+	// natural "key" to dedupe on the way NodeSelector does (the same key
+	// may legitimately appear more than once with different operators/
+	// values/effects), so this is a straight append rather than a
+	// conflict-avoiding merge. This is what lets a Sandbox actually
+	// schedule onto a tainted NodePool (e.g. a Karpenter pool reserved
+	// for sandbox-host nodes) when the class declares the matching
+	// toleration.
+	if cls != nil && len(cls.Spec.Tolerations) > 0 {
+		pod.Spec.Tolerations = append(pod.Spec.Tolerations, cls.Spec.Tolerations...)
 	}
 
 	// podspec.Build already populates a basic OwnerReference, but UID and

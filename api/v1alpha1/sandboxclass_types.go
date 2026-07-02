@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -146,6 +147,15 @@ type SandboxClassSpec struct {
 	// for RuntimeClass affinity.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations is injected into every Sandbox Pod produced under this
+	// class, additive to any tolerations the controller itself sets. This
+	// lets an administrator target a tainted NodePool (e.g. a Karpenter
+	// pool reserved for sandbox-host nodes via a NoSchedule taint) by
+	// declaring the matching toleration once on the class rather than
+	// requiring every tenant Sandbox to know about the taint.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// Default marks this SandboxClass as the cluster-wide default. Only
 	// one SandboxClass may carry this flag set to true; multiple defaults

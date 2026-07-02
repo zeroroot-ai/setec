@@ -101,6 +101,9 @@ and tenants reference by name. A class carries:
 - `allowedNetworkModes`: the subset of `Network.mode` values the
   class permits.
 - `nodeSelector`: additive node-selector merged into every Pod.
+- `tolerations`: additive tolerations appended to every Pod, letting
+  Sandboxes schedule onto a tainted NodePool (e.g. a Karpenter pool
+  reserved for sandbox-host nodes via a `NoSchedule` taint).
 - `default: true`: marks the class as the cluster-default. Zero or one
   classes may carry this flag.
 

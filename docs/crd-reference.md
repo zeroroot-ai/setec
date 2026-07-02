@@ -177,6 +177,11 @@ Administrators author classes; tenants reference them by name in
   Empty list means all modes allowed.
 - `spec.nodeSelector` — additive per-Sandbox node selector, merged with
   the backend's own `NodeAffinity` from `setec.zeroroot.ai/runtime.<backend>=true`.
+- `spec.tolerations` — additive `[]corev1.Toleration` appended to every
+  Sandbox Pod produced under this class. Required when the target
+  NodePool carries a taint (e.g. a Karpenter pool reserved for
+  sandbox-host nodes) — without a matching toleration the Pod stays
+  `Pending` forever.
 - `spec.default` — boolean. Exactly zero or one class may carry this.
 
 ### Validation rules (enforced by the SandboxClass webhook)
