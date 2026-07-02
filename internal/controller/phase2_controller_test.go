@@ -86,6 +86,39 @@ func TestPhase2_SandboxWithClass(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: SandboxClass.Spec.Tolerations propagates onto the Sandbox Pod.
+// ---------------------------------------------------------------------------
+
+// TestPhase2_SandboxClassTolerations locks in setec#115: a SandboxClass
+// carrying Tolerations must produce a Pod that tolerates the matching
+// taint, mirroring how NodeSelector is merged in createPod. Without this a
+// Sandbox can never schedule onto a tainted NodePool (e.g. a Karpenter
+// pool reserved for sandbox-host nodes).
+func TestPhase2_SandboxClassTolerations(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-tolerations")
+
+	wantToleration := corev1.Toleration{
+		Key:      "setec.zeroroot.ai/sandbox-host",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "true",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}
+
+	cls := newSandboxClass("p2-tainted", func(c *setecv1alpha1.SandboxClass) {
+		c.Spec.Tolerations = []corev1.Toleration{wantToleration}
+	})
+	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
+	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
+
+	sb := newSandboxWithClass(ns, "tolerant", cls.Name)
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	pod := waitForPod(g, ns, sb.Name)
+	g.Expect(pod.Spec.Tolerations).To(ContainElement(wantToleration))
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: Sandbox with mode=none gets a NetworkPolicy.
 // ---------------------------------------------------------------------------
 

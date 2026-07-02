@@ -245,6 +245,13 @@ func (in *SandboxClassSpec) DeepCopyInto(out *SandboxClassSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]corev1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.PreWarmTTL != nil {
 		in, out := &in.PreWarmTTL, &out.PreWarmTTL
 		*out = new(v1.Duration)
