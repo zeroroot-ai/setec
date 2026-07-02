@@ -1,31 +1,96 @@
-# Standard CI quality gates for Setec.
-#
-# These jobs run on every pull request and on every push to main. They use
-# only GitHub-hosted `ubuntu-latest` runners so forks, first-time contributors,
-# and CI-only clones can all reproduce the gates without any bare-metal or
-# cloud-specific infrastructure. Hardware-gated E2E tests live in `e2e.yml`
-# and are intentionally NOT duplicated here.
-#
-# Jobs are independent (no `needs:` chain) so they run in parallel and each
-# failure is reported distinctly in the PR status.
+name: go-ci
 
-name: CI
+# Thin caller for the canonical three-tier Go CI (Epic: cicd-efficiency,
+# board #44, slice S11b, .github#203). See docs/architecture/CICD-CONTEXT.md
+# (workspace docs repo) and docs/adr/0060-ci-runner-split-hosted-default-
+# ephemeral-metal.md for the org-wide tiering rationale.
+#
+# Replaces the former all-in-one ci.yml (365 lines), which ran every job on
+# both `pull_request` and `push:main`, double-firing full suites. setec is a
+# PUBLIC Apache-2.0 repo whose only zeroroot-ai Go dependency is the public
+# ast-checks module, so it needs no private-module git auth: both reusable
+# calls below pass `private-modules: false` and no `gh-pat` secret.
+#
+#   pull_request -> fast tier:  quick contributor signal. The reusable's fast
+#                                tier gives mod-tidy drift check, go vet, go
+#                                build, and a plain `go test` (no race). setec
+#                                keeps its own cheap native guards alongside
+#                                it: lint (Makefile-pinned golangci-lint + buf
+#                                lint), proto-breaking, generated-file drift
+#                                (manifests/proto), helm-lint, a no-push
+#                                docker build (compile-validity, not a deploy
+#                                step), the binary flag smoke test, the
+#                                markdown link check, the marker/insecure-
+#                                flag/unimplemented greps, and the 3
+#                                examples-build jobs (separate Go modules
+#                                under examples/, unreachable by the
+#                                reusable, which only knows the root module).
+#
+#   merge_group  -> heavy tier: the ONE authoritative gate before landing.
+#                                The reusable's heavy tier gives `go test
+#                                -race ./...` and govulncheck (root module,
+#                                MEDIUM+ severity). setec adds its own
+#                                envtest suite (`make test` -- real
+#                                apiserver via KUBEBUILDER_ASSETS, produces a
+#                                coverage artifact; NOT equivalent to the
+#                                reusable's plain `go test`) and the 3
+#                                examples-govulncheck jobs (moved from the
+#                                now-deleted security.yaml -- those are
+#                                separate Go modules the reusable can't
+#                                reach, and per decision 9, scanner cadence
+#                                belongs on merge_group).
+#
+# merge_group is inert until the merge queue is enabled on setec -- wiring it
+# now is intentionally a no-op until then.
+#
+# setec keeps its own Makefile-pinned golangci-lint (`make lint`) instead of
+# delegating to the reusable's built-in golangci-lint-action step: the
+# reusable pins golangci-lint-action to a fixed version, which can silently
+# diverge from the repo's Makefile-pinned version and trail go.mod's
+# toolchain target -- the "v2 trap" gibson was already bitten by once
+# (sdk#355/adk#154). Passing `skip-lint: true` avoids double-running
+# golangci-lint under two different pins.
+#
+# security.yaml is DELETED by this change: its root-module govulncheck is
+# now covered by the `heavy` job's reusable call; its three example-module
+# govulncheck invocations moved into the examples-govulncheck job below
+# (pinned to the same govulncheck version the reusable installs, v1.1.4, so
+# a single PR/queue-run sees one consistent scanner version rather than
+# `@latest` drifting mid-flight).
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  merge_group:
+
+concurrency:
+  group: go-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+  # ---- fast tier (pull_request): reusable mod-tidy/vet/build/test ----
+  fast:
+    if: github.event_name == 'pull_request'
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@v2
+    with:
+      tier: fast
+      private-modules: false
+      skip-lint: true # setec runs its own pinned golangci-lint below (make lint)
+
+  # ---- heavy tier (merge_group): reusable race test + govulncheck ----
+  heavy:
+    if: github.event_name == 'merge_group'
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@v2
+    with:
+      tier: heavy
+      private-modules: false
+
+  # ---- setec-specific lint (fast tier / pull_request) ----
   lint:
     name: Lint (golangci-lint + buf)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -50,8 +115,10 @@ jobs:
       - name: Run buf lint
         run: buf lint
 
+  # ---- proto WIRE-breaking gate (fast tier / pull_request) ----
   proto-breaking:
     name: Proto WIRE-breaking gate
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -74,8 +141,7 @@ jobs:
         # The setec.v1 SandboxService ABI is wire-stable. This gate rejects
         # any change that breaks an existing wire encoding (changed field
         # numbers/types, removed fields). Additive fields, renames, and doc
-        # edits pass. On the base branch (push to main) there is no diff so
-        # the gate is a no-op.
+        # edits pass.
         run: |
           git fetch origin "${GITHUB_BASE_REF:-main}" --depth=1 || true
           base="origin/${GITHUB_BASE_REF:-main}"
@@ -85,8 +151,17 @@ jobs:
             echo "No base ref to diff against; skipping breaking check."
           fi
 
+  # ---- envtest suite (heavy tier / merge_group) ----
+  # `make test` runs unit + envtest (real apiserver via KUBEBUILDER_ASSETS,
+  # installed transitively by the Makefile target) and produces cover.out.
+  # This is NOT equivalent to the reusable's plain `go test`: it needs the
+  # envtest control-plane binaries and emits a coverage artifact. It is
+  # setec's authoritative test suite (closest to integration), so it belongs
+  # in the merge_group-only tier alongside the reusable's `-race` run rather
+  # than duplicating a lighter variant on pull_request.
   test:
     name: Unit + envtest
+    if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -99,9 +174,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # `make test` transitively installs setup-envtest and downloads the
-      # matching Kubernetes control-plane binaries via the Makefile targets,
-      # so no extra install step is required here.
       - name: Run tests
         run: make test
 
@@ -114,8 +186,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # ---- generated-file drift gates (fast tier / pull_request) ----
   manifests-up-to-date:
     name: Manifests up-to-date
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -141,6 +215,7 @@ jobs:
 
   proto-up-to-date:
     name: Proto up-to-date
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -164,8 +239,10 @@ jobs:
             exit 1
           fi
 
+  # ---- helm chart gates (fast tier / pull_request) ----
   helm-lint:
     name: Helm lint
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -203,8 +280,13 @@ jobs:
             --set frontend.tlsCertSecretName=frontend-tls \
             --set frontend.tlsClientCASecretName=frontend-ca >/dev/null
 
+  # ---- docker build validity (fast tier / pull_request) ----
+  # Expensive (image build) but no push and no deploy -- a compile-validity
+  # signal, not a scanner or authoritative suite. Kept on pull_request to
+  # match today's behaviour rather than moved to merge_group.
   docker-build:
     name: Docker build (no push)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -225,8 +307,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ---- cheap guard checks (fast tier / pull_request) ----
   flag-smoke-test:
     name: Binary flag smoke test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -264,6 +348,7 @@ jobs:
 
   link-check:
     name: Markdown link check
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -285,6 +370,7 @@ jobs:
 
   no-marker-in-source:
     name: No TODO/FIXME/XXX/HACK markers in production source
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -311,6 +397,7 @@ jobs:
 
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -326,6 +413,7 @@ jobs:
 
   no-unimplemented-in-frontend:
     name: Frontend has no codes.Unimplemented
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -339,8 +427,11 @@ jobs:
             exit 1
           fi
 
+  # ---- examples (separate Go modules under examples/, unreachable by the
+  # reusable, which only knows the root module) ----
   examples-build:
     name: Examples build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -363,3 +454,39 @@ jobs:
       - name: Build ${{ matrix.example }}
         working-directory: examples/${{ matrix.example }}
         run: go build ./...
+
+  # ---- examples govulncheck (heavy tier / merge_group) ----
+  # Moved from the now-deleted security.yaml: that workflow's root-module
+  # govulncheck is superseded by the `heavy` job's reusable call above; these
+  # three example-module scans are preserved here (the reusable only reaches
+  # the root module). Scanner cadence -> merge_group per decision 9. Pinned
+  # to the same govulncheck version the reusable installs (v1.1.4) instead
+  # of the old `@latest`, so one PR/queue run sees one consistent version.
+  examples-govulncheck:
+    name: Examples govulncheck
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - ai-code-exec
+          - ci-sandbox
+          - sec-research
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: run govulncheck on examples/${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: govulncheck ./...

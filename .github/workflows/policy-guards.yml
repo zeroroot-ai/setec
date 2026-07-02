@@ -1,0 +1,37 @@
+# Epic: cicd-efficiency (board #44), slice S11b, .github#203. Consolidates
+# setec's trivial per-PR policy guards into a single job per
+# docs/architecture/CICD-CONTEXT.md decision #9 ("trivial guards ...
+# consolidated into one policy-guards job"). Runs on both pull_request
+# (fast contributor signal) and merge_group (the authoritative gate, once
+# the merge queue is enabled) -- pr-title-lint.yml stays separate and
+# pull_request-only since PR-title checks are meaningless in the merge
+# queue context.
+#
+# Currently folds in:
+#   - vault-auth-method-deny-list (ADR-0009, org-level reusable workflow;
+#     formerly its own vault-auth-method-deny-list.yml, deleted by this
+#     change)
+#
+# setec has no other standalone trivial guard workflows today.
+#
+# IMPORTANT: this exact structure (job id `policy-guards` calling the
+# reusable job id `vault-auth-method-deny-list`) is what produces the status
+# check context string `policy-guards / vault-auth-method-deny-list`, which
+# is the ONE context empirically verified to report correctly under
+# merge_group in this org (gibson's PR #208, canary-tested through a live
+# merge queue -- see zeroroot-ai/.github PR #208 for the evidence). Do not
+# rename the job id.
+#
+# Required check name: policy-guards
+
+name: policy-guards
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  merge_group:
+
+jobs:
+  policy-guards:
+    name: policy-guards
+    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@main
