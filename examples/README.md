@@ -9,7 +9,7 @@ Three reference programs, one per common integration pattern, all speaking to th
 | [`ci-sandbox`](./ci-sandbox/)             | Untrusted CI job execution             | You run tests for pull requests and do not trust the branch contents. |
 | [`sec-research`](./sec-research/)         | CPU-hungry, potentially-dangerous tool | You run fuzzers, dynamic analyzers, or similar against target code.   |
 
-Each example is a standalone Go module with its own `go.mod`. The local-development `replace` directive points at the parent repo; drop that line when consuming an example outside this source tree.
+Each example is a standalone Go module with its own `go.mod`, pinned to a released `github.com/zeroroot-ai/setec` version — no `replace` directives (the `no-monorepo-shortcuts` guard forbids committing them). To develop an example against the parent working tree, apply a local-only replace and drop it before committing: `go mod edit -replace github.com/zeroroot-ai/setec=../.. && go mod tidy` (CI's Examples build job does the same ephemerally to validate examples against each PR's tree).
 
 ## Common prerequisites
 
