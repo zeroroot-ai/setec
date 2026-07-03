@@ -19,6 +19,7 @@ package snapshot
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -488,4 +489,88 @@ func indexOf(h, n string) int {
 		}
 	}
 	return -1
+}
+
+// TestRestoreSandbox_EmitsEntropyReseededEvent asserts the Coordinator
+// surfaces the node-agent's entropy_reseeded confirmation as a Normal
+// event on the Sandbox (setec#72 observability requirement).
+func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
+	sb := newSandboxForCoord()
+	pod := newPodForSandbox(sb, "node-a")
+	snap := &setecv1alpha1.Snapshot{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Spec: setecv1alpha1.SnapshotSpec{
+			SandboxClass: "standard", Node: "node-a",
+			StorageBackend: "local-disk", StorageRef: "t-a-snap-1",
+			VMM: setecv1alpha1.VMMFirecracker,
+		},
+	}
+	c := newFakeClient(t, sb, pod, snap)
+	na := &fakeNodeAgentClient{
+		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: true},
+	}
+	rec := testutil.NewFakeEventsRecorder(32)
+	coord := &Coordinator{
+		Client:   c,
+		Dialer:   &fakeDialer{client: na},
+		Recorder: rec,
+		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
+	}
+
+	if err := coord.RestoreSandbox(context.Background(), sb, snap); err != nil {
+		t.Fatalf("RestoreSandbox: %v", err)
+	}
+
+	var sawReseeded bool
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, EventReasonEntropyReseeded) {
+				sawReseeded = true
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawReseeded {
+		t.Fatal("expected an EntropyReseeded event after a reseeded restore")
+	}
+}
+
+// TestRestoreSandbox_NoReseedEventWithoutConfirmation pins that the
+// event is only emitted when the node-agent actually confirmed the
+// reseed (no false assurance on --entropy-reseed=off).
+func TestRestoreSandbox_NoReseedEventWithoutConfirmation(t *testing.T) {
+	sb := newSandboxForCoord()
+	pod := newPodForSandbox(sb, "node-a")
+	snap := &setecv1alpha1.Snapshot{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Spec:       setecv1alpha1.SnapshotSpec{Node: "node-a"},
+	}
+	c := newFakeClient(t, sb, pod, snap)
+	na := &fakeNodeAgentClient{
+		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: false},
+	}
+	rec := testutil.NewFakeEventsRecorder(32)
+	coord := &Coordinator{
+		Client:   c,
+		Dialer:   &fakeDialer{client: na},
+		Recorder: rec,
+		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
+	}
+	if err := coord.RestoreSandbox(context.Background(), sb, snap); err != nil {
+		t.Fatalf("RestoreSandbox: %v", err)
+	}
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, EventReasonEntropyReseeded) {
+				t.Fatalf("EntropyReseeded event emitted without confirmation: %s", ev)
+			}
+			continue
+		default:
+		}
+		break
+	}
 }

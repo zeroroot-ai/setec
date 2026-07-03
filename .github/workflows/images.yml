@@ -1,10 +1,13 @@
 name: images
 
-# Builds + pushes setec, setec-node-agent, setec-frontend, and
-# setec-runtime-agent to GHCR.
+# Builds + pushes setec, setec-node-agent, setec-frontend,
+# setec-runtime-agent, and setec-guest-agent to GHCR.
 # Adopts the org reusable image-build workflow (slice 1.2, .github#47).
 #
-# All four images share a single Dockerfile; CMD build-arg selects the binary.
+# All images share a single Dockerfile; CMD build-arg selects the binary.
+# setec-guest-agent is not a runnable service image: it exists so microVM
+# rootfs builders can COPY the static binary out of it (the in-guest half
+# of the entropy reseed on snapshot restore, setec#72).
 # The smoke-test gate and draft GitHub Release creation live in release.yml.
 # Example Dockerfiles under examples/ are NOT published as releases (skipped).
 
@@ -92,3 +95,21 @@ jobs:
       tag_pattern: v(.*)
       build_args: |
         CMD=runtime-agent
+
+  setec-guest-agent:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-guest-agent
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-guest-agent
+      tag_pattern: v(.*)
+      build_args: |
+        CMD=setec-guest-agent

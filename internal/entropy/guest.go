@@ -1,0 +1,113 @@
+/*
+Copyright 2026 The Setec Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package entropy
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"net"
+	"time"
+)
+
+// Pool is the guest-side sink fresh entropy is written into. The
+// production implementation (KernelPool, pool_linux.go) issues the
+// RNDADDENTROPY ioctl so the payload is both mixed into the kernel
+// CRNG input pool and credited; tests inject fakes.
+type Pool interface {
+	// AddEntropy mixes p into the entropy pool and credits it. It
+	// must return a non-nil error when the injection did not happen —
+	// the handler acks StatusError in that case so the host fails
+	// closed rather than assuming a reseed that never occurred.
+	AddEntropy(p []byte) error
+}
+
+// guestConnBudget bounds a single reseed exchange so a stalled peer
+// cannot wedge the accept loop's goroutine forever.
+const guestConnBudget = 10 * time.Second
+
+// GuestHandler serves reseed requests inside the guest. One request is
+// served per connection; the connection is closed after the ack.
+type GuestHandler struct {
+	// Pool receives the injected entropy. Required.
+	Pool Pool
+
+	// Logf, when non-nil, receives one line per served request.
+	Logf func(format string, args ...any)
+}
+
+// Serve accepts connections from ln until ctx is cancelled, serving
+// each with ServeConn on its own goroutine.
+func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("entropy: accept: %w", err)
+		}
+		go func() {
+			if serveErr := h.ServeConn(conn); serveErr != nil {
+				h.logf("entropy reseed request failed: %v", serveErr)
+			}
+		}()
+	}
+}
+
+// ServeConn reads one reseed request from conn, injects the payload
+// into the Pool, and writes the ack. The ack digest is always the
+// SHA-256 of the received payload; the status reflects whether the
+// injection succeeded. conn is closed on return.
+func (h *GuestHandler) ServeConn(conn net.Conn) error {
+	defer func() { _ = conn.Close() }()
+	if h.Pool == nil {
+		return errors.New("entropy: GuestHandler has no Pool")
+	}
+	_ = conn.SetDeadline(time.Now().Add(guestConnBudget))
+
+	payload, err := ReadRequest(conn)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(payload)
+
+	status := StatusOK
+	if injectErr := h.Pool.AddEntropy(payload); injectErr != nil {
+		status = StatusError
+		h.logf("entropy injection failed: %v", injectErr)
+	}
+	if ackErr := WriteAck(conn, status, digest); ackErr != nil {
+		return ackErr
+	}
+	h.logf("reseed: injected %d bytes (status=%d)", len(payload), status)
+	if status != StatusOK {
+		return errors.New("entropy: injection failed; acked StatusError")
+	}
+	return nil
+}
+
+func (h *GuestHandler) logf(format string, args ...any) {
+	if h.Logf != nil {
+		h.Logf(format, args...)
+	}
+}

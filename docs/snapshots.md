@@ -218,18 +218,30 @@ hardening invariants (ADR-0052; full detail in `SECURITY.md`):
       - {host: mirror.internal, port: 443}
   ```
 
-- **Entropy reseed on restore** is a tracked follow-up (needs an in-guest
-  vsock agent the current runtime does not expose); see `SECURITY.md`.
+- **Entropy reseed on restore** is enforced fail-closed by default
+  (`snapshots.entropyReseed: require`): after every `LoadSnapshot` the
+  node-agent pushes fresh entropy to the in-guest `setec-guest-agent`
+  over vsock and refuses to report the restore successful until the
+  guest acknowledges it with a digest-verified ack. Guest images must
+  bundle `setec-guest-agent` (published as
+  `ghcr.io/zeroroot-ai/setec-guest-agent`; also `make build-guest-agent`).
+  `snapshots.entropyReseed: off` is the explicit opt-out for agent-less
+  images — restored clones then rely on the passive virtio-rng
+  mechanism only. See `SECURITY.md` ("Entropy reseed on restore").
 
 ## Metrics reference
 
-Phase 3 adds two collectors to the existing Prometheus suite:
+Phase 3 adds these collectors to the existing Prometheus suite:
 
 - `setec_snapshot_duration_seconds{operation,sandbox_class}` —
   histogram of snapshot operation durations. `operation` is one of
   `create`, `restore`, `delete`, `pause`, `resume`.
 - `setec_prewarm_pool_entries{node,sandbox_class}` — gauge of
   currently-paused pool entries per node/class.
+- `setec_node_entropy_reseed_total{outcome}` — counter of post-restore
+  entropy reseed attempts on the node-agent, `outcome` is `success` or
+  `failure`. A `failure` always corresponds to a restore that failed
+  closed (the sandbox was never handed over).
 
 ## Troubleshooting
 

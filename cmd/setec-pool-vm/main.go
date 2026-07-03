@@ -69,6 +69,18 @@ const (
 	// serialised VM state and guest memory respectively.
 	stateFileName = "state.bin"
 	memFileName   = "memory.bin"
+
+	// vsockFileName is the local filename inside
+	// <storage-root>/<pool-entry-id>/ where Firecracker binds the
+	// host side of the guest vsock device (the active entropy-reseed
+	// transport, setec#72).
+	vsockFileName = "vsock.sock"
+
+	// guestCID is the vsock context id assigned to the guest. 0-2 are
+	// reserved (hypervisor/loopback/host); 3 is the conventional
+	// first guest CID and unique per VM since each Firecracker
+	// process has its own vsock namespace.
+	guestCID = 3
 )
 
 // Options carries every knob the launcher takes. Kept as an explicit
@@ -86,6 +98,7 @@ type Options struct {
 	BootReadyTimeout   time.Duration
 	ShutdownGracePause time.Duration
 	BootArgs           string
+	VsockUDSPath       string
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -109,6 +122,9 @@ func parseFlags(args []string) (Options, error) {
 		"how long to wait after SIGTERM before SIGKILL on cleanup")
 	fs.StringVar(&o.BootArgs, "boot-args", "console=ttyS0 reboot=k panic=1 pci=off",
 		"kernel cmdline passed via boot-source")
+	fs.StringVar(&o.VsockUDSPath, "vsock-uds-path", "",
+		"host path where Firecracker binds the guest vsock device's Unix socket "+
+			"(the entropy-reseed transport). Empty derives <storage-root>/<pool-entry-id>/vsock.sock")
 
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -351,11 +367,38 @@ func configureAndBoot(ctx context.Context, _ firecracker.Client, o Options) erro
 		return fmt.Errorf("/entropy: %w", err)
 	}
 
+	// Attach a vsock device so the host can reach the in-guest
+	// setec-guest-agent AFTER a snapshot restore. This is the ACTIVE
+	// entropy-reseed transport (setec#72): post-LoadSnapshot the
+	// node-agent connects to the device's host-side Unix socket,
+	// performs the hybrid-vsock CONNECT handshake, and pushes fresh
+	// entropy that the guest agent credits into the kernel CRNG. The
+	// device is part of the VM config, so it is captured in the
+	// snapshot and re-established on restore, exactly like /entropy.
+	vsockBody := map[string]any{
+		"guest_cid": guestCID,
+		"uds_path":  vsockUDSPath(o),
+	}
+	if err := ec.do(ctx, "/vsock", vsockBody); err != nil {
+		return fmt.Errorf("/vsock: %w", err)
+	}
+
 	actionBody := map[string]any{"action_type": "InstanceStart"}
 	if err := ec.do(ctx, "/actions", actionBody); err != nil {
 		return fmt.Errorf("/actions InstanceStart: %w", err)
 	}
 	return nil
+}
+
+// vsockUDSPath resolves the host path Firecracker binds the vsock
+// device's Unix socket to: the explicit --vsock-uds-path when set,
+// otherwise <storage-root>/<pool-entry-id>/vsock.sock so the socket
+// lives (and is cleaned up) with the rest of the entry state.
+func vsockUDSPath(o Options) string {
+	if o.VsockUDSPath != "" {
+		return o.VsockUDSPath
+	}
+	return filepath.Join(o.StorageRoot, o.PoolEntryID, vsockFileName)
 }
 
 // verifySnapshotFiles asserts both files exist and are non-empty.

@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
+	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -64,6 +65,24 @@ type Server struct {
 	// TempDir is the directory temp state files are written to during
 	// CreateSnapshot/RestoreSandbox. Defaults to /var/lib/setec/tmp.
 	TempDir string
+
+	// Reseeder actively reseeds the restored guest's CSPRNG over the
+	// Firecracker vsock UDS after every successful LoadSnapshot
+	// (setec#72). When non-nil the restore FAILS CLOSED: the RPC only
+	// reports success once the in-guest setec-guest-agent has
+	// acknowledged fresh entropy, and an unconfirmed VM is paused
+	// rather than handed over with cloned RNG state. nil disables the
+	// active reseed (explicit --entropy-reseed=off opt-out), leaving
+	// only the passive virtio-rng mechanism.
+	Reseeder entropy.Reseeder
+
+	// ReseedVsockPaths returns candidate host paths for the restored
+	// VM's vsock Unix socket. nil uses defaultReseedVsockPaths.
+	ReseedVsockPaths func(in *setecgrpcv1.RestoreSandboxRequest) []string
+
+	// ReseedObserver, when non-nil, receives "success" or "failure"
+	// after each reseed attempt (metrics hook).
+	ReseedObserver func(outcome string)
 
 	// Tracer is optional.
 	Tracer trace.Tracer
@@ -203,7 +222,64 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		}, status.Errorf(codes.Internal, "firecracker loadSnapshot: %v", err)
 	}
 
+	// Active entropy reseed (setec#72). The snapshot's CSPRNG state is
+	// shared by every clone restored from it; before the restore is
+	// reported usable, push fresh entropy into the guest and require
+	// the in-guest agent's digest-verified ack. Fail closed: an
+	// unconfirmed reseed pauses the VM and fails the RPC so the
+	// Sandbox is never marked Ready.
+	if s.Reseeder != nil {
+		candidates := defaultReseedVsockPaths(in)
+		if s.ReseedVsockPaths != nil {
+			candidates = s.ReseedVsockPaths(in)
+		}
+		if err := entropy.ReseedFirst(ctx, s.Reseeder, candidates); err != nil {
+			s.observeReseed("failure")
+			msg := fmt.Sprintf("entropy reseed after restore failed (failing closed): %v", err)
+			if pauseErr := fc.Pause(ctx); pauseErr != nil {
+				msg += fmt.Sprintf("; additionally failed to pause the unreseeded VM: %v", pauseErr)
+			}
+			return &setecgrpcv1.RestoreSandboxResponse{
+				Success: false,
+				Error:   msg,
+			}, status.Error(codes.Internal, msg)
+		}
+		s.observeReseed("success")
+		return &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: true}, nil
+	}
+
 	return &setecgrpcv1.RestoreSandboxResponse{Success: true}, nil
+}
+
+// observeReseed invokes the optional metrics hook.
+func (s *Server) observeReseed(outcome string) {
+	if s.ReseedObserver != nil {
+		s.ReseedObserver(outcome)
+	}
+}
+
+// defaultReseedVsockPaths derives the candidate vsock UDS paths for a
+// restored VM:
+//
+//   - <storageRef>/vsock.sock — pool entries persist their state under
+//     an absolute on-node directory, and setec-pool-vm binds the vsock
+//     device there (vsockUDSPath); non-absolute (opaque backend) refs
+//     contribute nothing.
+//   - <dir(kataSocketTarget)>/vsock.sock — the sibling of the target
+//     Firecracker API socket, for restores into Kata-managed pods.
+//
+// Candidate probing is not a fail-open: whichever path connects must
+// still complete the digest-verified reseed, and if none does the
+// restore fails closed.
+func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest) []string {
+	var out []string
+	if ref := in.GetStorageRef(); ref != "" && filepath.IsAbs(ref) {
+		out = append(out, filepath.Join(ref, "vsock.sock"))
+	}
+	if ks := in.GetKataSocketTarget(); ks != "" {
+		out = append(out, filepath.Join(filepath.Dir(ks), "vsock.sock"))
+	}
+	return out
 }
 
 // PauseSandbox is a direct wrap of firecracker.Pause.

@@ -109,6 +109,16 @@ message RestoreSandboxRequest {
 message RestoreSandboxResponse {
   bool success = 1;
   string error = 2;
+
+  // entropy_reseeded reports whether the restored guest's CSPRNG was
+  // actively reseeded over vsock and the guest acknowledged the fresh
+  // entropy (setec#72). When the node-agent runs with entropy reseed
+  // enforcement (the default), success=true implies
+  // entropy_reseeded=true; false alongside success=true can only
+  // happen when the operator explicitly opted out
+  // (--entropy-reseed=off), leaving only the passive virtio-rng
+  // mechanism.
+  bool entropy_reseeded = 3;
 }
 
 // PauseSandboxRequest / PauseSandboxResponse wrap a direct

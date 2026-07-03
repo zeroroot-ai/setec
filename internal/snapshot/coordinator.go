@@ -115,6 +115,7 @@ const (
 	EventReasonSnapshotCreateFailed   = "SnapshotCreateFailed"
 	EventReasonSnapshotRestoreFailed  = "SnapshotRestoreFailed"
 	EventReasonSnapshotRestoreStarted = "SnapshotRestoreStarted"
+	EventReasonEntropyReseeded        = "EntropyReseeded"
 	EventReasonPauseFailed            = "PauseFailed"
 	EventReasonResumeFailed           = "ResumeFailed"
 	EventReasonInsufficientStorage    = "InsufficientStorage"
@@ -337,6 +338,14 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 
 	c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotRestoreStarted,
 		fmt.Sprintf("restored sandbox from snapshot %q on node %q", snap.Name, pod.Spec.NodeName))
+	// Surface the node-agent's active entropy-reseed confirmation
+	// (setec#72): the restored guest's CSPRNG verifiably received
+	// fresh entropy before the sandbox was handed over. Only emitted
+	// on explicit confirmation — never inferred.
+	if resp.GetEntropyReseeded() {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
+			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (snapshot %q)", snap.Name))
+	}
 	c.recordDuration("restore", sb, time.Since(start))
 	return nil
 }

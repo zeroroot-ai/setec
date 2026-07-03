@@ -445,6 +445,14 @@ snapshots:
   # kataSocketPattern is the format string the Coordinator and node-agent
   # share to render a Firecracker API socket path from a Pod UID.
   kataSocketPattern: /run/kata-containers/%s/firecracker.socket
+  # entropyReseed controls the ACTIVE entropy reseed on snapshot restore
+  # (setec#72). "require" (default, fail-closed): a restore only succeeds
+  # once the in-guest setec-guest-agent has acknowledged fresh entropy
+  # over vsock — guest images MUST bundle setec-guest-agent. "off" is an
+  # explicit, auditable opt-out for guest images without the agent; the
+  # restored clones then rely only on the passive virtio-rng mechanism
+  # (see SECURITY.md "Entropy reseed on restore" for the residual risk).
+  entropyReseed: require
   # mTLS configuration for the operator<->node-agent gRPC channel. When
   # certManager.enabled is true the chart renders Certificate resources
   # and the Deployment/DaemonSet mount the resulting Secrets. Otherwise

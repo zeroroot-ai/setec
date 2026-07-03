@@ -465,3 +465,152 @@ func makeFramedPayload(t *testing.T, state, mem []byte) []byte {
 	}
 	return raw
 }
+
+// --- entropy reseed enforcement (setec#72) --------------------------
+
+// recordingReseeder implements entropy.Reseeder for tests.
+type recordingReseeder struct {
+	mu    sync.Mutex
+	paths []string
+	err   error
+}
+
+func (r *recordingReseeder) Reseed(_ context.Context, udsPath string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.paths = append(r.paths, udsPath)
+	return r.err
+}
+
+func (r *recordingReseeder) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.paths...)
+}
+
+func TestRestoreSandbox_ReseedSuccessIsReported(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	rs := &recordingReseeder{}
+	var outcomes []string
+	srv.Reseeder = rs
+	srv.ReseedObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
+	cli := newBufconnClient(t, srv)
+	ctx := context.Background()
+
+	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
+	if _, _, err := srv.Storage.Save(ctx, "snap-e", bytes.NewReader(framed)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId:       "snap-e",
+		StorageRef:       "snap-e",
+		KataSocketTarget: "/run/kata-containers/pod-1/firecracker.socket",
+	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !resp.Success || !resp.EntropyReseeded {
+		t.Fatalf("expected success + entropy_reseeded, got %+v", resp)
+	}
+	if len(rs.seen()) == 0 {
+		t.Fatal("reseeder was never invoked")
+	}
+	if len(outcomes) != 1 || outcomes[0] != "success" {
+		t.Fatalf("observer outcomes = %v", outcomes)
+	}
+}
+
+// TestRestoreSandbox_ReseedFailureFailsClosed is the core fail-closed
+// contract of setec#72: when the guest cannot confirm the reseed, the
+// restore RPC must fail (so the sandbox is never reported Ready) and
+// the restored-but-unreseeded VM must be paused rather than left
+// running with cloned RNG state.
+func TestRestoreSandbox_ReseedFailureFailsClosed(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	rs := &recordingReseeder{err: errors.New("guest never acked")}
+	var outcomes []string
+	srv.Reseeder = rs
+	srv.ReseedObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
+	cli := newBufconnClient(t, srv)
+	ctx := context.Background()
+
+	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
+	if _, _, err := srv.Storage.Save(ctx, "snap-f", bytes.NewReader(framed)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId:       "snap-f",
+		StorageRef:       "snap-f",
+		KataSocketTarget: "/run/kata-containers/pod-2/firecracker.socket",
+	})
+	if err == nil {
+		t.Fatal("restore must FAIL when the reseed cannot be confirmed")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Internal {
+		t.Fatalf("code = %v, want Internal", s.Code())
+	}
+	fc.mu.Lock()
+	pauses := fc.pauseCalls
+	fc.mu.Unlock()
+	if pauses == 0 {
+		t.Fatal("the unreseeded VM must be paused (not left running with cloned RNG state)")
+	}
+	if len(outcomes) != 1 || outcomes[0] != "failure" {
+		t.Fatalf("observer outcomes = %v", outcomes)
+	}
+}
+
+// TestRestoreSandbox_NilReseederSkipsActiveReseed pins the explicit
+// opt-out shape (--entropy-reseed=off): restore succeeds but
+// entropy_reseeded is reported false so callers can see the passive-
+// only posture.
+func TestRestoreSandbox_NilReseederSkipsActiveReseed(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	cli := newBufconnClient(t, srv)
+	ctx := context.Background()
+
+	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
+	if _, _, err := srv.Storage.Save(ctx, "snap-n", bytes.NewReader(framed)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId:       "snap-n",
+		StorageRef:       "snap-n",
+		KataSocketTarget: "/s",
+	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("success = false: %q", resp.Error)
+	}
+	if resp.EntropyReseeded {
+		t.Fatal("entropy_reseeded must be false when no reseeder is configured")
+	}
+}
+
+func TestDefaultReseedVsockPaths(t *testing.T) {
+	in := &setecgrpcv1.RestoreSandboxRequest{
+		StorageRef:       "/var/lib/setec/pool/entry-1",
+		KataSocketTarget: "/run/kata-containers/pod-uid/firecracker.socket",
+	}
+	got := defaultReseedVsockPaths(in)
+	want := []string{
+		"/var/lib/setec/pool/entry-1/vsock.sock",
+		"/run/kata-containers/pod-uid/vsock.sock",
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+
+	// A non-absolute storage ref (opaque backend id) contributes no
+	// filesystem candidate.
+	in.StorageRef = "ns-snap"
+	got = defaultReseedVsockPaths(in)
+	if len(got) != 1 || got[0] != want[1] {
+		t.Fatalf("candidates = %v, want only the kata-socket sibling", got)
+	}
+}

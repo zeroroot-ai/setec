@@ -100,12 +100,16 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet build-pool-vm ## Build manager binary.
+build: manifests generate fmt vet build-pool-vm build-guest-agent ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: build-pool-vm
 build-pool-vm: ## Build the setec-pool-vm launcher binary.
 	go build -o bin/setec-pool-vm ./cmd/setec-pool-vm
+
+.PHONY: build-guest-agent
+build-guest-agent: ## Build the static in-guest setec-guest-agent (bundle into microVM rootfs images).
+	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o bin/setec-guest-agent ./cmd/setec-guest-agent
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
