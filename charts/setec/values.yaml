@@ -464,3 +464,80 @@ snapshots:
 # their preWarmPoolSize were 0 regardless of field values.
 preWarmPool:
   enabled: false
+
+# -- karpenter optionally renders a Karpenter EC2NodeClass + NodePool that
+# provision Graviton bare-metal nodes from the baked kata-fc AMI
+# (packer/eks-kata-fc-ami) ON DEMAND and scale to zero when no kata Sandbox
+# is running — the bare-metal floor is paid only during actual microVM
+# execution. Requires Karpenter >= 1.0 (karpenter.sh/v1 +
+# karpenter.k8s.aws/v1 CRDs) installed out of band; the chart does not
+# manage Karpenter itself. See docs/runtime-backends/eks.md for the cost
+# model and wiring.
+karpenter:
+  # -- enabled gates rendering of the EC2NodeClass and NodePool. When true,
+  # amiSelectorTerms, subnetSelectorTerms, securityGroupSelectorTerms, and
+  # exactly one of role/instanceProfile are REQUIRED (render fails
+  # otherwise).
+  enabled: false
+  # -- nodeClassName names the EC2NodeClass; the NodePool references it.
+  nodeClassName: setec-kata-fc
+  # -- nodePoolName names the NodePool.
+  nodePoolName: setec-kata-fc
+  # -- role is the node IAM role NAME (not ARN) Karpenter binds to
+  # provisioned instances. Set this OR instanceProfile, not both.
+  role: ""
+  # -- instanceProfile is an instance profile name, for setups that manage
+  # profiles themselves instead of letting Karpenter derive one from role.
+  instanceProfile: ""
+  # -- amiSelectorTerms selects the baked kata-fc AMI produced by
+  # packer/eks-kata-fc-ami (default matches its ami_name_prefix). Karpenter
+  # picks the newest matching AMI; pin by id for stricter immutability.
+  amiSelectorTerms:
+    - name: "setec-kata-fc-*"
+  # -- subnetSelectorTerms selects the subnets nodes launch into, e.g.
+  # [{tags: {"karpenter.sh/discovery": "<cluster-name>"}}]. REQUIRED when
+  # enabled.
+  subnetSelectorTerms: []
+  # -- securityGroupSelectorTerms selects the node security groups, e.g.
+  # [{tags: {"karpenter.sh/discovery": "<cluster-name>"}}]. REQUIRED when
+  # enabled.
+  securityGroupSelectorTerms: []
+  # -- tags are propagated to every EC2 instance the NodePool provisions.
+  tags: {}
+  # -- instanceTypes restricts provisioning to Graviton bare metal with
+  # local NVMe (KVM for Firecracker + instance-store for the devmapper
+  # thin-pool). Karpenter automatically picks the cheapest eligible type
+  # (c6gd.metal < m6gd.metal at time of writing — verify current pricing).
+  instanceTypes:
+    - c6gd.metal
+    - m6gd.metal
+  # -- capacityTypes defaults to on-demand ONLY: a spot interruption kills
+  # every running microVM on the node with two minutes' notice. Add "spot"
+  # only for interruption-tolerant workloads.
+  capacityTypes:
+    - on-demand
+  # -- taints keep everything except kata Sandbox pods (and tolerating
+  # DaemonSets) off the expensive metal. SandboxClasses targeting kata-fc
+  # must carry the matching toleration (spec.tolerations).
+  taints:
+    - key: kata
+      value: "true"
+      effect: NoSchedule
+  # -- nodeLabels are stamped on provisioned nodes. The kata-fc runtime
+  # label MUST be present: the kata-fc RuntimeClass schedules via this
+  # nodeSelector, and Karpenter only provisions for pending pods whose
+  # requirements its NodePool template can satisfy. The runtime-agent
+  # probe re-verifies (and maintains) the label once the node is up.
+  nodeLabels:
+    setec.zeroroot.ai/runtime.kata-fc: "true"
+  # -- consolidateAfter is the idle period after the last kata Sandbox pod
+  # leaves before Karpenter deprovisions the metal node (idle cost -> ~$0).
+  # Longer values bridge cold-starts between bursts at the price of idle
+  # metal-hours.
+  consolidateAfter: 5m
+  # -- expireAfter force-recycles nodes for AMI/patch hygiene. 720h = 30d.
+  expireAfter: 720h
+  # -- limits caps the pool's total resources as a runaway-cost guard.
+  # c6gd.metal/m6gd.metal are 64 vCPU each; cpu: "256" = at most 4 nodes.
+  limits:
+    cpu: "256"
