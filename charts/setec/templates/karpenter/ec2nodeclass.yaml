@@ -1,0 +1,53 @@
+{{- /*
+Karpenter EC2NodeClass for the baked kata-fc Graviton-metal AMI
+(packer/eks-kata-fc-ami). Rendered only when karpenter.enabled=true and
+requires the Karpenter v1 CRDs (karpenter.k8s.aws/v1) to be installed —
+the chart does not manage Karpenter itself.
+*/ -}}
+{{- if .Values.karpenter.enabled }}
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: {{ .Values.karpenter.nodeClassName }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: karpenter-nodeclass
+spec:
+  # amiFamily stays AL2023 so Karpenter generates nodeadm user data for the
+  # custom (AL2023-based) baked AMI selected below.
+  amiFamily: AL2023
+  {{- if empty .Values.karpenter.amiSelectorTerms }}
+  {{- fail "karpenter.amiSelectorTerms is required when karpenter.enabled=true (select the baked setec-kata-fc-* AMI)" }}
+  {{- end }}
+  amiSelectorTerms:
+    {{- toYaml .Values.karpenter.amiSelectorTerms | nindent 4 }}
+  {{- if and .Values.karpenter.role .Values.karpenter.instanceProfile }}
+  {{- fail "karpenter.role and karpenter.instanceProfile are mutually exclusive — set exactly one" }}
+  {{- end }}
+  {{- if .Values.karpenter.role }}
+  role: {{ .Values.karpenter.role | quote }}
+  {{- else if .Values.karpenter.instanceProfile }}
+  instanceProfile: {{ .Values.karpenter.instanceProfile | quote }}
+  {{- else }}
+  {{- fail "karpenter.enabled=true requires exactly one of karpenter.role or karpenter.instanceProfile" }}
+  {{- end }}
+  {{- if empty .Values.karpenter.subnetSelectorTerms }}
+  {{- fail "karpenter.subnetSelectorTerms is required when karpenter.enabled=true" }}
+  {{- end }}
+  subnetSelectorTerms:
+    {{- toYaml .Values.karpenter.subnetSelectorTerms | nindent 4 }}
+  {{- if empty .Values.karpenter.securityGroupSelectorTerms }}
+  {{- fail "karpenter.securityGroupSelectorTerms is required when karpenter.enabled=true" }}
+  {{- end }}
+  securityGroupSelectorTerms:
+    {{- toYaml .Values.karpenter.securityGroupSelectorTerms | nindent 4 }}
+  # IMDSv2 only, matching the baked AMI's bake-time settings.
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 2
+  {{- with .Values.karpenter.tags }}
+  tags:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -235,3 +235,18 @@ feature incrementally:
 4. Turn on `nodeAgent.enabled=true` after provisioning `thinpool`-ready
    block devices on worker nodes.
 5. Enable `frontend.enabled=true` last; it is the thinnest layer.
+
+## Karpenter scale-to-zero metal pool (EKS)
+
+`karpenter.enabled=true` renders a Karpenter `EC2NodeClass` + `NodePool`
+(Karpenter >= 1.0 CRDs required, installed out of band) that provision
+Graviton bare-metal nodes (`c6gd.metal` / `m6gd.metal`, cheapest first) from
+the baked kata-fc AMI (`packer/eks-kata-fc-ami`) on demand and scale to
+zero when no kata Sandbox is running. Nodes carry the
+`setec.zeroroot.ai/runtime.kata-fc=true` label and a `kata=true:NoSchedule`
+taint; SandboxClasses targeting the pool must set the matching
+`spec.tolerations`. When enabled, `karpenter.amiSelectorTerms`,
+`karpenter.subnetSelectorTerms`, `karpenter.securityGroupSelectorTerms`,
+and exactly one of `karpenter.role` / `karpenter.instanceProfile` are
+required. Full wiring, cost model, and the spot-metal caveat:
+[`docs/runtime-backends/eks.md`](../../docs/runtime-backends/eks.md).

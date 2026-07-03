@@ -80,6 +80,73 @@ Build instructions and the on-node verification checklist (including the
 `ctr plugins ls` devmapper check and a guest-kernel smoke pod) live in the
 [packer README](../../packer/eks-kata-fc-ami/README.md).
 
+## Karpenter scale-to-zero for the baked kata AMI
+
+The chart can render a Karpenter `EC2NodeClass` + `NodePool` (Karpenter >=
+1.0, installed out of band) that provision the cheapest Graviton bare metal
+(`c6gd.metal` / `m6gd.metal`) from the [baked kata-fc AMI](#baked-graviton-metal-ami-for-kata-fc-recommended)
+**on demand** and **scale to zero** when no kata Sandbox is running:
+
+```bash
+helm upgrade --install setec oci://ghcr.io/zeroroot-ai/charts/setec \
+  --namespace setec-system \
+  --reuse-values \
+  --set karpenter.enabled=true \
+  --set karpenter.role=<node-iam-role-name> \
+  --set-json 'karpenter.subnetSelectorTerms=[{"tags":{"karpenter.sh/discovery":"<cluster>"}}]' \
+  --set-json 'karpenter.securityGroupSelectorTerms=[{"tags":{"karpenter.sh/discovery":"<cluster>"}}]'
+```
+
+How the pieces line up:
+
+- The `EC2NodeClass` selects the baked AMI (`setec-kata-fc-*` by name, or
+  pin an AMI id) with `amiFamily: AL2023` so Karpenter emits standard
+  nodeadm user data.
+- The `NodePool` restricts to `c6gd.metal` / `m6gd.metal` (on-demand only
+  by default), stamps the `setec.zeroroot.ai/runtime.kata-fc=true` label the
+  kata-fc RuntimeClass schedules on, and taints the node
+  `kata=true:NoSchedule` so only Sandbox pods (and tolerating DaemonSets,
+  like Setec's runtime-agent) land on the expensive metal.
+- SandboxClasses targeting kata-fc must tolerate the taint via
+  `spec.tolerations` (propagated to every Sandbox pod under the class):
+
+  ```yaml
+  apiVersion: setec.zeroroot.ai/v1alpha1
+  kind: SandboxClass
+  metadata:
+    name: kata-metal
+  spec:
+    vmm: firecracker
+    runtimeClassName: kata-fc
+    tolerations:
+      - key: kata
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+  ```
+
+- Creating a Sandbox with no warm node leaves its pod pending → Karpenter
+  provisions a metal node from the baked AMI (boots kata-fc-capable, no
+  kata-deploy) → the microVM runs. After `karpenter.consolidateAfter`
+  (default 5m) with no Sandbox pods, `WhenEmpty` consolidation deprovisions
+  the node.
+
+### Cost model
+
+- **On-demand metal floor**: you pay the `.metal` hourly rate only while a
+  node exists. Karpenter picks the cheapest eligible type automatically
+  (`c6gd.metal` undercuts `m6gd.metal` at time of writing — verify current
+  pricing). `karpenter.limits` caps runaway scale-out.
+- **Scale-to-zero**: idle cost ≈ $0 — no standing node group, no
+  kata-deploy DaemonSet keeping nodes warm. The trade is the cold-start
+  gap (metal boot, typically minutes); Setec's warm-pool/snapshot machinery
+  bridges bursts *within* a node's lifetime, and a longer
+  `consolidateAfter` bridges bursts *between* Sandboxes.
+- **Spot caveat**: `capacityTypes` defaults to on-demand only. Spot metal
+  is materially cheaper, but an interruption kills every running microVM on
+  the node with two minutes' notice — opt in only for workloads that
+  tolerate losing in-flight Sandboxes.
+
 ## References
 
 - AWS nested virtualization documentation: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nested-virtualization.html
