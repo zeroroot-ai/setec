@@ -35,7 +35,7 @@ Setec is a Kubernetes operator that runs workloads inside isolated runtimes — 
 - **Observability shipped.** Prometheus metrics and OpenTelemetry traces emitted by default; Grafana dashboard and alert rules ship with the chart.
 - **gRPC frontend.** `SandboxService` with mTLS for programmatic consumers. See [examples](examples/).
 - **Cloud-agnostic.** Any Kubernetes cluster whose worker nodes meet at least one backend's prerequisites.
-- **Small surface.** Five distroless binaries: operator, node-agent, runtime-agent, frontend, and the pool launcher.
+- **Small surface.** Six small binaries: operator, node-agent, runtime-agent, frontend, the pool launcher, and the in-guest `setec-guest-agent` (bundled into microVM rootfs images for the fail-closed entropy reseed on snapshot restore).
 
 ## Quick install
 
