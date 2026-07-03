@@ -135,3 +135,54 @@ func TestModuleLoaded(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadedKVMModule verifies the preference order and the arm64 built-in
+// fallback of the LoadedKVMModule helper.
+func TestLoadedKVMModule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		paths      []string
+		wantModule string
+		wantOK     bool
+	}{
+		{
+			name:       "kvm_intel preferred over generic kvm",
+			paths:      []string{"sys/module/kvm_intel/", "sys/module/kvm/"},
+			wantModule: "kvm_intel",
+			wantOK:     true,
+		},
+		{
+			name:       "kvm_amd preferred over generic kvm",
+			paths:      []string{"sys/module/kvm_amd/", "sys/module/kvm/"},
+			wantModule: "kvm_amd",
+			wantOK:     true,
+		},
+		{
+			name:       "built-in kvm only (arm64)",
+			paths:      []string{"sys/module/kvm/"},
+			wantModule: "kvm",
+			wantOK:     true,
+		},
+		{
+			name:   "no KVM module",
+			paths:  []string{"sys/module/loop/"},
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := mkFakeFS(t, tc.paths...)
+			mod, ok := LoadedKVMModule(root)
+			if ok != tc.wantOK {
+				t.Errorf("LoadedKVMModule() ok = %v, want %v", ok, tc.wantOK)
+			}
+			if mod != tc.wantModule {
+				t.Errorf("LoadedKVMModule() module = %q, want %q", mod, tc.wantModule)
+			}
+		})
+	}
+}

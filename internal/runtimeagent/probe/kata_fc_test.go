@@ -65,16 +65,25 @@ func TestKataFCProbe(t *testing.T) {
 			wantModule:    "kvm_intel",
 		},
 		{
+			name: "kvm + built-in kvm module only (arm64 Graviton)",
+			paths: []string{
+				"dev/kvm",
+				"sys/module/kvm/",
+			},
+			wantAvailable: true,
+			wantModule:    "kvm",
+		},
+		{
 			name:          "kvm absent",
 			paths:         []string{"sys/module/kvm_intel/"},
 			wantAvailable: false,
 			wantReason:    "KVM device /dev/kvm not found",
 		},
 		{
-			name:          "kvm present but no CPU module",
+			name:          "kvm device present but no KVM module",
 			paths:         []string{"dev/kvm"},
 			wantAvailable: false,
-			wantReason:    "neither kvm_intel nor kvm_amd",
+			wantReason:    "none of kvm_intel, kvm_amd, or kvm",
 		},
 		{
 			name:          "nothing present",

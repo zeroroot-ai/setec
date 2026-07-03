@@ -51,3 +51,27 @@ func ModuleLoaded(root, name string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// kvmModuleCandidates lists the /sys/module entries that indicate a loaded
+// KVM backend, in preference order:
+//
+//   - kvm_intel / kvm_amd — the x86 vendor modules.
+//   - kvm — the generic entry. On arm64 (e.g. AWS Graviton bare metal) KVM
+//     is compiled into the kernel with no vendor module; the built-in kvm
+//     module still surfaces a /sys/module/kvm directory because it exposes
+//     parameters. Checking it last keeps x86 results byte-identical to the
+//     historical behaviour while unblocking ARM hosts.
+var kvmModuleCandidates = []string{"kvm_intel", "kvm_amd", "kvm"}
+
+// LoadedKVMModule returns the name of the first loaded KVM kernel module
+// from kvmModuleCandidates, or ("", false) when none is present.
+//
+// No subprocess is executed: each candidate is a single os.Stat call.
+func LoadedKVMModule(root string) (string, bool) {
+	for _, name := range kvmModuleCandidates {
+		if ModuleLoaded(root, name) {
+			return name, true
+		}
+	}
+	return "", false
+}
