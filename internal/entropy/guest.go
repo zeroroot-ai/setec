@@ -62,7 +62,7 @@ func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return nil //nolint:nilerr // Accept fails because we closed ln on ctx cancel: clean shutdown, not an error.
 			}
 			return fmt.Errorf("entropy: accept: %w", err)
 		}

@@ -241,7 +241,7 @@ type fakeVsockMux struct {
 	handler *GuestHandler
 }
 
-func startFakeVsockMux(t *testing.T, dir string, wantPort uint32, mode string, h *GuestHandler) string {
+func startFakeVsockMux(t *testing.T, dir string, mode string, h *GuestHandler) string {
 	t.Helper()
 	path := filepath.Join(dir, "fc-vsock.sock")
 	ln, err := net.Listen("unix", path)
@@ -249,22 +249,22 @@ func startFakeVsockMux(t *testing.T, dir string, wantPort uint32, mode string, h
 		t.Fatalf("listen %s: %v", path, err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	mux := &fakeVsockMux{ln: ln, wantPort: wantPort, mode: mode, handler: h}
-	go mux.run(t)
+	mux := &fakeVsockMux{ln: ln, wantPort: DefaultVsockPort, mode: mode, handler: h}
+	go mux.run()
 	return path
 }
 
-func (m *fakeVsockMux) run(t *testing.T) {
+func (m *fakeVsockMux) run() {
 	for {
 		conn, err := m.ln.Accept()
 		if err != nil {
 			return
 		}
-		go m.serveConn(t, conn)
+		go m.serveConn(conn)
 	}
 }
 
-func (m *fakeVsockMux) serveConn(t *testing.T, conn net.Conn) {
+func (m *fakeVsockMux) serveConn(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	br := bufio.NewReader(conn)
 	line, err := br.ReadString('\n')
@@ -312,7 +312,7 @@ func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
 func TestVsockReseeder_HappyPath(t *testing.T) {
 	pool := &fakePool{}
-	path := startFakeVsockMux(t, t.TempDir(), DefaultVsockPort, "", &GuestHandler{Pool: pool})
+	path := startFakeVsockMux(t, t.TempDir(), "", &GuestHandler{Pool: pool})
 
 	r := NewVsockReseeder()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -342,7 +342,7 @@ func TestVsockReseeder_FailsClosedWhenSocketMissing(t *testing.T) {
 }
 
 func TestVsockReseeder_FailsClosedWhenGuestNotListening(t *testing.T) {
-	path := startFakeVsockMux(t, t.TempDir(), DefaultVsockPort, "refuse", nil)
+	path := startFakeVsockMux(t, t.TempDir(), "refuse", nil)
 	r := NewVsockReseeder()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -352,7 +352,7 @@ func TestVsockReseeder_FailsClosedWhenGuestNotListening(t *testing.T) {
 }
 
 func TestVsockReseeder_FailsClosedOnAckTimeout(t *testing.T) {
-	path := startFakeVsockMux(t, t.TempDir(), DefaultVsockPort, "silent", nil)
+	path := startFakeVsockMux(t, t.TempDir(), "silent", nil)
 	r := NewVsockReseeder()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -362,7 +362,7 @@ func TestVsockReseeder_FailsClosedOnAckTimeout(t *testing.T) {
 }
 
 func TestVsockReseeder_FailsClosedOnDigestMismatch(t *testing.T) {
-	path := startFakeVsockMux(t, t.TempDir(), DefaultVsockPort, "wrong-digest", nil)
+	path := startFakeVsockMux(t, t.TempDir(), "wrong-digest", nil)
 	r := NewVsockReseeder()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -374,7 +374,7 @@ func TestVsockReseeder_FailsClosedOnDigestMismatch(t *testing.T) {
 func TestReseedFirst_TriesCandidatesInOrder(t *testing.T) {
 	pool := &fakePool{}
 	dir := t.TempDir()
-	good := startFakeVsockMux(t, dir, DefaultVsockPort, "", &GuestHandler{Pool: pool})
+	good := startFakeVsockMux(t, dir, "", &GuestHandler{Pool: pool})
 	missing := filepath.Join(dir, "missing.sock")
 
 	r := NewVsockReseeder()
@@ -402,8 +402,8 @@ func TestReseedFirst_TriesCandidatesInOrder(t *testing.T) {
 func TestReseed_RestoredClonesDiverge(t *testing.T) {
 	poolA, poolB := &fakePool{}, &fakePool{}
 	dirA, dirB := t.TempDir(), t.TempDir()
-	pathA := startFakeVsockMux(t, dirA, DefaultVsockPort, "", &GuestHandler{Pool: poolA})
-	pathB := startFakeVsockMux(t, dirB, DefaultVsockPort, "", &GuestHandler{Pool: poolB})
+	pathA := startFakeVsockMux(t, dirA, "", &GuestHandler{Pool: poolA})
+	pathB := startFakeVsockMux(t, dirB, "", &GuestHandler{Pool: poolB})
 
 	r := NewVsockReseeder()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -202,7 +202,7 @@ func main() {
 	})
 	entropyReseeds := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "setec_node_entropy_reseed_total",
-		Help: "Total post-restore entropy reseed attempts, labeled by outcome (success or failure). A failure fails the restore closed.",
+		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
 	}, []string{"outcome"})
 	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds)
 	// Presence of /dev/kvm is our local ready signal; deeper health
