@@ -24,8 +24,9 @@ import "context"
 // Unlike kata-fc, QEMU supports TCG software emulation in addition to
 // hardware-accelerated KVM. The probe behaviour depends on Config.AllowTCG:
 //
-//   - AllowTCG=false (default): KVM device and a CPU module (kvm_intel or
-//     kvm_amd) must both be present. Without KVM the result is Available=false.
+//   - AllowTCG=false (default): the KVM device and a KVM kernel module
+//     (kvm_intel/kvm_amd on x86, built-in kvm on arm64) must both be
+//     present. Without KVM the result is Available=false.
 //
 //   - AllowTCG=true: if KVM is absent the probe still returns Available=true
 //     with Details["mode"]="tcg" and a Reason noting the fallback. This is
@@ -65,27 +66,22 @@ func (p *kataQEMUProbe) Check(_ context.Context) CapabilityResult {
 		}
 	}
 
-	intelLoaded := ModuleLoaded(p.cfg.FSRoot, "kvm_intel")
-	amdLoaded := ModuleLoaded(p.cfg.FSRoot, "kvm_amd")
-	if !intelLoaded && !amdLoaded {
+	mod, loaded := LoadedKVMModule(p.cfg.FSRoot)
+	if !loaded {
 		if p.cfg.AllowTCG {
 			return CapabilityResult{
 				Available: true,
-				Reason:    "KVM absent, TCG fallback: neither kvm_intel nor kvm_amd loaded",
+				Reason:    "KVM absent, TCG fallback: no KVM kernel module loaded",
 				Details:   map[string]string{"mode": "tcg"},
 			}
 		}
 		return CapabilityResult{
 			Available: false,
-			Reason: "kata-qemu requires a KVM CPU module: " +
-				"neither kvm_intel nor kvm_amd is loaded in /sys/module/",
+			Reason: "kata-qemu requires a KVM kernel module: " +
+				"none of kvm_intel, kvm_amd, or kvm is loaded in /sys/module/",
 		}
 	}
 
-	mod := "kvm_intel"
-	if amdLoaded && !intelLoaded {
-		mod = "kvm_amd"
-	}
 	return CapabilityResult{
 		Available: true,
 		Details:   map[string]string{"mode": "kvm", "kvm_module": mod},

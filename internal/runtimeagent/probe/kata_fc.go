@@ -23,8 +23,10 @@ import "context"
 //
 // Requirements:
 //   - /dev/kvm must exist (hardware virtualisation device node).
-//   - At least one of /sys/module/kvm_intel or /sys/module/kvm_amd must be
-//     present (confirms a KVM-capable CPU module is loaded).
+//   - A KVM kernel module must be loaded: /sys/module/kvm_intel or
+//     /sys/module/kvm_amd on x86, or the built-in /sys/module/kvm entry on
+//     arm64 hosts (e.g. AWS Graviton bare metal), where KVM is compiled
+//     into the kernel and no vendor module exists.
 //
 // Firecracker does not support TCG (software) emulation, so both conditions
 // are mandatory. No binary lookup is performed: kata-fc availability is
@@ -41,7 +43,7 @@ func newKataFCProbe(cfg Config) Probe {
 func (p *kataFCProbe) Name() string { return "kata-fc" }
 
 // Check implements Probe. It returns Available=true only when both the KVM
-// device node and an Intel or AMD KVM module directory are present.
+// device node and a KVM kernel module directory are present.
 func (p *kataFCProbe) Check(_ context.Context) CapabilityResult {
 	kvmOK, kvmReason := KVMAvailable(p.cfg.FSRoot)
 	if !kvmOK {
@@ -51,20 +53,15 @@ func (p *kataFCProbe) Check(_ context.Context) CapabilityResult {
 		}
 	}
 
-	intelLoaded := ModuleLoaded(p.cfg.FSRoot, "kvm_intel")
-	amdLoaded := ModuleLoaded(p.cfg.FSRoot, "kvm_amd")
-	if !intelLoaded && !amdLoaded {
+	mod, loaded := LoadedKVMModule(p.cfg.FSRoot)
+	if !loaded {
 		return CapabilityResult{
 			Available: false,
-			Reason: "kata-fc requires a KVM CPU module: " +
-				"neither kvm_intel nor kvm_amd is loaded in /sys/module/",
+			Reason: "kata-fc requires a KVM kernel module: " +
+				"none of kvm_intel, kvm_amd, or kvm is loaded in /sys/module/",
 		}
 	}
 
-	mod := "kvm_intel"
-	if amdLoaded && !intelLoaded {
-		mod = "kvm_amd"
-	}
 	return CapabilityResult{
 		Available: true,
 		Details:   map[string]string{"kvm_module": mod},

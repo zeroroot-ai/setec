@@ -46,6 +46,40 @@ You must still install `runsc` and register a `gvisor` `RuntimeClass` on the wor
 
 If you need `kata-fc` for a subset of workloads (for example, untrusted model-agent code), run those on a dedicated bare-metal node group and leave the rest of the fleet on the default pool. Create a managed node group with a `.metal` instance type (verify current availability — `m7i.metal-24xl`, `c7i.metal-*`, `r7i.metal-*` are common at time of writing; check current vendor docs), taint it so only Sandboxes land there, and set the matching SandboxClass to request `kata-fc` with `fallback: [gvisor]`. Setec's node-agent will label the metal nodes `setec.zeroroot.ai/runtime.kata-fc=true` once KVM is detected, and the scheduler will place Sandboxes accordingly. See the top-level Kata installation docs for `runsc`- and `kata-runtime`-on-EKS procedures; verify against vendor docs for your EKS version.
 
+## Baked Graviton-metal AMI for kata-fc (recommended)
+
+The recommended production path for `kata-fc` on EKS is the **Packer-baked
+immutable AMI** in [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md)
+— it replaces kata-deploy's live containerd mutation (which can brick a node
+mid-run) with a node that either boots capable or fails loudly at boot:
+
+- **Base**: current EKS-optimized AL2023 **arm64** AMI (pinned Kubernetes
+  version via the public SSM parameter).
+- **Targets**: cheapest Graviton bare metal with local NVMe —
+  **`c6gd.metal` / `m6gd.metal`**. `.metal` supplies `/dev/kvm`; the `d`
+  suffix supplies the instance-store NVMe the devmapper thin-pool is built
+  from. (On arm64, KVM is compiled into the kernel — the runtime-agent
+  probe accepts the built-in `kvm` module, so the node self-labels
+  `setec.zeroroot.ai/runtime.kata-fc=true`.)
+- **Baked in**: pinned kata-containers static release (bundles Firecracker)
+  under `/opt/kata`; containerd statically configured via an
+  `/etc/containerd/config.d/` drop-in (kata-fc handler + devmapper
+  snapshotter); a boot-time `setec-thinpool.service` that provisions the
+  thin-pool from local NVMe idempotently (and rebuilds it after a
+  stop/start wiped the instance store); a static `kata-fc` RuntimeClass
+  manifest with kata-deploy-parity `overhead` at
+  `/etc/setec/manifests/runtimeclass-kata-fc.yaml`.
+- **No kata-deploy DaemonSet** on these nodes, ever. Upgrades are a new
+  bake + node roll, never in-place mutation.
+
+Chart settings when running on baked nodes: keep
+`runtimes.kata-fc.enabled=true` and set `runtimes.kata-fc.install=false`,
+then `kubectl apply -f` the baked RuntimeClass manifest once per cluster (it
+carries the `overhead.podFixed` block the chart-rendered variant omits).
+Build instructions and the on-node verification checklist (including the
+`ctr plugins ls` devmapper check and a guest-kernel smoke pod) live in the
+[packer README](../../packer/eks-kata-fc-ami/README.md).
+
 ## References
 
 - AWS nested virtualization documentation: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nested-virtualization.html
