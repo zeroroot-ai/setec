@@ -6,4 +6,5 @@ real manifest (runtimes-configmap.yaml) so render failures surface during
 */}}
 {{- define "setec.validate" -}}
 {{- include "setec.validateRuntimes" . -}}
+{{- include "setec.validateEntropyReseed" . -}}
 {{- end -}}

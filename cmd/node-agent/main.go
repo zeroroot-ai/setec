@@ -53,6 +53,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
@@ -97,6 +98,7 @@ func main() {
 		kataSocketPattern    string
 		poolReconcileTick    time.Duration
 		orphanReapTick       time.Duration
+		entropyReseedMode    string
 	)
 	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
 		"Name of the devicemapper thin-pool to manage.")
@@ -143,7 +145,17 @@ func main() {
 		"Interval between sweeps that force-remove orphaned NotReady kata sandboxes "+
 			"(microVMs leaked by a failed teardown that still hold a containerd "+
 			"name reservation). 0 disables the reaper.")
+	flag.StringVar(&entropyReseedMode, "entropy-reseed", "require",
+		"Active entropy reseed on snapshot restore (setec#72). 'require' (default) fails a "+
+			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
+			"over vsock; 'off' is an explicit opt-out that leaves only the passive virtio-rng "+
+			"mechanism (guest images without setec-guest-agent need this).")
 	flag.Parse()
+
+	if entropyReseedMode != "require" && entropyReseedMode != "off" {
+		fmt.Fprintf(os.Stderr, "node-agent: invalid --entropy-reseed %q (want \"require\" or \"off\")\n", entropyReseedMode)
+		os.Exit(1)
+	}
 
 	fmt.Fprintf(os.Stderr, "setec node-agent starting on node=%q pool=%q\n", nodeName, poolName)
 
@@ -188,7 +200,11 @@ func main() {
 		Name: "setec_node_orphan_reap_errors_total",
 		Help: "Total errors encountered while listing or removing orphaned kata sandboxes.",
 	})
-	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors)
+	entropyReseeds := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "setec_node_entropy_reseed_total",
+		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
+	}, []string{"outcome"})
+	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds)
 	// Presence of /dev/kvm is our local ready signal; deeper health
 	// checks require the controller-side runtime class and are out
 	// of scope for the node agent.
@@ -274,6 +290,23 @@ func main() {
 			FirecrackerFactory: ffactory,
 			Pool:               poolMgr,
 			TempDir:            snapshotRoot + "/tmp",
+			ReseedObserver: func(outcome string) {
+				entropyReseeds.WithLabelValues(outcome).Inc()
+			},
+		}
+		// Active entropy reseed on restore (setec#72). The default is
+		// fail-closed: a restored sandbox is only reported successful
+		// once the in-guest setec-guest-agent has acknowledged fresh
+		// entropy over vsock. --entropy-reseed=off is the explicit,
+		// auditable opt-out for guest images that do not bundle the
+		// agent; it leaves only the passive virtio-rng mechanism.
+		if entropyReseedMode == "require" {
+			srv.Reseeder = entropy.NewVsockReseeder()
+			fmt.Fprintln(os.Stderr, "node-agent: entropy reseed on restore ENFORCED (--entropy-reseed=require)")
+		} else {
+			fmt.Fprintln(os.Stderr,
+				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
+					"restored snapshot clones rely on passive virtio-rng only")
 		}
 		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(tlsCertPath, tlsKeyPath, tlsClientCAPath))
 

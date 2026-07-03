@@ -163,3 +163,16 @@ Map a backend name to its containerd runtime handler.
 {{- else -}}{{ $name }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Validate snapshots.entropyReseed (setec#72): only "require" (fail-closed
+active reseed on restore) and "off" (explicit opt-out, passive
+virtio-rng only) are meaningful; anything else would silently change
+the security posture.
+*/}}
+{{- define "setec.validateEntropyReseed" -}}
+{{- $mode := .Values.snapshots.entropyReseed | default "require" -}}
+{{- if not (has $mode (list "require" "off")) -}}
+{{- fail (printf "snapshots validation: snapshots.entropyReseed=%q is invalid; use \"require\" (fail-closed active reseed on restore, default) or \"off\" (explicit opt-out, passive virtio-rng only)." $mode) -}}
+{{- end -}}
+{{- end -}}

@@ -94,14 +94,36 @@ Linux `virtio-rng` driver feeds fresh host entropy into the kernel via
 leaving it frozen at the snapshot's captured pool state. This breaks the
 shared-RNG-across-clones property without any in-guest agent.
 
-A complementary **active** reseed — pushing fresh entropy into the guest over
-the vsock control plane at the *instant* of restore (closing the brief window
-before the guest next pulls from virtio-rng) — requires an in-guest agent that
-the current setec runtime does not yet expose; it is a scoped follow-up gated
-on the runtime agent (open-core E5). Until it lands, workloads that mint
-keys/nonces immediately on resume should also seed from the per-lease secret
-injected post-restore. Setec does not ship a stub that falsely claims to
-actively reseed.
+A complementary **active** reseed is **enforced fail-closed on the restore
+path** (setec#72). Every pool microVM is launched with a vsock device attached
+before `InstanceStart` (`cmd/setec-pool-vm`; regression test
+`TestConfigureAndBoot_AttachesVsockBeforeStart`), and the in-guest
+**`setec-guest-agent`** listens on an AF_VSOCK port inside the microVM. After
+every `LoadSnapshot`, the node-agent connects through the device's host-side
+Unix socket, pushes fresh `crypto/rand` entropy, and requires the guest agent
+to credit it into the kernel CRNG (`RNDADDENTROPY`) and acknowledge with the
+payload's SHA-256. The restore RPC only reports success once that
+digest-verified ack arrives; on any failure the restored VM is paused and the
+restore fails, so a sandbox is never handed over with unconfirmed CSPRNG state
+(regression test `TestRestoreSandbox_ReseedFailureFailsClosed`). Reseed
+outcomes are observable via the `setec_node_entropy_reseed_total{outcome}`
+metric and an `EntropyReseeded` Event on the Sandbox.
+
+Residual risk and scope limits, stated precisely:
+
+- Enforcement requires the guest image to **bundle `setec-guest-agent`**
+  (published as `ghcr.io/zeroroot-ai/setec-guest-agent`; `make
+  build-guest-agent`). Setec does not build guest rootfs images, so an
+  operator whose images lack the agent must either add it or explicitly opt
+  out with `snapshots.entropyReseed: off` (`--entropy-reseed=off`). The
+  opt-out downgrades restored clones to the passive virtio-rng mechanism
+  only — until virtio-rng's next reseed, workloads minting keys/nonces
+  immediately on resume may share RNG state across clones. The opt-out is a
+  deliberate, auditable flag; there is no silent fallback, and setec still
+  ships no stub that falsely claims to reseed.
+- The reseed covers the node-agent `RestoreSandbox` path (the only
+  snapshot-load path in the runtime). Pause/resume of the *same* VM does not
+  clone CSPRNG state and needs no reseed.
 
 ## Scope
 

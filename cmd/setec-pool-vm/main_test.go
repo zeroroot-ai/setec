@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -141,6 +142,7 @@ func defaultHandler() http.Handler {
 	mux.HandleFunc("/drives/rootfs", ok)
 	mux.HandleFunc("/machine-config", ok)
 	mux.HandleFunc("/entropy", ok)
+	mux.HandleFunc("/vsock", ok)
 	mux.HandleFunc("/actions", ok)
 	return mux
 }
@@ -418,6 +420,7 @@ func TestConfigureAndBoot_AttachesEntropyBeforeStart(t *testing.T) {
 	mux.HandleFunc("/drives/rootfs", rec("/drives/rootfs"))
 	mux.HandleFunc("/machine-config", rec("/machine-config"))
 	mux.HandleFunc("/entropy", rec("/entropy"))
+	mux.HandleFunc("/vsock", rec("/vsock"))
 	mux.HandleFunc("/actions", rec("/actions"))
 	spawner := &fakeSpawner{socketPath: opts.SocketPath, produceSocket: true, handler: mux}
 	defer spawner.closeListener()
@@ -438,6 +441,82 @@ func TestConfigureAndBoot_AttachesEntropyBeforeStart(t *testing.T) {
 	}
 	if idxActions < 0 || idxEntropy > idxActions {
 		t.Fatalf("entropy device must be attached before InstanceStart; order=%v", order)
+	}
+}
+
+// TestConfigureAndBoot_AttachesVsockBeforeStart asserts the launcher attaches
+// a vsock device BEFORE InstanceStart. The device is the transport for the
+// ACTIVE entropy reseed on snapshot restore (setec#72): the in-guest
+// setec-guest-agent listens on an AF_VSOCK port, and the node-agent pushes
+// fresh entropy through the device's host-side Unix socket after every
+// LoadSnapshot. Like /entropy, the device is part of the VM configuration, so
+// it is captured in the snapshot and re-established on restore.
+func TestConfigureAndBoot_AttachesVsockBeforeStart(t *testing.T) {
+	opts := tempOpts(t)
+
+	var mu sync.Mutex
+	var order []string
+	var vsockBody map[string]any
+	rec := func(path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			mu.Lock()
+			order = append(order, path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/boot-source", rec("/boot-source"))
+	mux.HandleFunc("/drives/rootfs", rec("/drives/rootfs"))
+	mux.HandleFunc("/machine-config", rec("/machine-config"))
+	mux.HandleFunc("/entropy", rec("/entropy"))
+	mux.HandleFunc("/vsock", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		order = append(order, "/vsock")
+		_ = json.NewDecoder(r.Body).Decode(&vsockBody)
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/actions", rec("/actions"))
+	spawner := &fakeSpawner{socketPath: opts.SocketPath, produceSocket: true, handler: mux}
+	defer spawner.closeListener()
+
+	fc := &fakeFC{snapshotWriter: goodSnapshotWriter}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runLauncher(ctx, opts, spawner, factoryReturning(fc)); err != nil {
+		t.Fatalf("runLauncher: unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	idxVsock := slices.Index(order, "/vsock")
+	idxActions := slices.Index(order, "/actions")
+	if idxVsock < 0 {
+		t.Fatalf("vsock device was not configured during bring-up; order=%v", order)
+	}
+	if idxActions < 0 || idxVsock > idxActions {
+		t.Fatalf("vsock device must be attached before InstanceStart; order=%v", order)
+	}
+	wantUDS := filepath.Join(opts.StorageRoot, opts.PoolEntryID, "vsock.sock")
+	if got, _ := vsockBody["uds_path"].(string); got != wantUDS {
+		t.Fatalf("vsock uds_path = %q, want %q", got, wantUDS)
+	}
+	if got, _ := vsockBody["guest_cid"].(float64); got != float64(guestCID) {
+		t.Fatalf("vsock guest_cid = %v, want %d", vsockBody["guest_cid"], guestCID)
+	}
+}
+
+// TestVsockUDSPath_Override asserts an explicit --vsock-uds-path wins over
+// the derived <storage-root>/<entry-id>/vsock.sock default.
+func TestVsockUDSPath_Override(t *testing.T) {
+	o := Options{StorageRoot: "/pool", PoolEntryID: "e1"}
+	if got := vsockUDSPath(o); got != "/pool/e1/vsock.sock" {
+		t.Fatalf("derived vsock path = %q", got)
+	}
+	o.VsockUDSPath = "/custom/vsock.sock"
+	if got := vsockUDSPath(o); got != "/custom/vsock.sock" {
+		t.Fatalf("override vsock path = %q", got)
 	}
 }
 
