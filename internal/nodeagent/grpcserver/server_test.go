@@ -373,6 +373,9 @@ func TestQueryPool_ReturnsEntries(t *testing.T) {
 	)
 	pm.MaxConcurrentBoots = 2
 	pm.PoolStorageRoot = t.TempDir()
+	// Keep socket paths under the test's temp dir — never the
+	// production /run/kata-containers default (#119).
+	pm.SocketPattern = filepath.Join(t.TempDir(), "pool-%s", "firecracker.socket")
 	pm.Launcher = noopLauncher{}
 	// Use ReconcilePools to seed the pool through the public API.
 	cls := setecv1alpha1.SandboxClass{
