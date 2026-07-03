@@ -451,6 +451,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The committed go.mod pins a released setec tag (replace directives are
+      # forbidden by no-monorepo-shortcuts, #122). Apply an ephemeral replace
+      # here so the example is still validated against THIS PR's tree, not the
+      # last release. Never committed — the guard job checks out clean files.
+      - name: Point ${{ matrix.example }} at the PR tree
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          go mod edit -replace github.com/zeroroot-ai/setec=../..
+          go mod tidy
+
       - name: Build ${{ matrix.example }}
         working-directory: examples/${{ matrix.example }}
         run: go build ./...
@@ -486,6 +496,14 @@ jobs:
 
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      # Same ephemeral replace as examples-build: scan the example against the
+      # tree that is about to merge, not the last released setec tag.
+      - name: Point ${{ matrix.example }} at the merge tree
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          go mod edit -replace github.com/zeroroot-ai/setec=../..
+          go mod tidy
 
       - name: run govulncheck on examples/${{ matrix.example }}
         working-directory: examples/${{ matrix.example }}
