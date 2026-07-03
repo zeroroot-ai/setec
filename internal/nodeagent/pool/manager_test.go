@@ -21,6 +21,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -184,6 +186,11 @@ func newTestManagerWithFactory(storageBackend storage.StorageBackend, pre *count
 	// Point pool storage at an ephemeral path; tests that care about
 	// the value override it.
 	m.PoolStorageRoot = testPoolRoot
+	// Never leave SocketPattern at the production default
+	// (/run/kata-containers/...): Release/drain os.Remove the rendered
+	// path, and on hosts with a root-owned /run/kata-containers that
+	// returns EACCES, making test results depend on host state (#119).
+	m.SocketPattern = filepath.Join(testPoolRoot, "sockets", "pool-%s", "firecracker.socket")
 	m.KernelPath = "/nonexistent/vmlinux"
 	m.RootfsPath = "/nonexistent/rootfs"
 	m.Launcher = &fakeLauncher{factory: ff}
@@ -577,5 +584,40 @@ func TestSize(t *testing.T) {
 	_ = m.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls})
 	if m.Size() != 2 {
 		t.Fatalf("Size = %d, want 2", m.Size())
+	}
+}
+
+// TestEntryPathsStayUnderTestRoot is a regression test for #119: the
+// test manager used to leave SocketPattern at the production default
+// ("/run/kata-containers/pool-%s/firecracker.socket"), so Release and
+// drain called os.Remove against the real host path. On any host with
+// a root-owned /run/kata-containers left over from node-agent work,
+// that Remove returns EACCES (not ENOENT), and the tests' outcome
+// depended on global host state. Every path a booted entry references
+// must live under the per-process test root.
+func TestEntryPathsStayUnderTestRoot(t *testing.T) {
+	m := newTestManager(newFakeStorage(), &countingPrefetcher{}, &fakeFirecracker{}, 4)
+	cls := newClass("img:v1", 2, 0)
+	if err := m.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	root := testPoolRoot + string(filepath.Separator)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entries := range m.state {
+		for _, e := range entries {
+			for name, p := range map[string]string{
+				"KataSocket": e.KataSocket,
+				"StorageRef": e.StorageRef,
+			} {
+				if p == "" {
+					continue
+				}
+				if !strings.HasPrefix(p, root) {
+					t.Errorf("%s = %q escapes test root %q — unit tests must never touch real host paths", name, p, testPoolRoot)
+				}
+			}
+		}
 	}
 }
