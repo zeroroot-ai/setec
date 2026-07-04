@@ -16,7 +16,7 @@ imagePullSecrets: []
 # registry mirror in air-gapped environments.
 kubectl:
   # -- image is the fully-qualified kubectl image reference. Leave empty to
-  # use the chart's default (docker.io/bitnami/kubectl:1.29).
+  # use the chart's default (ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4).
   image: ""
 
 # -- nameOverride replaces the chart name used in resource names, keeping the
@@ -189,6 +189,11 @@ runtimeAgent:
     tag: ""
     # -- pullPolicy one of Always, Never, IfNotPresent.
     pullPolicy: IfNotPresent
+  # -- nodeSelector constrains the runtime-agent DaemonSet. Published images
+  # are amd64-only (setec#132), so mixed-arch clusters should set
+  # {kubernetes.io/arch: amd64} until multi-arch images ship. Empty keeps the
+  # original run-everywhere behavior.
+  nodeSelector: {}
   # -- resources sizes the runtime-agent container. It is near-idle between
   # probe cycles (default 5m), so small requests are appropriate.
   resources:

@@ -13,7 +13,11 @@ reconcile classes manually before rolling forward.
     {{- $kubectlImage = .Values.kubectl.image -}}
   {{- end -}}
 {{- end -}}
-{{- $kubectlImage = $kubectlImage | default "docker.io/bitnami/kubectl:1.29" -}}
+{{- /* Default kubectl image: the org-maintained GHCR mirror. The previous
+default (docker.io/bitnami/kubectl:1.29) was retired from Docker Hub with
+the Bitnami catalog shutdown, which turned this warn-only hook into a
+hard ErrImagePull failure on every upgrade (setec#129). */ -}}
+{{- $kubectlImage = $kubectlImage | default "ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4" -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
