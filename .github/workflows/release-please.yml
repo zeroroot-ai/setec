@@ -12,8 +12,35 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v5
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Publish version-tagged images in the SAME run that cut the release
+  # (setec#131). release-please pushes its tag with the default GITHUB_TOKEN,
+  # and GitHub deliberately does not fire `on: push: tags:` workflows from
+  # GITHUB_TOKEN pushes (anti-recursion) — so images.yml's tag trigger never
+  # saw a release and ghcr only ever carried main/latest/sha-* tags, while
+  # the Helm chart defaults image tags to .Chart.AppVersion. Chaining via
+  # workflow_call avoids the trigger problem without needing a repo PAT
+  # (setec has none); same pattern as gibson's publish-authz-registry.
+  release-images:
+    name: release-images
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/images.yml
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      version_tag: ${{ needs.release-please.outputs.tag_name }}

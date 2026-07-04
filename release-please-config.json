@@ -5,7 +5,8 @@
   "tag-separator": "v",
   "packages": {
     ".": {
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "extra-files": ["charts/setec/Chart.yaml"]
     }
   }
 }
