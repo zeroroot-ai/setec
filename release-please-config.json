@@ -6,7 +6,7 @@
   "packages": {
     ".": {
       "bump-minor-pre-major": true,
-      "extra-files": ["charts/setec/Chart.yaml"]
+      "extra-files": [{"type": "generic", "path": "charts/setec/Chart.yaml"}]
     }
   }
 }
