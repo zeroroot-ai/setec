@@ -5,17 +5,14 @@ description: |
   via Kata Containers, exposing a high-level Sandbox custom resource for
   ephemeral, isolated workload execution.
 type: application
-# version + appVersion are bumped by release-please (extra-files generic
-# updater; the x-release-please-version annotations mark the lines).
-# appVersion keeps the v prefix: image tags are published as vX.Y.Z
-# (setec#131) and the chart defaults every image tag to .Chart.AppVersion.
-version: 0.105.0 # x-release-please-version
-appVersion: "v0.105.0" # x-release-please-version
-kubeVersion: ">=1.28.0-0"
+version: 0.106.0
+appVersion: v0.105.0
+kubeVersion: '>=1.28.0-0'
 home: https://github.com/zeroroot-ai/setec
 sources:
   - https://github.com/zeroroot-ai/setec
-icon: https://raw.githubusercontent.com/zeroroot-ai/setec/main/docs/assets/logo-128.png
+icon: >-
+  https://raw.githubusercontent.com/zeroroot-ai/setec/main/docs/assets/logo-128.png
 keywords:
   - microvm
   - firecracker
