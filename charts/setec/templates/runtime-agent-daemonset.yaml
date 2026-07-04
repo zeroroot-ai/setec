@@ -25,6 +25,15 @@ spec:
       # {operator: Exists} matches all taints.
       tolerations:
         - operator: Exists
+      {{- /* Published runtime-agent images are amd64-only (setec#132), so an
+      unconstrained DaemonSet ImagePullBackOffs forever on arm64 (Graviton
+      system) nodes and the release never converges. Values-driven so
+      mixed-arch clusters can pin {kubernetes.io/arch: amd64}; empty keeps
+      the run-everywhere default. */}}
+      {{- with .Values.runtimeAgent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: runtime-agent
           image: "{{ .Values.runtimeAgent.image.repository }}:{{ .Values.runtimeAgent.image.tag | default $.Chart.AppVersion }}"
