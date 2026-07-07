@@ -99,16 +99,16 @@ jobs:
           echo "runtime_agent_image=ghcr.io/zeroroot-ai/setec-runtime-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build + push manager (CMD=manager)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: CMD=manager
@@ -118,7 +118,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build + push runtime-agent (CMD=runtime-agent)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: CMD=runtime-agent
