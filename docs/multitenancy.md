@@ -123,6 +123,74 @@ your own control-plane ranges rather than clearing it.
 Network policies are owned by the Sandbox. Deleting the Sandbox
 garbage-collects the policy automatically.
 
+### The namespace-wide baseline, and what label-scoped policies cannot do
+
+Every policy described above selects on the `setec.zeroroot.ai/sandbox`
+label, whose value is the Sandbox name. That confines Pods the operator
+built from a Sandbox object.
+
+A Pod written into the same namespace by any other route carries no such
+label. It is selected by no policy, and in Kubernetes an unselected Pod
+is **allow-all, not deny-all**. A policy keyed on a label can only ever
+confine workloads that cooperate by wearing the label, so it is the
+wrong shape for a containment control on its own.
+
+The operator therefore also maintains one policy per Sandbox namespace:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: setec-sandbox-baseline-deny
+spec:
+  podSelector: {}          # every Pod in the namespace
+  policyTypes: [Ingress, Egress]
+```
+
+`podSelector: {}` selects every Pod present and future, whatever it is
+labelled. NetworkPolicies union, so this subtracts nothing from a
+Sandbox that has its own policy — a Sandbox under `external-only` still
+reaches the internet. What it removes is the unselected state itself.
+
+It is applied at reconcile time before the per-Sandbox policy and
+therefore before the Pod, controlled by `--namespace-baseline-deny`
+(default on), and it is also rendered at install time by the chart for
+every namespace in `sandboxNamespaces`. It is deliberately **not**
+owner-referenced to any Sandbox, so it survives Sandbox deletion.
+
+Scope, stated precisely. The baseline does **not**:
+
+- stop such a Pod from being created — that is RBAC, not NetworkPolicy
+  (see below);
+- apply to a Pod with `hostNetwork: true`, which runs in the node's
+  network namespace and is outside NetworkPolicy enforcement entirely.
+  Set `pod-security.kubernetes.io/enforce` on the namespace to prevent
+  that; the operator does not own namespace labels.
+
+No label-based exemption is offered, deliberately: any label an exempt
+Pod could wear, a Pod written by an adversary could wear too. A
+namespace in `sandboxNamespaces` is a Sandbox-only namespace, and the
+chart refuses to render if it names the operator's own namespace.
+
+### Where the operator may write Pods
+
+`sandboxNamespaces` also scopes the operator's RBAC. Pod and
+NetworkPolicy **reads** are cluster-wide, because controller-runtime's
+cache lists and watches across namespaces. Pod and NetworkPolicy
+**writes** are granted by a `RoleBinding` in each namespace of
+`sandboxNamespaces`.
+
+This matters because cluster-wide `pods: create` is by itself a
+cluster-admin path: the holder can create a Pod in any namespace, mount
+any ServiceAccount token, and schedule with any host mount. Confining
+the grant to Sandbox namespaces means a compromise of the operator does
+not become a compromise of the cluster.
+
+Leaving `sandboxNamespaces` empty fails the render rather than falling
+back silently. An install whose Sandbox namespace set is genuinely
+dynamic can take the cluster-wide grant with
+`rbac.allowClusterWideSandboxWrite: true`, explicitly and on the record.
+
 ### Enforcement is the CNI's job
 
 A NetworkPolicy is a request to the CNI, not a mechanism in itself. On a

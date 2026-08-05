@@ -143,6 +143,7 @@ func main() {
 		// Sandbox egress posture. Both lists are validated at startup;
 		// there is no runtime path that degrades to unrestricted egress.
 		reservedCIDRs    []string
+		nsBaselineDeny   bool
 		sandboxResolvers []string
 
 		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
@@ -196,6 +197,14 @@ func main() {
 		"DNS servers Sandboxes resolve through. Written into each Sandbox Pod's dnsConfig and into "+
 			"the generated NetworkPolicy's port-53 rule, so Sandboxes never query cluster DNS and "+
 			"cannot enumerate in-cluster Services by name. May not be empty.")
+
+	pflag.BoolVar(&nsBaselineDeny, "namespace-baseline-deny", true,
+		"Ensure a namespace-wide default-deny NetworkPolicy (podSelector: {}) in the namespace of "+
+			"every reconciled Sandbox, before its own policy and its Pod. The per-Sandbox policies "+
+			"select on the setec.zeroroot.ai/sandbox label and therefore confine only Pods this "+
+			"operator built; a Pod created in the same namespace by any other route is selected by "+
+			"no policy and is unrestricted. This is what removes that state. Disable only where "+
+			"Sandbox namespaces are shared with workloads that need ordinary egress.")
 
 	// Phase 3 flags.
 	pflag.BoolVar(&snapshotsEnabled, "snapshots-enabled", false,
@@ -379,19 +388,20 @@ func main() {
 
 	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{
-		Client:              mgr.GetClient(),
-		Scheme:              mgr.GetScheme(),
-		Recorder:            sandboxRecorder,
-		NodeSelectorLabel:   nodeSelectorLabel,
-		Runtimes:            runtimeRegistry,
-		RuntimeCfg:          runtimeCfg,
-		ClassResolver:       resolver,
-		MetricsCollector:    collectors,
-		Tracer:              tracer,
-		MultiTenancyEnabled: multiTenancyEnabled,
-		TenantLabelKey:      tenantLabelKey,
-		Coordinator:         coordinator,
-		NetPol:              netpolCfg,
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		Recorder:              sandboxRecorder,
+		NodeSelectorLabel:     nodeSelectorLabel,
+		Runtimes:              runtimeRegistry,
+		RuntimeCfg:            runtimeCfg,
+		ClassResolver:         resolver,
+		MetricsCollector:      collectors,
+		Tracer:                tracer,
+		MultiTenancyEnabled:   multiTenancyEnabled,
+		TenantLabelKey:        tenantLabelKey,
+		Coordinator:           coordinator,
+		NetPol:                netpolCfg,
+		NamespaceBaselineDeny: nsBaselineDeny,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)

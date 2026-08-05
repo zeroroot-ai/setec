@@ -246,10 +246,32 @@ addresses are written into every Sandbox Pod's `dnsConfig` with
 `dnsPolicy: None`, so Sandboxes do not use cluster DNS and cannot
 enumerate in-cluster Services by name.
 
-`sandboxNamespaces` renders a baseline deny-all `NetworkPolicy` in each
-listed namespace. The operator already writes a per-Sandbox policy before
-creating the Pod, so this is a safety net for Pods the operator did not
-create.
+`sandboxNamespaces` names the namespaces Sandboxes run in, and is
+required (an empty list fails the render). It does two things:
+
+1. Renders a **namespace-wide** deny-all `NetworkPolicy` — `podSelector:
+   {}`, every Pod, not only labelled Sandbox Pods. The per-Sandbox
+   policies select on `setec.zeroroot.ai/sandbox`, so they confine Pods
+   the operator built; a Pod created in the namespace by any other route
+   is selected by no policy and is therefore unrestricted. This is what
+   removes that state. The operator re-applies the same policy at
+   reconcile time (`--namespace-baseline-deny`), so namespaces created
+   after install are covered too.
+2. Binds the operator's Pod- and NetworkPolicy-**write** RBAC to those
+   namespaces with a `RoleBinding` rather than cluster-wide. Reads stay
+   cluster-wide for the controller cache. Cluster-wide `pods: create` is
+   a cluster-admin path on its own; set
+   `rbac.allowClusterWideSandboxWrite: true` to take it deliberately.
+
+A namespace listed here is a Sandbox-only namespace: the baseline denies
+every Pod in it, no label-based exemption is offered (any label an
+exempt Pod wears an adversary can wear too), and the chart refuses to
+render if the list names the operator's own namespace.
+
+The baseline does not stop a Pod being created — that is RBAC — and it
+does not apply to `hostNetwork: true` Pods, which are outside
+NetworkPolicy enforcement. Set `pod-security.kubernetes.io/enforce` on
+the namespace for that.
 
 None of this enforces anything unless the cluster's CNI implements
 `networking.k8s.io/v1` NetworkPolicy. Verify that against the running

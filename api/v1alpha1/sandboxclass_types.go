@@ -75,8 +75,17 @@ type SandboxClassRuntime struct {
 type SandboxClassSpec struct {
 	// Deprecated: use Runtime.Backend instead.
 	// VMM selects the virtual machine monitor targeted by this class.
-	// +required
-	VMM VMM `json:"vmm"`
+	//
+	// Optional. It was previously required, which made every class that
+	// states its isolation the current way — through Runtime.Backend —
+	// unadmittable: the API server rejected it with "spec.vmm: Required
+	// value", so the chart's own SandboxClasses could not be applied, no
+	// class resolved, and every Sandbox fell back to deny-all. A field
+	// that is deprecated cannot also be mandatory. When it is empty the
+	// operator reads Runtime.Backend; when both are empty the operator's
+	// configured default backend applies.
+	// +optional
+	VMM VMM `json:"vmm,omitempty"`
 
 	// Deprecated: use Runtime.Backend instead.
 	// RuntimeClassName optionally overrides the operator-wide default

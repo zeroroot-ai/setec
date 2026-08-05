@@ -19,17 +19,17 @@ rules:
     verbs:
       - get
       - list
+  # Pod READS are cluster-wide because controller-runtime's cache LISTs and
+  # WATCHes Pods across every namespace. Pod WRITES are not here: they live
+  # in the -sandbox-namespace ClusterRole, bound per namespace. See
+  # templates/sandbox-namespace-rbac.yaml for why that split exists.
   - apiGroups:
       - ""
     resources:
       - pods
     verbs:
-      - create
-      - delete
       - get
       - list
-      - patch
-      - update
       - watch
   - apiGroups:
       - node.k8s.io
@@ -82,18 +82,15 @@ rules:
       - get
       - list
       - watch
-  # Phase 2: NetworkPolicy CRUD for Sandbox network isolation.
+  # Phase 2: NetworkPolicy reads are cluster-wide for the same cache
+  # reason as Pods. Writes are in the -sandbox-namespace ClusterRole.
   - apiGroups:
       - networking.k8s.io
     resources:
       - networkpolicies
     verbs:
-      - create
-      - delete
       - get
       - list
-      - patch
-      - update
       - watch
 {{- if .Values.webhook.enabled }}
   # Phase 2 webhook: read ValidatingWebhookConfiguration for self-inspection.

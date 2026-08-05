@@ -352,18 +352,36 @@ netpol:
     - 1.1.1.1
     - 8.8.8.8
 
-# -- sandboxNamespaces are namespaces that host Sandbox Pods. Each gets a
-# baseline deny-all NetworkPolicy selecting anything carrying the
-# setec.zeroroot.ai/sandbox label.
+# -- sandboxNamespaces names the namespaces Sandboxes run in. It is one
+# decision with three consequences, and all three are load-bearing:
 #
-# The operator already writes a policy per Sandbox before creating its
-# Pod, so this is a safety net rather than the mechanism: it covers a
-# Pod the operator did not create, or one left behind by a reconcile that
-# died between writes. Policies union, so it can only close the
-# unselected-pod hole.
+#   1. Each namespace gets a NAMESPACE-WIDE default-deny NetworkPolicy
+#      (podSelector: {} — every Pod, not just labelled ones). The
+#      per-Sandbox policies select on setec.zeroroot.ai/sandbox, so they
+#      confine Pods the operator built; a Pod created in the namespace by
+#      any other route is selected by no policy and is unrestricted. The
+#      baseline is what removes that state.
+#   2. The operator's Pod-write RBAC is bound to these namespaces with a
+#      RoleBinding instead of cluster-wide. Cluster-wide pods:create is a
+#      cluster-admin path.
+#   3. It must NOT contain `namespace` above. A namespace listed here is
+#      a Sandbox-only namespace: the baseline denies every Pod in it, and
+#      no label-based exemption is offered, because any label an exempt
+#      Pod wears an adversary can wear too.
 #
-# Empty renders nothing. Namespaces listed here must already exist.
+# Empty fails the render unless rbac.allowClusterWideSandboxWrite is set.
+# Namespaces listed here must already exist.
 sandboxNamespaces: []
+
+# -- rbac controls how the operator's Pod- and NetworkPolicy-write
+# permissions are bound.
+rbac:
+  # allowClusterWideSandboxWrite binds those writes with a
+  # ClusterRoleBinding instead of per-namespace RoleBindings, letting the
+  # operator create a Pod in ANY namespace. Set it only where the Sandbox
+  # namespace set is genuinely dynamic, and understand that it makes a
+  # compromise of the operator a cluster-admin compromise.
+  allowClusterWideSandboxWrite: false
 
 # -- webhook installs the ValidatingWebhookConfiguration + Service that
 # route admission requests to the operator's built-in webhook server.

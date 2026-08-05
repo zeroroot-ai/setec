@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"time"
 
@@ -81,6 +82,7 @@ const (
 	eventReasonTenantMissing         = "TenantLabelMissing"
 	eventReasonNetworkPolicy         = "NetworkPolicyApplied"
 	eventReasonNetworkPolicyPending  = "NetworkPolicyPending"
+	eventReasonNamespaceBaseline     = "NamespaceBaselineApplied"
 	eventReasonSnapshotUnavailable   = "SnapshotUnavailable"
 	eventReasonSnapshotIncompatible  = "SnapshotIncompatible"
 	eventReasonPaused                = "Paused"
@@ -166,6 +168,26 @@ type SandboxReconciler struct {
 	// Set at construction time from the operator's --reserved-cidrs and
 	// --sandbox-resolvers flags, which are validated at startup.
 	NetPol netpol.Config
+
+	// NamespaceBaselineDeny, when true, makes the reconciler ensure a
+	// namespace-wide default-deny NetworkPolicy (podSelector: {}) in the
+	// namespace of every Sandbox it reconciles, before that Sandbox's
+	// own policy and therefore before its Pod.
+	//
+	// The per-Sandbox policies select on the setec.zeroroot.ai/sandbox
+	// label, so they confine Pods the operator built. A Pod written into
+	// the same namespace by any other route carries no such label, is
+	// selected by no policy, and is consequently unrestricted. The
+	// baseline removes that state for the whole namespace, which is the
+	// one control here that does not depend on the workload labelling
+	// itself correctly.
+	//
+	// It is set from --namespace-baseline-deny (default true). Turning it
+	// off is only correct where Sandbox namespaces are shared with
+	// workloads that need ordinary egress — a topology this operator
+	// recommends against, because there is no label that separates the
+	// two populations that an adversary could not also apply.
+	NamespaceBaselineDeny bool
 }
 
 // RBAC markers. These are consumed by controller-gen to generate the
@@ -330,6 +352,14 @@ func (r *SandboxReconciler) handleMissingPod(
 		}
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("select runtime: %w", selErr))
 	}
+	// Namespace baseline first, then the per-Sandbox policy, then the
+	// Pod. The baseline is ordered ahead of both because it is the only
+	// one of the three that covers Pods this operator did not create; a
+	// failure here is fatal to the reconcile for the same reason the
+	// per-Sandbox failure is.
+	if err := r.ensureNamespaceBaseline(ctx, logger, sb); err != nil {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, err)
+	}
 	// Policy first. A failure here is fatal to this reconcile: returning
 	// before createPod is what guarantees no Sandbox ever runs without a
 	// NetworkPolicy in place.
@@ -356,7 +386,13 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	prevPhase setecv1alpha1.SandboxPhase,
 	tenantID string,
 ) (ctrl.Result, error) {
-	// (9) Ensure NetworkPolicy (idempotent).
+	// (9) Ensure NetworkPolicy (idempotent). The namespace baseline is
+	// re-asserted on every pass as well, so a policy deleted or widened
+	// out of band is restored on the next reconcile rather than staying
+	// gone until the next Sandbox is created.
+	if err := r.ensureNamespaceBaseline(ctx, log.FromContext(ctx), sb); err != nil {
+		return ctrl.Result{}, err
+	}
 	if _, err := r.applyNetworkPolicy(ctx, sb, cls); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -668,6 +704,79 @@ func (r *SandboxReconciler) resolveClass(ctx context.Context, sb *setecv1alpha1.
 // desired policy: netpol resolves an unstated posture to deny-all. The
 // caller relies on that, because it creates the Pod only after this
 // function succeeds.
+// ensureNamespaceBaseline makes sure the namespace hosting sb carries the
+// namespace-wide default-deny policy before any Sandbox Pod is created in
+// it.
+//
+// # SCOPE, STATED PRECISELY
+//
+// Every other NetworkPolicy this operator writes selects on
+// setec.zeroroot.ai/sandbox, so it constrains Pods this operator built
+// from a Sandbox object. A Pod written into the same namespace by any
+// other route carries no such label, matches no policy, and is therefore
+// unrestricted — Kubernetes treats an unselected Pod as allow-all. This
+// function is what removes that state, because its policy selects
+// podSelector: {} rather than a label.
+//
+// It does not, and cannot, stop such a Pod from being created; that is an
+// RBAC question, not a NetworkPolicy one. It confines the Pod once it
+// exists. It also does not apply to a Pod with hostNetwork: true, which
+// runs in the node's network namespace and is outside NetworkPolicy
+// enforcement entirely — that case needs Pod Security Admission on the
+// namespace, which this operator does not own.
+//
+// The object is deliberately NOT owner-referenced to the Sandbox: it is
+// namespace-scoped and must outlive every individual Sandbox, so garbage
+// collection on Sandbox delete would reopen the hole between runs.
+func (r *SandboxReconciler) ensureNamespaceBaseline(
+	ctx context.Context,
+	logger logr.Logger,
+	sb *setecv1alpha1.Sandbox,
+) error {
+	if !r.NamespaceBaselineDeny {
+		return nil
+	}
+	desired := netpol.NamespaceBaseline(sb.Namespace)
+
+	existing := &networkingv1.NetworkPolicy{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create namespace baseline NetworkPolicy in %q: %w", desired.Namespace, err)
+		}
+		logger.Info("applied namespace-wide default-deny NetworkPolicy",
+			"namespace", desired.Namespace, "policy", desired.Name)
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonNamespaceBaseline,
+			actionApplyNetworkPolicy,
+			"Applied namespace-wide default-deny NetworkPolicy %q in %q; every Pod in this namespace is now selected by a policy",
+			desired.Name, desired.Namespace)
+		return nil
+	case err != nil:
+		return fmt.Errorf("get namespace baseline NetworkPolicy in %q: %w", desired.Namespace, err)
+	}
+
+	// The object exists. Reconcile it back whenever it has stopped
+	// expressing the namespace-wide deny — a narrowed selector, a
+	// dropped policy type or an added rule each turn it into an allow
+	// for some population, and the name alone is not evidence.
+	if netpol.BaselineIsIntact(existing) {
+		return nil
+	}
+	original := existing.DeepCopy()
+	existing.Spec = desired.Spec
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	maps.Copy(existing.Labels, desired.Labels)
+	if err := r.Patch(ctx, existing, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("patch namespace baseline NetworkPolicy in %q: %w", desired.Namespace, err)
+	}
+	logger.Info("restored namespace-wide default-deny NetworkPolicy",
+		"namespace", desired.Namespace, "policy", desired.Name)
+	return nil
+}
+
 func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) (ctrl.Result, error) {
 	desired, err := r.NetPol.GenerateForClass(sb, cls)
 	if err != nil {
@@ -685,7 +794,14 @@ func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1a
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				return ctrl.Result{}, nil
+				// A policy of this name already exists but was not
+				// visible to the Get above — a stale object from a
+				// crashed reconcile, or one written by something other
+				// than this operator. It is NOT evidence that the
+				// desired posture is in place, so this must not report
+				// success: requeue so the next pass takes the
+				// Get-then-Patch path and reconciles the spec.
+				return ctrl.Result{RequeueAfter: networkPolicyReadBackRequeue}, nil
 			}
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create NetworkPolicy: %w", err))
 		}

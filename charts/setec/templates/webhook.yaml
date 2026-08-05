@@ -1,4 +1,7 @@
 {{- if .Values.webhook.enabled -}}
+{{- if and (not .Values.webhook.certManager.enabled) (not .Values.webhook.caBundle) }}
+{{- fail "webhook.enabled is true but no CA source is configured: webhook.certManager.enabled is false and webhook.caBundle is empty. The rendered ValidatingWebhookConfiguration would carry no caBundle, so the API server cannot verify the webhook's serving certificate; with failurePolicy Fail every Sandbox and SandboxClass write is then rejected, and the class-level guardrails the webhook enforces never take effect. Either set webhook.certManager.enabled=true with an issuerRef, or supply webhook.caBundle (base64 PEM) alongside a Secret holding the serving cert." }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

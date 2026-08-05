@@ -292,6 +292,9 @@ func TestMain(m *testing.M) {
 		Coordinator: testCoordinator,
 		// The egress posture the envtest reconciler builds policies from.
 		NetPol: testNetPolConfig,
+		// On by default in the operator, so envtest exercises the same
+		// path production takes.
+		NamespaceBaselineDeny: true,
 		// Tracer and MultiTenancyEnabled stay at zero values — individual
 		// scenarios that need them can construct their own reconciler.
 	}
