@@ -37,14 +37,13 @@ func classWithDefault(mode setecv1alpha1.NetworkMode, allow ...setecv1alpha1.Net
 
 // TestGenerateForClass_DefaultDenyWhenSandboxSilent is the core security
 // assertion: a class with defaultNetworkMode=none must produce a deny-all
-// policy for a Sandbox that declares no network block — egress is
-// default-deny per class, not unrestricted.
+// policy for a Sandbox that declares no network block.
 func TestGenerateForClass_DefaultDenyWhenSandboxSilent(t *testing.T) {
 	t.Parallel()
 	s := sb("") // nil Network
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	got, err := GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -66,9 +65,9 @@ func TestGenerateForClass_DefaultEgressAllowList(t *testing.T) {
 	t.Parallel()
 	s := sb("")
 	cls := classWithDefault(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "mirror.internal", Port: 443})
+		setecv1alpha1.NetworkAllow{Host: "mirror.example.com", Port: 443})
 
-	got, err := GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -79,8 +78,34 @@ func TestGenerateForClass_DefaultEgressAllowList(t *testing.T) {
 	if len(got.Spec.Egress) != 2 {
 		t.Fatalf("expected DNS + 1 allow rule, got %d rules", len(got.Spec.Egress))
 	}
-	if got.Annotations["setec.zeroroot.ai/allow-443"] != "mirror.internal" {
+	if got.Annotations["setec.zeroroot.ai/allow-443"] != "mirror.example.com" {
 		t.Fatalf("class allow host not recorded: %v", got.Annotations)
+	}
+}
+
+// TestGenerateForClass_DefaultExternalOnly is the tool posture arriving
+// through the class rather than through the Sandbox. This is the path a
+// scanning workload actually takes: it says nothing about networking and
+// inherits external-only from its class.
+func TestGenerateForClass_DefaultExternalOnly(t *testing.T) {
+	t.Parallel()
+	s := sb("")
+	cls := classWithDefault(setecv1alpha1.NetworkModeExternalOnly)
+
+	got, err := testCfg().GenerateForClass(s, cls)
+	if err != nil {
+		t.Fatalf("GenerateForClass: %v", err)
+	}
+	// DNS + the public-egress rule.
+	if len(got.Spec.Egress) != 2 {
+		t.Fatalf("expected DNS + public egress, got %d rules", len(got.Spec.Egress))
+	}
+	pub := got.Spec.Egress[1]
+	if pub.To[0].IPBlock.CIDR != AllCIDR {
+		t.Errorf("public rule CIDR = %q, want %q", pub.To[0].IPBlock.CIDR, AllCIDR)
+	}
+	if len(pub.To[0].IPBlock.Except) != len(testReserved) {
+		t.Errorf("except = %v, want all %d reserved ranges", pub.To[0].IPBlock.Except, len(testReserved))
 	}
 }
 
@@ -89,49 +114,53 @@ func TestGenerateForClass_DefaultEgressAllowList(t *testing.T) {
 // applied over it.
 func TestGenerateForClass_ExplicitSandboxNetworkWins(t *testing.T) {
 	t.Parallel()
-	s := sb(setecv1alpha1.NetworkModeFull) // explicit full
+	s := sb(setecv1alpha1.NetworkModeExternalOnly)
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	got, err := GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
-	if got != nil {
-		t.Fatalf("explicit mode=full must win over class default-deny; expected nil policy, got %+v", got.Spec)
+	if len(got.Spec.Egress) == 0 {
+		t.Fatal("explicit external-only must win over the class default-deny")
 	}
 }
 
-// TestGenerateForClass_NoClassDefaultPreservesBackCompat ensures a class with
-// no default posture (or a nil class) keeps the historical mode=full →
-// no-policy behaviour.
-func TestGenerateForClass_NoClassDefaultPreservesBackCompat(t *testing.T) {
+// TestGenerateForClass_UnstatedPostureIsDenyAll replaces the old
+// back-compat case. A nil class, or a class that declares no default,
+// used to mean "emit no policy". It now means deny-all: the absence of a
+// stated posture is not a licence to skip the policy.
+func TestGenerateForClass_UnstatedPostureIsDenyAll(t *testing.T) {
 	t.Parallel()
 	s := sb("")
 	for name, cls := range map[string]*setecv1alpha1.SandboxClass{
 		"nil-class":     nil,
 		"empty-default": classWithDefault(""),
-		"full-default":  classWithDefault(setecv1alpha1.NetworkModeFull),
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := GenerateForClass(s, cls)
+			t.Parallel()
+			got, err := testCfg().GenerateForClass(s, cls)
 			if err != nil {
 				t.Fatalf("GenerateForClass: %v", err)
 			}
-			if got != nil {
-				t.Fatalf("expected nil policy (back-compat), got %+v", got.Spec)
+			if got == nil {
+				t.Fatal("expected a deny-all policy, got nil (unrestricted egress)")
+			}
+			if len(got.Spec.Egress) != 0 || len(got.Spec.Ingress) != 0 {
+				t.Fatalf("expected deny-all, got egress=%v ingress=%v", got.Spec.Egress, got.Spec.Ingress)
 			}
 		})
 	}
 }
 
-// TestGenerateForClass_DoesNotMutateSandbox guards that synthesising the
-// effective network block never writes back onto the caller's Sandbox.
+// TestGenerateForClass_DoesNotMutateSandbox guards that resolving the
+// effective posture never writes back onto the caller's Sandbox.
 func TestGenerateForClass_DoesNotMutateSandbox(t *testing.T) {
 	t.Parallel()
 	s := sb("")
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	if _, err := GenerateForClass(s, cls); err != nil {
+	if _, err := testCfg().GenerateForClass(s, cls); err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
 	if s.Spec.Network != nil {
@@ -141,7 +170,48 @@ func TestGenerateForClass_DoesNotMutateSandbox(t *testing.T) {
 
 func TestGenerateForClass_NilSandbox(t *testing.T) {
 	t.Parallel()
-	if _, err := GenerateForClass(nil, classWithDefault(setecv1alpha1.NetworkModeNone)); err == nil {
+	if _, err := testCfg().GenerateForClass(nil, classWithDefault(setecv1alpha1.NetworkModeNone)); err == nil {
 		t.Fatal("expected error on nil sandbox")
+	}
+}
+
+// TestEffectiveMode pins the resolution order the admission webhook
+// depends on: Sandbox first, then class default, then none.
+func TestEffectiveMode(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		sandbox *setecv1alpha1.Sandbox
+		class   *setecv1alpha1.SandboxClass
+		want    setecv1alpha1.NetworkMode
+	}{
+		"sandbox wins over class": {
+			sb(setecv1alpha1.NetworkModeExternalOnly),
+			classWithDefault(setecv1alpha1.NetworkModeNone),
+			setecv1alpha1.NetworkModeExternalOnly,
+		},
+		"class default fills the gap": {
+			sb(""),
+			classWithDefault(setecv1alpha1.NetworkModeExternalOnly),
+			setecv1alpha1.NetworkModeExternalOnly,
+		},
+		"nothing stated is none": {
+			sb(""), nil, setecv1alpha1.NetworkModeNone,
+		},
+		"empty class default is none": {
+			sb(""), classWithDefault(""), setecv1alpha1.NetworkModeNone,
+		},
+		"nil sandbox is none": {
+			nil, classWithDefault(setecv1alpha1.NetworkModeExternalOnly), setecv1alpha1.NetworkModeNone,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := EffectiveMode(tc.sandbox, tc.class); got != tc.want {
+				t.Fatalf("EffectiveMode() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

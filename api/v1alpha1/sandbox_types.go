@@ -27,23 +27,39 @@ import (
 // edit zz_generated.deepcopy.go by hand.
 
 // NetworkMode selects the egress posture applied to a Sandbox microVM.
-// +kubebuilder:validation:Enum=full;egress-allow-list;none
+//
+// Every mode produces a NetworkPolicy. There is no mode that means "emit no
+// policy": the operator always writes one, and the reconciler refuses to
+// start the microVM until it is accepted by the API server.
+// +kubebuilder:validation:Enum=external-only;egress-allow-list;none
 type NetworkMode string
 
 const (
-	// NetworkModeFull grants the Sandbox unrestricted egress. This is the
-	// default when network is unset and mirrors a standard Pod.
-	NetworkModeFull NetworkMode = "full"
+	// NetworkModeExternalOnly permits egress to public networks while
+	// denying every address range the cluster operator has reserved
+	// (spec.reservedCIDRs on the operator; see the --reserved-cidrs
+	// flag). It is the posture for workloads that must reach arbitrary
+	// external endpoints — scanners, crawlers, package fetchers — but
+	// have no business talking to cluster-internal services.
+	//
+	// The generated policy allows 0.0.0.0/0 on all ports with the
+	// reserved ranges subtracted via ipBlock.except, denies all
+	// ingress, and permits DNS only to the operator-configured
+	// resolvers.
+	NetworkModeExternalOnly NetworkMode = "external-only"
 
-	// NetworkModeEgressAllowList restricts egress to the hosts declared
-	// in Network.Allow. The controller generates a NetworkPolicy
-	// allowing egress only to those host/port pairs plus cluster DNS.
+	// NetworkModeEgressAllowList restricts egress to the destinations
+	// declared in Network.Allow. Each entry is rendered as its own
+	// port-scoped egress rule, and each rule carries the same reserved
+	// range subtraction as external-only unless the SandboxClass
+	// explicitly exempts a range via spec.egressExemptCIDRs.
 	NetworkModeEgressAllowList NetworkMode = "egress-allow-list"
 
 	// NetworkModeNone denies all network access. The controller
 	// generates a NetworkPolicy with empty ingress and empty egress,
-	// isolating the Sandbox from every endpoint including cluster
-	// DNS.
+	// isolating the Sandbox from every endpoint including DNS. This is
+	// the posture a Sandbox resolves to when neither it nor its
+	// SandboxClass states an intent.
 	NetworkModeNone NetworkMode = "none"
 )
 
@@ -164,6 +180,10 @@ type Resources struct {
 // NetworkMode is egress-allow-list.
 type NetworkAllow struct {
 	// Host is the DNS name or IP address permitted as an egress target.
+	// Kubernetes NetworkPolicy cannot match on a DNS name, so Host is
+	// recorded as declared intent on an annotation for audit. Set CIDR
+	// when the destination must actually be narrowed at the packet
+	// level.
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	Host string `json:"host"`
@@ -173,13 +193,25 @@ type NetworkAllow struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +required
 	Port int32 `json:"port"`
+
+	// CIDR optionally pins this entry to an address block. When set it
+	// replaces the default 0.0.0.0/0 base for this rule, which is how a
+	// caller that genuinely knows the destination address range (for
+	// example an in-cluster platform endpoint that the operator's
+	// reserved ranges would otherwise subtract) narrows the rule to
+	// exactly that range. When empty the rule keeps the 0.0.0.0/0 base
+	// minus the operator's reserved ranges.
+	// +optional
+	CIDR string `json:"cidr,omitempty"`
 }
 
 // Network describes the egress policy applied to the Sandbox. When omitted,
-// the Sandbox defaults to NetworkMode=full.
+// the Sandbox inherits its SandboxClass's spec.defaultNetworkMode; when the
+// class states no default either, the effective mode is NetworkModeNone.
+// There is no configuration that yields an unpoliced Sandbox.
 type Network struct {
 	// Mode selects the egress posture for the Sandbox.
-	// +kubebuilder:default=full
+	// +kubebuilder:default=none
 	// +required
 	Mode NetworkMode `json:"mode"`
 
@@ -230,8 +262,9 @@ type SandboxSpec struct {
 	// +required
 	Resources Resources `json:"resources"`
 
-	// Network describes the egress policy. Optional; defaults to
-	// NetworkMode=full when omitted.
+	// Network describes the egress policy. Optional; when omitted the
+	// SandboxClass default applies, and when the class states no default
+	// the Sandbox resolves to NetworkMode=none.
 	// +optional
 	Network *Network `json:"network,omitempty"`
 

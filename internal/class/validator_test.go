@@ -132,17 +132,20 @@ func TestValidate(t *testing.T) {
 			name: "network mode not allowed",
 			sb: func() *setecv1alpha1.Sandbox {
 				sb := baseSandbox()
-				sb.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeFull}
+				sb.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
 				return sb
 			}(),
 			cls: standardClass(),
 			expect: []ConstraintViolation{{
 				Field:   "spec.network.mode",
-				Message: `Sandbox requests network.mode="full" but SandboxClass "standard" only allows modes [none egress-allow-list]`,
+				Message: `Sandbox resolves to network.mode="external-only" but SandboxClass "standard" only allows modes [none egress-allow-list]`,
 			}},
 		},
 		{
-			name: "network mode check skipped when network nil",
+			// An omitted network block still resolves to a mode. Here the
+			// class states no default, so the effective mode is none —
+			// which this class permits.
+			name: "absent network resolves to none and is allowed",
 			sb: func() *setecv1alpha1.Sandbox {
 				sb := baseSandbox()
 				sb.Spec.Network = nil
@@ -152,10 +155,32 @@ func TestValidate(t *testing.T) {
 			expect: nil,
 		},
 		{
+			// The gap this check used to have: a Sandbox that omits
+			// spec.network inherits the class default, and that inherited
+			// mode must satisfy the allow-list too. Skipping the check on
+			// a nil network block let an omitted field bypass a
+			// constraint an explicit field has to meet.
+			name: "absent network inheriting a disallowed class default is rejected",
+			sb: func() *setecv1alpha1.Sandbox {
+				sb := baseSandbox()
+				sb.Spec.Network = nil
+				return sb
+			}(),
+			cls: func() *setecv1alpha1.SandboxClass {
+				c := standardClass()
+				c.Spec.DefaultNetworkMode = setecv1alpha1.NetworkModeExternalOnly
+				return c
+			}(),
+			expect: []ConstraintViolation{{
+				Field:   "spec.network.mode",
+				Message: `Sandbox resolves to network.mode="external-only" but SandboxClass "standard" only allows modes [none egress-allow-list]`,
+			}},
+		},
+		{
 			name: "empty allowed modes means any mode permitted",
 			sb: func() *setecv1alpha1.Sandbox {
 				sb := baseSandbox()
-				sb.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeFull}
+				sb.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
 				return sb
 			}(),
 			cls: func() *setecv1alpha1.SandboxClass {

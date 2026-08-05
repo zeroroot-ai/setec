@@ -29,6 +29,7 @@ import (
 	"slices"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/netpol"
 )
 
 // ConstraintViolation describes a single reason a Sandbox spec is rejected
@@ -99,14 +100,21 @@ func Validate(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) []Cons
 	}
 
 	// Network mode enforcement. An empty AllowedNetworkModes list means
-	// the class imposes no restriction (back-compat for Phase 1 users).
-	if len(cls.Spec.AllowedNetworkModes) > 0 && sb.Spec.Network != nil {
-		if !containsNetworkMode(cls.Spec.AllowedNetworkModes, sb.Spec.Network.Mode) {
+	// the class imposes no restriction.
+	//
+	// The check is against the EFFECTIVE mode, not against
+	// sb.Spec.Network.Mode. A Sandbox that omits spec.network entirely
+	// still ends up with a posture — the class default, or none — and
+	// checking only the declared field would let an omitted block skip
+	// the allow-list that an explicit one has to satisfy.
+	if len(cls.Spec.AllowedNetworkModes) > 0 {
+		effective := netpol.EffectiveMode(sb, cls)
+		if !containsNetworkMode(cls.Spec.AllowedNetworkModes, effective) {
 			out = append(out, ConstraintViolation{
 				Field: "spec.network.mode",
 				Message: fmt.Sprintf(
-					"Sandbox requests network.mode=%q but SandboxClass %q only allows modes %v",
-					sb.Spec.Network.Mode, cls.Name, cls.Spec.AllowedNetworkModes,
+					"Sandbox resolves to network.mode=%q but SandboxClass %q only allows modes %v",
+					effective, cls.Name, cls.Spec.AllowedNetworkModes,
 				),
 			})
 		}

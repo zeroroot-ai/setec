@@ -1,0 +1,29 @@
+{{- range $ns := .Values.sandboxNamespaces }}
+---
+# Baseline deny for every Sandbox Pod in {{ $ns }}.
+#
+# The operator writes a per-Sandbox policy before it creates the Pod, so
+# in normal operation this policy adds nothing. It exists for the case
+# where the operator is not the one creating the Pod — a hand-applied
+# manifest, a stale object left by a crashed reconcile, an operator that
+# died between writes. NetworkPolicies union, so this can only remove the
+# unselected-pod hole; it never subtracts from a per-Sandbox allow.
+#
+# The selector uses matchExpressions/Exists rather than matchLabels
+# because the label's value is the Sandbox name, which differs per Pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: setec-sandbox-baseline-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: setec.zeroroot.ai/sandbox
+        operator: Exists
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}

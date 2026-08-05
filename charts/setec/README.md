@@ -216,9 +216,44 @@ verify the expected new manifests appear via `helm template`.
   required** — mTLS is mandatory for the frontend and the chart refuses to
   render without them. The frontend does NOT bypass Kubernetes admission;
   every call still flows through the webhook.
-- `defaultClass.enabled=true` templates a cluster-default `SandboxClass` so
-  tenant Sandboxes that omit `spec.sandboxClassName` get the configured
-  defaults.
+- `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
+  set tenants launch against. The chart ships two: `tool`
+  (`defaultNetworkMode: external-only`, marked cluster-default) and
+  `connector` (`defaultNetworkMode: none`). A Sandbox that omits
+  `spec.sandboxClassName` resolves to the class marked default; a Sandbox
+  that omits `spec.network` inherits that class's `defaultNetworkMode`.
+  Every class must state a `defaultNetworkMode` or the chart refuses to
+  render.
+
+### Sandbox egress posture
+
+`netpol.reservedCIDRs` is the address space no Sandbox may reach. It is
+subtracted from every permissive egress rule the operator generates, and
+neither the chart nor the operator will start with it empty.
+
+**Add your cluster's Service and Pod CIDRs.** The default covers RFC1918,
+link-local (including the cloud instance-metadata address), CGNAT,
+loopback and multicast — but the chart cannot discover the ranges your
+own control plane sits on.
+
+**Self-hosted installs must retune it.** If the authorised scope for your
+workloads is private address space, this default denies exactly what you
+meant to permit. Narrow the list to your own control-plane ranges rather
+than clearing it.
+
+`netpol.resolvers` are the DNS servers Sandboxes may query. The same
+addresses are written into every Sandbox Pod's `dnsConfig` with
+`dnsPolicy: None`, so Sandboxes do not use cluster DNS and cannot
+enumerate in-cluster Services by name.
+
+`sandboxNamespaces` renders a baseline deny-all `NetworkPolicy` in each
+listed namespace. The operator already writes a per-Sandbox policy before
+creating the Pod, so this is a safety net for Pods the operator did not
+create.
+
+None of this enforces anything unless the cluster's CNI implements
+`networking.k8s.io/v1` NetworkPolicy. Verify that against the running
+cluster; the chart cannot detect it.
 
 ### Phase 1 to Phase 2 migration
 

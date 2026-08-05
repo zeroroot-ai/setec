@@ -39,10 +39,11 @@ createNamespace: false
 # RoleBinding subjects reference this namespace.
 namespace: setec-system
 
-# -- replicas is the number of controller-manager Pods. Default is 1 because
-# the operator runs a single leader. Set to 2+ and enable leaderElect to get
-# HA with only one active reconciler at a time.
-replicas: 1
+# -- replicas is the number of controller-manager Pods. Two by default,
+# with leaderElect on: only one replica reconciles, but every replica
+# serves admission. Because webhook.failurePolicy is Fail, a single
+# replica would block all Sandbox launches while it restarts.
+replicas: 2
 
 # -- resources describes the Pod's CPU and memory requests and limits. The
 # defaults are sized for a small controller-manager; tune upward only if
@@ -218,10 +219,17 @@ runtimeAgent:
 # actual scheduling uses the RuntimeClass.
 nodeSelectorLabel: katacontainers.io/kata-runtime
 
-# -- leaderElect enables controller-runtime leader election. Required when
-# running more than one replica; safe to leave false for the default single
-# replica deployment.
-leaderElect: false
+# -- leaderElect enables controller-runtime leader election. Required at
+# the default two replicas so exactly one of them reconciles.
+leaderElect: true
+
+# -- podDisruptionBudget keeps at least one operator replica serving
+# admission during voluntary disruption (node drain, cluster upgrade).
+# With webhook.failurePolicy Fail, losing every replica at once fails
+# every Sandbox launch until one comes back.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 # -- metricsPort is the TCP port the operator serves Prometheus metrics on.
 # The /metrics endpoint is exposed on this port.
@@ -311,10 +319,63 @@ observability:
     # root CAs.
     caSecretName: ""
 
+# -- netpol defines the egress posture every generated NetworkPolicy is
+# built from. Both lists are validated at operator startup and at render
+# time; neither may be empty.
+netpol:
+  # reservedCIDRs are the address ranges no Sandbox may reach. They are
+  # subtracted from every permissive egress rule via ipBlock.except.
+  #
+  # The default covers private (RFC1918), link-local — which includes the
+  # cloud instance-metadata address 169.254.169.254 — carrier-grade NAT,
+  # loopback and multicast space. ADD YOUR CLUSTER'S Service and Pod
+  # CIDRs: they are what stands between a Sandbox and the control plane,
+  # and the chart cannot discover them for you.
+  #
+  # SELF-HOSTED INSTALLS: if the authorised scope for your workloads is
+  # private address space, this default denies exactly what you meant to
+  # permit. Narrow the list to your own control-plane ranges. Do not
+  # clear it — an empty list is rejected.
+  reservedCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 100.64.0.0/10
+    - 127.0.0.0/8
+    - 224.0.0.0/4
+  # resolvers are the DNS servers Sandboxes may query. The same list is
+  # written into each Sandbox Pod's dnsConfig with dnsPolicy None, so a
+  # Sandbox resolves names through these addresses rather than through
+  # cluster DNS and cannot enumerate in-cluster Services by name.
+  resolvers:
+    - 1.1.1.1
+    - 8.8.8.8
+
+# -- sandboxNamespaces are namespaces that host Sandbox Pods. Each gets a
+# baseline deny-all NetworkPolicy selecting anything carrying the
+# setec.zeroroot.ai/sandbox label.
+#
+# The operator already writes a policy per Sandbox before creating its
+# Pod, so this is a safety net rather than the mechanism: it covers a
+# Pod the operator did not create, or one left behind by a reconcile that
+# died between writes. Policies union, so it can only close the
+# unselected-pod hole.
+#
+# Empty renders nothing. Namespaces listed here must already exist.
+sandboxNamespaces: []
+
 # -- webhook installs the ValidatingWebhookConfiguration + Service that
 # route admission requests to the operator's built-in webhook server.
+#
+# Enabled by default: with it off, allowedNetworkModes, the runc dev-only
+# gate and the tenant-label check never run, so the constraints a
+# SandboxClass publishes are advisory. failurePolicy Fail means a
+# Sandbox is rejected rather than admitted unchecked when the operator is
+# unreachable, which is why replicaCount defaults to 2 and a
+# PodDisruptionBudget ships alongside it.
 webhook:
-  enabled: false
+  enabled: true
   # failurePolicy is propagated to the ValidatingWebhookConfiguration.
   failurePolicy: Fail
   # certSecret is the Secret (keys tls.crt/tls.key) mounted into the operator
@@ -411,18 +472,61 @@ frontend:
       cpu: 500m
       memory: 512Mi
 
-# -- defaultClass optionally templates a cluster-default SandboxClass so
-# tenant Sandboxes without a class name resolve to a sane baseline.
-defaultClass:
-  enabled: false
-  name: default
-  spec:
-    vmm: firecracker
-    runtimeClassName: kata-fc
-    maxResources:
-      vcpu: 8
-      memory: 16Gi
-    default: true
+# -- sandboxClasses templates the SandboxClasses tenants launch against.
+# A Sandbox that names no class resolves to the one marked default, and
+# a class is what supplies the egress posture for a Sandbox that declares
+# no spec.network — so shipping at least one enabled class is what keeps
+# the default posture something other than deny-all.
+#
+# Each entry is {name, spec}; spec is the SandboxClass spec verbatim.
+sandboxClasses:
+  enabled: true
+  classes:
+    # The tool posture. Workloads under this class reach arbitrary
+    # external endpoints on arbitrary ports — that is the product — but
+    # reach nothing in the operator's reserved ranges. It is the
+    # cluster default so a Sandbox that names no class lands here.
+    - name: tool
+      spec:
+        runtime:
+          backend: kata-fc
+        maxResources:
+          vcpu: 8
+          memory: 16Gi
+        defaultNetworkMode: external-only
+        # egress-allow-list is permitted as well as external-only
+        # because it is strictly the tighter of the two: it carries the
+        # same reserved-range subtraction AND scopes each rule to a
+        # port. Excluding it would only push callers toward the broader
+        # posture.
+        allowedNetworkModes:
+          - external-only
+          - egress-allow-list
+          - none
+        default: true
+
+    # The connector posture. Workloads under this class talk to a small
+    # declared destination set and must NOT reach the internet at large,
+    # so external-only is deliberately absent from allowedNetworkModes
+    # and the default is deny-all until a Sandbox declares its list.
+    #
+    # egressExemptCIDRs is where a deliberate in-cluster destination is
+    # re-opened. It is empty here: a range added to this list is
+    # reachable by every Sandbox in the class, so it must be the
+    # narrowest block that covers the one endpoint, and it must be set
+    # per install rather than shipped as a default.
+    - name: connector
+      spec:
+        runtime:
+          backend: kata-fc
+        maxResources:
+          vcpu: 4
+          memory: 8Gi
+        defaultNetworkMode: none
+        allowedNetworkModes:
+          - egress-allow-list
+          - none
+        egressExemptCIDRs: []
 
 # ---------------------------------------------------------------------------
 # Phase 3: snapshot, restore, pause/resume, pre-warmed pool.

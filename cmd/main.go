@@ -54,6 +54,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
 	"github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/prereq"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
@@ -101,6 +102,27 @@ type readyzBody struct {
 	Warnings             []string `json:"warnings,omitempty"`
 }
 
+// defaultReservedCIDRs is the address space Sandboxes are denied out of
+// the box. It covers private (RFC1918), link-local — which includes the
+// cloud instance-metadata address — carrier-grade NAT, loopback and
+// multicast ranges.
+//
+// It deliberately does NOT include this cluster's Service or Pod CIDRs,
+// because those vary per cluster and are usually carved out of RFC1918
+// anyway. A cluster whose Service CIDR sits outside these ranges must add
+// it explicitly via --reserved-cidrs.
+func defaultReservedCIDRs() []string {
+	return []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16",
+		"100.64.0.0/10",
+		"127.0.0.0/8",
+		"224.0.0.0/4",
+	}
+}
+
 // nolint:gocyclo
 func main() {
 	var (
@@ -117,6 +139,11 @@ func main() {
 		otlpCAFile          string
 		webhookEnabled      bool
 		webhookCertDir      string
+
+		// Sandbox egress posture. Both lists are validated at startup;
+		// there is no runtime path that degrades to unrestricted egress.
+		reservedCIDRs    []string
+		sandboxResolvers []string
 
 		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
 		snapshotsEnabled  bool
@@ -158,6 +185,17 @@ func main() {
 		"Register the validating admission webhook with the manager.")
 	pflag.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs",
 		"Directory containing tls.crt and tls.key for the webhook server.")
+
+	// Sandbox egress posture.
+	pflag.StringSliceVar(&reservedCIDRs, "reserved-cidrs", defaultReservedCIDRs(),
+		"Address ranges no Sandbox may reach. Subtracted from every permissive egress rule via "+
+			"ipBlock.except. Add this cluster's Service and Pod CIDRs. Self-hosted operators whose "+
+			"authorised scan scope is private address space must narrow this list to their own "+
+			"control-plane ranges instead of clearing it. May not be empty.")
+	pflag.StringSliceVar(&sandboxResolvers, "sandbox-resolvers", []string{"1.1.1.1", "8.8.8.8"},
+		"DNS servers Sandboxes resolve through. Written into each Sandbox Pod's dnsConfig and into "+
+			"the generated NetworkPolicy's port-53 rule, so Sandboxes never query cluster DNS and "+
+			"cannot enumerate in-cluster Services by name. May not be empty.")
 
 	// Phase 3 flags.
 	pflag.BoolVar(&snapshotsEnabled, "snapshots-enabled", false,
@@ -225,6 +263,27 @@ func main() {
 			},
 		}
 	}
+
+	// --- Sandbox egress posture ---
+	//
+	// Validated before the manager starts. An empty or unparseable list is
+	// a startup failure rather than a per-reconcile error: a running
+	// operator that cannot express the reserved ranges would emit
+	// permissive policies, which is the outcome this configuration exists
+	// to prevent.
+	netpolCfg := netpol.Config{
+		ReservedCIDRs: reservedCIDRs,
+		ResolverIPs:   sandboxResolvers,
+	}
+	if err := netpolCfg.Validate(); err != nil {
+		setupLog.Error(err, "invalid sandbox egress configuration; "+
+			"check --reserved-cidrs and --sandbox-resolvers")
+		os.Exit(1)
+	}
+	setupLog.Info("sandbox egress posture configured",
+		"reservedCIDRs", netpolCfg.ReservedCIDRs,
+		"resolvers", netpolCfg.ResolverIPs,
+	)
 
 	// Build the dispatcher Registry and register one Dispatcher per enabled backend.
 	runtimeRegistry = runtimepkg.NewRegistry()
@@ -332,6 +391,7 @@ func main() {
 		MultiTenancyEnabled: multiTenancyEnabled,
 		TenantLabelKey:      tenantLabelKey,
 		Coordinator:         coordinator,
+		NetPol:              netpolCfg,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)

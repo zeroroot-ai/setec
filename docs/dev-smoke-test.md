@@ -365,7 +365,7 @@ helm upgrade --install setec charts/setec \
   --set webhook.certManager.enabled=true \
   --set frontend.enabled=true \
   --set observability.enabled=true \
-  --set defaultClass.enabled=true
+  --set sandboxClasses.enabled=true
 ```
 
 ## Scenario P1: Multi-tenant ResourceQuota

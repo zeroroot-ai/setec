@@ -70,10 +70,14 @@ spec:
                   tenants may request under this class. Empty list means all modes
                   are allowed (back-compat: Phase 1 behavior).
                 items:
-                  description: NetworkMode selects the egress posture applied to a
-                    Sandbox microVM.
+                  description: |-
+                    NetworkMode selects the egress posture applied to a Sandbox microVM.
+
+                    Every mode produces a NetworkPolicy. There is no mode that means "emit no
+                    policy": the operator always writes one, and the reconciler refuses to
+                    start the microVM until it is accepted by the API server.
                   enum:
-                  - full
+                  - external-only
                   - egress-allow-list
                   - none
                   type: string
@@ -98,9 +102,23 @@ spec:
                     NetworkAllow describes a single permitted egress destination when
                     NetworkMode is egress-allow-list.
                   properties:
+                    cidr:
+                      description: |-
+                        CIDR optionally pins this entry to an address block. When set it
+                        replaces the default 0.0.0.0/0 base for this rule, which is how a
+                        caller that genuinely knows the destination address range (for
+                        example an in-cluster platform endpoint that the operator's
+                        reserved ranges would otherwise subtract) narrows the rule to
+                        exactly that range. When empty the rule keeps the 0.0.0.0/0 base
+                        minus the operator's reserved ranges.
+                      type: string
                     host:
-                      description: Host is the DNS name or IP address permitted as
-                        an egress target.
+                      description: |-
+                        Host is the DNS name or IP address permitted as an egress target.
+                        Kubernetes NetworkPolicy cannot match on a DNS name, so Host is
+                        recorded as declared intent on an annotation for audit. Set CIDR
+                        when the destination must actually be narrowed at the packet
+                        level.
                       minLength: 1
                       type: string
                     port:
@@ -118,22 +136,21 @@ spec:
               defaultNetworkMode:
                 allOf:
                 - enum:
-                  - full
+                  - external-only
                   - egress-allow-list
                   - none
                 - enum:
-                  - full
+                  - external-only
                   - egress-allow-list
                   - none
                 description: |-
                   DefaultNetworkMode is the egress posture applied to Sandboxes in
-                  this class that do not declare their own spec.network. Setting
-                  this to "none" or "egress-allow-list" makes egress DEFAULT-DENY
-                  for the class: a Sandbox that says nothing about networking is
-                  isolated rather than granted unrestricted egress (ADR-0052,
-                  setec#66). When unset the operator preserves the historical
-                  default of "full" (unrestricted) for back-compat; operators
-                  hardening a class set this to "none" to fail closed.
+                  this class that do not declare their own spec.network. When unset
+                  the effective mode is "none": a Sandbox that says nothing about
+                  networking is fully isolated (ADR-0052, setec#66). Classes whose
+                  workloads must reach external endpoints set this to
+                  "external-only"; classes whose workloads talk to a small declared
+                  destination set use "egress-allow-list".
                 type: string
               defaultResources:
                 description: |-
@@ -161,6 +178,19 @@ spec:
                 - memory
                 - vcpu
                 type: object
+              egressExemptCIDRs:
+                description: |-
+                  EgressExemptCIDRs lists address ranges this class is permitted to
+                  reach even though the operator reserved them cluster-wide via
+                  --reserved-cidrs. Entries are subtracted from the reserved list
+                  before it is rendered into ipBlock.except, so a class may punch a
+                  deliberate, audited hole for a specific in-cluster endpoint (for
+                  example a platform check-in service a connector must reach).
+                  Empty — the expected value for every class that runs tenant
+                  workloads — keeps the full reserved list in force.
+                items:
+                  type: string
+                type: array
               kernelImage:
                 description: |-
                   KernelImage is an optional OCI reference to a custom guest kernel

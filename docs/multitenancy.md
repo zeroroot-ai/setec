@@ -66,23 +66,71 @@ throws away the CR.
 
 ## Network policies
 
-Each `Sandbox.spec.network.mode` maps to a specific NetworkPolicy shape:
+Every Sandbox gets a NetworkPolicy, and the operator writes it **before**
+it creates the Pod. If the policy cannot be applied the Pod is not
+created: the Sandbox stays `Pending` and emits a `NetworkPolicyPending`
+Event. There is no configuration — no mode, no omitted `spec.network`, no
+absent class default — that produces a Sandbox with no policy. An
+unstated posture resolves to `none`.
 
-- `full` (default): no policy generated. The namespace default policy
-  applies.
-- `none`: a NetworkPolicy selecting the Sandbox Pod is created with
-  both `Ingress` and `Egress` PolicyTypes and empty rule lists. Every
-  connection is denied.
-- `egress-allow-list`: the policy denies all ingress, permits DNS
-  (UDP/TCP 53 to any CIDR), and adds one egress rule per
-  `allow` entry (TCP to the requested port against `0.0.0.0/0`).
-  Hostnames in the allow list are recorded as
-  `setec.zeroroot.ai/allow-<port>` annotations but are NOT resolved to CIDRs —
-  operators who need hostname-based filtering should layer a CNI
-  with DNS-aware policy (e.g. Cilium) or pre-resolve.
+Each effective `mode` maps to a specific shape. All three deny ingress.
+
+- `none`: both `Ingress` and `Egress` PolicyTypes with empty rule lists.
+  Every connection is denied, including DNS.
+- `external-only`: egress to `0.0.0.0/0` on **every port**, with the
+  operator's reserved ranges subtracted via `ipBlock.except`, plus DNS to
+  the configured resolvers. This is the posture for workloads that must
+  reach arbitrary external endpoints. The rule is deliberately not
+  port-scoped: confinement here is by address space, not by port.
+- `egress-allow-list`: one TCP rule per `allow` entry, scoped to that
+  entry's port, built on the entry's `cidr` (default `0.0.0.0/0`) with
+  the same reserved-range subtraction, plus DNS to the configured
+  resolvers.
+
+Hostnames in the allow list are recorded as
+`setec.zeroroot.ai/allow-<port>` annotations for audit and are NOT
+resolved to CIDRs. Resolving them in the operator would bake a DNS answer
+into a long-lived object and put a resolver in the reconcile path.
+Callers that genuinely know a destination range set `allow[].cidr`
+instead; operators who want DNS-aware filtering layer a CNI that provides
+it.
+
+### Reserved ranges and resolvers
+
+Two operator flags define the posture:
+
+- `--reserved-cidrs` — address ranges no Sandbox may reach. Subtracted
+  from every permissive rule. Default: RFC1918, link-local
+  (`169.254.0.0/16`, which covers the cloud instance-metadata address),
+  carrier-grade NAT, loopback and multicast. Add this cluster's Service
+  and Pod CIDRs. An empty list is rejected at startup.
+- `--sandbox-resolvers` — the DNS servers Sandboxes may query. The same
+  list is written into each Pod's `dnsConfig` with `dnsPolicy: None`, so
+  a Sandbox resolves names through these addresses rather than through
+  cluster DNS and cannot enumerate in-cluster Services by name.
+
+A `SandboxClass` may re-open specific reserved ranges for its own
+Sandboxes via `spec.egressExemptCIDRs`. An `allow` entry whose `cidr`
+lies entirely inside a still-reserved range is dropped rather than
+rendered, and recorded on the `setec.zeroroot.ai/suppressed-allow`
+annotation.
+
+**Self-hosted installs must retune the reserved list.** If your
+authorised scope is private address space, the default reserved list
+denies exactly what you meant to permit. Narrow `--reserved-cidrs` to
+your own control-plane ranges rather than clearing it.
 
 Network policies are owned by the Sandbox. Deleting the Sandbox
 garbage-collects the policy automatically.
+
+### Enforcement is the CNI's job
+
+A NetworkPolicy is a request to the CNI, not a mechanism in itself. On a
+cluster whose CNI does not implement `networking.k8s.io/v1` — or has
+policy enforcement switched off — every policy in this document renders
+correctly and enforces nothing, and neither the operator nor the Helm
+chart can detect it. Confirm enforcement against the running cluster
+rather than against the manifests.
 
 ## SandboxClass-based policy enforcement
 
@@ -99,7 +147,13 @@ and tenants reference by name. A class carries:
   backends (ignored for gvisor and runc).
 - `defaultResources`, `maxResources`: per-Sandbox resource ceilings.
 - `allowedNetworkModes`: the subset of `Network.mode` values the
-  class permits.
+  class permits. Checked against the *effective* mode, so a Sandbox that
+  omits `spec.network` and inherits `defaultNetworkMode` must satisfy it
+  too.
+- `defaultNetworkMode`, `defaultEgressAllow`: the posture applied when a
+  Sandbox declares no `spec.network`. Unset resolves to `none`.
+- `egressExemptCIDRs`: ranges this class may reach despite the
+  cluster-wide reserved list.
 - `nodeSelector`: additive node-selector merged into every Pod.
 - `tolerations`: additive tolerations appended to every Pod, letting
   Sandboxes schedule onto a tainted NodePool (e.g. a Karpenter pool

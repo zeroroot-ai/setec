@@ -99,7 +99,48 @@ type BuildOptions struct {
 	// dispatcher-specific pod mutations.  Applied as the last step in
 	// BuildWithOptions so dispatchers see the fully-assembled pod.
 	RuntimeSelection *runtimepkg.Selection
+
+	// ResolverIPs are the DNS servers the Sandbox Pod is configured to
+	// use. They are written into spec.dnsConfig.nameservers with
+	// dnsPolicy None, so the workload resolves names through these
+	// addresses instead of cluster DNS and cannot look up in-cluster
+	// Service names. The controller passes the same list it gives
+	// netpol.Config, so the Pod's resolver and the NetworkPolicy's DNS
+	// rule can never disagree.
+	//
+	// Empty leaves the Pod on the cluster default resolver, which is
+	// only appropriate for tests: the operator refuses to start without
+	// a resolver list.
+	ResolverIPs []string
 }
+
+// Hardening constants applied to every Sandbox Pod.
+const (
+	// sandboxUID and sandboxGID are the unprivileged user and group the
+	// workload container runs as. 65532 is the conventional
+	// "nonroot" ID used by distroless base images.
+	sandboxUID int64 = 65532
+	sandboxGID int64 = 65532
+
+	// scratchVolumeName is the writable scratch mount that makes a
+	// read-only root filesystem usable. Tools that expect to write
+	// temporary files get this instead of a writable root.
+	scratchVolumeName = "scratch"
+
+	// scratchMountPath is where the scratch volume is mounted.
+	scratchMountPath = "/tmp"
+)
+
+// sandboxCapabilities are the Linux capabilities added back after
+// dropping ALL.
+//
+// NET_RAW and NET_ADMIN are required by raw-socket network tooling: with
+// them dropped, half-open port scanning and packet crafting stop working
+// and the product cannot do its job. Per ADR-0052 the containment
+// boundary for untrusted execution is the microVM, not the container
+// capability set, so re-adding these two costs nothing that the guest
+// boundary was not already carrying. Everything else stays dropped.
+var sandboxCapabilities = []corev1.Capability{"NET_RAW", "NET_ADMIN"}
 
 // Build transforms a Sandbox custom resource into the corev1.Pod the
 // controller must create. The function is pure: it performs no I/O, makes no
@@ -174,6 +215,21 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		Command:   append([]string(nil), sb.Spec.Command...),
 		Env:       append([]corev1.EnvVar(nil), sb.Spec.Env...),
 		Resources: buildResourceRequirements(sb.Spec.Resources),
+		// A read-only root filesystem needs somewhere to write, or every
+		// tool that touches a temporary file fails.
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      scratchVolumeName,
+			MountPath: scratchMountPath,
+		}},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: new(false),
+			Privileged:               new(false),
+			ReadOnlyRootFilesystem:   new(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  append([]corev1.Capability(nil), sandboxCapabilities...),
+			},
+		},
 	}
 
 	rcName := effectiveRCName
@@ -188,7 +244,37 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			RuntimeClassName: &rcName,
 			RestartPolicy:    corev1.RestartPolicyNever,
 			Containers:       []corev1.Container{container},
+
+			// A Sandbox never calls the Kubernetes API. Mounting the
+			// namespace's default ServiceAccount token would hand the
+			// workload a cluster credential it has no use for, so the
+			// projection is switched off rather than merely unused.
+			AutomountServiceAccountToken: new(false),
+
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   new(true),
+				RunAsUser:      new(sandboxUID),
+				RunAsGroup:     new(sandboxGID),
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			},
+
+			Volumes: []corev1.Volume{{
+				Name:         scratchVolumeName,
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			}},
 		},
+	}
+
+	// Resolve names through the operator-configured resolvers rather than
+	// cluster DNS. This is half of the containment pair: the matching
+	// NetworkPolicy permits port 53 only to these same addresses, so the
+	// workload can neither query nor reach cluster DNS and cannot
+	// enumerate in-cluster Services by name.
+	if len(opts.ResolverIPs) > 0 {
+		pod.Spec.DNSPolicy = corev1.DNSNone
+		pod.Spec.DNSConfig = &corev1.PodDNSConfig{
+			Nameservers: append([]string(nil), opts.ResolverIPs...),
+		}
 	}
 
 	if opts.NodeName != "" {

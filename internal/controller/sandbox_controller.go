@@ -64,6 +64,11 @@ const (
 	// balance between responsiveness and API-server load.
 	runtimeUnavailableRequeue = 60 * time.Second
 
+	// networkPolicyReadBackRequeue is how long the reconciler waits
+	// before retrying when a freshly-created NetworkPolicy is not yet
+	// readable. Short, because the Pod is held back until it is.
+	networkPolicyReadBackRequeue = 2 * time.Second
+
 	// Event reasons. Kept as constants so tests and docs can reference them
 	// by name rather than string-matching fragments of the message.
 	eventReasonRuntimeUnavailable    = "RuntimeUnavailable"
@@ -75,6 +80,7 @@ const (
 	eventReasonConstraintViolated    = "ConstraintViolated"
 	eventReasonTenantMissing         = "TenantLabelMissing"
 	eventReasonNetworkPolicy         = "NetworkPolicyApplied"
+	eventReasonNetworkPolicyPending  = "NetworkPolicyPending"
 	eventReasonSnapshotUnavailable   = "SnapshotUnavailable"
 	eventReasonSnapshotIncompatible  = "SnapshotIncompatible"
 	eventReasonPaused                = "Paused"
@@ -150,6 +156,16 @@ type SandboxReconciler struct {
 
 	// Coordinator orchestrates the operator-side snapshot work.
 	Coordinator *snapshot.Coordinator
+
+	// NetPol is the cluster-wide egress posture every generated
+	// NetworkPolicy is built from: the reserved address ranges no
+	// Sandbox may reach, and the DNS resolvers it may query. The same
+	// resolver list is written into each Pod's dnsConfig so the policy
+	// and the Pod agree by construction.
+	//
+	// Set at construction time from the operator's --reserved-cidrs and
+	// --sandbox-resolvers flags, which are validated at startup.
+	NetPol netpol.Config
 }
 
 // RBAC markers. These are consumed by controller-gen to generate the
@@ -287,8 +303,15 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 // handleMissingPod is called when the owned Pod does not yet exist. It skips
-// creation for terminal Sandboxes and otherwise selects a runtime, creates the
-// Pod, and applies the NetworkPolicy.
+// creation for terminal Sandboxes and otherwise selects a runtime, applies
+// the NetworkPolicy, and only then creates the Pod.
+//
+// The order matters and is the point of this function: a Pod that exists
+// before its policy does can send traffic in the window between the two
+// writes. NetworkPolicy selects by label, so the policy is legal to write
+// while its subject does not yet exist. If the policy cannot be applied the
+// Pod is not created at all — the Sandbox stalls Pending and says why,
+// rather than running unpoliced.
 func (r *SandboxReconciler) handleMissingPod(
 	ctx context.Context,
 	logger logr.Logger,
@@ -307,10 +330,18 @@ func (r *SandboxReconciler) handleMissingPod(
 		}
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("select runtime: %w", selErr))
 	}
-	if res, err := r.createPod(ctx, sb, cls, pinnedNode, sel); err != nil || res.RequeueAfter > 0 {
+	// Policy first. A failure here is fatal to this reconcile: returning
+	// before createPod is what guarantees no Sandbox ever runs without a
+	// NetworkPolicy in place.
+	if res, err := r.applyNetworkPolicy(ctx, sb, cls); err != nil || res.RequeueAfter > 0 {
+		if err != nil {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonNetworkPolicyPending,
+				actionApplyNetworkPolicy,
+				"Pod creation deferred: NetworkPolicy for Sandbox is not in place yet")
+		}
 		return res, err
 	}
-	return r.applyNetworkPolicy(ctx, sb, cls)
+	return r.createPod(ctx, sb, cls, pinnedNode, sel)
 }
 
 // reconcileExistingPod handles the case where the owned Pod already exists:
@@ -629,21 +660,18 @@ func (r *SandboxReconciler) resolveClass(ctx context.Context, sb *setecv1alpha1.
 }
 
 // applyNetworkPolicy generates the desired NetworkPolicy from the
-// Sandbox's network intent (and the resolved SandboxClass default-deny
-// posture) and creates or patches it. A nil desired policy (effective
-// mode=full or network absent with no class default) results in a no-op —
-// the namespace default policy applies. When the resolved class declares
-// spec.defaultNetworkMode=none|egress-allow-list, a Sandbox that does not
-// declare its own spec.network inherits that closed posture so egress is
-// default-deny per class (ADR-0052, setec#66).
+// Sandbox's network intent (and the resolved SandboxClass default posture)
+// and creates or patches it.
+//
+// Every Sandbox gets a policy. There is no mode, and no combination of an
+// absent spec.network with an absent class default, that produces a nil
+// desired policy: netpol resolves an unstated posture to deny-all. The
+// caller relies on that, because it creates the Pod only after this
+// function succeeds.
 func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) (ctrl.Result, error) {
-	desired, err := netpol.GenerateForClass(sb, cls)
+	desired, err := r.NetPol.GenerateForClass(sb, cls)
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("generate NetworkPolicy: %w", err))
-	}
-	if desired == nil {
-		// mode=full or absent network: no policy to manage.
-		return ctrl.Result{}, nil
 	}
 	// Own the NetworkPolicy so it is garbage-collected when the
 	// Sandbox is deleted.
@@ -660,6 +688,14 @@ func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1a
 				return ctrl.Result{}, nil
 			}
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create NetworkPolicy: %w", err))
+		}
+		// Read the policy back before reporting success. A Create that
+		// the API server accepted but that is not yet readable means the
+		// caller must not create the Pod yet, so a read-back miss is a
+		// requeue rather than a pass.
+		readBack := &networkingv1.NetworkPolicy{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, readBack); err != nil {
+			return ctrl.Result{RequeueAfter: networkPolicyReadBackRequeue}, nil //nolint:nilerr // a missing read-back is a retry, not a failure
 		}
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonNetworkPolicy, actionApplyNetworkPolicy,
 			"Created NetworkPolicy %q for Sandbox", desired.Name)
@@ -779,7 +815,10 @@ func (r *SandboxReconciler) createPod(
 		rcName = cls.Spec.RuntimeClassName //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
 	}
 
-	opts := podspec.BuildOptions{NodeName: nodeName}
+	// The Pod's resolvers come from the same config the NetworkPolicy's
+	// DNS rule is built from, so the addresses the workload queries and
+	// the addresses the policy permits are the same list by construction.
+	opts := podspec.BuildOptions{NodeName: nodeName, ResolverIPs: r.NetPol.ResolverIPs}
 	if sel != nil {
 		opts.RuntimeSelection = sel
 	}

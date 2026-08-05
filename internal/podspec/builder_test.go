@@ -585,3 +585,150 @@ func TestWithRuntimeSelection_OverheadOmittedForExternalRuntimeClass(t *testing.
 		t.Errorf("Overhead = %v, want nil for an externally-managed RuntimeClass (admission applies the class's own)", pod.Spec.Overhead)
 	}
 }
+
+// --- Pod hardening ---------------------------------------------------------
+
+// TestBuild_NoServiceAccountTokenMounted guards the credential a Sandbox
+// has no use for. Without AutomountServiceAccountToken=false the kubelet
+// projects the namespace's default ServiceAccount token into the
+// workload, handing untrusted code a cluster credential.
+func TestBuild_NoServiceAccountTokenMounted(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	if pod.Spec.AutomountServiceAccountToken == nil {
+		t.Fatal("AutomountServiceAccountToken is unset; the default SA token would be mounted")
+	}
+	if *pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("AutomountServiceAccountToken = true; the default SA token would be mounted")
+	}
+}
+
+// TestBuild_PodSecurityContext pins the unprivileged identity the
+// workload runs as.
+func TestBuild_PodSecurityContext(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	sc := pod.Spec.SecurityContext
+	if sc == nil {
+		t.Fatal("pod SecurityContext is nil")
+	}
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("RunAsNonRoot is not enforced")
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != sandboxUID {
+		t.Errorf("RunAsUser = %v, want %d", sc.RunAsUser, sandboxUID)
+	}
+	if sc.RunAsGroup == nil || *sc.RunAsGroup != sandboxGID {
+		t.Errorf("RunAsGroup = %v, want %d", sc.RunAsGroup, sandboxGID)
+	}
+	if sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("SeccompProfile = %v, want RuntimeDefault", sc.SeccompProfile)
+	}
+}
+
+// TestBuild_ContainerSecurityContext pins the container-level hardening
+// AND the two capabilities that must survive it. Dropping NET_RAW or
+// NET_ADMIN would break raw-socket network tooling, so this test fails in
+// both directions on purpose.
+func TestBuild_ContainerSecurityContext(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	sc := pod.Spec.Containers[0].SecurityContext
+	if sc == nil {
+		t.Fatal("container SecurityContext is nil")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("AllowPrivilegeEscalation is not disabled")
+	}
+	if sc.Privileged == nil || *sc.Privileged {
+		t.Error("Privileged is not disabled")
+	}
+	if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+		t.Error("ReadOnlyRootFilesystem is not enforced")
+	}
+	if sc.Capabilities == nil {
+		t.Fatal("Capabilities is nil; the default capability set would apply")
+	}
+	if diff := cmp.Diff([]corev1.Capability{"ALL"}, sc.Capabilities.Drop); diff != "" {
+		t.Errorf("Capabilities.Drop mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(sandboxCapabilities, sc.Capabilities.Add); diff != "" {
+		t.Errorf("Capabilities.Add mismatch (-want +got):\n%s\n"+
+			"NET_RAW and NET_ADMIN must survive the drop or raw-socket tooling stops working", diff)
+	}
+}
+
+// TestBuild_ScratchVolumeForReadOnlyRoot checks the writable mount that
+// makes a read-only root filesystem usable. Without it every tool that
+// writes a temporary file fails.
+func TestBuild_ScratchVolumeForReadOnlyRoot(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == scratchVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatalf("no %q volume; a read-only root filesystem leaves nowhere to write", scratchVolumeName)
+	}
+	if vol.EmptyDir == nil {
+		t.Errorf("%q volume is not an emptyDir", scratchVolumeName)
+	}
+
+	var mounted bool
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == scratchVolumeName && m.MountPath == scratchMountPath {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("%q is not mounted at %s", scratchVolumeName, scratchMountPath)
+	}
+}
+
+// TestBuild_ResolverIPsSetDNSConfig covers the half of DNS containment
+// that lives on the Pod. With dnsPolicy None and explicit nameservers the
+// workload resolves through the operator's resolvers instead of cluster
+// DNS, so it cannot look up in-cluster Service names.
+func TestBuild_ResolverIPsSetDNSConfig(t *testing.T) {
+	t.Parallel()
+
+	pod, err := BuildWithOptions(newSandbox(), defaultRuntimeClass, BuildOptions{
+		ResolverIPs: []string{"1.1.1.1", "8.8.8.8"},
+	})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+
+	if pod.Spec.DNSPolicy != corev1.DNSNone {
+		t.Errorf("DNSPolicy = %q, want None; the Pod would use cluster DNS", pod.Spec.DNSPolicy)
+	}
+	if pod.Spec.DNSConfig == nil {
+		t.Fatal("DNSConfig is nil")
+	}
+	if diff := cmp.Diff([]string{"1.1.1.1", "8.8.8.8"}, pod.Spec.DNSConfig.Nameservers); diff != "" {
+		t.Errorf("nameservers mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestBuild_NoResolverIPsLeavesDNSAtDefault documents the test-only path:
+// an empty resolver list leaves cluster DNS in place. The operator
+// refuses to start without resolvers, so this shape never reaches a
+// cluster.
+func TestBuild_NoResolverIPsLeavesDNSAtDefault(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	if pod.Spec.DNSPolicy != "" {
+		t.Errorf("DNSPolicy = %q, want empty (cluster default)", pod.Spec.DNSPolicy)
+	}
+	if pod.Spec.DNSConfig != nil {
+		t.Errorf("DNSConfig = %+v, want nil", pod.Spec.DNSConfig)
+	}
+}

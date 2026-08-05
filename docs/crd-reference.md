@@ -54,11 +54,12 @@ status:
 | `resources` | object | yes | — | CPU and memory budget for the microVM; see [`spec.resources`](#specresources) below. |
 | `resources.vcpu` | int32 (`1`–`32`) | yes | — | Number of virtual CPUs allocated to the microVM. |
 | `resources.memory` | resource.Quantity | yes | — | RAM allocated to the microVM (e.g. `512Mi`, `2Gi`). |
-| `network` | object | no | `{mode: full}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
-| `network.mode` | enum `full` \| `egress-allow-list` \| `none` | yes (when `network` set) | `full` | Egress posture. Enforcement of `egress-allow-list` and `none` is deferred to a later phase; the field is accepted today. |
+| `network` | object | no | class default, else `{mode: none}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
+| `network.mode` | enum `external-only` \| `egress-allow-list` \| `none` | yes (when `network` set) | `none` | Egress posture. Every mode is enforced by a generated NetworkPolicy. |
 | `network.allow` | []object | no | `[]` | Permitted egress destinations. Meaningful only when `network.mode: egress-allow-list`. |
-| `network.allow[].host` | string (`minLength: 1`) | yes | — | DNS name or IP address permitted as an egress target. |
+| `network.allow[].host` | string (`minLength: 1`) | yes | — | DNS name or IP address permitted as an egress target. Recorded as an annotation for audit; NetworkPolicy cannot match a DNS name, so it does not narrow the rule by itself. |
 | `network.allow[].port` | int32 (`1`–`65535`) | yes | — | Destination TCP port permitted for this host. |
+| `network.allow[].cidr` | string | no | `0.0.0.0/0` | Address block this entry is pinned to. Set it when the destination range is genuinely known; it replaces the `0.0.0.0/0` base for that rule. |
 | `lifecycle` | object | no | `{}` | Runtime constraints applied to the Sandbox. |
 | `lifecycle.timeout` | Go duration string (`metav1.Duration`) | no | unset (unbounded) | Maximum wall-clock runtime. When exceeded, the controller terminates the Pod and marks the Sandbox `Failed` with reason `Timeout`. Examples: `30m`, `8h`. |
 
@@ -70,14 +71,54 @@ Firecracker microVM's CPU and memory envelope.
 
 ### `spec.network`
 
-All three modes (`full`, `egress-allow-list`, `none`) are enforced by a
-generated NetworkPolicy owned by the Sandbox. `full` creates no
-NetworkPolicy (default pod networking). `egress-allow-list` creates a
-policy that permits egress only to the declared `network.allow`
-entries plus cluster DNS. `none` creates a policy with empty ingress
-and empty egress rules, isolating the Sandbox from every endpoint
-including cluster DNS. Sandbox deletion garbage-collects the
-NetworkPolicy via its OwnerReference.
+Every Sandbox gets a NetworkPolicy. There is no mode, and no combination
+of an omitted `spec.network` with an absent SandboxClass default, that
+leaves a Sandbox unpoliced: an unstated posture resolves to `none`. The
+operator writes the policy **before** it creates the Pod, and if the
+policy cannot be applied the Pod is not created at all.
+
+All three modes deny ingress — nothing dials into a Sandbox.
+
+| Mode | Egress |
+|------|--------|
+| `external-only` | `0.0.0.0/0` on **all ports**, with the operator's reserved ranges subtracted via `ipBlock.except`. Public destinations stay reachable on arbitrary ports; the cluster's own address space does not. |
+| `egress-allow-list` | One TCP rule per `allow` entry, scoped to that entry's port, on the entry's `cidr` (default `0.0.0.0/0`) with the same reserved-range subtraction. |
+| `none` | Nothing. Empty ingress and egress rule lists with both policy types listed. |
+
+`external-only` and `egress-allow-list` additionally permit UDP and TCP 53
+to exactly the resolvers the operator was started with (`--sandbox-resolvers`).
+The Pod itself is configured with `dnsPolicy: None` and those same
+addresses, so a Sandbox resolves names through them rather than through
+cluster DNS and cannot enumerate in-cluster Services by name.
+
+The reserved ranges come from the operator's `--reserved-cidrs` flag. The
+default covers private (RFC1918), link-local — which includes the cloud
+instance-metadata address — carrier-grade NAT, loopback and multicast
+space. A cluster operator adds their Service and Pod CIDRs.
+
+Two consequences worth stating plainly:
+
+- **Self-hosted installs must retune the reserved list.** If the
+  authorised scope for your workloads *is* private address space, the
+  default reserved list denies exactly what you meant to allow. Narrow
+  `--reserved-cidrs` to your own control-plane ranges rather than
+  clearing it; an empty list is rejected at startup.
+- **Reserved ranges are enforced, not advisory.** An `allow` entry whose
+  `cidr` falls entirely inside a reserved range is dropped rather than
+  rendered, and the dropped entry is recorded on the
+  `setec.zeroroot.ai/suppressed-allow` annotation. A SandboxClass may
+  deliberately re-open a range for its own Sandboxes via
+  `spec.egressExemptCIDRs`.
+
+Rules are IPv4. Traffic that matches no rule is denied, so on a
+dual-stack cluster IPv6 egress is denied outright.
+
+Sandbox deletion garbage-collects the NetworkPolicy via its
+OwnerReference.
+
+Enforcement is the CNI's job. A NetworkPolicy on a cluster whose CNI does
+not implement `networking.k8s.io/v1` is inert, and nothing in this
+operator can detect that. Verify enforcement on the cluster itself.
 
 ### `spec.lifecycle.timeout`
 
@@ -173,8 +214,21 @@ Administrators author classes; tenants reference them by name in
   agent prefetches (kata-fc / kata-qemu only; ignored for gvisor / runc).
 - `spec.defaultResources`, `spec.maxResources` — `{vcpu, memory}`
   blocks that set the default and ceiling for tenant Sandboxes.
-- `spec.allowedNetworkModes` — subset of `[full, egress-allow-list, none]`.
-  Empty list means all modes allowed.
+- `spec.allowedNetworkModes` — subset of
+  `[external-only, egress-allow-list, none]`. Empty list means all modes
+  allowed. The check runs against the **effective** mode, so a Sandbox
+  that omits `spec.network` and inherits `defaultNetworkMode` must
+  satisfy this list too.
+- `spec.defaultNetworkMode` — the posture applied to Sandboxes in this
+  class that declare no `spec.network`. Unset resolves to `none`.
+- `spec.defaultEgressAllow` — class-level allow-list applied with
+  `defaultNetworkMode: egress-allow-list`.
+- `spec.egressExemptCIDRs` — ranges this class may reach despite the
+  operator's cluster-wide `--reserved-cidrs`. Entries are subtracted
+  from the reserved list before it is rendered into `ipBlock.except`.
+  Use it only for a specific in-cluster endpoint a class genuinely
+  needs; every entry re-opens address space for every Sandbox in the
+  class.
 - `spec.nodeSelector` — additive per-Sandbox node selector, merged with
   the backend's own `NodeAffinity` from `setec.zeroroot.ai/runtime.<backend>=true`.
 - `spec.tolerations` — additive `[]corev1.Toleration` appended to every
