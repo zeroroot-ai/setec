@@ -270,8 +270,11 @@ render if the list names the operator's own namespace.
 
 The baseline does not stop a Pod being created — that is RBAC — and it
 does not apply to `hostNetwork: true` Pods, which are outside
-NetworkPolicy enforcement. Set `pod-security.kubernetes.io/enforce` on
-the namespace for that.
+NetworkPolicy enforcement. Pod Security Admission does not close that
+either: `baseline`, the weakest level forbidding `hostNetwork`, also
+forbids the `NET_RAW`/`NET_ADMIN` that Sandbox Pods add on purpose, so
+enforcing it rejects every legitimate Sandbox. That case needs an
+admission policy on Pod CREATE, which this chart does not ship.
 
 None of this enforces anything unless the cluster's CNI implements
 `networking.k8s.io/v1` NetworkPolicy. Verify that against the running

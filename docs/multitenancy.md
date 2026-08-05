@@ -164,8 +164,17 @@ Scope, stated precisely. The baseline does **not**:
   (see below);
 - apply to a Pod with `hostNetwork: true`, which runs in the node's
   network namespace and is outside NetworkPolicy enforcement entirely.
-  Set `pod-security.kubernetes.io/enforce` on the namespace to prevent
-  that; the operator does not own namespace labels.
+
+  **Pod Security Admission is not a drop-in answer to that**, and it is
+  worth stating rather than leaving as an exercise. PSA `baseline` — the
+  weakest level that forbids `hostNetwork` — also forbids adding
+  `NET_RAW` and `NET_ADMIN`, which Sandbox Pods add on purpose so
+  raw-socket tooling works. So `pod-security.kubernetes.io/enforce:
+  baseline` on a Sandbox namespace rejects every legitimate Sandbox
+  alongside the hostNetwork Pod. Closing the hostNetwork case needs a
+  policy engine that can express "no hostNetwork, but these capabilities
+  are fine" — an admission policy on Pod CREATE, not a PSA level. The
+  operator does not own namespace labels and does not set them.
 
 No label-based exemption is offered, deliberately: any label an exempt
 Pod could wear, a Pod written by an adversary could wear too. A
