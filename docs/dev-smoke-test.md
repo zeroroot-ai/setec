@@ -355,6 +355,12 @@ In addition to the Phase 1 prerequisites:
 
 ## Install
 
+`sandboxNamespaces` namespaces must already exist before install — create
+them first: `kubectl create ns tenant-a tenant-b && kubectl label ns
+tenant-a setec.zeroroot.ai/tenant=tenant-a && kubectl label ns tenant-b
+setec.zeroroot.ai/tenant=tenant-b` (this is the same step Scenario P1
+below asks for; doing it here just reorders it ahead of install).
+
 ```bash
 helm upgrade --install setec charts/setec \
   --set multiTenancy.enabled=true \
@@ -365,8 +371,14 @@ helm upgrade --install setec charts/setec \
   --set webhook.certManager.enabled=true \
   --set frontend.enabled=true \
   --set observability.enabled=true \
-  --set sandboxClasses.enabled=true
+  --set sandboxClasses.enabled=true \
+  --set 'sandboxNamespaces={tenant-a,tenant-b}'
 ```
+
+`sandboxNamespaces` must list every namespace a Sandbox runs in (here,
+the two tenant namespaces created in Scenario P1) — the chart refuses
+to render with it empty. See `charts/setec/README.md` "Sandbox egress
+posture".
 
 ## Scenario P1: Multi-tenant ResourceQuota
 

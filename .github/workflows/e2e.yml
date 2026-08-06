@@ -220,10 +220,12 @@ jobs:
             --set "image.tag=${MANAGER_IMAGE##*:}" \
             --set "runtimeAgent.image.repository=${RUNTIME_AGENT_IMAGE%:*}" \
             --set "runtimeAgent.image.tag=${RUNTIME_AGENT_IMAGE##*:}" \
-            --set defaultClass.enabled=false \
+            --set sandboxClasses.enabled=false \
             --set runtimes.kata-fc.install=false \
             --set runtimes.kata-qemu.enabled=true \
             --set runtimes.kata-qemu.install=false \
+            --set webhook.enabled=false \
+            --set rbac.allowClusterWideSandboxWrite=true \
             "${overhead_args[@]}" \
             --wait --timeout 5m
           # Notes on the values above:
@@ -231,11 +233,26 @@ jobs:
           #    pullPolicy stays the chart default (IfNotPresent) — unlike the
           #    old bare-metal model there IS a registry to pull from, so no
           #    docker-save/ctr-import dance and no pullPolicy=Never.
-          #  - defaultClass.enabled=false: .Values.defaultClass.name is NOT
-          #    release-prefixed and would collide with a live staging release
-          #    once deploy#1080 flips setec on. The round-trip creates its own
-          #    run-scoped SandboxClass below.
-          #  - webhook stays disabled (chart default) — see the header note.
+          #  - sandboxClasses.enabled=false (renamed from defaultClass by
+          #    setec#157): the chart-shipped classes are NOT release-prefixed
+          #    and would collide with a live staging release once deploy#1080
+          #    flips setec on. The round-trip creates its own run-scoped
+          #    SandboxClass below.
+          #  - webhook.enabled=false is now an explicit override, not the
+          #    chart default — setec#157 flipped the default to true. Left
+          #    at true here a throwaway ValidatingWebhookConfiguration would
+          #    be CLUSTER-scoped with failurePolicy=Fail and fail closed
+          #    every Sandbox/SandboxClass write in the shared staging
+          #    cluster if a run is cancelled before cleanup — see the header
+          #    note.
+          #  - rbac.allowClusterWideSandboxWrite=true: setec#157 also made
+          #    sandboxNamespaces (Sandbox-only namespaces, RBAC-bound and
+          #    default-denied) required unless this is set, and the chart
+          #    refuses to list the operator's own namespace there. This
+          #    shadow install puts the operator and its Sandbox in the SAME
+          #    throwaway namespace, so sandboxNamespaces cannot express it;
+          #    this is the documented deliberate opt-out, scoped to a
+          #    single ephemeral namespace deleted at job end.
 
       - name: Ensure a kata-qemu SandboxClass exists (throwaway, this run only)
         # SandboxClass is CLUSTER-scoped (api/v1alpha1/sandboxclass_types.go:
