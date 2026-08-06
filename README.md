@@ -15,7 +15,7 @@
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <a href="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec"><img alt="OSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec/badge"></a>
   <a href="https://github.com/zeroroot-ai/setec/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/zeroroot-ai/setec/codeql.yml?branch=main&label=codeql"></a>
-  <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-1.28%2B-blue">
+  <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-1.30%2B-blue">
 </p>
 
 ---
@@ -53,7 +53,7 @@ helm install setec ./charts/setec \
   --create-namespace
 ```
 
-Prerequisites: a Kubernetes 1.28+ cluster plus at least one runtime backend's node-level requirements:
+Prerequisites: a Kubernetes 1.30+ cluster plus at least one runtime backend's node-level requirements:
 
 - `kata-fc` — worker node with `/dev/kvm` + [Kata Containers](https://katacontainers.io/docs/how-to/how-to-use-kata-containers-with-kata-deploy/) installed so the `kata-fc` `RuntimeClass` is present. Strongest isolation; requires bare metal or nested-virt-capable nodes.
 - `kata-qemu` — same KVM requirement; uses QEMU instead of Firecracker. Falls back to TCG where hardware virt is unavailable.

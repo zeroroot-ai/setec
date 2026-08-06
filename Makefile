@@ -146,6 +146,14 @@ helm-lint: ## Lint the Setec Helm chart (requires helm CLI on PATH).
 	}
 	$(HELM) lint $(HELM_CHART_DIR)
 
+.PHONY: helm-verify
+helm-verify: ## Render the chart and assert its containment controls are present.
+	@command -v $(HELM) >/dev/null 2>&1 || { \
+		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
+		exit 1; \
+	}
+	HELM="$(HELM)" ./hack/verify-chart-security.sh $(HELM_CHART_DIR)
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/

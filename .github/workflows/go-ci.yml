@@ -269,6 +269,17 @@ jobs:
             --set sandboxNamespaces={sandbox-workloads} \
             --set webhook.certManager.enabled=true >/dev/null
 
+      - name: Helm containment-control assertions
+        # A render that merely succeeds does not prove the controls are in
+        # the output. This asserts the objects that provide containment are
+        # actually there and still say what they are supposed to say --
+        # the regression it catches is a chart that installs cleanly and
+        # enforces nothing.
+        # Invoked directly rather than via `make helm-verify`: this job has
+        # no Go toolchain, and the Makefile shells out to `go env` while it
+        # parses.
+        run: ./hack/verify-chart-security.sh charts/setec
+
       - name: Helm template (Phase 3 enabled)
         # Catches regressions in Phase 3 chart extensions without
         # requiring a live cluster. mTLS is mandatory so the tls
