@@ -56,6 +56,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	classpkg "github.com/zeroroot-ai/setec/internal/class"
 	metricspkg "github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/netpol"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	snapshotpkg "github.com/zeroroot-ai/setec/internal/snapshot"
 )
@@ -84,6 +85,14 @@ var (
 	// dispatcher registry and config wired to the SandboxReconciler.
 	testRuntimeRegistry *runtimepkg.Registry
 	testRuntimeCfg      *runtimepkg.RuntimeConfig
+
+	// testNetPolConfig is the egress posture the envtest reconciler
+	// generates policies from. Scenarios assert against these exact
+	// values, so keep them stable.
+	testNetPolConfig = netpol.Config{
+		ReservedCIDRs: []string{"10.0.0.0/8", "169.254.0.0/16"},
+		ResolverIPs:   []string{"1.1.1.1"},
+	}
 
 	// Phase 2 dependencies that scenarios may inspect directly.
 	testClassResolver   *classpkg.Resolver
@@ -281,6 +290,11 @@ func TestMain(m *testing.M) {
 		MetricsCollector: testCollectors,
 		// Phase 3 dependency.
 		Coordinator: testCoordinator,
+		// The egress posture the envtest reconciler builds policies from.
+		NetPol: testNetPolConfig,
+		// On by default in the operator, so envtest exercises the same
+		// path production takes.
+		NamespaceBaselineDeny: true,
 		// Tracer and MultiTenancyEnabled stay at zero values — individual
 		// scenarios that need them can construct their own reconciler.
 	}

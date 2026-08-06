@@ -260,8 +260,9 @@ spec:
                 type: object
               network:
                 description: |-
-                  Network describes the egress policy. Optional; defaults to
-                  NetworkMode=full when omitted.
+                  Network describes the egress policy. Optional; when omitted the
+                  SandboxClass default applies, and when the class states no default
+                  the Sandbox resolves to NetworkMode=none.
                 properties:
                   allow:
                     description: |-
@@ -272,9 +273,23 @@ spec:
                         NetworkAllow describes a single permitted egress destination when
                         NetworkMode is egress-allow-list.
                       properties:
+                        cidr:
+                          description: |-
+                            CIDR optionally pins this entry to an address block. When set it
+                            replaces the default 0.0.0.0/0 base for this rule, which is how a
+                            caller that genuinely knows the destination address range (for
+                            example an in-cluster platform endpoint that the operator's
+                            reserved ranges would otherwise subtract) narrows the rule to
+                            exactly that range. When empty the rule keeps the 0.0.0.0/0 base
+                            minus the operator's reserved ranges.
+                          type: string
                         host:
-                          description: Host is the DNS name or IP address permitted
-                            as an egress target.
+                          description: |-
+                            Host is the DNS name or IP address permitted as an egress target.
+                            Kubernetes NetworkPolicy cannot match on a DNS name, so Host is
+                            recorded as declared intent on an annotation for audit. Set CIDR
+                            when the destination must actually be narrowed at the packet
+                            level.
                           minLength: 1
                           type: string
                         port:
@@ -290,10 +305,10 @@ spec:
                       type: object
                     type: array
                   mode:
-                    default: full
+                    default: none
                     description: Mode selects the egress posture for the Sandbox.
                     enum:
-                    - full
+                    - external-only
                     - egress-allow-list
                     - none
                     type: string

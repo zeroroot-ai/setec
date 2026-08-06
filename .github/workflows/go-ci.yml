@@ -258,27 +258,42 @@ jobs:
         run: helm lint charts/setec --strict
 
       - name: Helm template (render check, default values)
-        # Ensures every template renders against default values without error.
-        run: helm template setec charts/setec >/dev/null
+        # Ensures every template renders without error given the two
+        # settings the chart deliberately ships unset so a genuinely
+        # unconfigured install fails loudly rather than rendering an
+        # insecure default (README "Sandbox egress posture"): a webhook
+        # CA source, and the Sandbox namespace list. Every other value
+        # here is the chart default.
+        run: |
+          helm template setec charts/setec \
+            --set sandboxNamespaces={sandbox-workloads} \
+            --set webhook.certManager.enabled=true >/dev/null
 
       - name: Helm template (Phase 3 enabled)
         # Catches regressions in Phase 3 chart extensions without
         # requiring a live cluster. mTLS is mandatory so the tls
-        # Secret names are supplied explicitly.
+        # Secret names are supplied explicitly; sandboxNamespaces and a
+        # webhook CA source are required the same way as above.
         run: |
           helm template setec charts/setec \
             --set snapshots.enabled=true \
             --set nodeAgent.enabled=true \
-            --set webhook.enabled=true >/dev/null
+            --set webhook.enabled=true \
+            --set webhook.certManager.enabled=true \
+            --set sandboxNamespaces={sandbox-workloads} >/dev/null
 
       - name: Helm template (frontend enabled with mTLS)
         # The frontend requires both TLS Secret names; without them the
         # chart refuses to render. This gate exercises that path.
+        # sandboxNamespaces and a webhook CA source are required the
+        # same way as the default-values render check above.
         run: |
           helm template setec charts/setec \
             --set frontend.enabled=true \
             --set frontend.tlsCertSecretName=frontend-tls \
-            --set frontend.tlsClientCASecretName=frontend-ca >/dev/null
+            --set frontend.tlsClientCASecretName=frontend-ca \
+            --set webhook.certManager.enabled=true \
+            --set sandboxNamespaces={sandbox-workloads} >/dev/null
 
   # ---- docker build validity (fast tier / pull_request) ----
   # Expensive (image build) but no push and no deploy -- a compile-validity

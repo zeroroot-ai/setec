@@ -75,8 +75,17 @@ type SandboxClassRuntime struct {
 type SandboxClassSpec struct {
 	// Deprecated: use Runtime.Backend instead.
 	// VMM selects the virtual machine monitor targeted by this class.
-	// +required
-	VMM VMM `json:"vmm"`
+	//
+	// Optional. It was previously required, which made every class that
+	// states its isolation the current way — through Runtime.Backend —
+	// unadmittable: the API server rejected it with "spec.vmm: Required
+	// value", so the chart's own SandboxClasses could not be applied, no
+	// class resolved, and every Sandbox fell back to deny-all. A field
+	// that is deprecated cannot also be mandatory. When it is empty the
+	// operator reads Runtime.Backend; when both are empty the operator's
+	// configured default backend applies.
+	// +optional
+	VMM VMM `json:"vmm,omitempty"`
 
 	// Deprecated: use Runtime.Backend instead.
 	// RuntimeClassName optionally overrides the operator-wide default
@@ -122,16 +131,26 @@ type SandboxClassSpec struct {
 	AllowedNetworkModes []NetworkMode `json:"allowedNetworkModes,omitempty"`
 
 	// DefaultNetworkMode is the egress posture applied to Sandboxes in
-	// this class that do not declare their own spec.network. Setting
-	// this to "none" or "egress-allow-list" makes egress DEFAULT-DENY
-	// for the class: a Sandbox that says nothing about networking is
-	// isolated rather than granted unrestricted egress (ADR-0052,
-	// setec#66). When unset the operator preserves the historical
-	// default of "full" (unrestricted) for back-compat; operators
-	// hardening a class set this to "none" to fail closed.
-	// +kubebuilder:validation:Enum=full;egress-allow-list;none
+	// this class that do not declare their own spec.network. When unset
+	// the effective mode is "none": a Sandbox that says nothing about
+	// networking is fully isolated (ADR-0052, setec#66). Classes whose
+	// workloads must reach external endpoints set this to
+	// "external-only"; classes whose workloads talk to a small declared
+	// destination set use "egress-allow-list".
+	// +kubebuilder:validation:Enum=external-only;egress-allow-list;none
 	// +optional
 	DefaultNetworkMode NetworkMode `json:"defaultNetworkMode,omitempty"`
+
+	// EgressExemptCIDRs lists address ranges this class is permitted to
+	// reach even though the operator reserved them cluster-wide via
+	// --reserved-cidrs. Entries are subtracted from the reserved list
+	// before it is rendered into ipBlock.except, so a class may punch a
+	// deliberate, audited hole for a specific in-cluster endpoint (for
+	// example a platform check-in service a connector must reach).
+	// Empty — the expected value for every class that runs tenant
+	// workloads — keeps the full reserved list in force.
+	// +optional
+	EgressExemptCIDRs []string `json:"egressExemptCIDRs,omitempty"`
 
 	// DefaultEgressAllow is the class-level egress allowlist applied
 	// when DefaultNetworkMode is "egress-allow-list" and a Sandbox does

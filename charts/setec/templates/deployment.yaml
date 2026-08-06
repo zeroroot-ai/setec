@@ -58,6 +58,14 @@ spec:
             {{- if .Values.webhook.enabled }}
             - --webhook-enabled
             {{- end }}
+            {{- if not .Values.netpol.reservedCIDRs }}
+            {{- fail "netpol.reservedCIDRs must not be empty: an empty reserved list gives every Sandbox unrestricted egress. Narrow it for self-hosted installs, do not clear it." }}
+            {{- end }}
+            {{- if not .Values.netpol.resolvers }}
+            {{- fail "netpol.resolvers must not be empty: Sandboxes resolve names through these addresses instead of cluster DNS." }}
+            {{- end }}
+            - --reserved-cidrs={{ join "," .Values.netpol.reservedCIDRs }}
+            - --sandbox-resolvers={{ join "," .Values.netpol.resolvers }}
             {{- if .Values.snapshots.enabled }}
             - --snapshots-enabled
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}

@@ -233,6 +233,11 @@ func (in *SandboxClassSpec) DeepCopyInto(out *SandboxClassSpec) {
 		*out = make([]NetworkMode, len(*in))
 		copy(*out, *in)
 	}
+	if in.EgressExemptCIDRs != nil {
+		in, out := &in.EgressExemptCIDRs, &out.EgressExemptCIDRs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.DefaultEgressAllow != nil {
 		in, out := &in.DefaultEgressAllow, &out.DefaultEgressAllow
 		*out = make([]NetworkAllow, len(*in))

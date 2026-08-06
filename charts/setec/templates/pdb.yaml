@@ -1,0 +1,19 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# The operator serves admission for every Sandbox launch. With
+# webhook.failurePolicy: Fail, an eviction that takes out every replica
+# at once fails every launch until one comes back — so keep one running
+# through voluntary disruption.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "setec.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+{{- end }}

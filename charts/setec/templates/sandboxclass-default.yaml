@@ -1,10 +1,23 @@
-{{- if .Values.defaultClass.enabled -}}
+{{- if .Values.sandboxClasses.enabled }}
+{{- $defaults := 0 }}
+{{- range .Values.sandboxClasses.classes }}
+{{- if .spec.default }}{{ $defaults = add1 $defaults }}{{ end }}
+{{- end }}
+{{- if gt $defaults 1 }}
+{{- fail "sandboxClasses.classes declares more than one class with spec.default: true; the resolver refuses to default until the ambiguity is resolved." }}
+{{- end }}
+{{- range $class := .Values.sandboxClasses.classes }}
+{{- if not $class.spec.defaultNetworkMode }}
+{{- fail (printf "SandboxClass %q sets no spec.defaultNetworkMode. A Sandbox that declares no spec.network would resolve to deny-all; state the posture explicitly." $class.name) }}
+{{- end }}
+---
 apiVersion: setec.zeroroot.ai/v1alpha1
 kind: SandboxClass
 metadata:
-  name: {{ .Values.defaultClass.name }}
+  name: {{ $class.name }}
   labels:
-    {{- include "setec.labels" . | nindent 4 }}
+    {{- include "setec.labels" $ | nindent 4 }}
 spec:
-{{- toYaml .Values.defaultClass.spec | nindent 2 }}
+{{- toYaml $class.spec | nindent 2 }}
+{{- end }}
 {{- end }}

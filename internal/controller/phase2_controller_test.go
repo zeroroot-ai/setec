@@ -23,6 +23,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -221,30 +222,119 @@ func TestPhase2_NetworkPolicyEgressAllowList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: mode=full produces no NetworkPolicy, and a later switch to
-// mode=none creates one, so the reconciler handles transitions.
+// Scenario: a Sandbox that declares no network block still gets a policy.
+//
+// This replaces the former "mode=full produces no NetworkPolicy" case.
+// Omitting spec.network no longer means "unpoliced"; it resolves to
+// deny-all, and the Pod does not exist until the policy does.
 // ---------------------------------------------------------------------------
 
-func TestPhase2_NetworkPolicyFullModeNoPolicy(t *testing.T) {
+func TestPhase2_NetworkPolicyAlwaysGenerated(t *testing.T) {
 	g := NewWithT(t)
-	ns := newNamespace(t, "p2-netpol-full")
+	ns := newNamespace(t, "p2-netpol-default")
 
-	sb := newSandbox(ns, "unrestricted", func(s *setecv1alpha1.Sandbox) {
-		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeFull}
+	sb := newSandbox(ns, "unstated", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = nil
 	})
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	_ = waitForPod(g, ns, sb.Name)
 
-	// Give the reconciler a reasonable window; then confirm no
-	// NetworkPolicy was ever created for this Sandbox.
-	g.Consistently(func() bool {
-		np := &networkingv1.NetworkPolicy{}
-		err := testClient.Get(testCtx, types.NamespacedName{
+	np := &networkingv1.NetworkPolicy{}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, types.NamespacedName{
 			Namespace: ns,
 			Name:      sb.Name + netpol.NetworkPolicySuffix,
 		}, np)
-		return apierrors.IsNotFound(err)
-	}, "2s", convergeInterval).Should(BeTrue())
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	g.Expect(np.Spec.PolicyTypes).To(ConsistOf(
+		networkingv1.PolicyTypeIngress,
+		networkingv1.PolicyTypeEgress,
+	))
+	g.Expect(np.Spec.Egress).To(BeEmpty(), "an unstated posture must deny egress, not permit it")
+	g.Expect(np.Spec.Ingress).To(BeEmpty())
+
+	// The Pod is created only after the policy exists.
+	_ = waitForPod(g, ns, sb.Name)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: the policy exists before the Pod does.
+//
+// Ordering is the whole point: a Pod that is admitted before its policy is
+// written can send traffic in the gap between the two writes.
+// ---------------------------------------------------------------------------
+
+func TestPhase2_NetworkPolicyPrecedesPod(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-netpol-order")
+
+	sb := newSandbox(ns, "ordered", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	// Whenever the Pod is observable, the policy must already be there.
+	// Polling both and asserting the implication catches an inverted
+	// order without depending on reconcile timing.
+	g.Eventually(func() bool {
+		if _, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix); err != nil {
+			return false
+		}
+		np := &networkingv1.NetworkPolicy{}
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns,
+			Name:      sb.Name + netpol.NetworkPolicySuffix,
+		}, np) == nil
+	}, convergeTimeout, convergeInterval).Should(BeTrue())
+
+	g.Consistently(func() bool {
+		_, podErr := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
+		if podErr != nil {
+			// No Pod yet is fine; the invariant only binds once it exists.
+			return true
+		}
+		np := &networkingv1.NetworkPolicy{}
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns,
+			Name:      sb.Name + netpol.NetworkPolicySuffix,
+		}, np) == nil
+	}, "2s", convergeInterval).Should(BeTrue(), "a Pod existed without its NetworkPolicy")
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: external-only reaches public address space but not reserved
+// ranges. This is the posture a scanning workload runs under, so the test
+// asserts both halves — the permissive half as much as the restrictive one.
+// ---------------------------------------------------------------------------
+
+func TestPhase2_NetworkPolicyExternalOnlyShape(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-netpol-ext")
+
+	sb := newSandbox(ns, "scanner", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	np := &networkingv1.NetworkPolicy{}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns,
+			Name:      sb.Name + netpol.NetworkPolicySuffix,
+		}, np)
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	var public *networkingv1.IPBlock
+	for _, rule := range np.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil && peer.IPBlock.CIDR == netpol.AllCIDR {
+				public = peer.IPBlock
+				g.Expect(rule.Ports).To(BeEmpty(), "arbitrary destination ports must stay reachable")
+			}
+		}
+	}
+	g.Expect(public).ToNot(BeNil(), "external targets must remain reachable")
+	g.Expect(public.Except).To(ConsistOf(testNetPolConfig.ReservedCIDRs))
 }
 
 // ---------------------------------------------------------------------------
@@ -360,4 +450,136 @@ func TestPhase2_SandboxClassControllerRuns(t *testing.T) {
 		return testClient.Get(testCtx, types.NamespacedName{Name: cls.Name},
 			&setecv1alpha1.SandboxClass{})
 	}, convergeTimeout, convergeInterval).Should(Succeed())
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: the namespace-wide baseline deny.
+//
+// Every other policy the operator writes selects on the
+// setec.zeroroot.ai/sandbox label, so it confines Pods the operator built.
+// A Pod created in the namespace by any other route wears no such label,
+// is selected by no policy, and is therefore unrestricted. These tests
+// assert the one policy that does not depend on that labelling.
+// ---------------------------------------------------------------------------
+
+func TestPhase2_NamespaceBaselineSelectsEveryPod(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-baseline")
+
+	sb := newSandbox(ns, "any", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	baseline := &networkingv1.NetworkPolicy{}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns, Name: netpol.BaselineName,
+		}, baseline)
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	g.Expect(baseline.Spec.PodSelector.MatchLabels).To(BeEmpty(),
+		"the baseline must select every Pod, not only labelled Sandbox Pods")
+	g.Expect(baseline.Spec.PodSelector.MatchExpressions).To(BeEmpty(),
+		"the baseline must select every Pod, not only labelled Sandbox Pods")
+	g.Expect(baseline.Spec.Egress).To(BeEmpty())
+	g.Expect(baseline.Spec.Ingress).To(BeEmpty())
+	g.Expect(baseline.Spec.PolicyTypes).To(ConsistOf(
+		networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress))
+
+	// It must not be owned by the Sandbox: a namespace-scoped policy that
+	// is garbage-collected with one Sandbox reopens the hole between runs.
+	g.Expect(baseline.OwnerReferences).To(BeEmpty(),
+		"the baseline must outlive any individual Sandbox")
+}
+
+func TestPhase2_NamespaceBaselinePrecedesPod(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-baseline-order")
+
+	sb := newSandbox(ns, "ordered", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	g.Consistently(func() bool {
+		if _, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix); err != nil {
+			return true // no Pod yet; the invariant only binds once it exists
+		}
+		np := &networkingv1.NetworkPolicy{}
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns, Name: netpol.BaselineName,
+		}, np) == nil
+	}, "3s", convergeInterval).Should(BeTrue(),
+		"a Pod existed in the namespace before the namespace-wide baseline deny")
+}
+
+func TestPhase2_NamespaceBaselineRestoredWhenWidened(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-baseline-restore")
+
+	sb := newSandbox(ns, "restore", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeExternalOnly}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	baseline := &networkingv1.NetworkPolicy{}
+	key := types.NamespacedName{Namespace: ns, Name: netpol.BaselineName}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, key, baseline)
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	// Narrow the selector so it stops covering unlabelled Pods — the
+	// exact mutation that would silently reopen the hole.
+	baseline.Spec.PodSelector = metav1.LabelSelector{
+		MatchLabels: map[string]string{podspec.SandboxLabelKey: sb.Name},
+	}
+	g.Expect(testClient.Update(testCtx, baseline)).To(Succeed())
+
+	// Nudge a reconcile and assert the operator puts it back.
+	g.Eventually(func() bool {
+		nudge := &setecv1alpha1.Sandbox{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: sb.Name}, nudge); err != nil {
+			return false
+		}
+		if nudge.Annotations == nil {
+			nudge.Annotations = map[string]string{}
+		}
+		nudge.Annotations["setec.zeroroot.ai/test-nudge"] = time.Now().Format(time.RFC3339Nano)
+		_ = testClient.Update(testCtx, nudge)
+
+		current := &networkingv1.NetworkPolicy{}
+		if err := testClient.Get(testCtx, key, current); err != nil {
+			return false
+		}
+		return len(current.Spec.PodSelector.MatchLabels) == 0 &&
+			len(current.Spec.PodSelector.MatchExpressions) == 0
+	}, convergeTimeout, convergeInterval).Should(BeTrue(),
+		"a narrowed baseline selector was not reconciled back to podSelector: {}")
+}
+
+// TestPhase2_SandboxClassInstallsWithoutVMM guards the install path. The
+// chart ships SandboxClasses that state their isolation through
+// spec.runtime.backend and set no spec.vmm, because vmm is deprecated.
+// While the CRD marked vmm required the API server rejected every one of
+// them with "spec.vmm: Required value" — no class installed, no class
+// resolved, and every Sandbox silently fell back to deny-all. This asserts
+// against a real API server that such a class is admitted.
+func TestPhase2_SandboxClassInstallsWithoutVMM(t *testing.T) {
+	g := NewWithT(t)
+
+	cls := &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-vmm-class"},
+		Spec: setecv1alpha1.SandboxClassSpec{
+			Runtime:            &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
+			DefaultNetworkMode: setecv1alpha1.NetworkModeExternalOnly,
+		},
+	}
+	g.Expect(testClient.Create(testCtx, cls)).To(Succeed(),
+		"a SandboxClass that declares spec.runtime.backend and no spec.vmm must be admitted")
+	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
+
+	fetched := &setecv1alpha1.SandboxClass{}
+	g.Expect(testClient.Get(testCtx, types.NamespacedName{Name: cls.Name}, fetched)).To(Succeed())
+	g.Expect(string(fetched.Spec.VMM)).To(BeEmpty())
 }

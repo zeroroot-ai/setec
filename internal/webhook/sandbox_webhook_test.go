@@ -174,7 +174,7 @@ func TestValidateCreate(t *testing.T) {
 				mkClass("standard", false, "8Gi",
 					setecv1alpha1.NetworkModeNone),
 			},
-			sb:      mkSandbox("standard", 2, "2Gi", setecv1alpha1.NetworkModeFull),
+			sb:      mkSandbox("standard", 2, "2Gi", setecv1alpha1.NetworkModeExternalOnly),
 			wantErr: true,
 			wantMsg: "network.mode",
 		},

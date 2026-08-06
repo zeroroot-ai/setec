@@ -216,9 +216,69 @@ verify the expected new manifests appear via `helm template`.
   required** — mTLS is mandatory for the frontend and the chart refuses to
   render without them. The frontend does NOT bypass Kubernetes admission;
   every call still flows through the webhook.
-- `defaultClass.enabled=true` templates a cluster-default `SandboxClass` so
-  tenant Sandboxes that omit `spec.sandboxClassName` get the configured
-  defaults.
+- `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
+  set tenants launch against. The chart ships two: `tool`
+  (`defaultNetworkMode: external-only`, marked cluster-default) and
+  `connector` (`defaultNetworkMode: none`). A Sandbox that omits
+  `spec.sandboxClassName` resolves to the class marked default; a Sandbox
+  that omits `spec.network` inherits that class's `defaultNetworkMode`.
+  Every class must state a `defaultNetworkMode` or the chart refuses to
+  render.
+
+### Sandbox egress posture
+
+`netpol.reservedCIDRs` is the address space no Sandbox may reach. It is
+subtracted from every permissive egress rule the operator generates, and
+neither the chart nor the operator will start with it empty.
+
+**Add your cluster's Service and Pod CIDRs.** The default covers RFC1918,
+link-local (including the cloud instance-metadata address), CGNAT,
+loopback and multicast — but the chart cannot discover the ranges your
+own control plane sits on.
+
+**Self-hosted installs must retune it.** If the authorised scope for your
+workloads is private address space, this default denies exactly what you
+meant to permit. Narrow the list to your own control-plane ranges rather
+than clearing it.
+
+`netpol.resolvers` are the DNS servers Sandboxes may query. The same
+addresses are written into every Sandbox Pod's `dnsConfig` with
+`dnsPolicy: None`, so Sandboxes do not use cluster DNS and cannot
+enumerate in-cluster Services by name.
+
+`sandboxNamespaces` names the namespaces Sandboxes run in, and is
+required (an empty list fails the render). It does two things:
+
+1. Renders a **namespace-wide** deny-all `NetworkPolicy` — `podSelector:
+   {}`, every Pod, not only labelled Sandbox Pods. The per-Sandbox
+   policies select on `setec.zeroroot.ai/sandbox`, so they confine Pods
+   the operator built; a Pod created in the namespace by any other route
+   is selected by no policy and is therefore unrestricted. This is what
+   removes that state. The operator re-applies the same policy at
+   reconcile time (`--namespace-baseline-deny`), so namespaces created
+   after install are covered too.
+2. Binds the operator's Pod- and NetworkPolicy-**write** RBAC to those
+   namespaces with a `RoleBinding` rather than cluster-wide. Reads stay
+   cluster-wide for the controller cache. Cluster-wide `pods: create` is
+   a cluster-admin path on its own; set
+   `rbac.allowClusterWideSandboxWrite: true` to take it deliberately.
+
+A namespace listed here is a Sandbox-only namespace: the baseline denies
+every Pod in it, no label-based exemption is offered (any label an
+exempt Pod wears an adversary can wear too), and the chart refuses to
+render if the list names the operator's own namespace.
+
+The baseline does not stop a Pod being created — that is RBAC — and it
+does not apply to `hostNetwork: true` Pods, which are outside
+NetworkPolicy enforcement. Pod Security Admission does not close that
+either: `baseline`, the weakest level forbidding `hostNetwork`, also
+forbids the `NET_RAW`/`NET_ADMIN` that Sandbox Pods add on purpose, so
+enforcing it rejects every legitimate Sandbox. That case needs an
+admission policy on Pod CREATE, which this chart does not ship.
+
+None of this enforces anything unless the cluster's CNI implements
+`networking.k8s.io/v1` NetworkPolicy. Verify that against the running
+cluster; the chart cannot detect it.
 
 ### Phase 1 to Phase 2 migration
 
