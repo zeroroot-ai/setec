@@ -243,9 +243,20 @@ Administrators author classes; tenants reference them by name in
 - `spec.runtime.backend` must be in the cluster's enabled-backend set
   (`runtime.<backend>.enabled=true` in Helm values). Attempting to use
   a disabled backend fails admission.
-- `spec.runtime.backend=runc` is rejected unless Helm flag
-  `runtime.runc.devOnly=true` is also set. This prevents accidental
-  production use of namespace-only isolation.
+- A backend marked `devOnly` in Helm values (`runtimes.runc.devOnly=true`
+  by default) is rejected unless the `default` namespace carries the label
+  `setec.zeroroot.ai/allow-dev-runtimes=true`. That label is the cluster
+  operator's written consent to namespace-only isolation.
+- The same `devOnly` mark also bars the backend from
+  `defaults.runtime.backend` and `defaults.runtime.fallback`, and that
+  rule is **absolute** rather than gated by the consent label
+  (GHSA-q7hq-f8hm-wmjr). The cluster defaults apply to Sandboxes in every
+  namespace and never pass through the SandboxClass webhook, so no single
+  namespace's label would be the right consent to ask for. The chart
+  refuses to render and the operator refuses to start. To run such a
+  backend cluster-wide, set `runtimes.<backend>.devOnly=false` — a
+  deliberate statement that its isolation is acceptable, rather than a
+  side-effect of naming it in the defaults block.
 - `spec.vmm` and `spec.runtime.backend` are mutually exclusive; if both
   are provided, admission fails. Migration: set one and delete the other.
 

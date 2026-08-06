@@ -159,7 +159,37 @@ func LoadFromFile(path string) (*RuntimeConfig, error) {
 //  1. At least one backend must have enabled=true.
 //  2. defaults.runtime.backend must name a backend in the enabled set.
 //  3. Every entry in defaults.runtime.fallback must be enabled.
-//  4. defaults.runtime.nodeCapabilitiesMode must be "" or "probe".
+//  4. Neither defaults.runtime.backend nor any fallback entry may be
+//     devOnly.
+//  5. defaults.runtime.nodeCapabilitiesMode must be "" or "probe".
+//
+// # Why rule 4 lives here and not only in admission
+//
+// devOnly marks a backend whose isolation is too weak for untrusted work —
+// runc, which is namespaces and seccomp and nothing else. The admission
+// webhook gates it by requiring a consent label on a well-known namespace
+// before a SandboxClass may name it (see
+// internal/webhook/sandboxclass_webhook.go).
+//
+// That gate only ever sees SandboxClass objects. The cluster defaults are
+// not a SandboxClass: they are the backend a Sandbox gets when it
+// references no class at all, and the ordered list tried when the primary
+// backend has no capable node. Nothing in the admission path reads them,
+// so a devOnly backend could become the cluster-wide default — applying to
+// every Sandbox in every namespace — without the gate ever running
+// (GHSA-q7hq-f8hm-wmjr).
+//
+// The cluster default cannot be gated by a namespace label, because it is
+// not scoped to a namespace: there is no namespace whose consent would be
+// the right one to ask for. So the rule here is absolute rather than
+// conditional — a devOnly backend is not eligible to be a cluster default,
+// full stop. Running one cluster-wide is still possible, but it takes
+// setting runtimes.<backend>.devOnly=false, which is a deliberate written
+// statement that the weaker isolation is acceptable, rather than a
+// side-effect of naming it in the defaults block.
+//
+// Validate runs at operator startup, so this is a boot failure with a
+// named field, not a per-reconcile error.
 func (c *RuntimeConfig) Validate() error {
 	var errs []error
 
@@ -186,13 +216,24 @@ func (c *RuntimeConfig) Validate() error {
 			Field:  "defaults.runtime.backend",
 			Detail: fmt.Sprintf("backend %q is not enabled; enable it via runtimes.%s.enabled=true", defaultBackend, defaultBackend),
 		})
+	} else if c.IsDevOnly(defaultBackend) {
+		errs = append(errs, &ConfigValidationError{
+			Field:  "defaults.runtime.backend",
+			Detail: devOnlyDefaultDetail(defaultBackend, "the cluster-default backend"),
+		})
 	}
 
 	for i, fb := range c.Defaults.Runtime.Fallback {
-		if !enabled[fb] {
+		switch {
+		case !enabled[fb]:
 			errs = append(errs, &ConfigValidationError{
 				Field:  fmt.Sprintf("defaults.runtime.fallback[%d]", i),
 				Detail: fmt.Sprintf("backend %q is not enabled; enable it or remove it from the fallback list", fb),
+			})
+		case c.IsDevOnly(fb):
+			errs = append(errs, &ConfigValidationError{
+				Field:  fmt.Sprintf("defaults.runtime.fallback[%d]", i),
+				Detail: devOnlyDefaultDetail(fb, "a cluster-default fallback"),
 			})
 		}
 	}
@@ -214,6 +255,27 @@ func (c *RuntimeConfig) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// IsDevOnly reports whether the named backend is marked devOnly. An unknown
+// backend is not devOnly: "this backend does not exist" is a different
+// error, reported separately, and answering true here would attach a
+// misleading second message to it.
+func (c *RuntimeConfig) IsDevOnly(backend string) bool {
+	bc, ok := c.Runtimes[backend]
+	return ok && bc.DevOnly
+}
+
+// devOnlyDefaultDetail builds the rejection message for a devOnly backend
+// used as a cluster default. role describes where it appeared.
+func devOnlyDefaultDetail(backend, role string) string {
+	return fmt.Sprintf(
+		"backend %q is marked devOnly, so it cannot be %s: the cluster defaults apply to "+
+			"Sandboxes in every namespace, and the devOnly consent gate is a per-namespace label "+
+			"the admission webhook only checks on SandboxClass objects — it never sees this block. "+
+			"Name a backend with stronger isolation here, or set runtimes.%s.devOnly=false to state "+
+			"cluster-wide that its isolation is acceptable",
+		backend, role, backend)
 }
 
 // EnabledBackends returns the sorted list of backend names whose enabled flag
