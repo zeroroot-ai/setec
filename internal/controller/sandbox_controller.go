@@ -432,6 +432,21 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	if desired.Phase == setecv1alpha1.SandboxPhaseFailed {
 		span.SetStatus(codes.Error, desired.Reason)
 	}
+
+	// (13) A policy built from resolved host names is only as accurate as
+	// its last lookup, so a Sandbox that has one needs to come back
+	// round. Without this the rules would be frozen at the DNS answer
+	// that happened to be current when the Pod was created, and a
+	// destination that moved would keep its old addresses allowed and its
+	// new ones denied until some unrelated event triggered a reconcile
+	// (setec#130).
+	//
+	// Only this path requeues. The creation path also applies the policy,
+	// but there RequeueAfter means "do not create the Pod yet", so
+	// reusing it for a refresh would defer the launch instead.
+	if netpol.DependsOnDNS(sb, cls) {
+		return ctrl.Result{RequeueAfter: r.NetPol.EffectiveRefreshInterval()}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -778,7 +793,7 @@ func (r *SandboxReconciler) ensureNamespaceBaseline(
 }
 
 func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) (ctrl.Result, error) {
-	desired, err := r.NetPol.GenerateForClass(sb, cls)
+	desired, err := r.NetPol.GenerateForClass(ctx, sb, cls)
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("generate NetworkPolicy: %w", err))
 	}

@@ -145,6 +145,8 @@ func main() {
 		reservedCIDRs    []string
 		nsBaselineDeny   bool
 		sandboxResolvers []string
+		egressHostTTL    time.Duration
+		egressHostGrace  time.Duration
 
 		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
 		snapshotsEnabled  bool
@@ -197,6 +199,18 @@ func main() {
 		"DNS servers Sandboxes resolve through. Written into each Sandbox Pod's dnsConfig and into "+
 			"the generated NetworkPolicy's port-53 rule, so Sandboxes never query cluster DNS and "+
 			"cannot enumerate in-cluster Services by name. May not be empty.")
+
+	pflag.DurationVar(&egressHostTTL, "egress-host-resolve-ttl", netpol.DefaultResolveTTL,
+		"How long a resolved egress-allow-list host is reused before it is looked up again. This "+
+			"is also the reconcile cadence for a Sandbox whose policy names hosts, and therefore "+
+			"the worst-case lag between a permitted destination changing address and the "+
+			"NetworkPolicy following it.")
+	pflag.DurationVar(&egressHostGrace, "egress-host-resolve-grace", netpol.DefaultResolveGrace,
+		"How long the last successful answer for an egress-allow-list host keeps being used after "+
+			"lookups start failing. Past this window the entry is dropped from the policy rather "+
+			"than widened, so a sustained resolver outage costs egress rather than containment. "+
+			"Set to a very small value only if you would rather lose egress immediately than run "+
+			"on a stale address.")
 
 	pflag.BoolVar(&nsBaselineDeny, "namespace-baseline-deny", true,
 		"Ensure a namespace-wide default-deny NetworkPolicy (podSelector: {}) in the namespace of "+
@@ -280,9 +294,18 @@ func main() {
 	// operator that cannot express the reserved ranges would emit
 	// permissive policies, which is the outcome this configuration exists
 	// to prevent.
+	// The resolver is what makes an egress-allow-list entry name a
+	// destination rather than a port (setec#130). It is always wired: with
+	// no resolver, a host that is not a literal address cannot be turned
+	// into an ipBlock at all, and the generator drops the entry.
 	netpolCfg := netpol.Config{
 		ReservedCIDRs: reservedCIDRs,
 		ResolverIPs:   sandboxResolvers,
+		Resolver: netpol.NewCachingResolver(netpol.ResolverOptions{
+			TTL:   egressHostTTL,
+			Grace: egressHostGrace,
+		}),
+		RefreshInterval: egressHostTTL,
 	}
 	if err := netpolCfg.Validate(); err != nil {
 		setupLog.Error(err, "invalid sandbox egress configuration; "+
@@ -292,6 +315,8 @@ func main() {
 	setupLog.Info("sandbox egress posture configured",
 		"reservedCIDRs", netpolCfg.ReservedCIDRs,
 		"resolvers", netpolCfg.ResolverIPs,
+		"hostResolveTTL", egressHostTTL,
+		"hostResolveGrace", egressHostGrace,
 	)
 
 	// Build the dispatcher Registry and register one Dispatcher per enabled backend.

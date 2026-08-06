@@ -180,10 +180,17 @@ type Resources struct {
 // NetworkMode is egress-allow-list.
 type NetworkAllow struct {
 	// Host is the DNS name or IP address permitted as an egress target.
-	// Kubernetes NetworkPolicy cannot match on a DNS name, so Host is
-	// recorded as declared intent on an annotation for audit. Set CIDR
-	// when the destination must actually be narrowed at the packet
-	// level.
+	//
+	// Kubernetes NetworkPolicy cannot match on a DNS name, so the
+	// operator resolves it and writes the answer into the rule as
+	// ipBlock peers, re-resolving periodically so the rule follows the
+	// name. The declared value is also kept on an annotation as the
+	// human-readable record.
+	//
+	// A name the operator cannot resolve is DROPPED from the policy, not
+	// widened: the entry contributes no rule and the drop is recorded on
+	// the setec.zeroroot.ai/unresolved-allow annotation. Set CIDR to pin
+	// the destination and skip resolution entirely.
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	Host string `json:"host"`
@@ -194,13 +201,14 @@ type NetworkAllow struct {
 	// +required
 	Port int32 `json:"port"`
 
-	// CIDR optionally pins this entry to an address block. When set it
-	// replaces the default 0.0.0.0/0 base for this rule, which is how a
-	// caller that genuinely knows the destination address range (for
-	// example an in-cluster platform endpoint that the operator's
-	// reserved ranges would otherwise subtract) narrows the rule to
-	// exactly that range. When empty the rule keeps the 0.0.0.0/0 base
-	// minus the operator's reserved ranges.
+	// CIDR optionally pins this entry to an address block, replacing
+	// resolution of Host for this rule.
+	//
+	// An explicit pin is a statement about the destination's address
+	// range that DNS cannot improve on, so it wins outright and no
+	// lookup happens. Use it for a destination whose addresses are known
+	// and stable, or one whose name does not resolve from inside the
+	// cluster. When empty, Host is resolved instead.
 	// +optional
 	CIDR string `json:"cidr,omitempty"`
 }

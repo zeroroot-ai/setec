@@ -83,17 +83,47 @@ Each effective `mode` maps to a specific shape. All three deny ingress.
   reach arbitrary external endpoints. The rule is deliberately not
   port-scoped: confinement here is by address space, not by port.
 - `egress-allow-list`: one TCP rule per `allow` entry, scoped to that
-  entry's port, built on the entry's `cidr` (default `0.0.0.0/0`) with
-  the same reserved-range subtraction, plus DNS to the configured
+  entry's port and naming that entry's destination as `ipBlock` peers,
+  with the same reserved-range subtraction, plus DNS to the configured
   resolvers.
 
-Hostnames in the allow list are recorded as
-`setec.zeroroot.ai/allow-<port>` annotations for audit and are NOT
-resolved to CIDRs. Resolving them in the operator would bake a DNS answer
-into a long-lived object and put a resolver in the reconcile path.
-Callers that genuinely know a destination range set `allow[].cidr`
-instead; operators who want DNS-aware filtering layer a CNI that provides
-it.
+### How an allow-list entry becomes addresses
+
+Kubernetes NetworkPolicy has no hostname matcher, so a declared host has
+to become addresses before it can be enforced. Three sources, in order:
+
+1. `allow[].cidr`, when set. An explicit pin is a statement about the
+   destination's address range that DNS cannot improve on, so it wins and
+   no lookup happens.
+2. `allow[].host`, when it is already a literal IP. Same reasoning.
+3. The operator's resolver, otherwise. The name is looked up and every
+   answer becomes a single-address peer on the rule. A Sandbox whose
+   policy names hosts is re-reconciled every
+   `--egress-host-resolve-ttl` (default 60s) so the rule follows the name.
+
+The declared host is also kept on a `setec.zeroroot.ai/allow-<port>`
+annotation as the human-readable record of what was asked for.
+
+**A name that does not resolve is dropped, not widened.** The entry
+contributes no rule and the drop is recorded on
+`setec.zeroroot.ai/unresolved-allow`. Before setec#130 an entry for
+`api.example.com:443` was written as `0.0.0.0/0` on port 443 — the port
+enforced and the destination not — which is an allow-list in name only.
+A previously-good answer keeps being used for
+`--egress-host-resolve-grace` (default 10m) after lookups start failing,
+so a resolver blip costs staleness rather than the egress of every
+running Sandbox.
+
+**Residual, stated precisely.** Enforcement is per-address, so another
+name sharing a resolved address is reachable too, and a destination
+behind a large or fast-rotating pool (a CDN, an anycast front end) may
+hand the Sandbox an address the policy did not write — a connectivity
+failure, not a containment one, since the extra addresses are denied
+rather than allowed. Closing that needs the CNI to enforce policy on the
+DNS exchange itself (Cilium `toFQDNs` or equivalent), which is not
+expressible in `networking.k8s.io/v1` and cannot be required of every
+cluster this operator installs on. Where a destination must be exact,
+`allow[].cidr` pins it with no DNS in the path.
 
 ### Reserved ranges and resolvers
 
