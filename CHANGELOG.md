@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.0](https://github.com/zeroroot-ai/setec/compare/v0.106.0...v0.107.0) (2026-08-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* `NetworkMode` no longer accepts `full`. The enum is now `external-only`, `egress-allow-list`, `none`, and `Network.mode` defaults to `none`. `SandboxClass.spec.defaultNetworkMode` drops `full` likewise, and an unset value now resolves to `none` rather than to unrestricted egress. Callers relying on the previous default must select a SandboxClass whose `defaultNetworkMode` is `external-only`, or declare `spec.network` explicitly. Chart value `defaultClass` is replaced by `sandboxClasses`.
+
+### Features
+
+* make sandbox egress default-deny and scope the allow-list to declared destinations ([#157](https://github.com/zeroroot-ai/setec/issues/157)) ([6103192](https://github.com/zeroroot-ai/setec/commit/6103192a2ce1d153e507e8ea8b1bbffa65d13951))
+
 ## [0.106.0](https://github.com/zeroroot-ai/setec/compare/v0.105.0...v0.106.0) (2026-07-04)
 
 
