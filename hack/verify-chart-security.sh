@@ -119,7 +119,7 @@ assert_contains "$workdir/guard.yaml" "binding is scoped to the sandbox namespac
 # and not to a stale key that renders it unconditionally.
 render "$workdir/guard-off.yaml" --set sandboxHostGuard.enabled=false
 assert_absent "$workdir/guard-off.yaml" "guard is omitted when disabled" \
-	"kind: ValidatingAdmissionPolicy"
+	"setec-sandbox-host-guard"
 
 # ---------------------------------------------------------------------------
 # Namespace baseline default-deny NetworkPolicy (setec#157).
@@ -131,6 +131,54 @@ note "namespace baseline default-deny (setec#157)"
 assert_contains "$workdir/default.yaml" "baseline policy selects every Pod" \
 	"name: setec-sandbox-baseline-deny" \
 	"podSelector: {}"
+
+# ---------------------------------------------------------------------------
+# runtime-agent least privilege (GHSA-p8f8-3qpw-7h93).
+#
+# The agent's `nodes: patch` grant is only tolerable because admission
+# narrows it. If the policy stopped rendering, or nodes/status came back,
+# the chart would still install and the narrowing would be gone.
+# ---------------------------------------------------------------------------
+render "$workdir/agent-rbac.yaml" --show-only templates/runtime-agent-rbac.yaml
+render "$workdir/agent-ds.yaml" --show-only templates/runtime-agent-daemonset.yaml
+render "$workdir/agent-guard.yaml" --show-only templates/runtime-agent-node-guard.yaml
+
+note "runtime-agent least privilege (GHSA-p8f8-3qpw-7h93)"
+# The rule, not the prose: the ClusterRole comment explains why the grant
+# was dropped, so a bare substring match would fail on its own rationale.
+assert_absent "$workdir/agent-rbac.yaml" "agent holds no nodes/status grant" \
+	'resources: ["nodes/status"]'
+assert_contains "$workdir/agent-ds.yaml" "agent runs as a verified non-root user" \
+	"runAsNonRoot: true" \
+	"runAsUser: 65532" \
+	"type: RuntimeDefault"
+assert_absent "$workdir/agent-ds.yaml" "agent is not permitted to run as root" \
+	"runAsNonRoot: false"
+assert_contains "$workdir/agent-guard.yaml" "node-write guard is rendered and denies" \
+	"kind: ValidatingAdmissionPolicy" \
+	"name: setec-runtime-agent-node-guard" \
+	"- Deny"
+assert_contains "$workdir/agent-guard.yaml" "guard is scoped to the agent ServiceAccount" \
+	"system:serviceaccount:setec-system:setec-runtime-agent"
+assert_contains "$workdir/agent-guard.yaml" "guard pins the writable key set" \
+	"'setec.zeroroot.ai/runtime.'" \
+	"'setec.zeroroot.ai/runtime-probe'" \
+	"object.spec == oldObject.spec"
+assert_contains "$workdir/agent-guard.yaml" "guard checks node identity when the cluster supplies it" \
+	"authentication.kubernetes.io/node-name"
+
+# requireNodeIdentity must flip the expression from opportunistic to
+# mandatory. A toggle that renders the same policy either way is worse
+# than no toggle: it reads as a control and is not one.
+render "$workdir/agent-guard-strict.yaml" \
+	--set runtimeAgent.nodeGuard.requireNodeIdentity=true \
+	--show-only templates/runtime-agent-node-guard.yaml
+assert_absent "$workdir/agent-guard-strict.yaml" "requireNodeIdentity removes the absent-claim escape" \
+	"!has(request.userInfo.extra)"
+
+render "$workdir/guard-off-agent.yaml" --set runtimeAgent.nodeGuard.enabled=false
+assert_absent "$workdir/guard-off-agent.yaml" "node guard is omitted when disabled" \
+	"setec-runtime-agent-node-guard"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then

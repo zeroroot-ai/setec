@@ -195,6 +195,43 @@ runtimeAgent:
   # {kubernetes.io/arch: amd64} until multi-arch images ship. Empty keeps the
   # original run-everywhere behavior.
   nodeSelector: {}
+  # -- tolerations placed on the runtime-agent DaemonSet. The default
+  # matches every taint, because a node the agent never probed looks
+  # uncapable to the operator and no Sandbox will be scheduled there.
+  # Narrow it when Sandboxes are deliberately kept off some nodes
+  # (control-plane, infrastructure pools): the capability view only has to
+  # cover nodes that can actually host a Sandbox, and not placing the agent
+  # somewhere is strictly less exposure than placing it there.
+  tolerations:
+    - operator: Exists
+  # -- nodeGuard installs the ValidatingAdmissionPolicy that constrains
+  # what the runtime-agent's ServiceAccount may write to a Node
+  # (GHSA-p8f8-3qpw-7h93).
+  #
+  # The agent needs `nodes: patch` to publish its capability labels, and
+  # RBAC cannot narrow that to specific label keys or to the agent's own
+  # node — neither is expressible in RBAC, and a DaemonSet has one
+  # ServiceAccount for the whole cluster, so there is no per-node
+  # credential to bind. Admission can express both, and does here.
+  #
+  # Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). With this
+  # off, any agent Pod can rewrite any node's labels and spec, including
+  # the runtime-capability labels the operator schedules Sandboxes from.
+  nodeGuard:
+    enabled: true
+    # -- requireNodeIdentity rejects an agent write that carries no
+    # verifiable node identity, rather than only rejecting one that names
+    # the wrong node.
+    #
+    # The identity comes from the `authentication.kubernetes.io/node-name`
+    # user-info entry the API server derives from a node-bound
+    # ServiceAccount token (Kubernetes 1.31+). Left false, the check
+    # applies when the cluster supplies the claim and is skipped when it
+    # does not, so the chart installs on older clusters without breaking
+    # the agent. Turn it on once every node is on 1.31+ with node-bound
+    # tokens — CONFIRM THAT FIRST: with it on and the claim absent, every
+    # probe write is rejected and the operator sees no capable nodes.
+    requireNodeIdentity: false
   # -- resources sizes the runtime-agent container. It is near-idle between
   # probe cycles (default 5m), so small requests are appropriate.
   resources:

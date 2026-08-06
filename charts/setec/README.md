@@ -177,6 +177,39 @@ kubectl logs hello-vm
   `sandboxes` and `pods`, status/finalizer writes on `sandboxes`, `events`
   create/patch, and read-only access to `nodes` and `runtimeclasses`.
 
+### runtime-agent node writes
+
+The runtime-agent DaemonSet probes each node and publishes what it found so
+the operator can schedule Sandboxes onto capable nodes. That publication is
+a Node write, and Node writes are cluster-wide primitives, so the grant is
+narrowed on three axes:
+
+- **No `nodes/status`.** The probe detail used to be a `SetecRuntimes` node
+  condition, which needed `nodes/status: patch` on every node — a verb whose
+  holder can rewrite any node's allocatable capacity and readiness. Nothing
+  read the condition, so the detail is now the
+  `setec.zeroroot.ai/runtime-probe` **annotation** and the grant is gone.
+  `kubectl get node -o yaml` shows the same JSON.
+- **Non-root, verified.** The agent image has always been distroless-nonroot,
+  but the DaemonSet asserted `runAsNonRoot: false`, so nothing checked. It
+  now runs with `runAsNonRoot: true`, an explicit UID/GID of 65532 and
+  `seccompProfile: RuntimeDefault`. Every probe is an `os.Stat` against a
+  read-only mount, so nothing about this needs privilege.
+- **`nodes: patch` narrowed by admission.** The agent still needs to write
+  its capability labels, and RBAC cannot scope `patch` to particular label
+  keys or to the agent's own node. `runtimeAgent.nodeGuard` installs a
+  `ValidatingAdmissionPolicy` that holds the agent's ServiceAccount to the
+  `setec.zeroroot.ai/runtime.` label prefix plus the one probe annotation,
+  rejects any other change to the object including all of `spec`, and — on
+  clusters that bind node identity into ServiceAccount tokens (1.31+) —
+  rejects a write aimed at any node but its own.
+
+  Node-identity enforcement is opportunistic by default so the chart still
+  installs on clusters without node-bound tokens. Set
+  `runtimeAgent.nodeGuard.requireNodeIdentity: true` to make it mandatory
+  once every node is on 1.31+; with it on and the claim absent, every probe
+  write is rejected and the operator sees no capable nodes.
+
 ## Troubleshooting
 
 - `kubectl describe sandbox <name>` shows the most recent events, including

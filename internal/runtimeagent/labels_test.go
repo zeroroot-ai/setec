@@ -20,8 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"strings"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,16 +83,6 @@ func getNode(t *testing.T, c client.Client) *corev1.Node {
 	return n
 }
 
-// findCondition returns the first condition with the given type, or nil.
-func findCondition(conditions []corev1.NodeCondition) *corev1.NodeCondition {
-	for i := range conditions {
-		if conditions[i].Type == conditionType {
-			return &conditions[i]
-		}
-	}
-	return nil
-}
-
 // allFourResults returns a canonical set of four CapabilityResults for testing.
 func allFourResults(kataFCAvail, kataQEMUAvail, gvisorAvail bool) []probe.CapabilityResult {
 	return []probe.CapabilityResult{
@@ -103,8 +93,32 @@ func allFourResults(kataFCAvail, kataQEMUAvail, gvisorAvail bool) []probe.Capabi
 	}
 }
 
-// TestApply_FirstApply verifies that the first Apply call sets all four backend
-// labels and adds the SetecRuntimes condition.
+// probeEntry mirrors the JSON shape Apply writes into ResultAnnotation.
+type probeEntry struct {
+	Available bool              `json:"available"`
+	Reason    string            `json:"reason,omitempty"`
+	Details   map[string]string `json:"details,omitempty"`
+}
+
+// decodeAnnotation parses the probe-result annotation off a Node, failing
+// the test when it is absent or not the documented JSON shape. The
+// annotation is the only place the probe detail is published now that the
+// SetecRuntimes node condition is gone, so its shape is a contract.
+func decodeAnnotation(t *testing.T, node *corev1.Node) map[string]probeEntry {
+	t.Helper()
+	raw, ok := node.Annotations[ResultAnnotation]
+	if !ok {
+		t.Fatalf("annotation %q not found on Node; annotations = %v", ResultAnnotation, node.Annotations)
+	}
+	var out map[string]probeEntry
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("annotation %q is not valid JSON (%v): %s", ResultAnnotation, err, raw)
+	}
+	return out
+}
+
+// TestApply_FirstApply verifies that the first Apply sets one label per
+// backend and publishes the full probe detail on the annotation.
 func TestApply_FirstApply(t *testing.T) {
 	t.Parallel()
 
@@ -117,7 +131,6 @@ func TestApply_FirstApply(t *testing.T) {
 
 	node := getNode(t, c)
 
-	// All four backend labels must be present.
 	for _, r := range results {
 		key := labelPrefix + r.Backend
 		val, ok := node.Labels[key]
@@ -134,30 +147,103 @@ func TestApply_FirstApply(t *testing.T) {
 		}
 	}
 
-	// SetecRuntimes condition must be present.
-	cond := findCondition(node.Status.Conditions)
-	if cond == nil {
-		t.Fatalf("SetecRuntimes condition not found on Node")
-	}
-	if cond.Status != corev1.ConditionTrue {
-		t.Errorf("condition Status = %q, want True (all available)", cond.Status)
-	}
-
-	// Message must be valid JSON with all four backends.
-	var msg map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(cond.Message), &msg); err != nil {
-		t.Fatalf("condition message is not valid JSON: %v", err)
-	}
+	decoded := decodeAnnotation(t, node)
 	for _, r := range results {
-		if _, ok := msg[r.Backend]; !ok {
-			t.Errorf("condition message missing backend %q", r.Backend)
+		entry, ok := decoded[r.Backend]
+		if !ok {
+			t.Errorf("annotation missing backend %q", r.Backend)
+			continue
+		}
+		if entry.Available != r.Available {
+			t.Errorf("annotation backend %q available = %v, want %v", r.Backend, entry.Available, r.Available)
 		}
 	}
 }
 
-// TestApply_Idempotent verifies that a second Apply call with identical input
-// does not change LastTransitionTime on the condition.
-func TestApply_Idempotent(t *testing.T) {
+// TestApply_NoStatusWrite is the regression test for GHSA-p8f8-3qpw-7h93.
+//
+// The agent's ServiceAccount no longer holds nodes/status: patch, so an
+// Apply that still tried to write node.status would fail against a real
+// API server while passing silently against a fake client that ignores
+// RBAC. Asserting that status stays empty is what catches a reintroduced
+// status write here rather than in a cluster.
+func TestApply_NoStatusWrite(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeClient(t, newNode(nil))
+
+	if err := Apply(context.Background(), c, testNodeName, allFourResults(true, false, true)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	node := getNode(t, c)
+	if len(node.Status.Conditions) != 0 {
+		t.Errorf("Apply wrote %d node status condition(s); it must touch metadata only: %+v",
+			len(node.Status.Conditions), node.Status.Conditions)
+	}
+}
+
+// TestApply_TouchesOnlySetecKeys pins the second half of the containment
+// story. The admission policy the chart installs permits the agent to
+// change setec.zeroroot.ai/runtime.* labels and the probe annotation and
+// nothing else; an agent that wrote outside that set would be rejected by
+// the API server. This asserts the agent stays inside it.
+func TestApply_TouchesOnlySetecKeys(t *testing.T) {
+	t.Parallel()
+
+	node := newNode(map[string]string{
+		"example.com/foo":        "bar",
+		"kubernetes.io/hostname": testNodeName,
+	})
+	node.Annotations = map[string]string{
+		"example.com/owner": "platform-team",
+	}
+	c := newFakeClient(t, node)
+
+	if err := Apply(context.Background(), c, testNodeName, allFourResults(false, false, false)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	got := getNode(t, c)
+
+	for k, want := range map[string]string{
+		"example.com/foo":        "bar",
+		"kubernetes.io/hostname": testNodeName,
+	} {
+		if v, ok := got.Labels[k]; !ok || v != want {
+			t.Errorf("label %q = %q (present=%v), want %q preserved", k, v, ok, want)
+		}
+	}
+	if v, ok := got.Annotations["example.com/owner"]; !ok || v != "platform-team" {
+		t.Errorf("annotation example.com/owner = %q (present=%v), want preserved", v, ok)
+	}
+
+	for k := range got.Labels {
+		if strings.HasPrefix(k, labelPrefix) {
+			continue
+		}
+		if k == "example.com/foo" || k == "kubernetes.io/hostname" {
+			continue
+		}
+		t.Errorf("Apply introduced unexpected label %q", k)
+	}
+	for k := range got.Annotations {
+		if k == ResultAnnotation || k == "example.com/owner" {
+			continue
+		}
+		t.Errorf("Apply introduced unexpected annotation %q", k)
+	}
+}
+
+// TestApply_UnchangedResultsIssueNoWrite verifies the strong form of
+// idempotence: a repeat Apply with identical probe results must not touch
+// the object at all.
+//
+// The old implementation refreshed a condition heartbeat every cycle, so
+// every node in the cluster produced a Node write every probe interval
+// whether or not anything had changed. ResourceVersion is the observable
+// that distinguishes "wrote the same thing again" from "did not write".
+func TestApply_UnchangedResultsIssueNoWrite(t *testing.T) {
 	t.Parallel()
 
 	c := newFakeClient(t, newNode(nil))
@@ -166,106 +252,66 @@ func TestApply_Idempotent(t *testing.T) {
 	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
-
-	node := getNode(t, c)
-	cond := findCondition(node.Status.Conditions)
-	if cond == nil {
-		t.Fatalf("SetecRuntimes condition missing after first Apply")
-	}
-	firstTransition := cond.LastTransitionTime.Time
-
-	// Sleep briefly so that a naive implementation would produce a different
-	// timestamp on the second call.
-	time.Sleep(10 * time.Millisecond)
+	afterFirst := getNode(t, c).ResourceVersion
 
 	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
+	afterSecond := getNode(t, c).ResourceVersion
 
-	node = getNode(t, c)
-	cond = findCondition(node.Status.Conditions)
-	if cond == nil {
-		t.Fatalf("SetecRuntimes condition missing after second Apply")
-	}
-
-	// LastTransitionTime must be frozen — same Status, no transition.
-	if !cond.LastTransitionTime.Time.Equal(firstTransition) {
-		t.Errorf("LastTransitionTime changed on no-op Apply: first=%v second=%v",
-			firstTransition, cond.LastTransitionTime.Time)
+	if afterFirst != afterSecond {
+		t.Errorf("no-op Apply wrote to the Node: resourceVersion %q -> %q", afterFirst, afterSecond)
 	}
 }
 
-// TestApply_Transition verifies that a status flip updates the appropriate
-// label and advances LastTransitionTime.
+// TestApply_Transition verifies that a changed probe outcome updates both
+// the backend label and the annotation detail.
 func TestApply_Transition(t *testing.T) {
 	t.Parallel()
 
 	c := newFakeClient(t, newNode(nil))
 
-	// First apply: gvisor unavailable.
-	results := allFourResults(true, true, false)
-	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
+	if err := Apply(context.Background(), c, testNodeName, allFourResults(true, true, false)); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	node := getNode(t, c)
-	firstCond := findCondition(node.Status.Conditions)
-	if firstCond == nil {
-		t.Fatalf("condition missing after first Apply")
-	}
-	firstTransition := firstCond.LastTransitionTime.Time
-
 	if node.Labels[labelPrefix+"gvisor"] != testLabelFalse {
 		t.Errorf("gvisor label should be false initially, got %q", node.Labels[labelPrefix+"gvisor"])
 	}
+	if decodeAnnotation(t, node)["gvisor"].Available {
+		t.Error("annotation should report gvisor unavailable initially")
+	}
 
-	// Ensure time advances by at least one second (condition timestamps
-	// are second-granular).
-	time.Sleep(1100 * time.Millisecond)
-
-	// Second apply: gvisor now available → status flips True→False→True path.
-	results2 := allFourResults(true, true, true)
-	if err := Apply(context.Background(), c, testNodeName, results2); err != nil {
+	if err := Apply(context.Background(), c, testNodeName, allFourResults(true, true, true)); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
-
 	node = getNode(t, c)
-	secondCond := findCondition(node.Status.Conditions)
-	if secondCond == nil {
-		t.Fatalf("condition missing after second Apply")
-	}
-
 	if node.Labels[labelPrefix+"gvisor"] != testLabelTrue {
 		t.Errorf("gvisor label should be true after transition, got %q", node.Labels[labelPrefix+"gvisor"])
 	}
-
-	// The overall condition status changed (False→True), so transition time must advance.
-	if !secondCond.LastTransitionTime.After(firstTransition) {
-		t.Errorf("LastTransitionTime did not advance on status flip: first=%v second=%v",
-			firstTransition, secondCond.LastTransitionTime.Time)
+	if !decodeAnnotation(t, node)["gvisor"].Available {
+		t.Error("annotation should report gvisor available after transition")
 	}
 }
 
-// TestApply_PreservesUnrelatedLabels verifies that Apply does not remove
-// labels that do not share the setec.zeroroot.ai/runtime. prefix.
-func TestApply_PreservesUnrelatedLabels(t *testing.T) {
+// TestBuildResultJSON_Deterministic guards the no-op check in Apply: if
+// the serialisation were not stable for identical input, every probe cycle
+// would look like a change and write to every Node in the cluster.
+func TestBuildResultJSON_Deterministic(t *testing.T) {
 	t.Parallel()
 
-	extraLabels := map[string]string{
-		"example.com/foo":        "bar",
-		"kubernetes.io/hostname": "test-node-0",
+	results := allFourResults(true, false, true)
+	first, err := buildResultJSON(results)
+	if err != nil {
+		t.Fatalf("buildResultJSON: %v", err)
 	}
-	c := newFakeClient(t, newNode(extraLabels))
-	results := allFourResults(false, false, false)
-
-	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-
-	node := getNode(t, c)
-
-	for k, want := range extraLabels {
-		if got, ok := node.Labels[k]; !ok || got != want {
-			t.Errorf("label %q = %q, want %q (should be preserved)", k, got, want)
+	for i := range 8 {
+		again, err := buildResultJSON(results)
+		if err != nil {
+			t.Fatalf("buildResultJSON (iteration %d): %v", i, err)
+		}
+		if again != first {
+			t.Fatalf("buildResultJSON is not deterministic:\n  %s\n  %s", first, again)
 		}
 	}
 }
