@@ -17,20 +17,40 @@ limitations under the License.
 // Package runtimeagent provides the node-local runtime capability detection
 // and node labelling logic for the Setec node-agent DaemonSet.
 //
-// Apply patches Node objects with per-backend labels and a SetecRuntimes
-// status condition. The probe package performs the detection; this package
-// owns the Kubernetes write path.
+// Apply writes the probe outcome onto the Node's own metadata: one label per
+// backend (which is what the operator's node affinity selects on) and one
+// annotation carrying the diagnostic detail. The probe package performs the
+// detection; this package owns the Kubernetes write path.
+//
+// # Why metadata only
+//
+// Apply used to publish the same detail as a SetecRuntimes condition on
+// node.status, which required the agent's ServiceAccount to hold
+// nodes/status: patch cluster-wide. That verb is not a reporting
+// primitive — it lets its holder rewrite any node's allocatable capacity
+// and any node's readiness conditions, on every node in the cluster,
+// which is a cluster-wide scheduling and availability primitive rather
+// than the "tell the operator what this node can run" the agent needs
+// (GHSA-p8f8-3qpw-7h93). No code ever read the condition back, so the
+// detail moved to an annotation under the setec.zeroroot.ai/ prefix and
+// the grant was dropped. Annotations are inert: nothing schedules,
+// evicts or admits on them.
+//
+// What remains — a metadata write on the agent's own Node — is narrowed
+// outside Go, because RBAC cannot express "only these label keys". The
+// chart ships a ValidatingAdmissionPolicy that holds the agent's
+// ServiceAccount to exactly the keys named here, on the node its token
+// says it runs on. See charts/setec/templates/runtime-agent-node-guard.yaml.
 package runtimeagent
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -38,108 +58,111 @@ import (
 )
 
 const (
-	// labelPrefix is the key prefix for all runtime capability labels
-	// applied by the Setec node-agent.
-	labelPrefix = "setec.zeroroot.ai/runtime."
+	// LabelPrefix is the key prefix for all runtime capability labels
+	// applied by the Setec node-agent. The operator's node affinity
+	// selects on LabelPrefix+<backend>, so these keys are the scheduling
+	// contract between agent and operator.
+	LabelPrefix = "setec.zeroroot.ai/runtime."
 
-	// conditionType is the Kubernetes Node condition type set by Apply.
-	conditionType = "SetecRuntimes"
+	// ResultAnnotation carries the full probe outcome as JSON:
+	// {"<backend>": {"available": bool, "reason": string, "details": {}}}.
+	//
+	// It replaces the SetecRuntimes node condition. `kubectl get node -o
+	// yaml` still shows the same information, and writing it costs only a
+	// metadata patch rather than a cluster-wide nodes/status grant.
+	ResultAnnotation = "setec.zeroroot.ai/runtime-probe"
 )
 
-// Apply patches a Node with Setec runtime capability labels and a SetecRuntimes
-// status condition derived from results.
+// labelPrefix is retained as an unexported alias so the many internal
+// references read as before.
+const labelPrefix = LabelPrefix
+
+// Apply writes the Setec runtime capability labels and the probe-result
+// annotation onto a Node.
 //
 // Label key format: setec.zeroroot.ai/runtime.<backend>
 // Label value: "true" when Available, "false" otherwise.
 //
-// Apply only touches labels whose keys begin with labelPrefix — it never
-// removes or modifies other labels already present on the Node. The
-// SetecRuntimes condition message is a JSON object mapping backend name to
-// its CapabilityResult (available, reason, details).
+// Apply only touches labels whose keys begin with labelPrefix plus the
+// single ResultAnnotation key — it never removes or modifies other labels
+// or annotations already present on the Node. That restraint is mirrored
+// by the admission policy the chart installs, so a build of this agent
+// that stopped honouring it would be rejected by the API server rather
+// than trusted.
 //
-// LastTransitionTime on the condition is updated only when the condition
-// Status (True/False) actually changes, making repeated calls with identical
-// input idempotent.
+// Apply is idempotent in the strong sense: when the Node already carries
+// the desired keys and values it issues no write at all. The previous
+// implementation refreshed a condition heartbeat on every cycle, so every
+// node produced a write every probe interval whether or not anything had
+// changed.
 func Apply(
 	ctx context.Context,
 	c client.Client,
 	nodeName string,
 	results []probe.CapabilityResult,
 ) error {
-	// 1. Fetch the current Node.
 	node := &corev1.Node{}
 	if err := c.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
 		return fmt.Errorf("runtimeagent: get Node %q: %w", nodeName, err)
 	}
 
-	// 2. Compute desired labels, preserving all non-setec labels.
-	// Save a copy before mutation so MergeFrom can compute the label patch.
-	labelBase := node.DeepCopy()
+	detail, err := buildResultJSON(results)
+	if err != nil {
+		return fmt.Errorf("runtimeagent: build probe result annotation: %w", err)
+	}
+
+	base := node.DeepCopy()
 	if node.Labels == nil {
 		node.Labels = make(map[string]string)
 	}
+	if node.Annotations == nil {
+		node.Annotations = make(map[string]string)
+	}
 	for _, r := range results {
-		key := labelPrefix + r.Backend
-		val := "false"
-		if r.Available {
-			val = "true"
-		}
-		node.Labels[key] = val
+		node.Labels[labelPrefix+r.Backend] = boolLabel(r.Available)
+	}
+	node.Annotations[ResultAnnotation] = detail
+
+	// Nothing to say: skip the write entirely rather than emit a patch the
+	// API server would resolve to a no-op. On a large cluster this is the
+	// difference between one Node write per node per probe interval and
+	// none.
+	if maps.Equal(base.Labels, node.Labels) && maps.Equal(base.Annotations, node.Annotations) {
+		return nil
 	}
 
-	// 3. Patch metadata (labels). Node labels live on the object metadata.
-	if err := c.Patch(ctx, node, client.MergeFrom(labelBase)); err != nil {
-		return fmt.Errorf("runtimeagent: patch Node labels %q: %w", nodeName, err)
+	if err := c.Patch(ctx, node, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("runtimeagent: patch Node metadata %q: %w", nodeName, err)
 	}
-
-	// 4. Build the JSON condition message: map[backend]CapabilityResult.
-	conditionStatus, conditionMsg, err := buildCondition(results)
-	if err != nil {
-		return fmt.Errorf("runtimeagent: build condition message: %w", err)
-	}
-
-	// 5. Patch status (conditions). Status is a sub-resource on Node.
-	// Re-fetch the node after the metadata patch so the status base
-	// reflects the current server state (ResourceVersion may have advanced).
-	statusBase := &corev1.Node{}
-	if err := c.Get(ctx, types.NamespacedName{Name: nodeName}, statusBase); err != nil {
-		return fmt.Errorf("runtimeagent: re-fetch Node for status patch %q: %w", nodeName, err)
-	}
-	now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
-	statusNode := statusBase.DeepCopy()
-	statusNode.Status.Conditions = upsertCondition(statusNode.Status.Conditions, corev1.NodeCondition{
-		Type:               conditionType,
-		Status:             conditionStatus,
-		Reason:             "RuntimeProbe",
-		Message:            conditionMsg,
-		LastTransitionTime: now,
-		LastHeartbeatTime:  now,
-	})
-	if err := c.Status().Patch(ctx, statusNode, client.MergeFrom(statusBase)); err != nil {
-		return fmt.Errorf("runtimeagent: patch Node status %q: %w", nodeName, err)
-	}
-
 	return nil
 }
 
-// buildCondition constructs the condition Status and JSON message body for the
-// SetecRuntimes condition. Status is True when all backends are available, False
-// otherwise.
-func buildCondition(results []probe.CapabilityResult) (corev1.ConditionStatus, string, error) {
-	// Build a map for JSON serialisation. We need ordered, reproducible JSON
-	// so tests can assert on content; use a dedicated struct per backend.
+// boolLabel renders a capability result as the label value the operator's
+// node affinity matches on.
+func boolLabel(available bool) string {
+	if available {
+		return "true"
+	}
+	return "false"
+}
+
+// buildResultJSON serialises the probe results into the JSON body of the
+// ResultAnnotation: a map of backend name to its outcome.
+//
+// The value is deliberately free of timestamps. A heartbeat field would
+// make every write differ from the last, defeating the no-op check in
+// Apply and putting a Node update on the API server for every node on
+// every probe cycle. The probe's freshness is observable from the agent's
+// metrics, which is where a liveness question belongs.
+func buildResultJSON(results []probe.CapabilityResult) (string, error) {
 	type entry struct {
 		Available bool              `json:"available"`
 		Reason    string            `json:"reason,omitempty"`
 		Details   map[string]string `json:"details,omitempty"`
 	}
 
-	allAvailable := true
 	m := make(map[string]entry, len(results))
 	for _, r := range results {
-		if !r.Available {
-			allAvailable = false
-		}
 		m[r.Backend] = entry{
 			Available: r.Available,
 			Reason:    r.Reason,
@@ -147,37 +170,13 @@ func buildCondition(results []probe.CapabilityResult) (corev1.ConditionStatus, s
 		}
 	}
 
+	// encoding/json sorts map keys, so identical results always produce an
+	// identical string and the no-op check in Apply holds.
 	msg, err := json.Marshal(m)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-
-	status := corev1.ConditionFalse
-	if allAvailable {
-		status = corev1.ConditionTrue
-	}
-	return status, string(msg), nil
-}
-
-// upsertCondition inserts or updates the condition in the slice. When an
-// existing condition with the same Type is found:
-//   - LastTransitionTime is preserved when Status has NOT changed (idempotent).
-//   - LastTransitionTime is updated to the incoming value when Status flips.
-//   - LastHeartbeatTime is always updated to the incoming value.
-func upsertCondition(conditions []corev1.NodeCondition, desired corev1.NodeCondition) []corev1.NodeCondition {
-	for i, c := range conditions {
-		if c.Type != desired.Type {
-			continue
-		}
-		// Preserve transition time when status is unchanged.
-		if c.Status == desired.Status {
-			desired.LastTransitionTime = c.LastTransitionTime
-		}
-		conditions[i] = desired
-		return conditions
-	}
-	// Not found — append.
-	return append(conditions, desired)
+	return string(msg), nil
 }
 
 // HasSetecLabel reports whether key is a Setec runtime label key.

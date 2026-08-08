@@ -20,11 +20,30 @@ spec:
       serviceAccountName: {{ include "setec.fullname" . }}-runtime-agent
       hostPID: false
       hostNetwork: false
-      # Tolerate every taint: the runtime-agent must run on every node so
-      # the operator has a capability view of the full cluster. Using
-      # {operator: Exists} matches all taints.
+      hostIPC: false
+      # Pod-level identity. The image is distroless-nonroot and already
+      # carries USER 65532:65532, so this changes no runtime behaviour —
+      # what it changes is who checks. runAsNonRoot: true makes the kubelet
+      # refuse to start the Pod if a future image (a rebuild on a different
+      # base, a mirror substitution) ships a root entrypoint, instead of
+      # quietly running the agent as root against the API server
+      # (GHSA-p8f8-3qpw-7h93).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # tolerations default to matching every taint: the runtime-agent
+      # needs to run on every node the operator might schedule a Sandbox
+      # onto, and a node it never probed looks uncapable. Values-driven so
+      # a cluster that keeps Sandboxes off, say, control-plane or
+      # infrastructure nodes can stop placing the agent there too — the
+      # capability view only has to cover nodes that can actually host a
+      # Sandbox.
       tolerations:
-        - operator: Exists
+        {{- toYaml .Values.runtimeAgent.tolerations | nindent 8 }}
       {{- /* Published runtime-agent images are amd64-only (setec#132), so an
       unconstrained DaemonSet ImagePullBackOffs forever on arm64 (Graviton
       system) nodes and the release never converges. Values-driven so
@@ -71,10 +90,17 @@ spec:
             {{- toYaml .Values.runtimeAgent.resources | nindent 12 }}
           securityContext:
             # Host mounts are read-only but we still drop every capability
-            # we don't need. The probes do not require elevated privileges.
+            # we don't need. The probes do not require elevated privileges:
+            # every one of them is an os.Stat against a read-only mount
+            # (see internal/runtimeagent/probe/detector_linux.go), and no
+            # probe opens /dev/kvm or executes a subprocess.
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            runAsNonRoot: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop:
                 - ALL

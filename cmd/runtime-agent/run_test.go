@@ -34,6 +34,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	internalruntime "github.com/zeroroot-ai/setec/internal/runtime"
+	"github.com/zeroroot-ai/setec/internal/runtimeagent"
 	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
@@ -267,9 +268,14 @@ func TestProbeFailReason(t *testing.T) {
 }
 
 // TestConditionMessageContainsBackends is an integration-flavoured test that
-// verifies the Node condition message set by a single probe cycle contains the
-// expected backend keys (JSON round-trip).
-func TestConditionMessageContainsBackends(t *testing.T) {
+// verifies the probe-result annotation written by a single probe cycle
+// contains the expected backend keys (JSON round-trip).
+//
+// The detail used to live on a SetecRuntimes node condition. It moved to a
+// Node annotation so the agent's ServiceAccount no longer needs
+// nodes/status: patch cluster-wide (GHSA-p8f8-3qpw-7h93); the payload is
+// unchanged.
+func TestProbeAnnotationContainsBackends(t *testing.T) {
 	const nodeName = "cond-node"
 
 	s := newTestScheme()
@@ -301,27 +307,28 @@ func TestConditionMessageContainsBackends(t *testing.T) {
 		t.Fatalf("get node: %v", err)
 	}
 
-	// Find the SetecRuntimes condition.
-	var condMsg string
-	for _, cond := range got.Status.Conditions {
-		if cond.Type == "SetecRuntimes" {
-			condMsg = cond.Message
-			break
-		}
-	}
-	if condMsg == "" {
-		t.Fatal("SetecRuntimes condition not found on node")
+	detail, ok := got.Annotations[runtimeagent.ResultAnnotation]
+	if !ok {
+		t.Fatalf("annotation %q not found on node; annotations = %v",
+			runtimeagent.ResultAnnotation, got.Annotations)
 	}
 
-	// Condition message is a JSON object — verify expected keys are present.
 	var msg map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(condMsg), &msg); err != nil {
-		t.Fatalf("condition message is not valid JSON: %v (got %q)", err, condMsg)
+	if err := json.Unmarshal([]byte(detail), &msg); err != nil {
+		t.Fatalf("probe annotation is not valid JSON: %v (got %q)", err, detail)
 	}
 	for _, backend := range []string{"gvisor", "runc"} {
 		if _, ok := msg[backend]; !ok {
-			t.Errorf("condition message missing backend %q; full message: %s", backend, condMsg)
+			t.Errorf("probe annotation missing backend %q; full value: %s", backend, detail)
 		}
+	}
+
+	// The agent must not write node.status at all: the grant that made it
+	// possible is gone, so a status write would fail against a real API
+	// server while passing here.
+	if len(got.Status.Conditions) != 0 {
+		t.Errorf("probe cycle wrote %d node status condition(s); it must touch metadata only: %+v",
+			len(got.Status.Conditions), got.Status.Conditions)
 	}
 }
 
