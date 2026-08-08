@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.108.0](https://github.com/zeroroot-ai/setec/compare/v0.107.0...v0.108.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* the SetecRuntimes Node condition is no longer written. Anything reading it must read the setec.zeroroot.ai/runtime-probe annotation instead; the JSON body is identical. The setec.zeroroot.ai/runtime.<backend> labels are unchanged.
+* an egress-allow-list entry naming a host now permits only the addresses that host resolves to, where it previously permitted every address on the declared port. A workload relying on the old behaviour will lose egress to destinations it was never declared to reach. An entry whose host does not resolve from the operator loses its rule entirely; pin it with allow[].cidr.
+* the chart's kubeVersion floor moves from 1.28 to 1.30. ValidatingAdmissionPolicy reached admissionregistration.k8s.io/v1 in 1.30, and rendering the guard conditionally on the API version would make containment depend on which cluster happened to install the chart.
+
+### Features
+
+* deny host-namespace and host-path Pods in Sandbox namespaces ([#163](https://github.com/zeroroot-ai/setec/issues/163)) ([dd51f1d](https://github.com/zeroroot-ai/setec/commit/dd51f1de8eacb77c4d9f8f44e68690c6a049b70f))
+
+
+### Bug Fixes
+
+* drop the runtime-agent's node/status grant and narrow its node writes ([#164](https://github.com/zeroroot-ai/setec/issues/164)) ([8003696](https://github.com/zeroroot-ai/setec/commit/8003696bceb7b834098225cd0f9771b95feaf08f))
+* gate devOnly backends out of the cluster runtime defaults ([#165](https://github.com/zeroroot-ai/setec/issues/165)) ([f3e35c1](https://github.com/zeroroot-ai/setec/commit/f3e35c14285e991ee699de2c7517be05f7f4f8f5))
+* resolve declared egress hosts instead of permitting the whole internet on their port ([#166](https://github.com/zeroroot-ai/setec/issues/166)) ([a625609](https://github.com/zeroroot-ai/setec/commit/a6256096ecad8b79fa9453c2a1ba47f9e11e6ae7))
+
 ## [0.107.0](https://github.com/zeroroot-ai/setec/compare/v0.106.0...v0.107.0) (2026-08-06)
 
 
