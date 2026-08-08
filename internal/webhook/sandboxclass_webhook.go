@@ -275,9 +275,13 @@ func (w *SandboxClassWebhook) validateBackendKnownAndEnabled(backend string, fld
 
 // isDevOnly returns true when backend is configured with DevOnly=true.
 // Unknown backends return false (no restriction imposed).
+//
+// The predicate is RuntimeConfig.IsDevOnly, shared with the startup check
+// that keeps a devOnly backend out of the cluster defaults
+// (GHSA-q7hq-f8hm-wmjr). Two copies of "what counts as devOnly" is exactly
+// how the two paths drifted apart in the first place.
 func (w *SandboxClassWebhook) isDevOnly(backend string) bool {
-	bc, ok := w.RuntimeCfg.Runtimes[backend]
-	return ok && bc.DevOnly
+	return w.RuntimeCfg.IsDevOnly(backend)
 }
 
 // fetchGateNamespaceLabels fetches the label map of devGateNamespace.

@@ -111,6 +111,26 @@ pre-install/upgrade.
   {{- fail (printf "runtimes validation: defaults.runtime.fallback[%d]=%q is not enabled. Enable runtimes.%s.enabled=true or remove it from the fallback list." $i $fb $fb) -}}
   {{- end -}}
 {{- end -}}
+{{- /* devOnly gate on the cluster defaults (GHSA-q7hq-f8hm-wmjr).
+
+The admission webhook gates a devOnly backend behind a namespace consent
+label, but it only ever inspects SandboxClass objects — it never sees this
+block. The cluster defaults apply to Sandboxes in every namespace, and no
+single namespace's label would be the right consent to ask for, so the
+rule is absolute: a devOnly backend may not be a cluster default.
+
+The operator enforces the same rule at startup (internal/runtime/config.go
+Validate). Repeating it here turns a boot crash-loop into a render error
+that names the value, which is the difference between debugging a
+CrashLoopBackOff and reading one sentence. */ -}}
+{{- if (get .Values.runtimes $defaultBackend).devOnly -}}
+{{- fail (printf "runtimes validation: defaults.runtime.backend=%q is marked devOnly and cannot be the cluster default. The cluster default applies to Sandboxes in EVERY namespace, and the devOnly consent gate is a per-namespace label the admission webhook only checks on SandboxClass objects — it never sees defaults.runtime. Pick a backend with stronger isolation, or set runtimes.%s.devOnly=false to state cluster-wide that its isolation is acceptable." $defaultBackend $defaultBackend) -}}
+{{- end -}}
+{{- range $i, $fb := .Values.defaults.runtime.fallback -}}
+  {{- if (get $.Values.runtimes $fb).devOnly -}}
+  {{- fail (printf "runtimes validation: defaults.runtime.fallback[%d]=%q is marked devOnly and cannot be a cluster-default fallback. A fallback is reached automatically when the primary backend has no capable node, in any namespace, with no gate in the path. Remove it, or set runtimes.%s.devOnly=false to state cluster-wide that its isolation is acceptable." $i $fb $fb) -}}
+  {{- end -}}
+{{- end -}}
 {{- $mode := .Values.defaults.runtime.nodeCapabilitiesMode | default "probe" -}}
 {{- if ne $mode "probe" -}}
 {{- fail (printf "runtimes validation: defaults.runtime.nodeCapabilitiesMode=%q is invalid; \"probe\" is the only supported mode (the never-implemented \"static\" mode was removed in #79, and the operator rejects it at config load)." $mode) -}}

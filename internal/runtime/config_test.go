@@ -329,3 +329,157 @@ func writeTemp(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// TestValidate_DevOnlyClusterDefaults is the regression test for
+// GHSA-q7hq-f8hm-wmjr.
+//
+// devOnly marks a backend whose isolation is too weak for untrusted work.
+// The consent gate for it is a namespace label the admission webhook
+// checks — and the webhook only ever sees SandboxClass objects, never the
+// cluster defaults. So a devOnly backend could become the backend every
+// class-less Sandbox in every namespace runs on, or the one every Sandbox
+// silently falls back to, without the gate running once.
+//
+// Validate is the only thing that sees the defaults block, so the rule
+// has to live here.
+func TestValidate_DevOnlyClusterDefaults(t *testing.T) {
+	t.Parallel()
+
+	// enabledRunc is devOnly and enabled: the exact configuration a
+	// cluster running dev workloads would have, and the one where naming
+	// it in the defaults must be caught.
+	base := func() *RuntimeConfig {
+		return &RuntimeConfig{
+			Runtimes: map[string]BackendConfig{
+				BackendKataFC: {Enabled: true, RuntimeClassName: "kata-fc"},
+				BackendRunc:   {Enabled: true, RuntimeClassName: "runc", DevOnly: true},
+			},
+			Defaults: DefaultsConfig{
+				Runtime: RuntimeDefaults{Backend: BackendKataFC},
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*RuntimeConfig)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "devOnly backend is not named in the defaults",
+			mutate: func(*RuntimeConfig) {},
+		},
+		{
+			name: "devOnly backend as the cluster default",
+			mutate: func(c *RuntimeConfig) {
+				c.Defaults.Runtime.Backend = BackendRunc
+			},
+			wantErr:     true,
+			errContains: "defaults.runtime.backend",
+		},
+		{
+			name: "devOnly backend in the cluster fallback list",
+			mutate: func(c *RuntimeConfig) {
+				c.Defaults.Runtime.Fallback = []string{BackendRunc}
+			},
+			wantErr:     true,
+			errContains: "defaults.runtime.fallback[0]",
+		},
+		{
+			name: "devOnly backend behind a permitted one in the fallback list",
+			mutate: func(c *RuntimeConfig) {
+				c.Runtimes[BackendGVisor] = BackendConfig{Enabled: true, RuntimeClassName: "gvisor"}
+				c.Defaults.Runtime.Fallback = []string{BackendGVisor, BackendRunc}
+			},
+			wantErr:     true,
+			errContains: "defaults.runtime.fallback[1]",
+		},
+		{
+			// The gate is devOnly, not the backend's name. An operator
+			// who has written runtimes.runc.devOnly=false has stated
+			// cluster-wide that the weaker isolation is acceptable, which
+			// is the deliberate act the rule is meant to require.
+			name: "devOnly=false makes the same backend usable as a default",
+			mutate: func(c *RuntimeConfig) {
+				c.Runtimes[BackendRunc] = BackendConfig{Enabled: true, RuntimeClassName: "runc"}
+				c.Defaults.Runtime.Backend = BackendRunc
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := base()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Validate() = nil, want an error naming the offending field")
+			}
+			if !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("Validate() error does not name %q:\n%v", tt.errContains, err)
+			}
+			if !strings.Contains(err.Error(), "devOnly") {
+				t.Errorf("Validate() error does not explain the devOnly gate:\n%v", err)
+			}
+		})
+	}
+}
+
+// TestValidate_DevOnlyErrorNamesTheRemedy: the message has to say what to
+// do about it. "backend is devOnly" without the way out sends an operator
+// looking for a flag that does not exist.
+func TestValidate_DevOnlyErrorNamesTheRemedy(t *testing.T) {
+	t.Parallel()
+
+	cfg := &RuntimeConfig{
+		Runtimes: map[string]BackendConfig{
+			BackendRunc: {Enabled: true, RuntimeClassName: "runc", DevOnly: true},
+		},
+		Defaults: DefaultsConfig{
+			Runtime: RuntimeDefaults{Backend: BackendRunc},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "runtimes.runc.devOnly=false") {
+		t.Errorf("error should name the setting that lifts the gate:\n%v", err)
+	}
+}
+
+// TestIsDevOnly covers the shared predicate. Both the startup check and
+// the admission webhook route through it, so an unknown backend answering
+// true here would attach a misleading second error to a plain typo.
+func TestIsDevOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &RuntimeConfig{
+		Runtimes: map[string]BackendConfig{
+			BackendKataFC: {Enabled: true},
+			BackendRunc:   {Enabled: true, DevOnly: true},
+		},
+	}
+
+	for backend, want := range map[string]bool{
+		BackendRunc:       true,
+		BackendKataFC:     false,
+		"no-such-backend": false,
+		"":                false,
+	} {
+		if got := cfg.IsDevOnly(backend); got != want {
+			t.Errorf("IsDevOnly(%q) = %v, want %v", backend, got, want)
+		}
+	}
+}
