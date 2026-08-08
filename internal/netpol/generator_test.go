@@ -17,7 +17,9 @@ limitations under the License.
 package netpol
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -47,11 +49,59 @@ var testReserved = []string{
 
 var testResolvers = []string{"1.1.1.1", "8.8.8.8"}
 
+// testHostAddrs is the DNS the generator tests run against. Every host a
+// test declares has an entry; a host that is absent models a name that
+// does not resolve.
+//
+// The addresses are drawn from 203.0.113.0/24 (TEST-NET-3) and
+// 198.51.100.0/24 (TEST-NET-2) so they are unmistakably fixtures and, more
+// importantly, are outside every entry in testReserved — a resolved
+// address inside a reserved range is suppressed, which would silently
+// change what these cases assert.
+var testHostAddrs = map[string][]string{
+	"api.example.com":     {"203.0.113.10", "203.0.113.11"},
+	"metrics.example.com": {"198.51.100.7"},
+	"mirror.example.com":  {"203.0.113.20"},
+	"vendor.example.com":  {"203.0.113.30"},
+	"h":                   {"203.0.113.40"},
+	// Resolves into a reserved range on purpose: the rule must be
+	// suppressed rather than written with an ipBlock that grants nothing.
+	"internal.example.com": {"10.20.30.40"},
+}
+
+// stubResolver is a HostResolver backed by testHostAddrs. It performs no
+// I/O, so the generator tests never touch real DNS.
+type stubResolver struct{}
+
+func (stubResolver) Resolve(_ context.Context, host string) ([]string, error) {
+	addrs, ok := testHostAddrs[host]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q: stub has no record", ErrResolveFailed, host)
+	}
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, a+"/32")
+	}
+	return out, nil
+}
+
+// hostCIDRs renders a testHostAddrs entry as the peer CIDRs the generator
+// is expected to produce for it.
+func hostCIDRs(host string) []string {
+	addrs := testHostAddrs[host]
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, a+"/32")
+	}
+	return out
+}
+
 // testCfg is the Config under test.
 func testCfg() Config {
 	return Config{
 		ReservedCIDRs: slices.Clone(testReserved),
 		ResolverIPs:   slices.Clone(testResolvers),
+		Resolver:      stubResolver{},
 	}
 }
 
@@ -136,7 +186,7 @@ func TestGenerate_NeverReturnsNilPolicy(t *testing.T) {
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().Generate(s)
+			got, err := testCfg().Generate(t.Context(), s)
 			if err != nil {
 				t.Fatalf("Generate() err: %v", err)
 			}
@@ -159,7 +209,7 @@ func TestGenerate_NeverReturnsNilPolicy(t *testing.T) {
 func TestGenerate_AbsentNetworkIsDenyAll(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(""))
+	got, err := testCfg().Generate(t.Context(), sb(""))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
 	}
@@ -174,7 +224,7 @@ func TestGenerate_AbsentNetworkIsDenyAll(t *testing.T) {
 func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeNone))
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeNone))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
 	}
@@ -210,7 +260,7 @@ func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 func TestGenerate_ExternalOnlyShape(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeExternalOnly))
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
 	}
@@ -255,7 +305,7 @@ func TestGenerate_ExternalOnlyShape(t *testing.T) {
 func TestGenerate_ExternalOnlyKeepsArbitraryPortsOpen(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeExternalOnly))
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
 	}
@@ -283,27 +333,45 @@ func TestGenerate_ExternalOnlyKeepsArbitraryPortsOpen(t *testing.T) {
 func TestGenerate_AllowListDoesNotOpenInClusterCIDRs(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
 	}
 
-	// Every peer that permits a broad block must subtract the reserved
-	// ranges. A bare 0.0.0.0/0 anywhere in the policy is the bug.
+	// An allow-list entry must never name all of public address space.
+	// Before setec#130 it always did — the declared host went to an
+	// annotation and the rule went to 0.0.0.0/0 on the declared port — so
+	// this is the assertion that says the destination is enforced and not
+	// just the port.
 	for i, rule := range got.Spec.Egress {
 		for j, peer := range rule.To {
 			blk := peer.IPBlock
-			if blk == nil || blk.CIDR != AllCIDR {
+			if blk == nil {
 				continue
 			}
+			if blk.CIDR == AllCIDR {
+				t.Errorf("egress[%d].to[%d] permits %s; an allow-list entry must name its "+
+					"destination, not the whole internet on one port", i, j, AllCIDR)
+				continue
+			}
+			// Belt and braces: whatever block the rule does name must
+			// not overlap a reserved range without excepting it.
 			for _, reserved := range testReserved {
-				if !slices.Contains(blk.Except, reserved) {
-					t.Errorf("egress[%d].to[%d] permits %s without excepting %s; in-cluster addresses are reachable",
-						i, j, blk.CIDR, reserved)
+				if blk.CIDR == reserved && !slices.Contains(blk.Except, reserved) {
+					t.Errorf("egress[%d].to[%d] permits reserved range %s", i, j, reserved)
 				}
 			}
 		}
+	}
+
+	// And it must actually name the resolved addresses.
+	var seen []string
+	for _, peer := range got.Spec.Egress[1].To {
+		seen = append(seen, peer.IPBlock.CIDR)
+	}
+	if want := hostCIDRs("api.example.com"); !slices.Equal(seen, want) {
+		t.Errorf("allow rule peers = %v, want %v", seen, want)
 	}
 }
 
@@ -312,7 +380,7 @@ func TestGenerate_AllowListDoesNotOpenInClusterCIDRs(t *testing.T) {
 func TestGenerate_AllowListRuleShape(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
@@ -338,9 +406,15 @@ func TestGenerate_AllowListRuleShape(t *testing.T) {
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				dnsRuleWant(),
 				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: testReserved},
-					}},
+					// One peer per resolved address, and no except list:
+					// a /32 outside every reserved range has nothing to
+					// subtract. This is the whole point of setec#130 —
+					// the rule names the destination, not "anywhere on
+					// 443".
+					To: []networkingv1.NetworkPolicyPeer{
+						{IPBlock: &networkingv1.IPBlock{CIDR: "203.0.113.10/32"}},
+						{IPBlock: &networkingv1.IPBlock{CIDR: "203.0.113.11/32"}},
+					},
 					Ports: []networkingv1.NetworkPolicyPort{portRule(443)},
 				},
 			},
@@ -358,7 +432,7 @@ func TestGenerate_AllowListRuleShape(t *testing.T) {
 func TestGenerate_AllowListPinnedCIDR(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "vendor.example.com", Port: 443, CIDR: "203.0.113.0/24"}))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
@@ -382,7 +456,7 @@ func TestGenerate_AllowListPinnedCIDR(t *testing.T) {
 func TestGenerate_AllowListReservedTargetIsSuppressed(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "daemon.platform.svc", Port: 50051, CIDR: "10.96.0.0/12"}))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
@@ -408,7 +482,7 @@ func TestGenerate_ClassExemptionReopensReservedRange(t *testing.T) {
 			EgressExemptCIDRs: []string{"10.0.0.0/8"},
 		},
 	}
-	got, err := testCfg().GenerateForClass(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "platform", Port: 8080, CIDR: "10.96.0.0/12"}), cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass() err: %v", err)
@@ -436,7 +510,7 @@ func TestGenerate_DNSTargetsOnlyConfiguredResolvers(t *testing.T) {
 	} {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().Generate(sb(mode))
+			got, err := testCfg().Generate(t.Context(), sb(mode))
 			if err != nil {
 				t.Fatalf("Generate() err: %v", err)
 			}
@@ -497,7 +571,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestGenerate_NilSandbox(t *testing.T) {
 	t.Parallel()
-	_, err := testCfg().Generate(nil)
+	_, err := testCfg().Generate(t.Context(), nil)
 	if err == nil || !errors.Is(err, ErrNilSandbox) {
 		t.Fatalf("expected ErrNilSandbox, got %v", err)
 	}
@@ -505,7 +579,7 @@ func TestGenerate_NilSandbox(t *testing.T) {
 
 func TestGenerate_UnknownMode(t *testing.T) {
 	t.Parallel()
-	_, err := testCfg().Generate(sb(setecv1alpha1.NetworkMode("mystery")))
+	_, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkMode("mystery")))
 	if err == nil || !errors.Is(err, ErrUnknownMode) {
 		t.Fatalf("expected ErrUnknownMode, got %v", err)
 	}
@@ -514,11 +588,16 @@ func TestGenerate_UnknownMode(t *testing.T) {
 // TestGenerate_DeclaredHostIsNotResolved locks in that the translator
 // records a declared hostname for audit and never turns it into an
 // address. Resolving here would bake a DNS answer into a long-lived
-// object and put a resolver in the reconcile path.
-func TestGenerate_DeclaredHostIsNotResolved(t *testing.T) {
+// TestGenerate_UnresolvableHostIsDroppedNotWidened is the regression test
+// for setec#130.
+//
+// A declared host the operator cannot locate used to fall back to a base
+// of 0.0.0.0/0, so the rule enforced the port and nothing else. The entry
+// is dropped now, and the drop is recorded where an operator will see it.
+func TestGenerate_UnresolvableHostIsDroppedNotWidened(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "private.internal.corp", Port: 8080}))
 	if err != nil {
 		t.Fatalf("Generate() err: %v", err)
@@ -527,7 +606,120 @@ func TestGenerate_DeclaredHostIsNotResolved(t *testing.T) {
 	if got.Annotations["setec.zeroroot.ai/allow-8080"] != "private.internal.corp" {
 		t.Fatalf("declared host should be recorded as an annotation, got %v", got.Annotations)
 	}
-	if want := AllCIDR; got.Spec.Egress[1].To[0].IPBlock.CIDR != want {
-		t.Errorf("egress CIDR = %q, want %q", got.Spec.Egress[1].To[0].IPBlock.CIDR, want)
+	if want := "private.internal.corp:8080"; got.Annotations[AnnotationUnresolved] != want {
+		t.Errorf("%s = %q, want %q", AnnotationUnresolved,
+			got.Annotations[AnnotationUnresolved], want)
+	}
+
+	// DNS only. No rule for the unresolvable destination, and above all
+	// no rule naming 0.0.0.0/0.
+	if len(got.Spec.Egress) != 1 {
+		t.Fatalf("expected only the DNS rule, got %d rules: %+v", len(got.Spec.Egress), got.Spec.Egress)
+	}
+	for i, rule := range got.Spec.Egress {
+		for j, peer := range rule.To {
+			if peer.IPBlock != nil && peer.IPBlock.CIDR == AllCIDR {
+				t.Errorf("egress[%d].to[%d] is %s; an unresolvable host must not widen to all of "+
+					"public address space", i, j, AllCIDR)
+			}
+		}
+	}
+}
+
+// TestGenerate_NoResolverConfiguredFailsClosed pins the behaviour of a
+// Config with no Resolver. A nil resolver is not a licence to fall back to
+// the old 0.0.0.0/0 base: the entry is dropped exactly as an unresolvable
+// name is.
+func TestGenerate_NoResolverConfiguredFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	cfg := testCfg()
+	cfg.Resolver = nil
+
+	got, err := cfg.Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
+	if err != nil {
+		t.Fatalf("Generate() err: %v", err)
+	}
+	if len(got.Spec.Egress) != 1 {
+		t.Fatalf("expected only the DNS rule, got %d rules: %+v", len(got.Spec.Egress), got.Spec.Egress)
+	}
+	if got.Annotations[AnnotationUnresolved] == "" {
+		t.Errorf("drop should be recorded on %s; annotations = %v", AnnotationUnresolved, got.Annotations)
+	}
+}
+
+// TestGenerate_LiteralAddressHostNeedsNoResolver covers the second source
+// of an ipBlock: a host that already is an address. No lookup should
+// happen, so this passes with the resolver removed.
+func TestGenerate_LiteralAddressHostNeedsNoResolver(t *testing.T) {
+	t.Parallel()
+
+	cfg := testCfg()
+	cfg.Resolver = nil
+
+	got, err := cfg.Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "203.0.113.55", Port: 443}))
+	if err != nil {
+		t.Fatalf("Generate() err: %v", err)
+	}
+	if len(got.Spec.Egress) != 2 {
+		t.Fatalf("expected DNS + 1 allow rule, got %d: %+v", len(got.Spec.Egress), got.Spec.Egress)
+	}
+	if got := got.Spec.Egress[1].To[0].IPBlock.CIDR; got != "203.0.113.55/32" {
+		t.Errorf("egress CIDR = %q, want %q", got, "203.0.113.55/32")
+	}
+}
+
+// TestGenerate_ResolvedIntoReservedRangeIsSuppressed covers the
+// interaction between resolution and the reserved list. A destination
+// whose name points at cluster-internal address space must not become a
+// reachable rule just because the caller wrote a public-looking name —
+// this is the DNS-rebinding shape of the same attack the reserved list
+// exists to stop.
+func TestGenerate_ResolvedIntoReservedRangeIsSuppressed(t *testing.T) {
+	t.Parallel()
+
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "internal.example.com", Port: 8443}))
+	if err != nil {
+		t.Fatalf("Generate() err: %v", err)
+	}
+	if len(got.Spec.Egress) != 1 {
+		t.Fatalf("expected only the DNS rule, got %d rules: %+v", len(got.Spec.Egress), got.Spec.Egress)
+	}
+	if want := "internal.example.com:8443"; got.Annotations[AnnotationSuppressed] != want {
+		t.Errorf("%s = %q, want %q", AnnotationSuppressed,
+			got.Annotations[AnnotationSuppressed], want)
+	}
+}
+
+// TestDependsOnDNS pins which postures need a periodic requeue. Only a
+// name does; a literal address and an explicit CIDR are already final.
+func TestDependsOnDNS(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		sandbox *setecv1alpha1.Sandbox
+		want    bool
+	}{
+		"nil sandbox":   {nil, false},
+		"deny-all":      {sb(setecv1alpha1.NetworkModeNone), false},
+		"external-only": {sb(setecv1alpha1.NetworkModeExternalOnly), false},
+		"allow-list w/name": {sb(setecv1alpha1.NetworkModeEgressAllowList,
+			setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}), true},
+		"allow-list w/literal": {sb(setecv1alpha1.NetworkModeEgressAllowList,
+			setecv1alpha1.NetworkAllow{Host: "203.0.113.55", Port: 443}), false},
+		"allow-list w/pinned CIDR": {sb(setecv1alpha1.NetworkModeEgressAllowList,
+			setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443, CIDR: "203.0.113.0/24"}), false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := DependsOnDNS(tc.sandbox, nil); got != tc.want {
+				t.Errorf("DependsOnDNS() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

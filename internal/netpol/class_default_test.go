@@ -43,7 +43,7 @@ func TestGenerateForClass_DefaultDenyWhenSandboxSilent(t *testing.T) {
 	s := sb("") // nil Network
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	got, err := testCfg().GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(t.Context(), s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestGenerateForClass_DefaultEgressAllowList(t *testing.T) {
 	cls := classWithDefault(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{Host: "mirror.example.com", Port: 443})
 
-	got, err := testCfg().GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(t.Context(), s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestGenerateForClass_DefaultExternalOnly(t *testing.T) {
 	s := sb("")
 	cls := classWithDefault(setecv1alpha1.NetworkModeExternalOnly)
 
-	got, err := testCfg().GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(t.Context(), s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestGenerateForClass_ExplicitSandboxNetworkWins(t *testing.T) {
 	s := sb(setecv1alpha1.NetworkModeExternalOnly)
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	got, err := testCfg().GenerateForClass(s, cls)
+	got, err := testCfg().GenerateForClass(t.Context(), s, cls)
 	if err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestGenerateForClass_UnstatedPostureIsDenyAll(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().GenerateForClass(s, cls)
+			got, err := testCfg().GenerateForClass(t.Context(), s, cls)
 			if err != nil {
 				t.Fatalf("GenerateForClass: %v", err)
 			}
@@ -160,7 +160,7 @@ func TestGenerateForClass_DoesNotMutateSandbox(t *testing.T) {
 	s := sb("")
 	cls := classWithDefault(setecv1alpha1.NetworkModeNone)
 
-	if _, err := testCfg().GenerateForClass(s, cls); err != nil {
+	if _, err := testCfg().GenerateForClass(t.Context(), s, cls); err != nil {
 		t.Fatalf("GenerateForClass: %v", err)
 	}
 	if s.Spec.Network != nil {
@@ -170,7 +170,7 @@ func TestGenerateForClass_DoesNotMutateSandbox(t *testing.T) {
 
 func TestGenerateForClass_NilSandbox(t *testing.T) {
 	t.Parallel()
-	if _, err := testCfg().GenerateForClass(nil, classWithDefault(setecv1alpha1.NetworkModeNone)); err == nil {
+	if _, err := testCfg().GenerateForClass(t.Context(), nil, classWithDefault(setecv1alpha1.NetworkModeNone)); err == nil {
 		t.Fatal("expected error on nil sandbox")
 	}
 }

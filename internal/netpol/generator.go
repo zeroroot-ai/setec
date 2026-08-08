@@ -22,15 +22,50 @@ limitations under the License.
 //
 // The package holds one invariant: for a non-nil Sandbox, Generate always
 // returns a policy. There is no input — no mode, no absent network block,
-// no absent class — that yields "no policy". A Sandbox the operator cannot
+// no absent class, no unresolvable destination — that yields "no policy",
+// and none that widens a rule as a fallback. A Sandbox the operator cannot
 // describe a posture for gets deny-all, not unrestricted egress.
+//
+// # Hostnames
+//
+// Kubernetes NetworkPolicy has no hostname matcher, so an allow-list entry
+// naming a host has to be resolved before it can be enforced. Config.Resolver
+// does that and the answer is written into the rule as ipBlock peers; the
+// controller re-reconciles such a Sandbox on Config.RefreshInterval so the
+// rule follows the name. An entry that cannot be resolved is dropped and
+// recorded on AnnotationUnresolved.
+//
+// The residual is inherent to doing this at the NetworkPolicy layer, and
+// worth stating precisely rather than leaving implied:
+//
+//   - The policy is only as current as its last lookup. A destination that
+//     changes address is allowed at its old address, and denied at its new
+//     one, until the next refresh — RefreshInterval is the worst-case lag.
+//   - The Sandbox resolves the same name independently, through the
+//     resolvers in Config.ResolverIPs. Nothing forces the two answers to
+//     agree, so a destination behind a large or fast-rotating pool (a CDN,
+//     an anycast front end) can hand the Sandbox an address the policy did
+//     not write. That is a connectivity failure, not a containment one:
+//     the extra addresses are denied, never allowed.
+//   - Enforcement is per-address, not per-name. Another name sharing a
+//     resolved address is reachable too, because the packet filter cannot
+//     tell them apart.
+//
+// Closing those last two requires the CNI to enforce policy on the DNS
+// exchange itself — Cilium's toFQDNs, or an equivalent — which is not
+// expressible in networking.k8s.io/v1 and is not something this operator
+// can require of the cluster it is installed on. Where the destination
+// must be exact, NetworkAllow.CIDR pins it with no DNS in the path.
 package netpol
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -51,8 +86,8 @@ const NetworkPolicySuffix = "-netpol"
 const AllCIDR = "0.0.0.0/0"
 
 // annotationPrefixAllow prefixes the per-port annotation recording the
-// host a caller declared. Kubernetes NetworkPolicy cannot match a DNS
-// name, so the declared intent is preserved for audit only.
+// host a caller declared. The rule itself carries resolved addresses, so
+// this preserves the human-readable intent alongside them.
 const annotationPrefixAllow = "setec.zeroroot.ai/allow-"
 
 // AnnotationSuppressed records allow-list entries that were dropped
@@ -60,6 +95,17 @@ const annotationPrefixAllow = "setec.zeroroot.ai/allow-"
 // entirely. Surfacing this is what stops a silently-empty policy from
 // looking like a working one.
 const AnnotationSuppressed = "setec.zeroroot.ai/suppressed-allow"
+
+// AnnotationUnresolved records allow-list entries that were dropped
+// because their host could not be resolved to an address.
+//
+// It is a separate annotation from AnnotationSuppressed because the two
+// mean different things and want different responses: suppressed means
+// "you asked for a range the cluster reserves", which is a declaration to
+// fix; unresolved means "the name did not answer", which is usually DNS to
+// fix. Collapsing them would hide a resolver outage inside a list of
+// policy decisions.
+const AnnotationUnresolved = "setec.zeroroot.ai/unresolved-allow"
 
 // Errors returned by Generate for inputs the pure function cannot handle.
 var (
@@ -111,6 +157,45 @@ type Config struct {
 	// resolves names exclusively through these addresses and never
 	// enumerates in-cluster Services through cluster DNS.
 	ResolverIPs []string
+
+	// Resolver turns a declared egress host name into the addresses the
+	// generated rule names (setec#130).
+	//
+	// Kubernetes NetworkPolicy cannot match a DNS name. Without a
+	// resolver, an allow-list entry for "api.example.com:443" can only
+	// be written as "0.0.0.0/0 on port 443" — the port is enforced and
+	// the destination is not, which is an allow-list in name only. With
+	// one, the entry becomes ipBlock peers for the addresses the name
+	// currently holds.
+	//
+	// A nil Resolver does NOT restore the old behaviour: an entry whose
+	// host is a name rather than a literal address is dropped and
+	// recorded on AnnotationUnresolved. There is no configuration that
+	// turns a named destination back into 0.0.0.0/0.
+	Resolver HostResolver
+
+	// RefreshInterval is how often a Sandbox whose policy depends on DNS
+	// should be reconciled so its rules follow the answer. The
+	// controller reads it; this package only carries it so the interval
+	// and the resolver TTL come from one place.
+	//
+	// Zero selects DefaultRefreshInterval.
+	RefreshInterval time.Duration
+}
+
+// DefaultRefreshInterval is the reconcile cadence for a Sandbox whose
+// policy was built from resolved names. It matches DefaultResolveTTL so a
+// requeue and a cache expiry line up rather than the requeue repeatedly
+// reading a still-fresh cache.
+const DefaultRefreshInterval = DefaultResolveTTL
+
+// EffectiveRefreshInterval returns RefreshInterval, or the package default
+// when it is unset.
+func (c Config) EffectiveRefreshInterval() time.Duration {
+	if c.RefreshInterval > 0 {
+		return c.RefreshInterval
+	}
+	return DefaultRefreshInterval
 }
 
 // Validate reports whether the Config expresses a usable posture. It is
@@ -149,8 +234,10 @@ func (c Config) Validate() error {
 //     the configured resolvers. This is the posture for workloads that
 //     must reach arbitrary external endpoints.
 //   - mode=egress-allow-list: deny-all ingress; one port-scoped egress
-//     rule per Allow entry, each carrying the same reserved-range
-//     subtraction, plus DNS to the configured resolvers.
+//     rule per Allow entry, each naming the addresses the declared host
+//     resolves to (or the caller's explicit CIDR) with the reserved
+//     ranges subtracted, plus DNS to the configured resolvers. An entry
+//     whose host cannot be resolved is dropped, not widened.
 //
 // The returned NetworkPolicy is cluster-ready apart from its
 // OwnerReferences, which the controller stamps via
@@ -158,8 +245,8 @@ func (c Config) Validate() error {
 // whether to Create or Patch; this function never mutates anything.
 //
 // Generate never returns a nil policy together with a nil error.
-func (c Config) Generate(sb *setecv1alpha1.Sandbox) (*networkingv1.NetworkPolicy, error) {
-	return c.generate(sb, nil)
+func (c Config) Generate(ctx context.Context, sb *setecv1alpha1.Sandbox) (*networkingv1.NetworkPolicy, error) {
+	return c.generate(ctx, sb, nil)
 }
 
 // GenerateForClass is the class-aware entry point (ADR-0052, setec#66). It
@@ -175,13 +262,47 @@ func (c Config) Generate(sb *setecv1alpha1.Sandbox) (*networkingv1.NetworkPolicy
 // to skip the policy.
 //
 // GenerateForClass never mutates sb or class.
-func (c Config) GenerateForClass(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.SandboxClass) (*networkingv1.NetworkPolicy, error) {
-	return c.generate(sb, class)
+func (c Config) GenerateForClass(
+	ctx context.Context,
+	sb *setecv1alpha1.Sandbox,
+	class *setecv1alpha1.SandboxClass,
+) (*networkingv1.NetworkPolicy, error) {
+	return c.generate(ctx, sb, class)
+}
+
+// DependsOnDNS reports whether the effective posture for sb under class
+// contains an allow-list entry whose destination is a name rather than a
+// literal address or an explicit CIDR.
+//
+// Such a policy is only as accurate as its last lookup, so the controller
+// uses this to decide whether the Sandbox needs a periodic requeue. A
+// policy built entirely from literals never goes stale and does not.
+func DependsOnDNS(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.SandboxClass) bool {
+	if sb == nil {
+		return false
+	}
+	mode, allow := effectivePosture(sb, class)
+	if mode != setecv1alpha1.NetworkModeEgressAllowList {
+		return false
+	}
+	for _, a := range allow {
+		if a.CIDR != "" {
+			continue
+		}
+		if _, err := netip.ParseAddr(a.Host); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // generate is the single implementation behind both entry points. It
 // resolves the effective posture, then dispatches on mode.
-func (c Config) generate(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.SandboxClass) (*networkingv1.NetworkPolicy, error) {
+func (c Config) generate(
+	ctx context.Context,
+	sb *setecv1alpha1.Sandbox,
+	class *setecv1alpha1.SandboxClass,
+) (*networkingv1.NetworkPolicy, error) {
 	if sb == nil {
 		return nil, ErrNilSandbox
 	}
@@ -205,7 +326,7 @@ func (c Config) generate(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.Sandbox
 	case setecv1alpha1.NetworkModeExternalOnly:
 		return c.externalOnly(sb, reserved)
 	case setecv1alpha1.NetworkModeEgressAllowList:
-		return c.egressAllowList(sb, allow, reserved)
+		return c.egressAllowList(ctx, sb, allow, reserved)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownMode, mode)
 	}
@@ -311,14 +432,44 @@ func (c Config) externalOnly(sb *setecv1alpha1.Sandbox, reserved []string) (*net
 }
 
 // egressAllowList returns a policy that denies all ingress and permits
-// egress only on the declared destinations, each rule scoped to its port
+// egress only to the declared destinations, each rule scoped to its port
 // and stripped of the reserved ranges.
 //
-// The declared Host is recorded on an annotation rather than in a rule:
-// Kubernetes NetworkPolicy has no hostname matcher, and resolving the
-// name here would bake a DNS answer into a long-lived object. Callers
-// that must narrow a rule to real addresses set NetworkAllow.CIDR.
+// # How a destination becomes an ipBlock
+//
+// Kubernetes NetworkPolicy has no hostname matcher, so a declared host
+// has to become addresses before it can be enforced. Three sources, in
+// order:
+//
+//  1. NetworkAllow.CIDR, when the caller set it. An explicit pin is a
+//     statement about the destination's address range that DNS cannot
+//     improve on, so it wins outright and no lookup happens.
+//  2. The host itself, when it parses as a literal IP. Same reasoning,
+//     no lookup needed.
+//  3. Config.Resolver, otherwise. The name is resolved and every answer
+//     becomes a single-address peer on the rule.
+//
+// # What happens when a name does not resolve
+//
+// The entry is DROPPED and recorded on AnnotationUnresolved. It is not
+// widened to 0.0.0.0/0.
+//
+// This is the fix for setec#130. Previously an unresolvable — indeed any
+// — named destination fell back to base = AllCIDR, so "api.example.com on
+// 443" was written as "anywhere on 443": the port was enforced and the
+// destination was not. An allow-list that grants the whole internet on
+// the declared port is not an allow-list, and the failure was silent
+// because the declared name was still recorded on an annotation, which
+// reads like enforcement to anyone inspecting the object.
+//
+// Failing closed is the only answer consistent with the rest of this
+// package: a Sandbox whose posture the operator cannot express gets
+// deny-all, never unrestricted egress. CachingResolver's grace window is
+// what keeps that from being brittle — a transient resolver failure keeps
+// serving the last good answer, so only a sustained one withdraws the
+// rule.
 func (c Config) egressAllowList(
+	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
 	allow []setecv1alpha1.NetworkAllow,
 	reserved []string,
@@ -328,28 +479,53 @@ func (c Config) egressAllowList(
 	egress := make([]networkingv1.NetworkPolicyEgressRule, 0, 1+len(allow))
 	egress = append(egress, c.dnsRule())
 
-	var suppressed []string
+	var suppressed, unresolved []string
 	for _, a := range allow {
-		base := a.CIDR
-		if base == "" {
-			base = AllCIDR
-		}
-		except, covered, err := exceptFor(base, reserved)
-		if err != nil {
-			return nil, err
-		}
-
-		// Record the declared intent for audit regardless of whether the
-		// rule survives, so an operator reading the policy sees what was
+		// Record the declared intent for audit regardless of what
+		// happens below, so an operator reading the policy sees what was
 		// asked for as well as what was granted.
 		np.Annotations = appendAnnotation(np.Annotations,
 			fmt.Sprintf("%s%d", annotationPrefixAllow, a.Port), a.Host)
 
-		if covered {
-			// The requested block lies entirely inside a reserved range.
-			// Emitting the rule would produce an ipBlock whose except
-			// equals its cidr; dropping it is the same posture stated
-			// honestly.
+		bases, err := c.basesFor(ctx, a)
+		if err != nil {
+			// A malformed declaration is the caller's error and aborts
+			// the whole policy; an unresolvable name is a fact about the
+			// world and only costs this entry.
+			if !errors.Is(err, ErrResolveFailed) {
+				return nil, err
+			}
+			unresolved = append(unresolved, fmt.Sprintf("%s:%d", a.Host, a.Port))
+			continue
+		}
+		if len(bases) == 0 {
+			// The name answered with nothing. Same posture as a failed
+			// lookup, reported the same way.
+			unresolved = append(unresolved, fmt.Sprintf("%s:%d", a.Host, a.Port))
+			continue
+		}
+
+		peers := make([]networkingv1.NetworkPolicyPeer, 0, len(bases))
+		for _, base := range bases {
+			except, covered, eerr := exceptFor(base, reserved)
+			if eerr != nil {
+				return nil, eerr
+			}
+			if covered {
+				// This block lies entirely inside a reserved range.
+				// Emitting it would produce an ipBlock whose except
+				// equals its cidr; dropping it is the same posture
+				// stated honestly. With a resolved name this is also
+				// the control that stops a destination pointing at
+				// cluster-internal address space from being reachable.
+				continue
+			}
+			peers = append(peers, networkingv1.NetworkPolicyPeer{
+				IPBlock: &networkingv1.IPBlock{CIDR: base, Except: except},
+			})
+		}
+
+		if len(peers) == 0 {
 			suppressed = append(suppressed, fmt.Sprintf("%s:%d", a.Host, a.Port))
 			continue
 		}
@@ -357,9 +533,7 @@ func (c Config) egressAllowList(
 		port := intstr.FromInt32(a.Port)
 		proto := corev1.ProtocolTCP
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
-			To: []networkingv1.NetworkPolicyPeer{{
-				IPBlock: &networkingv1.IPBlock{CIDR: base, Except: except},
-			}},
+			To: peers,
 			Ports: []networkingv1.NetworkPolicyPort{{
 				Protocol: &proto,
 				Port:     &port,
@@ -371,11 +545,52 @@ func (c Config) egressAllowList(
 		np.Annotations = appendAnnotation(np.Annotations,
 			AnnotationSuppressed, strings.Join(suppressed, ", "))
 	}
+	if len(unresolved) > 0 {
+		np.Annotations = appendAnnotation(np.Annotations,
+			AnnotationUnresolved, strings.Join(unresolved, ", "))
+	}
 
 	np.Spec.Egress = egress
 	// Ingress is deliberately nil — no ingress rules combined with
 	// PolicyTypeIngress denies all inbound traffic.
 	return np, nil
+}
+
+// basesFor resolves one allow-list entry to the address blocks its rule
+// may name. See egressAllowList for the three sources and their order.
+//
+// A returned error wrapping ErrResolveFailed means "this destination
+// could not be located"; any other error is a malformed declaration.
+func (c Config) basesFor(ctx context.Context, a setecv1alpha1.NetworkAllow) ([]string, error) {
+	if a.CIDR != "" {
+		if _, err := netip.ParsePrefix(a.CIDR); err != nil {
+			return nil, fmt.Errorf("%w: %q: %w", ErrInvalidCIDR, a.CIDR, err)
+		}
+		return []string{a.CIDR}, nil
+	}
+
+	if addr, err := netip.ParseAddr(a.Host); err == nil {
+		addr = addr.Unmap()
+		return []string{netip.PrefixFrom(addr, addr.BitLen()).String()}, nil
+	}
+
+	if c.Resolver == nil {
+		// No resolver and a named destination. The old code answered
+		// 0.0.0.0/0 here; answering "cannot locate it" is the honest
+		// version of the same state, and it is the one that fails
+		// closed.
+		return nil, fmt.Errorf("%w: %q: no resolver is configured", ErrResolveFailed, a.Host)
+	}
+
+	prefixes, err := c.Resolver.Resolve(ctx, a.Host)
+	if err != nil {
+		if errors.Is(err, ErrResolveFailed) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %q: %w", ErrResolveFailed, a.Host, err)
+	}
+	sort.Strings(prefixes)
+	return prefixes, nil
 }
 
 // dnsRule permits UDP and TCP 53 to exactly the configured resolvers.

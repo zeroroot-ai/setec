@@ -57,9 +57,9 @@ status:
 | `network` | object | no | class default, else `{mode: none}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
 | `network.mode` | enum `external-only` \| `egress-allow-list` \| `none` | yes (when `network` set) | `none` | Egress posture. Every mode is enforced by a generated NetworkPolicy. |
 | `network.allow` | []object | no | `[]` | Permitted egress destinations. Meaningful only when `network.mode: egress-allow-list`. |
-| `network.allow[].host` | string (`minLength: 1`) | yes | — | DNS name or IP address permitted as an egress target. Recorded as an annotation for audit; NetworkPolicy cannot match a DNS name, so it does not narrow the rule by itself. |
+| `network.allow[].host` | string (`minLength: 1`) | yes | — | DNS name or IP address permitted as an egress target. Resolved to `ipBlock` peers on the generated rule and re-resolved periodically; also recorded on a `setec.zeroroot.ai/allow-<port>` annotation. A name that does not resolve is **dropped** from the policy (recorded on `setec.zeroroot.ai/unresolved-allow`), never widened to `0.0.0.0/0`. |
 | `network.allow[].port` | int32 (`1`–`65535`) | yes | — | Destination TCP port permitted for this host. |
-| `network.allow[].cidr` | string | no | `0.0.0.0/0` | Address block this entry is pinned to. Set it when the destination range is genuinely known; it replaces the `0.0.0.0/0` base for that rule. |
+| `network.allow[].cidr` | string | no | — | Address block this entry is pinned to, replacing resolution of `host` for that rule. Set it when the destination range is genuinely known, or when the name does not resolve from inside the cluster. |
 | `lifecycle` | object | no | `{}` | Runtime constraints applied to the Sandbox. |
 | `lifecycle.timeout` | Go duration string (`metav1.Duration`) | no | unset (unbounded) | Maximum wall-clock runtime. When exceeded, the controller terminates the Pod and marks the Sandbox `Failed` with reason `Timeout`. Examples: `30m`, `8h`. |
 
@@ -82,7 +82,7 @@ All three modes deny ingress — nothing dials into a Sandbox.
 | Mode | Egress |
 |------|--------|
 | `external-only` | `0.0.0.0/0` on **all ports**, with the operator's reserved ranges subtracted via `ipBlock.except`. Public destinations stay reachable on arbitrary ports; the cluster's own address space does not. |
-| `egress-allow-list` | One TCP rule per `allow` entry, scoped to that entry's port, on the entry's `cidr` (default `0.0.0.0/0`) with the same reserved-range subtraction. |
+| `egress-allow-list` | One TCP rule per `allow` entry, scoped to that entry's port, naming that entry's `cidr` or the addresses its `host` resolves to, with the same reserved-range subtraction. An entry whose host cannot be resolved contributes no rule. |
 | `none` | Nothing. Empty ingress and egress rule lists with both policy types listed. |
 
 `external-only` and `egress-allow-list` additionally permit UDP and TCP 53

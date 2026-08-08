@@ -92,6 +92,19 @@ var (
 	testNetPolConfig = netpol.Config{
 		ReservedCIDRs: []string{"10.0.0.0/8", "169.254.0.0/16"},
 		ResolverIPs:   []string{"1.1.1.1"},
+		// An egress-allow-list entry now names the addresses its host
+		// resolves to (setec#130). The suite supplies a fixed table
+		// rather than the process resolver so scenarios assert on exact
+		// peers and never depend on the network the test host is on.
+		Resolver: testHostResolver{},
+	}
+
+	// testEgressHosts is the DNS the envtest suite runs against. Addresses are
+	// TEST-NET fixtures outside every entry in testNetPolConfig.ReservedCIDRs,
+	// so a resolved peer is never suppressed by the reserved list.
+	testEgressHosts = map[string][]string{
+		"api.example.com":     {"203.0.113.10/32"},
+		"metrics.example.com": {"198.51.100.7/32"},
 	}
 
 	// Phase 2 dependencies that scenarios may inspect directly.
@@ -445,4 +458,16 @@ func getPod(ctx context.Context, ns, name string) (*corev1.Pod, error) {
 		return nil, err
 	}
 	return pod, nil
+}
+
+// testHostResolver is the netpol.HostResolver the envtest suite wires in.
+// It performs no I/O.
+type testHostResolver struct{}
+
+func (testHostResolver) Resolve(_ context.Context, host string) ([]string, error) {
+	addrs, ok := testEgressHosts[host]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q: suite has no record", netpol.ErrResolveFailed, host)
+	}
+	return append([]string(nil), addrs...), nil
 }

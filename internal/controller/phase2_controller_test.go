@@ -217,8 +217,63 @@ func TestPhase2_NetworkPolicyEgressAllowList(t *testing.T) {
 	))
 	// Ingress is empty (no external traffic reaches the Sandbox).
 	g.Expect(np.Spec.Ingress).To(BeEmpty())
-	// Egress has at least DNS (rule 0) plus one rule per Allow entry.
+	// Egress has DNS (rule 0) plus one rule per Allow entry.
 	g.Expect(len(np.Spec.Egress)).To(BeNumerically(">=", 3))
+
+	// Each allow rule names the addresses its declared host resolves to,
+	// not 0.0.0.0/0 on the declared port (setec#130). Asserting the peers
+	// is what distinguishes an allow-list from a port filter.
+	var peers []string
+	for _, rule := range np.Spec.Egress[1:] {
+		for _, peer := range rule.To {
+			g.Expect(peer.IPBlock).ToNot(BeNil())
+			g.Expect(peer.IPBlock.CIDR).ToNot(Equal(netpol.AllCIDR),
+				"an allow-list entry must name its destination, not all of public address space")
+			peers = append(peers, peer.IPBlock.CIDR)
+		}
+	}
+	g.Expect(peers).To(ConsistOf("203.0.113.10/32", "198.51.100.7/32"))
+
+	// The declared names stay on the annotations as the human-readable
+	// record of what was asked for.
+	g.Expect(np.Annotations).To(HaveKeyWithValue("setec.zeroroot.ai/allow-443", "api.example.com"))
+	g.Expect(np.Annotations).To(HaveKeyWithValue("setec.zeroroot.ai/allow-9090", "metrics.example.com"))
+	g.Expect(np.Annotations).ToNot(HaveKey(netpol.AnnotationUnresolved))
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: an allow-list entry whose host does not resolve is dropped
+// from the policy rather than widened to all of public address space
+// (setec#130).
+// ---------------------------------------------------------------------------
+
+func TestPhase2_NetworkPolicyUnresolvableHostIsDropped(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-netpol-unresolved")
+
+	sb := newSandbox(ns, "unresolvable", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{
+			Mode: setecv1alpha1.NetworkModeEgressAllowList,
+			Allow: []setecv1alpha1.NetworkAllow{
+				{Host: "nowhere.invalid", Port: 443},
+			},
+		}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+
+	np := &networkingv1.NetworkPolicy{}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns,
+			Name:      sb.Name + netpol.NetworkPolicySuffix,
+		}, np)
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	// DNS only: the unresolvable destination contributes no rule, and in
+	// particular no 0.0.0.0/0 rule on port 443.
+	g.Expect(np.Spec.Egress).To(HaveLen(1))
+	g.Expect(np.Annotations).To(HaveKeyWithValue(
+		netpol.AnnotationUnresolved, "nowhere.invalid:443"))
 }
 
 // ---------------------------------------------------------------------------
