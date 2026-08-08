@@ -172,7 +172,11 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 # check: org-contract CI-equivalent gate (gibson#171 slice 1.4 /
 # zeroroot-ai/.github#87). Runs the same targets CI executes on every PR.
 .PHONY: check
-check: lint test ## Run the full CI gate locally (lint + test).
+# golangci-lint is deliberately excluded: it type-checks the whole module (~3 GB
+# resident, a full core for minutes), and several of these repos share one
+# 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
+# nothing is lost here. Run `make lint` by hand when you want it.
+check: test ## Run the local gate (test only — run 'make lint' separately).
 
 ##@ Deployment
 
