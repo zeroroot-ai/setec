@@ -10,7 +10,12 @@ to reconcile `Sandbox` resources into Kata-runtime Pods.
 
 ## Prerequisites
 
-- Kubernetes 1.28 or later.
+- Kubernetes 1.30 or later. The Sandbox-namespace host guard is a
+  `ValidatingAdmissionPolicy`, which reached
+  `admissionregistration.k8s.io/v1` in 1.30. It is not an optional extra:
+  without it a `hostNetwork` Pod steps around the namespace default-deny
+  NetworkPolicy, so the chart states 1.30 as its floor rather than
+  rendering containment conditionally.
 - At least one Node with KVM access (bare-metal Linux or a VM with nested
   virtualization enabled). Setec runs Firecracker microVMs, which require
   `/dev/kvm`.
@@ -272,9 +277,33 @@ The baseline does not stop a Pod being created — that is RBAC — and it
 does not apply to `hostNetwork: true` Pods, which are outside
 NetworkPolicy enforcement. Pod Security Admission does not close that
 either: `baseline`, the weakest level forbidding `hostNetwork`, also
-forbids the `NET_RAW`/`NET_ADMIN` that Sandbox Pods add on purpose, so
-enforcing it rejects every legitimate Sandbox. That case needs an
-admission policy on Pod CREATE, which this chart does not ship.
+forbids the `NET_ADMIN` that Sandbox Pods add on purpose, so enforcing it
+rejects every legitimate Sandbox.
+
+`sandboxHostGuard` (on by default) is what closes it. It renders a
+`ValidatingAdmissionPolicy` plus a binding scoped to `sandboxNamespaces`
+that denies, on Pod `CREATE` and `UPDATE`:
+
+| Denied | Why it defeats the baseline |
+|---|---|
+| `hostNetwork` | Pod runs in the node network namespace, where NetworkPolicy is not enforced |
+| `hostPID` | Pod sees every process on the node |
+| `hostIPC` | Pod shares the node IPC namespace |
+| `hostPath` volumes | Pod mounts the node filesystem |
+| `hostPort` | Pod is published on the node address, past the namespace ingress policy |
+| `privileged` containers | Container holds the node |
+
+That is the host-access half of PSA `baseline` without the capability
+rule Setec cannot adopt. It is in-tree CEL evaluated by the API server —
+no controller, no webhook endpoint, and therefore no outage that turns
+the check off — with `failurePolicy: Fail`, so a policy the API server
+cannot evaluate rejects the write rather than admitting it unchecked.
+
+`ValidatingAdmissionPolicy` reached `admissionregistration.k8s.io/v1` in
+Kubernetes 1.30, which is the chart's `kubeVersion` floor. The Sandbox
+Pods the operator itself builds never request any of the above, so the
+policy is invisible to normal operation; it only ever fires on a Pod that
+arrived by some other route.
 
 None of this enforces anything unless the cluster's CNI implements
 `networking.k8s.io/v1` NetworkPolicy. Verify that against the running

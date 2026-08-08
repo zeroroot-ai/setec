@@ -373,6 +373,25 @@ netpol:
 # Namespaces listed here must already exist.
 sandboxNamespaces: []
 
+# -- sandboxHostGuard installs the ValidatingAdmissionPolicy that denies
+# host-access requests for Pods in the namespaces listed above:
+# hostNetwork, hostPID, hostIPC, hostPath volumes, hostPort and privileged
+# containers (setec#159).
+#
+# It is what makes the namespace-wide default-deny NetworkPolicy
+# load-bearing. A Pod with hostNetwork: true runs in the node's network
+# namespace, where NetworkPolicy is not enforced at all — the baseline
+# selects it and confines nothing. Pod Security Admission `baseline` would
+# deny the same set, but it also forbids adding NET_ADMIN, which Sandbox
+# Pods legitimately request, so PSA cannot be applied to these namespaces
+# and this policy covers the host-access half instead.
+#
+# Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA); see
+# Chart.yaml kubeVersion. Turning it off leaves the netpol baseline
+# bypassable by any principal that can create a Pod in the namespace.
+sandboxHostGuard:
+  enabled: true
+
 # -- rbac controls how the operator's Pod- and NetworkPolicy-write
 # permissions are bound.
 rbac:

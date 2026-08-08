@@ -12,7 +12,7 @@ or modify the runtime backends themselves.
 
 Before you start, verify all of the following on your workstation:
 
-- [ ] A Kubernetes **1.28+** cluster you can reach with `kubectl`.
+- [ ] A Kubernetes **1.30+** cluster you can reach with `kubectl`. (1.30 is the floor because the chart ships a `ValidatingAdmissionPolicy` that keeps `hostNetwork` Pods out of Sandbox namespaces.)
 - [ ] At least one worker Node meets the requirements of a runtime backend
       you intend to enable — see the table below.
 - [ ] `kubectl` configured for the target cluster (`kubectl cluster-info`

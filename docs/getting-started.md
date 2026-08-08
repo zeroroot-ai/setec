@@ -22,7 +22,7 @@ The [runtime-backends](./runtime-backends/README.md) doc has the full isolation 
 
 You will need:
 
-1. A Kubernetes cluster (1.28 or later) with cluster-admin credentials. A single-node development cluster works, provided the node meets at least one backend's prerequisites.
+1. A Kubernetes cluster (1.30 or later) with cluster-admin credentials. The 1.30 floor comes from the `ValidatingAdmissionPolicy` the chart installs to keep host-access Pods out of Sandbox namespaces. A single-node development cluster works, provided the node meets at least one backend's prerequisites.
 2. At least one worker node that meets your chosen backend's requirements (see the table above). For this walk-through: `/dev/kvm` present on the node.
 3. `kubectl` and `helm` 3.8 or later on your workstation.
 4. About fifteen minutes of unhurried time.
