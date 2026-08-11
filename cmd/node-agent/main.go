@@ -90,6 +90,8 @@ func main() {
 		creds                credentialFlags
 		snapshotBackend      string
 		snapshotRoot         string
+		snapshotKeyFile      string
+		snapshotDEKDir       string
 		snapshotFillFraction float64
 		kataSocketPattern    string
 		poolReconcileTick    time.Duration
@@ -139,6 +141,12 @@ func main() {
 		"Phase 3: storage backend identifier. Only local-disk is supported in Phase 3.")
 	flag.StringVar(&snapshotRoot, "snapshot-root", "/var/lib/setec/snapshots",
 		"Phase 3: root directory for persisted snapshot state files.")
+	flag.StringVar(&snapshotKeyFile, "snapshot-key-file", "/var/lib/setec/keys/node.key",
+		"Node-local key-encryption-key file snapshot DEKs are sealed with (created on "+
+			"first use). Snapshots are ALWAYS encrypted at rest (ADR-0005); there is no opt-out.")
+	flag.StringVar(&snapshotDEKDir, "snapshot-dek-dir", "/var/lib/setec/keys/dek",
+		"Directory holding per-snapshot sealed data-encryption keys. Kept OUTSIDE the "+
+			"snapshot root so artifact-tree copies carry no key material.")
 	flag.Float64Var(&snapshotFillFraction, "snapshot-fill-threshold", 0.85,
 		"Phase 3: refuse new snapshots when the snapshot-root filesystem's used fraction exceeds this value.")
 	flag.StringVar(&kataSocketPattern, "kata-socket-pattern", "/run/kata-containers/%s/firecracker.socket",
@@ -284,15 +292,30 @@ func main() {
 			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", snapshotRoot, err)
 			os.Exit(1)
 		}
-		backend := &storage.LocalDiskBackend{
-			Root:          snapshotRoot,
-			FillThreshold: snapshotFillFraction,
+		if err := os.MkdirAll(snapshotDEKDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", snapshotDEKDir, err)
+			os.Exit(1)
+		}
+		// Encryption at rest is unconditional (ADR-0005 invariant 5):
+		// the encrypted wrapper is the only backend ever wired, so an
+		// unencrypted snapshot write path does not exist.
+		backend := &storage.EncryptedBackend{
+			Inner: &storage.LocalDiskBackend{
+				Root:          snapshotRoot,
+				FillThreshold: snapshotFillFraction,
+			},
+			KEKPath: snapshotKeyFile,
+			KeyDir:  snapshotDEKDir,
 		}
 		ffactory := func(sock string) firecracker.Client {
 			return firecracker.NewClientFromSocket(sock)
 		}
 		poolMgr := pool.New(backend, nodeagent.NewImageCache(puller), ffactory, nodeName)
-		poolMgr.Launcher = pool.DefaultExecLauncher()
+		launcher := pool.DefaultExecLauncher()
+		// Pool entries seal their per-entry DEKs with the same node
+		// KEK the snapshot backend uses.
+		launcher.ExtraArgs = append(launcher.ExtraArgs, "--key-file", snapshotKeyFile)
+		poolMgr.Launcher = launcher
 		if kataSocketPattern != "" {
 			poolMgr.SocketPattern = kataSocketPattern
 		}
@@ -301,6 +324,7 @@ func main() {
 			Storage:            backend,
 			FirecrackerFactory: ffactory,
 			Pool:               poolMgr,
+			PoolKEKPath:        snapshotKeyFile,
 			TempDir:            snapshotRoot + "/tmp",
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()

@@ -32,6 +32,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -167,6 +168,17 @@ func (l *fakeLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	}
 	_ = os.WriteFile(statePath, []byte("state"), 0o644)
 	_ = os.WriteFile(memPath, []byte("mem"), 0o644)
+	// Mirror the production launcher's artifact layer: a sealed-DEK
+	// sidecar (junk bytes are fine for the manager's purposes — it
+	// only ever shreds it) and a class-image-boot provenance record,
+	// without which Claim refuses the entry (ADR-0005 invariant 4).
+	_ = os.WriteFile(entryDir+"/"+poolentry.DEKFile, []byte("sealed-dek"), 0o600)
+	if err := poolentry.WriteProvenance(entryDir, poolentry.Provenance{
+		Source:   poolentry.SourceClassImageBoot,
+		ImageRef: opts.ImageRef,
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

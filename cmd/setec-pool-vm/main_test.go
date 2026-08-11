@@ -205,6 +205,7 @@ func tempOpts(t *testing.T) Options {
 		BootReadyTimeout:   2 * time.Second,
 		ShutdownGracePause: 100 * time.Millisecond,
 		BootArgs:           "console=ttyS0",
+		KeyFile:            filepath.Join(root, "keys", "node.key"),
 	}
 	_ = os.WriteFile(opts.KernelPath, []byte{0}, 0o644)
 	_ = os.WriteFile(opts.RootfsPath, []byte{0}, 0o644)

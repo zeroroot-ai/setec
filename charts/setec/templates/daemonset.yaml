@@ -55,6 +55,8 @@ spec:
             - --grpc-listen-addr=:50052
             - --snapshot-backend={{ .Values.snapshots.backend }}
             - --snapshot-root={{ .Values.snapshots.localDisk.root }}
+            - --snapshot-key-file={{ .Values.snapshots.keysDir }}/node.key
+            - --snapshot-dek-dir={{ .Values.snapshots.keysDir }}/dek
             - --snapshot-fill-threshold={{ .Values.snapshots.localDisk.fillThreshold }}
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
             - --entropy-reseed={{ .Values.snapshots.entropyReseed }}
@@ -100,6 +102,8 @@ spec:
             {{- if .Values.snapshots.enabled }}
             - name: snapshot-root
               mountPath: {{ .Values.snapshots.localDisk.root }}
+            - name: snapshot-keys
+              mountPath: {{ .Values.snapshots.keysDir }}
             - name: nodeagent-tls
               mountPath: /etc/setec/nodeagent-tls
               readOnly: true
@@ -129,6 +133,10 @@ spec:
         - name: snapshot-root
           hostPath:
             path: {{ .Values.snapshots.localDisk.root }}
+            type: DirectoryOrCreate
+        - name: snapshot-keys
+          hostPath:
+            path: {{ .Values.snapshots.keysDir }}
             type: DirectoryOrCreate
         - name: nodeagent-tls
           secret:

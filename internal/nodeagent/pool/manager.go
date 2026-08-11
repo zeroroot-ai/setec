@@ -36,6 +36,8 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -357,7 +359,33 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 // Claim atomically removes a single matching entry from the pool and
 // returns it. Returns ok=false when no compatible entry exists; the
 // caller must fall back to cold boot.
-func (m *Manager) Claim(_ context.Context, className, imageRef string) (Entry, bool, error) {
+//
+// Template provenance (ADR-0005 invariant 4) is enforced here, at the
+// hand-over boundary: an entry whose on-disk provenance record is
+// missing, unreadable, or claims any source other than the class-image
+// boot path is never handed out — it is torn down instead, and the
+// scan continues to the next candidate.
+func (m *Manager) Claim(ctx context.Context, className, imageRef string) (Entry, bool, error) {
+	for {
+		e, found := m.popMatching(className, imageRef)
+		if !found {
+			return Entry{}, false, nil
+		}
+		if err := poolentry.Verify(e.StorageRef, e.ImageRef); err != nil {
+			// Refused entry: destroy it (state, key, socket) rather
+			// than returning it to the pool, and keep scanning.
+			if relErr := m.releaseEntry(ctx, e); relErr != nil {
+				return Entry{}, false, fmt.Errorf("pool: refusing entry %s (%v) and teardown failed: %w", e.ID, err, relErr)
+			}
+			continue
+		}
+		return *e, true, nil
+	}
+}
+
+// popMatching removes and returns the first entry for className whose
+// image matches the optional filter.
+func (m *Manager) popMatching(className, imageRef string) (*Entry, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entries := m.state[className]
@@ -367,9 +395,9 @@ func (m *Manager) Claim(_ context.Context, className, imageRef string) (Entry, b
 		}
 		// Remove in-place, preserving order.
 		m.state[className] = append(entries[:i], entries[i+1:]...)
-		return *e, true, nil
+		return e, true
 	}
-	return Entry{}, false, nil
+	return nil, false
 }
 
 // ReleaseClaimed tears down an entry that was already removed from
@@ -402,11 +430,20 @@ func (m *Manager) Release(ctx context.Context, entryID string) error {
 //
 // The function is idempotent: a missing directory or socket is
 // treated as success so reconcile retries do not thrash.
+//
+// Destruction order matters (ADR-0005 invariant 5): the entry's sealed
+// DEK is zero-overwritten and unlinked FIRST, cryptographically
+// erasing the encrypted state/memory files even if the subsequent
+// directory removal is interrupted or the filesystem's overwrite
+// semantics are weak (copy-on-write).
 func (m *Manager) releaseEntry(_ context.Context, e *Entry) error {
 	if e == nil {
 		return nil
 	}
 	if e.StorageRef != "" {
+		if err := atrest.Shred(filepath.Join(e.StorageRef, poolentry.DEKFile)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("pool: destroy sealed DEK for %q: %w", e.ID, err)
+		}
 		if err := os.RemoveAll(e.StorageRef); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("pool: remove %q: %w", e.StorageRef, err)
 		}

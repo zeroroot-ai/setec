@@ -31,9 +31,14 @@ A snapshot-restored (or resumed) Sandbox MUST satisfy:
    (ADR-0006), but it is **never** reused across sessions or tenants, and is
    wiped at session end.
 4. **Template provenance.** The pool template is built only from a trusted class
-   image, never from a used/dirty sandbox.
-5. **Snapshot at rest.** Node-durable, secret-scanned ✅, encrypted at rest, and
-   destroyed with its pool/session.
+   image, never from a used/dirty sandbox. (Enforced in code ✅ setec#190: the
+   pool builder refuses a live pre-existing VM, every entry carries a
+   provenance record bound into its sealed encryption key, and the pool
+   manager destroys any entry whose record is missing or foreign.)
+5. **Snapshot at rest.** Node-durable, secret-scanned ✅, encrypted at rest ✅
+   (setec#190: per-artifact AES-256-GCM keys sealed by a node-local keyfile —
+   never cluster-global; no plaintext write path), and destroyed with its
+   pool/session ✅ (key destroyed first — crypto-erase — then ciphertext).
 
 Enabling snapshot warm-start (or session checkpointing) in a non-dev namespace
 is gated on 1-5 holding, with 2's entropy reseed *verified* per restore.
@@ -41,6 +46,7 @@ is gated on 1-5 holding, with 2's entropy reseed *verified* per restore.
 ## Consequences
 
 - Residuals to verify/close before GA: unique vsock CID, fresh net identity,
-  machine-id/boot-id regeneration, encryption-at-rest of snapshots, and the
-  one-session wipe path. (Entropy reseed + secret-scan are done.)
+  machine-id/boot-id regeneration, and the one-session wipe path. (Entropy
+  reseed, secret-scan, encryption-at-rest + key destruction, and template
+  provenance are done.)
 - A restore that cannot verify the entropy reseed fails closed.
