@@ -46,12 +46,18 @@ import (
 	"syscall"
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
 // Options carries the agent's flag values.
 type Options struct {
-	// Port is the AF_VSOCK port to listen on.
+	// Port is the AF_VSOCK port to listen on for entropy-reseed
+	// requests.
 	Port uint32
+	// UniquifyPort is the AF_VSOCK port to listen on for per-restore
+	// identity uniquification directives (ADR-0005 invariant 2,
+	// setec#189).
+	UniquifyPort uint32
 	// RandomDevice is the device node the RNDADDENTROPY ioctl is
 	// issued against.
 	RandomDevice string
@@ -59,10 +65,12 @@ type Options struct {
 
 func parseFlags(args []string) (Options, error) {
 	fs := flag.NewFlagSet("setec-guest-agent", flag.ContinueOnError)
-	var port uint
+	var port, uniquifyPort uint
 	var dev string
 	fs.UintVar(&port, "vsock-port", uint(entropy.DefaultVsockPort),
 		"AF_VSOCK port to listen on for entropy-reseed requests")
+	fs.UintVar(&uniquifyPort, "uniquify-vsock-port", uint(uniquify.DefaultVsockPort),
+		"AF_VSOCK port to listen on for restore-uniquification directives")
 	fs.StringVar(&dev, "random-device", "/dev/urandom",
 		"device node the RNDADDENTROPY ioctl is issued against")
 	if err := fs.Parse(args); err != nil {
@@ -71,13 +79,31 @@ func parseFlags(args []string) (Options, error) {
 	if port == 0 || port > 0xFFFFFFFF {
 		return Options{}, fmt.Errorf("--vsock-port must be in 1..2^32-1, got %d", port)
 	}
-	return Options{Port: uint32(port), RandomDevice: dev}, nil
+	if uniquifyPort == 0 || uniquifyPort > 0xFFFFFFFF || uniquifyPort == port {
+		return Options{}, fmt.Errorf("--uniquify-vsock-port must be in 1..2^32-1 and differ from --vsock-port, got %d", uniquifyPort)
+	}
+	return Options{Port: uint32(port), UniquifyPort: uint32(uniquifyPort), RandomDevice: dev}, nil
 }
 
 // run serves reseed requests from ln until ctx is cancelled. Split
 // from main so the loop is unit-testable with any net.Listener.
 func run(ctx context.Context, ln net.Listener, pool entropy.Pool, logf func(string, ...any)) error {
 	h := &entropy.GuestHandler{Pool: pool, Logf: logf}
+	return h.Serve(ctx, ln)
+}
+
+// runUniquify serves restore-uniquification directives from ln until
+// ctx is cancelled. Split from main so the loop is unit-testable with
+// any net.Listener and injected appliers.
+func runUniquify(
+	ctx context.Context,
+	ln net.Listener,
+	identity uniquify.IdentityApplier,
+	network uniquify.NetworkReconciler,
+	cid uniquify.CIDReporter,
+	logf func(string, ...any),
+) error {
+	h := &uniquify.GuestHandler{Identity: identity, Network: network, CID: cid, Logf: logf}
 	return h.Serve(ctx, ln)
 }
 
@@ -96,10 +122,24 @@ func main() {
 		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.Port, err)
 		os.Exit(1)
 	}
-	log.Printf("setec-guest-agent: listening on vsock port %d (random device %s)", opts.Port, opts.RandomDevice)
+	uln, err := listenVsock(opts.UniquifyPort)
+	if err != nil {
+		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.UniquifyPort, err)
+		os.Exit(1)
+	}
+	log.Printf("setec-guest-agent: listening on vsock ports %d (entropy) and %d (uniquify), random device %s",
+		opts.Port, opts.UniquifyPort, opts.RandomDevice)
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- runUniquify(ctx, uln,
+			uniquify.NewLinuxIdentity(), uniquify.NewLinuxNetwork(), uniquify.VsockCID{}, log.Printf)
+	}()
 
 	pool := newKernelPool(opts.RandomDevice)
-	if err := run(ctx, ln, pool, log.Printf); err != nil {
+	go func() { errCh <- run(ctx, ln, pool, log.Printf) }()
+
+	if err := <-errCh; err != nil {
 		log.Printf("setec-guest-agent: %v", err)
 		os.Exit(1)
 	}

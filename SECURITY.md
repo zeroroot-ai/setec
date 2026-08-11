@@ -175,6 +175,38 @@ Residual risk and scope limits, stated precisely:
   snapshot-load path in the runtime). Pause/resume of the *same* VM does not
   clone CSPRNG state and needs no reseed.
 
+### Restore uniquification (identity, network, vsock CID)
+
+The CSPRNG is not the only state cloned by a snapshot restore: two VMs
+restored from the same template also share their machine-id, boot-id,
+hostname, snapshot-time network configuration, and vsock CID. Per-restore
+uniquification (ADR-0005 invariant 2, setec#189) closes these residuals with
+the same **fail-closed, guest-verified** pattern as the entropy reseed.
+
+After every `LoadSnapshot` (and after the reseed), the node-agent connects to
+the in-guest `setec-guest-agent` on a second AF_VSOCK port and pushes a
+per-restore identity directive: a **host-minted fresh machine-id and
+boot-id**, a **hostname derived from the Sandbox name**, and the Pod's
+**CNI-assigned IP**. The guest applies them (rewriting `/etc/machine-id`,
+bind-mounting a fresh `boot_id` over `/proc/sys/kernel/random/boot_id`,
+`sethostname(2)`, and reconciling its primary interface to the Pod IP —
+restores are pinned to the snapshot's node, so node-scoped routes stay valid
+and the Pod IP is the piece of network identity that changes) and reports
+back the identity it observes plus its **local vsock CID**. The node-agent
+verifies the report against the exact directive sent (SHA-256 of the frame
+plus field-by-field echo) and registers the CID in a **node-local registry**:
+pool entries are each booted with a freshly allocated CID, and a restore
+whose guest reports a CID already held by another live sandbox on the node
+fails. On any verification failure the VM is paused and the restore fails —
+a sandbox whose uniquification cannot be confirmed is never handed to a
+caller. Outcomes are observable via the
+`setec_node_restore_uniquify_total{outcome}` metric and a
+`SandboxUniquified` Event on the Sandbox.
+
+The opt-out mirrors the reseed's: `snapshots.restoreUniquify: off`
+(`--restore-uniquify=off`) is deliberate and auditable, and restored clones
+then keep the machine identity captured at snapshot time.
+
 ### What mTLS proves, per credential mode
 
 Every setec control-plane hop is mTLS. mTLS on its own is an

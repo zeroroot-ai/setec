@@ -503,8 +503,8 @@ func TestConfigureAndBoot_AttachesVsockBeforeStart(t *testing.T) {
 	if got, _ := vsockBody["uds_path"].(string); got != wantUDS {
 		t.Fatalf("vsock uds_path = %q, want %q", got, wantUDS)
 	}
-	if got, _ := vsockBody["guest_cid"].(float64); got != float64(guestCID) {
-		t.Fatalf("vsock guest_cid = %v, want %d", vsockBody["guest_cid"], guestCID)
+	if got, _ := vsockBody["guest_cid"].(float64); got != float64(defaultGuestCID) {
+		t.Fatalf("vsock guest_cid = %v, want %d", vsockBody["guest_cid"], defaultGuestCID)
 	}
 }
 
@@ -542,5 +542,31 @@ func TestParseFlags_HappyPath(t *testing.T) {
 	}
 	if o.PoolEntryID != "abc" {
 		t.Fatalf("got %+v", o)
+	}
+	if o.GuestCID != defaultGuestCID {
+		t.Fatalf("guest CID default = %d, want %d", o.GuestCID, defaultGuestCID)
+	}
+}
+
+// TestParseFlags_GuestCID pins the ADR-0005 invariant-2 flag surface:
+// the node-agent passes a node-unique CID per pool boot, and reserved
+// values are rejected.
+func TestParseFlags_GuestCID(t *testing.T) {
+	base := []string{
+		"--kernel-path", "/k",
+		"--rootfs-path", "/r",
+		"--socket-path", "/tmp/fc.sock",
+		"--storage-root", "/tmp/pool",
+		"--pool-entry-id", "abc",
+	}
+	o, err := parseFlags(append(base, "--guest-cid", "42"))
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if o.GuestCID != 42 {
+		t.Fatalf("guest CID = %d, want 42", o.GuestCID)
+	}
+	if _, err := parseFlags(append(base, "--guest-cid", "2")); err == nil {
+		t.Fatal("reserved guest CID (0-2) must be rejected")
 	}
 }

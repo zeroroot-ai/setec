@@ -39,6 +39,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
 // ImagePrefetcher is the narrow hook the pool uses to ensure the
@@ -74,6 +75,11 @@ type Entry struct {
 	// PausedAt is when the entry entered the paused state; the TTL
 	// recycler uses this.
 	PausedAt time.Time
+	// GuestCID is the vsock context id the entry's guest was booted
+	// with, allocated node-locally so any two entries differ
+	// (ADR-0005 invariant 2). Zero when the Manager runs without a
+	// CIDAllocator (tests, legacy wiring).
+	GuestCID uint32
 }
 
 // Manager maintains the pool state for one node. The struct is safe
@@ -130,6 +136,16 @@ type Manager struct {
 	// for pool entries when a SandboxClass does not override.
 	DefaultVCPUs     int
 	DefaultMemoryMiB int
+
+	// CIDs is the node-local vsock CID authority shared with the gRPC
+	// server. When set, every pool entry boots with a freshly
+	// allocated guest CID so no two entries (and no two sandboxes
+	// warm-started from them) can collide (ADR-0005 invariant 2). A
+	// claimed entry's CID registration is released at Claim time; the
+	// restore path re-registers it to the owning sandbox after the
+	// guest confirms it. nil disables allocation (launcher default
+	// CID applies).
+	CIDs *uniquify.CIDAllocator
 
 	// clockFn returns the current time. Exposed for tests so they
 	// can drive TTL recycling deterministically.
@@ -218,7 +234,7 @@ func (m *Manager) ReconcilePools(ctx context.Context, classes []setecv1alpha1.Sa
 	for _, name := range toDrain {
 		entries := m.drainClass(name)
 		for _, e := range entries {
-			if err := m.releaseEntry(ctx, e); err != nil && firstErr == nil {
+			if err := m.releaseEntry(ctx, e, true); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
@@ -240,7 +256,7 @@ func (m *Manager) reconcileClass(ctx context.Context, cls *setecv1alpha1.Sandbox
 	// this same call.
 	expired := m.popExpired(cls)
 	for _, e := range expired {
-		if err := m.releaseEntry(ctx, e); err != nil {
+		if err := m.releaseEntry(ctx, e, true); err != nil {
 			return err
 		}
 	}
@@ -252,7 +268,7 @@ func (m *Manager) reconcileClass(ctx context.Context, cls *setecv1alpha1.Sandbox
 		if e == nil {
 			break
 		}
-		if err := m.releaseEntry(ctx, e); err != nil {
+		if err := m.releaseEntry(ctx, e, true); err != nil {
 			return err
 		}
 		current--
@@ -333,12 +349,27 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 		mem = 512
 	}
 
-	opts := LaunchOptionsFrom(cls, id, sock, m.PoolStorageRoot, m.KernelPath, m.RootfsPath, vcpus, mem)
+	// Allocate a node-unique guest vsock CID for the entry (ADR-0005
+	// invariant 2): any two pool entries — and any two sandboxes
+	// restored from them — differ by construction.
+	var guestCID uint32
+	if m.CIDs != nil {
+		cid, cidErr := m.CIDs.Allocate("pool/" + id)
+		if cidErr != nil {
+			return fmt.Errorf("pool: allocate guest CID for %s/%s: %w", cls.Name, id, cidErr)
+		}
+		guestCID = cid
+	}
+
+	opts := LaunchOptionsFrom(cls, id, sock, m.PoolStorageRoot, m.KernelPath, m.RootfsPath, vcpus, mem, guestCID)
 	if err := m.Launcher.Launch(ctx, opts); err != nil {
 		// The launcher is responsible for its own cleanup. Drop the
 		// partial entry directory defensively in case the launcher
 		// was killed before its deferred cleanup ran.
 		_ = os.RemoveAll(entryDir)
+		if m.CIDs != nil && guestCID != 0 {
+			m.CIDs.Release(guestCID)
+		}
 		return fmt.Errorf("pool: launch %s/%s: %w", cls.Name, id, err)
 	}
 
@@ -349,6 +380,7 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 		KataSocket: sock,
 		StorageRef: entryDir,
 		PausedAt:   m.clockFn(),
+		GuestCID:   guestCID,
 	}
 	m.mu.Lock()
 	m.state[cls.Name] = append(m.state[cls.Name], entry)
@@ -372,12 +404,20 @@ func (m *Manager) Claim(ctx context.Context, className, imageRef string) (Entry,
 			return Entry{}, false, nil
 		}
 		if err := poolentry.Verify(e.StorageRef, e.ImageRef); err != nil {
-			// Refused entry: destroy it (state, key, socket) rather
-			// than returning it to the pool, and keep scanning.
-			if relErr := m.releaseEntry(ctx, e); relErr != nil {
+			// Refused entry: destroy it (state, key, socket, CID)
+			// rather than returning it to the pool, and keep scanning.
+			if relErr := m.releaseEntry(ctx, e, true); relErr != nil {
 				return Entry{}, false, fmt.Errorf("pool: refusing entry %s (%v) and teardown failed: %w", e.ID, err, relErr)
 			}
 			continue
+		}
+		// Hand the CID registration over to the restore path: the
+		// entry leaves the pool, and the gRPC server re-registers the
+		// CID to the claiming sandbox once the restored guest
+		// confirms it. Allocate never re-issues released values, so
+		// nothing can grab the CID in between.
+		if m.CIDs != nil && e.GuestCID != 0 {
+			m.CIDs.Release(e.GuestCID)
 		}
 		return *e, true, nil
 	}
@@ -405,9 +445,11 @@ func (m *Manager) popMatching(className, imageRef string) (*Entry, bool) {
 // Release (which looks the entry up by ID) cannot find it; callers
 // that consumed an entry — successfully restored or not — use this to
 // erase its on-disk state (ADR-0005: pool state is never restored
-// twice).
+// twice). The entry's CID registration was already handed over at
+// Claim time and is NOT touched here: on a successful restore the
+// restored sandbox now owns it.
 func (m *Manager) ReleaseClaimed(ctx context.Context, e Entry) error {
-	return m.releaseEntry(ctx, &e)
+	return m.releaseEntry(ctx, &e, false)
 }
 
 // Release tears down a claimed or expired entry: it deletes the
@@ -419,7 +461,7 @@ func (m *Manager) Release(ctx context.Context, entryID string) error {
 	if e == nil {
 		return fmt.Errorf("pool: entry %q not found", entryID)
 	}
-	return m.releaseEntry(ctx, e)
+	return m.releaseEntry(ctx, e, true)
 }
 
 // releaseEntry tears down the on-disk artefacts for an entry. The
@@ -436,9 +478,17 @@ func (m *Manager) Release(ctx context.Context, entryID string) error {
 // erasing the encrypted state/memory files even if the subsequent
 // directory removal is interrupted or the filesystem's overwrite
 // semantics are weak (copy-on-write).
-func (m *Manager) releaseEntry(_ context.Context, e *Entry) error {
+//
+// freeCID releases the entry's guest-CID registration; it is true for
+// entries torn down while still pool-owned (expired, pruned, drained,
+// refused) and false for claimed entries, whose CID ownership moved to
+// the restored sandbox at Claim time.
+func (m *Manager) releaseEntry(_ context.Context, e *Entry, freeCID bool) error {
 	if e == nil {
 		return nil
+	}
+	if freeCID && m.CIDs != nil && e.GuestCID != 0 {
+		m.CIDs.Release(e.GuestCID)
 	}
 	if e.StorageRef != "" {
 		if err := atrest.Shred(filepath.Join(e.StorageRef, poolentry.DEKFile)); err != nil && !os.IsNotExist(err) {

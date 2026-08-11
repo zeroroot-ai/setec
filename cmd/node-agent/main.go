@@ -58,6 +58,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/reaper"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
 const (
@@ -97,6 +98,7 @@ func main() {
 		poolReconcileTick    time.Duration
 		orphanReapTick       time.Duration
 		entropyReseedMode    string
+		restoreUniquifyMode  string
 	)
 	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
 		"Name of the devicemapper thin-pool to manage.")
@@ -162,10 +164,19 @@ func main() {
 			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
 			"over vsock; 'off' is an explicit opt-out that leaves only the passive virtio-rng "+
 			"mechanism (guest images without setec-guest-agent need this).")
+	flag.StringVar(&restoreUniquifyMode, "restore-uniquify", "require",
+		"Per-restore identity uniquification (ADR-0005 invariant 2, setec#189). 'require' (default) "+
+			"fails a restore closed unless the in-guest setec-guest-agent confirms a fresh "+
+			"machine-id/boot-id/hostname, the CNI-assigned Pod IP, and a node-unique vsock CID. "+
+			"'off' is an explicit opt-out.")
 	flag.Parse()
 
 	if entropyReseedMode != "require" && entropyReseedMode != "off" {
 		fmt.Fprintf(os.Stderr, "node-agent: invalid --entropy-reseed %q (want \"require\" or \"off\")\n", entropyReseedMode)
+		os.Exit(1)
+	}
+	if restoreUniquifyMode != "require" && restoreUniquifyMode != "off" {
+		fmt.Fprintf(os.Stderr, "node-agent: invalid --restore-uniquify %q (want \"require\" or \"off\")\n", restoreUniquifyMode)
 		os.Exit(1)
 	}
 
@@ -216,6 +227,10 @@ func main() {
 		Name: "setec_node_entropy_reseed_total",
 		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
 	}, []string{"outcome"})
+	restoreUniquifies := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "setec_node_restore_uniquify_total",
+		Help: "Post-restore identity uniquification attempts by outcome (success/failure); failures fail the restore closed.",
+	}, []string{"outcome"})
 	poolFill := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "setec_prewarm_pool_entries",
 		Help: "Number of pre-warmed pool entries currently paused on this node for a SandboxClass.",
@@ -224,7 +239,7 @@ func main() {
 		Name: "setec_prewarm_pool_claims_total",
 		Help: "Pool claim attempts by outcome (restored, miss, restore_failed).",
 	}, []string{"outcome"})
-	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds, poolFill, poolClaims)
+	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds, restoreUniquifies, poolFill, poolClaims)
 	// Presence of /dev/kvm is our local ready signal; deeper health
 	// checks require the controller-side runtime class and are out
 	// of scope for the node agent.
@@ -310,12 +325,19 @@ func main() {
 		ffactory := func(sock string) firecracker.Client {
 			return firecracker.NewClientFromSocket(sock)
 		}
+		// The node-local vsock CID authority is shared between the pool
+		// Manager (allocates a unique CID per pool boot) and the gRPC
+		// restore path (verifies the CID a restored guest reports) —
+		// ADR-0005 invariant 2.
+		cids := uniquify.NewCIDAllocator()
+
 		poolMgr := pool.New(backend, nodeagent.NewImageCache(puller), ffactory, nodeName)
 		launcher := pool.DefaultExecLauncher()
 		// Pool entries seal their per-entry DEKs with the same node
 		// KEK the snapshot backend uses.
 		launcher.ExtraArgs = append(launcher.ExtraArgs, "--key-file", snapshotKeyFile)
 		poolMgr.Launcher = launcher
+		poolMgr.CIDs = cids
 		if kataSocketPattern != "" {
 			poolMgr.SocketPattern = kataSocketPattern
 		}
@@ -326,8 +348,12 @@ func main() {
 			Pool:               poolMgr,
 			PoolKEKPath:        snapshotKeyFile,
 			TempDir:            snapshotRoot + "/tmp",
+			CIDs:               cids,
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()
+			},
+			UniquifyObserver: func(outcome string) {
+				restoreUniquifies.WithLabelValues(outcome).Inc()
 			},
 			ClaimObserver: func(outcome string) {
 				poolClaims.WithLabelValues(outcome).Inc()
@@ -346,6 +372,20 @@ func main() {
 			fmt.Fprintln(os.Stderr,
 				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 					"restored snapshot clones rely on passive virtio-rng only")
+		}
+		// Per-restore identity uniquification (ADR-0005 invariant 2,
+		// setec#189). Default fail-closed: a restored sandbox is only
+		// reported successful once the in-guest setec-guest-agent has
+		// confirmed a fresh machine-id/boot-id/hostname, its
+		// CNI-assigned Pod IP, and a node-unique vsock CID.
+		// --restore-uniquify=off is the explicit, auditable opt-out.
+		if restoreUniquifyMode == "require" {
+			srv.Uniquifier = uniquify.NewVsockUniquifier()
+			fmt.Fprintln(os.Stderr, "node-agent: restore uniquification ENFORCED (--restore-uniquify=require)")
+		} else {
+			fmt.Fprintln(os.Stderr,
+				"node-agent: restore uniquification DISABLED (--restore-uniquify=off); "+
+					"restored snapshot clones keep the snapshotted machine identity")
 		}
 		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
 

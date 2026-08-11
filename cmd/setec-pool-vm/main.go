@@ -84,11 +84,13 @@ const (
 	// transport, setec#72).
 	vsockFileName = "vsock.sock"
 
-	// guestCID is the vsock context id assigned to the guest. 0-2 are
+	// defaultGuestCID is the fallback vsock context id when the
+	// node-agent does not pass an explicit --guest-cid. 0-2 are
 	// reserved (hypervisor/loopback/host); 3 is the conventional
-	// first guest CID and unique per VM since each Firecracker
-	// process has its own vsock namespace.
-	guestCID = 3
+	// first guest CID. Production pool boots ALWAYS pass an explicit
+	// node-unique CID from the node-agent's allocator (ADR-0005
+	// invariant 2) so two entries never share one.
+	defaultGuestCID = 3
 )
 
 // Options carries every knob the launcher takes. Kept as an explicit
@@ -108,6 +110,7 @@ type Options struct {
 	BootArgs           string
 	VsockUDSPath       string
 	KeyFile            string
+	GuestCID           uint
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -137,6 +140,9 @@ func parseFlags(args []string) (Options, error) {
 	fs.StringVar(&o.KeyFile, "key-file", defaultKeyFile,
 		"node-local key-encryption-key file the per-entry snapshot DEK is sealed with "+
 			"(created on first use). Snapshot state is ALWAYS encrypted at rest; there is no opt-out.")
+	fs.UintVar(&o.GuestCID, "guest-cid", defaultGuestCID,
+		"vsock context id assigned to the guest; the node-agent allocates a node-unique "+
+			"value per pool entry (ADR-0005 invariant 2). Must be >= 3 (0-2 are reserved)")
 
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -168,6 +174,9 @@ func parseFlags(args []string) (Options, error) {
 	}
 	if o.VCPUs <= 0 || o.MemoryMiB <= 0 {
 		return o, errors.New("--vcpus and --memory-mib must be positive")
+	}
+	if o.GuestCID < 3 || o.GuestCID > 0xFFFFFFFF {
+		return o, fmt.Errorf("--guest-cid must be in 3..2^32-1, got %d", o.GuestCID)
 	}
 	return o, nil
 }
@@ -239,6 +248,12 @@ func runLauncher(
 	spawner Spawner,
 	factory ClientFactory,
 ) (err error) {
+	// Callers constructing Options directly (tests) may leave GuestCID
+	// zero; fall back to the conventional first guest CID.
+	if o.GuestCID == 0 {
+		o.GuestCID = defaultGuestCID
+	}
+
 	// Ensure the storage directory exists before we spend time booting
 	// a VM whose state we cannot persist.
 	entryDir := filepath.Join(o.StorageRoot, o.PoolEntryID)
@@ -411,7 +426,7 @@ func configureAndBoot(ctx context.Context, _ firecracker.Client, o Options) erro
 	// device is part of the VM config, so it is captured in the
 	// snapshot and re-established on restore, exactly like /entropy.
 	vsockBody := map[string]any{
-		"guest_cid": guestCID,
+		"guest_cid": o.GuestCID,
 		"uds_path":  vsockUDSPath(o),
 	}
 	if err := ec.do(ctx, "/vsock", vsockBody); err != nil {
