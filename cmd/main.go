@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	grpccreds "google.golang.org/grpc/credentials"
 	nodev1 "k8s.io/api/node/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -53,6 +54,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/prereq"
@@ -393,13 +395,16 @@ func main() {
 	// Phase 2-equivalent.
 	var coordinator *snapshot.Coordinator
 	if snapshotsEnabled {
-		dialer := snapshot.NewGRPCDialer(nodeAgentEndpoint, nil)
-		tlsConfig, err := snapshot.LoadTLSConfig(nodeAgentTLSCert, nodeAgentTLSKey, nodeAgentTLSCA)
+		creds, err := nodeAgentClientCredentials(context.Background(), nodeAgentCredentialFlags{
+			certPath: nodeAgentTLSCert,
+			keyPath:  nodeAgentTLSKey,
+			caPath:   nodeAgentTLSCA,
+		})
 		if err != nil {
-			setupLog.Error(err, "unable to load node-agent TLS config")
+			setupLog.Error(err, "unable to load node-agent client credentials")
 			os.Exit(1)
 		}
-		dialer.TLSConfig = tlsConfig
+		dialer := snapshot.NewGRPCDialer(nodeAgentEndpoint, creds)
 		snapshotCoordRecorder := mgr.GetEventRecorder("snapshot-coordinator")
 		coordinator = &snapshot.Coordinator{
 			Client:            mgr.GetClient(),
@@ -517,6 +522,53 @@ func main() {
 		setupLog.Error(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// nodeAgentCredentialFlags carries the credential-related flag values
+// the operator parsed for its client hop to the node-agents. It exists
+// so the translation from flags to a credential source happens in
+// exactly one place, and so a test can exercise that translation
+// without the process exiting.
+type nodeAgentCredentialFlags struct {
+	certPath string
+	keyPath  string
+	caPath   string
+}
+
+// credentialConfig translates the parsed flags into the credential
+// module's configuration, or reports why this component must not
+// start. It is the client-side twin of the check cmd/frontend and
+// cmd/node-agent make on their server surfaces: same shape, same
+// refusal to start on a half-configured credential.
+func (f nodeAgentCredentialFlags) credentialConfig() (credentials.Config, error) {
+	if f.certPath == "" || f.keyPath == "" || f.caPath == "" {
+		return credentials.Config{}, errors.New(
+			"--nodeagent-tls-cert, --nodeagent-tls-key and --nodeagent-ca are required; mTLS is mandatory")
+	}
+	return credentials.Config{
+		Files: &credentials.FileSource{
+			CertFile: f.certPath,
+			KeyFile:  f.keyPath,
+			CAFile:   f.caPath,
+		},
+	}, nil
+}
+
+// nodeAgentClientCredentials resolves the transport credentials the
+// snapshot dialer presents to node-agents. The operator is the client
+// on this hop, so what it must get right is whose node-agent it is
+// willing to talk to — the credential module owns that decision, and
+// this function only names the surface it needs.
+func nodeAgentClientCredentials(ctx context.Context, f nodeAgentCredentialFlags) (grpccreds.TransportCredentials, error) {
+	cfg, err := f.credentialConfig()
+	if err != nil {
+		return nil, err
+	}
+	provider, err := credentials.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return provider.ClientCredentials(ctx)
 }
 
 // runStartupPrereqCheck performs the one-shot cluster prerequisite check and

@@ -18,15 +18,12 @@ package snapshot
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	grpccreds "google.golang.org/grpc/credentials"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 )
@@ -45,21 +42,25 @@ type GRPCDialer struct {
 	// a node name (e.g. "%s.setec-node-agent.setec-system.svc:50052").
 	EndpointPattern string
 
-	// TLSConfig is the client tls.Config used for mTLS. Required —
-	// the operator-to-node-agent channel is always mTLS. Populated
-	// from --nodeagent-tls-cert/--nodeagent-tls-key/--nodeagent-ca.
-	TLSConfig *tls.Config
+	// Credentials are the client transport credentials used for
+	// mTLS. Required — the operator-to-node-agent channel is always
+	// mTLS. They come from internal/credentials, which is what
+	// decides where the operator's identity is sourced from and
+	// whose node-agent it is willing to talk to; the dialer only
+	// carries them to grpc.NewClient.
+	Credentials grpccreds.TransportCredentials
 
 	mu    sync.Mutex
 	conns map[string]*grpc.ClientConn
 }
 
-// NewGRPCDialer constructs a GRPCDialer with the provided config.
-// The connection cache is lazily populated.
-func NewGRPCDialer(pattern string, tlsCfg *tls.Config) *GRPCDialer {
+// NewGRPCDialer constructs a GRPCDialer with the provided endpoint
+// pattern and client credentials. The connection cache is lazily
+// populated.
+func NewGRPCDialer(pattern string, creds grpccreds.TransportCredentials) *GRPCDialer {
 	return &GRPCDialer{
 		EndpointPattern: pattern,
-		TLSConfig:       tlsCfg,
+		Credentials:     creds,
 		conns:           map[string]*grpc.ClientConn{},
 	}
 }
@@ -79,10 +80,10 @@ func (d *GRPCDialer) Dial(_ context.Context, nodeName string) (NodeAgentClient, 
 
 	target := fmt.Sprintf(d.EndpointPattern, nodeName)
 
-	if d.TLSConfig == nil {
-		return nil, errors.New("grpcdialer: TLSConfig is required; mTLS is mandatory")
+	if d.Credentials == nil {
+		return nil, errors.New("grpcdialer: Credentials are required; mTLS is mandatory")
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(d.TLSConfig))}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(d.Credentials)}
 
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
@@ -137,28 +138,4 @@ func (d *GRPCDialer) Close() error {
 	}
 	d.conns = map[string]*grpc.ClientConn{}
 	return firstErr
-}
-
-// LoadTLSConfig builds a *tls.Config suitable for passing to
-// NewGRPCDialer. It reads the operator's client certificate and key,
-// plus the CA used to verify node-agent server certificates. Fails
-// loudly on any missing or unparseable file.
-func LoadTLSConfig(certPath, keyPath, caPath string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("tls keypair: %w", err)
-	}
-	caBytes, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, fmt.Errorf("read ca: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, errors.New("ca file contained no usable certificates")
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		MinVersion:   tls.VersionTLS13,
-	}, nil
 }

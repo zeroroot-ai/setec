@@ -22,8 +22,6 @@ package tracing
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"os"
 
@@ -35,9 +33,9 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
-	"google.golang.org/grpc/credentials"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 )
 
 // ServiceName is the service.name resource attribute stamped on every
@@ -73,6 +71,10 @@ type Config struct {
 	Insecure bool
 	// CAFile optionally overrides the system root CAs with a PEM
 	// bundle the operator has mounted. Ignored when Insecure is true.
+	//
+	// Note what this hop is: the collector is authenticated, setec is
+	// not. The exporter presents no client certificate, so a collector
+	// cannot use this channel to establish who is talking to it.
 	CAFile string
 }
 
@@ -102,7 +104,11 @@ func Setup(cfg Config) (trace.Tracer, ShutdownFunc, error) {
 			"tracing: WARNING --otel-insecure set; OTLP traces will be exported in plaintext")
 		opts = append(opts, otlptracegrpc.WithInsecure())
 	} else {
-		tlsCreds, err := buildOTLPTLSCredentials(cfg.CAFile)
+		// The collector is verified but setec presents no identity
+		// to it: this hop is one-way TLS, not mTLS, and the
+		// credential module names it as such. Nothing else in this
+		// package touches crypto/tls.
+		tlsCreds, err := credentials.TrustOnlyCredentials(credentials.TrustOnly{CAFile: cfg.CAFile})
 		if err != nil {
 			return nil, nil, fmt.Errorf("tracing: build OTLP TLS credentials: %w", err)
 		}
@@ -144,27 +150,6 @@ func Setup(cfg Config) (trace.Tracer, ShutdownFunc, error) {
 	}
 
 	return tp.Tracer(TracerName), shutdown, nil
-}
-
-// buildOTLPTLSCredentials returns TransportCredentials configured
-// from the system root CAs by default, or from an explicit PEM bundle
-// when caFile is non-empty. A missing or malformed caFile is fatal:
-// silently falling back to system roots would violate operator
-// intent.
-func buildOTLPTLSCredentials(caFile string) (credentials.TransportCredentials, error) {
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if caFile != "" {
-		pem, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read CA file %q: %w", caFile, err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("CA file %q contains no usable certificates", caFile)
-		}
-		tlsCfg.RootCAs = pool
-	}
-	return credentials.NewTLS(tlsCfg), nil
 }
 
 // StartSandboxSpan starts a root span for a Sandbox reconciliation or any
