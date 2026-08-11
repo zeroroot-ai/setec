@@ -42,6 +42,54 @@ Setec warms pools by restoring microVMs from shared Snapshots. A Snapshot is
 restored across every warm-pool claim of a SandboxClass, which creates three
 distinct risks. The invariants below are enforced in code (ADR-0052).
 
+### The invariant gate (ADR-0005): unverified restores are never served
+
+Every mechanism below produces a **per-restore verification signal**, and one
+operator-side decision point — the invariant gate
+(`internal/snapshot/gate`) — consumes them all. Outside dev-mode, setec
+serves a snapshot warm-start or a checkpoint/snapshot resume ONLY when all
+five ADR-0005 invariants carry a positive verification for that specific
+restore:
+
+1. **Clean base** — the restored template is the class image booted to
+   guest-agent-ready (attested per claim via the verified provenance record;
+   see "No secrets in a Snapshot" and "Template provenance").
+2. **Per-restore uniquification** — the guest verifiably received a fresh
+   CSPRNG reseed AND adopted a fresh machine-id/boot-id/hostname, its
+   CNI-assigned Pod IP, and a node-unique vsock CID (see "Entropy reseed on
+   restore" and "Restore uniquification").
+3. **One-session-then-destroy** — the restored state serves exactly one
+   session: pool entries are consumed on claim, and a snapshot resume must
+   target the sandbox that produced the artifact (cross-sandbox restores are
+   refused before any state is loaded).
+4. **Template provenance** — the entry's provenance record names the
+   class-image boot path and is cryptographically bound into its sealed
+   encryption key (see "Template provenance").
+5. **Encrypted at rest** — the state was served through the sealed-DEK
+   encrypted path (see "Snapshots encrypted at rest").
+
+The gate **fails closed on absence of evidence**: a node-agent that was
+opted out of a verification (`--entropy-reseed=off`,
+`--restore-uniquify=off`) reports the missing signal truthfully, and the
+operator then refuses the restore — the sandbox that received the
+unverified state is destroyed (`Failed`/`InvariantGateViolation`, a typed
+`InvariantGateViolation` Event, `status.warmStart.outcome: Rejected`) and is
+never handed to a caller. Ordinary cold boots are unaffected: a pool miss or
+a node-side restore failure still falls back to cold boot; only a
+*successful-but-unverified* restore is terminal, because the VM already
+holds the restored state.
+
+The **dev-mode opt-out is deliberate and loud**, mirroring the dev-only
+runtime (runc) gate: it requires BOTH the
+`setec.zeroroot.ai/allow-unverified-restores: "true"` annotation on the
+SandboxClass AND the cluster-level
+`setec.zeroroot.ai/allow-dev-runtimes=true` label on the gate namespace.
+While active, the class carries a visible
+`UnverifiedRestoresAllowed=True` status condition, the operator logs the
+opt-out, and every restore served despite failed verifications emits an
+`UnverifiedRestoreAllowed` Warning Event. Never use the opt-out in
+production.
+
 ### No secrets in a Snapshot
 
 A Snapshot is shared across every warm-pool claim, so any secret baked into
@@ -207,7 +255,10 @@ Residual risk and scope limits, stated precisely:
   only — until virtio-rng's next reseed, workloads minting keys/nonces
   immediately on resume may share RNG state across clones. The opt-out is a
   deliberate, auditable flag; there is no silent fallback, and setec still
-  ships no stub that falsely claims to reseed.
+  ships no stub that falsely claims to reseed. Additionally, the invariant
+  gate (above) refuses to SERVE restores whose reseed went unverified
+  outside dev-mode — the node-side flag alone cannot weaken a production
+  deployment.
 - The reseed covers the node-agent `RestoreSandbox` path (the only
   snapshot-load path in the runtime). Pause/resume of the *same* VM does not
   clone CSPRNG state and needs no reseed.
@@ -242,7 +293,9 @@ caller. Outcomes are observable via the
 
 The opt-out mirrors the reseed's: `snapshots.restoreUniquify: off`
 (`--restore-uniquify=off`) is deliberate and auditable, and restored clones
-then keep the machine identity captured at snapshot time.
+then keep the machine identity captured at snapshot time. As with the
+reseed, the invariant gate refuses to serve such unverified restores
+outside dev-mode.
 
 ### What mTLS proves, per credential mode
 

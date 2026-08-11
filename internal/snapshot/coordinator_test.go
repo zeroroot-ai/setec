@@ -40,6 +40,33 @@ import (
 
 // --- test doubles --------------------------------------------------
 
+// verifiedRestoreRes returns a RestoreSandboxResponse carrying every
+// ADR-0005 per-restore verification signal, so the invariant gate
+// admits the restore. Tests that exercise a specific missing signal
+// build their own response.
+func verifiedRestoreRes() *setecgrpcv1.RestoreSandboxResponse {
+	return &setecgrpcv1.RestoreSandboxResponse{
+		Success:         true,
+		EntropyReseeded: true,
+		Uniquified:      true,
+		EncryptedAtRest: true,
+	}
+}
+
+// verifiedClaimRes is the pool-claim counterpart of
+// verifiedRestoreRes.
+func verifiedClaimRes(entryID string) *setecgrpcv1.ClaimPoolEntryResponse {
+	return &setecgrpcv1.ClaimPoolEntryResponse{
+		Claimed:            true,
+		Success:            true,
+		EntryId:            entryID,
+		EntropyReseeded:    true,
+		Uniquified:         true,
+		ProvenanceVerified: true,
+		EncryptedAtRest:    true,
+	}
+}
+
 // fakeNodeAgentClient records the most recent request and returns
 // the configured response/error. Individual test cases swap the
 // response or error via the constructor.
@@ -331,14 +358,15 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "ghcr.io/org/app:v1",
+			SourceSandbox: "s",
+			SandboxClass:  "standard", ImageRef: "ghcr.io/org/app:v1",
 			Node: "node-a", StorageBackend: "local-disk", StorageRef: "t-a-snap-1",
 			VMM: setecv1alpha1.VMMFirecracker,
 		},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true},
+		restoreRes: verifiedRestoreRes(),
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
 
@@ -369,7 +397,7 @@ func TestRestoreSandbox_RPCError(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{Node: "node-a"},
+		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
@@ -508,14 +536,15 @@ func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", Node: "node-a",
+			SourceSandbox: "s",
+			SandboxClass:  "standard", Node: "node-a",
 			StorageBackend: "local-disk", StorageRef: "t-a-snap-1",
 			VMM: setecv1alpha1.VMMFirecracker,
 		},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: true},
+		restoreRes: verifiedRestoreRes(),
 	}
 	rec := testutil.NewFakeEventsRecorder(32)
 	coord := &Coordinator{
@@ -546,19 +575,24 @@ func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
 	}
 }
 
-// TestRestoreSandbox_NoReseedEventWithoutConfirmation pins that the
-// event is only emitted when the node-agent actually confirmed the
-// reseed (no false assurance on --entropy-reseed=off).
+// TestRestoreSandbox_NoReseedEventWithoutConfirmation pins that a
+// restore whose reseed the node-agent did NOT confirm (e.g.
+// --entropy-reseed=off) is refused by the ADR-0005 invariant gate:
+// no EntropyReseeded event, a typed InvariantGateViolation instead,
+// and the restore surfaces the terminal gate error.
 func TestRestoreSandbox_NoReseedEventWithoutConfirmation(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{Node: "node-a"},
+		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
+	res := verifiedRestoreRes()
+	res.EntropyReseeded = false
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: false},
+		restoreRes: res,
+		pauseRes:   &setecgrpcv1.PauseSandboxResponse{Success: true},
 	}
 	rec := testutil.NewFakeEventsRecorder(32)
 	coord := &Coordinator{
@@ -567,18 +601,30 @@ func TestRestoreSandbox_NoReseedEventWithoutConfirmation(t *testing.T) {
 		Recorder: rec,
 		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
 	}
-	if err := coord.RestoreSandbox(context.Background(), sb, snap); err != nil {
-		t.Fatalf("RestoreSandbox: %v", err)
+	err := coord.RestoreSandbox(context.Background(), sb, snap)
+	if !errors.Is(err, ErrInvariantGateViolation) {
+		t.Fatalf("err = %v, want ErrInvariantGateViolation", err)
 	}
+	// The unverified VM must have been paused before hand-back.
+	if na.lastPause == nil {
+		t.Fatal("expected the unverified VM to be paused")
+	}
+	sawViolation := false
 	for {
 		select {
 		case ev := <-rec.Events:
 			if strings.Contains(ev, EventReasonEntropyReseeded) {
 				t.Fatalf("EntropyReseeded event emitted without confirmation: %s", ev)
 			}
+			if strings.Contains(ev, EventReasonInvariantGateViolation) {
+				sawViolation = true
+			}
 			continue
 		default:
 		}
 		break
+	}
+	if !sawViolation {
+		t.Fatal("expected an InvariantGateViolation event on an unconfirmed reseed")
 	}
 }

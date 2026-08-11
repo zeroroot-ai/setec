@@ -287,6 +287,19 @@ type SandboxClassStatus struct {
 	// reconciled. Optional; left empty in Phase 2.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions surface class-level facts the operator wants loudly
+	// visible. Today the only stamped type is
+	// UnverifiedRestoresAllowed: True when the class carries the
+	// setec.zeroroot.ai/allow-unverified-restores="true" dev-mode
+	// annotation AND the cluster-level dev gate label is present, so
+	// the ADR-0005 invariant gate may serve unverified restores for
+	// this class. Anyone auditing the cluster sees the opt-out on the
+	// class itself, not buried in per-sandbox events.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

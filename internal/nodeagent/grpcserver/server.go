@@ -366,6 +366,11 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		Success:         true,
 		EntropyReseeded: reseeded,
 		Uniquified:      uniquified,
+		// Reported from the attested capability of the backend that
+		// actually served THIS restore (node-local or per-session S3),
+		// never assumed: the operator-side invariant gate (ADR-0005)
+		// fails closed on false outside dev.
+		EncryptedAtRest: storage.IsEncryptedAtRest(backend),
 	}, nil
 }
 
@@ -660,6 +665,15 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 		EntryId:         entry.ID,
 		EntropyReseeded: reseeded,
 		Uniquified:      uniquified,
+		// Both attestations are earned by the only code path that can
+		// reach this return: Claim verified the template-provenance
+		// record (pool.Manager → poolentry.Verify) and decryptPoolEntry
+		// unsealed the per-entry DEK under AAD that binds that record
+		// (a foreign or tampered record makes the DEK unopenable), then
+		// decrypted the always-encrypted state pair. ADR-0005
+		// invariants 1/4 (provenance ⇒ clean class-image base) and 5.
+		ProvenanceVerified: true,
+		EncryptedAtRest:    true,
 	}, nil
 }
 

@@ -98,6 +98,11 @@ const (
 	eventReasonWorkspaceCreated      = "WorkspaceCreated"
 	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
 	eventReasonSessionVMRestart      = "SessionVMRestart"
+	// eventReasonInvariantGateViolation mirrors the coordinator's
+	// typed reason (snapshot.EventReasonInvariantGateViolation): the
+	// ADR-0005 invariant gate refused a restore and the Pod holding
+	// the unverified state is destroyed.
+	eventReasonInvariantGateViolation = "InvariantGateViolation"
 
 	// workspaceFinalizer guards session-Sandbox deletion so the durable
 	// workspace PVC is wiped and deleted before the Sandbox object goes
@@ -727,6 +732,12 @@ func (r *SandboxReconciler) reconcileExistingPod(
 			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after idle eviction: %w", err))
 			}
+		case status.ReasonInvariantGateViolation:
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
+				"ADR-0005 invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after invariant-gate refusal: %w", err))
+			}
 		}
 	}
 
@@ -884,10 +895,21 @@ func (r *SandboxReconciler) maybeWarmStart(
 
 	outcome, entryID := r.Coordinator.WarmStartFromPool(ctx, sb, cls)
 	ws := &setecv1alpha1.SandboxWarmStartStatus{}
-	if outcome == snapshot.WarmStartRestored {
+	switch outcome {
+	case snapshot.WarmStartRestored:
 		ws.Outcome = setecv1alpha1.SandboxWarmStartPoolRestored
 		ws.EntryID = entryID
-	} else {
+	case snapshot.WarmStartRejected:
+		// ADR-0005 invariant gate refusal: the Pod's VM already holds
+		// the unverified restored state, so cold boot is NOT a safe
+		// fallback. The Sandbox fails terminally and step (12) of the
+		// reconcile destroys the Pod.
+		ws.Outcome = setecv1alpha1.SandboxWarmStartRejected
+		ws.EntryID = entryID
+		ws.Reason = string(outcome)
+		desired.Phase = setecv1alpha1.SandboxPhaseFailed
+		desired.Reason = status.ReasonInvariantGateViolation
+	default:
 		ws.Outcome = setecv1alpha1.SandboxWarmStartColdBoot
 		ws.Reason = string(outcome)
 	}

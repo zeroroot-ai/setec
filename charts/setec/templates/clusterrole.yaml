@@ -88,6 +88,16 @@ rules:
       - get
       - list
       - watch
+  # ADR-0005 invariant gate: the class controller stamps the loud
+  # UnverifiedRestoresAllowed condition on the class status.
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxclasses/status
+    verbs:
+      - get
+      - patch
+      - update
   # Phase 2: multi-tenancy namespace label lookups.
   - apiGroups:
       - ""

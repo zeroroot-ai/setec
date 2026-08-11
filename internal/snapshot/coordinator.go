@@ -37,6 +37,7 @@ import (
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/metrics"
+	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -107,6 +108,13 @@ type Coordinator struct {
 	// node-agent in CreateSnapshotRequest.StorageBackend. Defaults to
 	// "local-disk".
 	StorageBackendName string
+
+	// Gate resolves the dev-mode opt-out for the ADR-0005 invariant
+	// gate. The gate itself is ALWAYS enforced — every restore/resume
+	// the Coordinator serves passes through one decision point that
+	// fails closed on any unverified invariant. A nil Gate only means
+	// no dev opt-out can ever be granted.
+	Gate *gate.Gate
 }
 
 // Event reason constants — exported so callers can use them for
@@ -125,6 +133,17 @@ const (
 	EventReasonSnapshotNameConflict   = "SnapshotNameConflict"
 	EventReasonWarmStartRestored      = "WarmStartRestored"
 	EventReasonWarmStartColdBoot      = "WarmStartColdBoot"
+	// EventReasonInvariantGateViolation is the typed reason surfaced
+	// when the ADR-0005 invariant gate refuses a restore/resume: one
+	// or more per-restore invariant verifications did not pass and no
+	// dev-mode opt-out is active. The sandbox that received the
+	// unverified state is destroyed, never handed to a caller.
+	EventReasonInvariantGateViolation = "InvariantGateViolation"
+	// EventReasonUnverifiedRestoreAllowed is emitted (as a Warning)
+	// every time the dev-mode opt-out serves a restore despite failed
+	// invariant verifications. Deliberately loud: dev-mode is an
+	// auditable exception, not a quiet default.
+	EventReasonUnverifiedRestoreAllowed = "UnverifiedRestoreAllowed"
 )
 
 // WarmStartOutcome classifies the result of a pool warm-start attempt.
@@ -142,6 +161,14 @@ const (
 	// the node-agent was unreachable; the Sandbox continues its cold
 	// boot.
 	WarmStartError WarmStartOutcome = "error"
+	// WarmStartRejected: the restore itself succeeded node-side but
+	// the ADR-0005 invariant gate refused to serve it — at least one
+	// per-restore invariant verification did not pass and no dev-mode
+	// opt-out is active. Unlike every other failure mode this does NOT
+	// fall back to cold boot: the Sandbox's VM already holds the
+	// unverified restored state, so the caller must destroy the
+	// Sandbox.
+	WarmStartRejected WarmStartOutcome = "rejected"
 )
 
 // defaultKataSocketPattern is used when the Coordinator's
@@ -162,6 +189,13 @@ const defaultStorageBackend = "local-disk"
 // namespace. The reconciler detects this early and emits a specific
 // Event reason.
 var ErrSnapshotNameConflict = errors.New("snapshot: name already in use in namespace")
+
+// ErrInvariantGateViolation is surfaced when the ADR-0005 invariant
+// gate refuses a restore/resume. Callers MUST treat it as terminal
+// for the target sandbox — the VM may already hold unverified
+// restored state, so the sandbox is destroyed, never retried into
+// service.
+var ErrInvariantGateViolation = errors.New("snapshot: ADR-0005 invariant gate refused the restore")
 
 // CreateSnapshot pauses the source sandbox, delegates snapshot
 // persistence to the node-agent, and creates a Snapshot CR on
@@ -308,7 +342,14 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 // the snapshot state. Pod pinning is the reconciler's responsibility;
 // this function assumes the Pod is already scheduled to
 // snap.Spec.Node. A non-nil error leaves the Sandbox in Restoring
-// state so the reconciler can decide whether to fail or retry.
+// state so the reconciler can decide whether to fail or retry —
+// EXCEPT an error wrapping ErrInvariantGateViolation, which is
+// terminal: the sandbox must be destroyed.
+//
+// This method is the shared restore/resume chokepoint: any future
+// resume path (e.g. session checkpoint resume) that lands its state
+// through this coordinator inherits the ADR-0005 invariant gate
+// automatically.
 func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot) error {
 	if sb == nil || snap == nil {
 		return errors.New("coordinator: RestoreSandbox requires non-nil sandbox and snapshot")
@@ -320,6 +361,29 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		attribute.String("setec.snapshot.name", snap.Name),
 	)
 	start := time.Now()
+
+	// ADR-0005 gate, operator-verifiable half. A snapshot restore is
+	// only an intra-session resume when the artifact provably came
+	// from the sandbox it is being restored into (spec.sourceSandbox
+	// binding). Cross-sandbox restore reuses one session's state for
+	// another — invariants 1/3/4 all fail — so outside dev-mode it is
+	// refused BEFORE any state is loaded into the target VM.
+	cls := c.classOf(ctx, sb)
+	bound := snap.Spec.SourceSandbox == sb.Name
+	preflight := gate.Evidence{
+		CleanBase:          bound,
+		EntropyReseeded:    true, // verified post-RPC
+		IdentityUniquified: true, // verified post-RPC
+		SingleSession:      bound,
+		ProvenanceVerified: bound,
+		EncryptedAtRest:    true, // verified post-RPC
+	}
+	if decision, gateErr := c.Gate.Decide(ctx, cls, preflight); !decision.Allowed {
+		msg := c.gateRefusalMsg("snapshot "+snap.Name, decision, gateErr)
+		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
+		setSpanErr(span, msg)
+		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
+	}
 
 	pod, err := c.getPod(ctx, sb)
 	if err != nil {
@@ -360,6 +424,39 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: RestoreSandbox RPC: %s", msg)
 	}
 
+	// ADR-0005 gate, full evidence. The node reported success — the
+	// state is loaded — so a refusal here is terminal for the sandbox:
+	// pause the VM best-effort and surface the typed violation. This
+	// closes the "node-agent opted out of a verification" hole: a
+	// restore whose reseed/uniquification/encryption is unverified is
+	// never handed to a caller outside dev-mode.
+	ev := gate.Evidence{
+		CleanBase:          bound,
+		EntropyReseeded:    resp.GetEntropyReseeded(),
+		IdentityUniquified: resp.GetUniquified(),
+		SingleSession:      bound,
+		ProvenanceVerified: bound,
+		EncryptedAtRest:    resp.GetEncryptedAtRest(),
+	}
+	decision, gateErr := c.Gate.Decide(ctx, cls, ev)
+	if !decision.Allowed {
+		msg := c.gateRefusalMsg("snapshot "+snap.Name, decision, gateErr)
+		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
+			SandboxId:        sb.Namespace + "/" + sb.Name,
+			KataSocketTarget: c.socketForPod(pod),
+		}); pauseErr != nil {
+			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
+		}
+		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
+		setSpanErr(span, msg)
+		c.recordDuration("restore", sb, time.Since(start))
+		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
+	}
+	if decision.DevOptOut {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonUnverifiedRestoreAllowed,
+			fmt.Sprintf("DEV-MODE OPT-OUT: serving restore of snapshot %q despite %s", snap.Name, decision.String()))
+	}
+
 	c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotRestoreStarted,
 		fmt.Sprintf("restored sandbox from snapshot %q on node %q", snap.Name, pod.Spec.NodeName))
 	// Surface the node-agent's active entropy-reseed confirmation
@@ -394,6 +491,13 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 // a cold-boot fallback, which is the acceptance contract of setec#188:
 // a restore failure must not fail the Sandbox. The returned outcome +
 // entry id are for status/metrics; Events are emitted here.
+//
+// The ONE exception is the ADR-0005 invariant gate: when the node
+// reports a successful restore whose per-restore invariant
+// verifications did not all pass, cold boot is no longer safe — the
+// Pod's VM already holds the unverified restored state — so the
+// outcome is WarmStartRejected and the caller MUST destroy the
+// Sandbox.
 func (c *Coordinator) WarmStartFromPool(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
@@ -446,6 +550,43 @@ func (c *Coordinator) WarmStartFromPool(
 		return WarmStartMiss, ""
 	case !resp.GetSuccess():
 		return fallback(fmt.Sprintf("pool entry %q restore failed: %s", resp.GetEntryId(), resp.GetError()))
+	}
+
+	// ADR-0005 invariant gate — the single decision point between "the
+	// node restored state into this Pod" and "the Sandbox is served".
+	// Evidence: invariants 1/4/5 from the node's provenance/encryption
+	// attestations; invariant 2 from the reseed + uniquification
+	// confirmations; invariant 3 holds structurally on this path (the
+	// entry was consumed by this one claim — a pool entry is never
+	// restored twice — and the controller attempts warm-start at most
+	// once per Sandbox, stamped in status.warmStart).
+	ev := gate.Evidence{
+		CleanBase:          resp.GetProvenanceVerified(),
+		EntropyReseeded:    resp.GetEntropyReseeded(),
+		IdentityUniquified: resp.GetUniquified(),
+		SingleSession:      true,
+		ProvenanceVerified: resp.GetProvenanceVerified(),
+		EncryptedAtRest:    resp.GetEncryptedAtRest(),
+	}
+	decision, gateErr := c.Gate.Decide(ctx, cls, ev)
+	if !decision.Allowed {
+		msg := c.gateRefusalMsg(fmt.Sprintf("pool entry %q", resp.GetEntryId()), decision, gateErr)
+		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
+			SandboxId:        sb.Namespace + "/" + sb.Name,
+			KataSocketTarget: c.socketForPod(pod),
+		}); pauseErr != nil {
+			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
+		}
+		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
+		setSpanErr(span, msg)
+		c.recordWarmStart(WarmStartRejected, cls.Name)
+		c.recordDuration("warmstart", sb, time.Since(start))
+		return WarmStartRejected, resp.GetEntryId()
+	}
+	if decision.DevOptOut {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonUnverifiedRestoreAllowed,
+			fmt.Sprintf("DEV-MODE OPT-OUT: serving warm start from pool entry %q despite %s",
+				resp.GetEntryId(), decision.String()))
 	}
 
 	c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartRestored,
@@ -572,6 +713,32 @@ func (c *Coordinator) Resume(ctx context.Context, sb *setecv1alpha1.Sandbox) err
 }
 
 // --- helpers -------------------------------------------------------
+
+// classOf resolves the Sandbox's SandboxClass for the invariant gate's
+// dev-opt-out lookup. Any failure (no class named, class missing)
+// returns nil, which the gate treats as "no opt-out" — fail closed.
+func (c *Coordinator) classOf(ctx context.Context, sb *setecv1alpha1.Sandbox) *setecv1alpha1.SandboxClass {
+	if sb.Spec.SandboxClassName == "" {
+		return nil
+	}
+	cls := &setecv1alpha1.SandboxClass{}
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); err != nil {
+		return nil
+	}
+	return cls
+}
+
+// gateRefusalMsg renders the one-line message for an invariant-gate
+// refusal, appending the opt-out resolution error (e.g. an unreadable
+// gate namespace) when there is one.
+func (c *Coordinator) gateRefusalMsg(subject string, decision gate.Decision, gateErr error) string {
+	msg := fmt.Sprintf("ADR-0005 invariant gate refused restore of %s: %s (destroying sandbox; dev-mode opt-out requires the %s=\"true\" annotation on the SandboxClass AND the %s=true label on the %q namespace)",
+		subject, decision.String(), gate.AllowUnverifiedRestoresAnnotation, gate.DefaultAllowDevLabel, gate.DefaultGateNamespace)
+	if gateErr != nil {
+		msg += fmt.Sprintf("; opt-out resolution failed closed: %v", gateErr)
+	}
+	return msg
+}
 
 // getPod returns the Pod backing the Sandbox (named "<sandbox>-vm" by
 // convention) or an error if it is missing.

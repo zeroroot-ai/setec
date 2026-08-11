@@ -81,7 +81,9 @@ func TestWarmStart_PoolRestoredStampedOnce(t *testing.T) {
 	newPreWarmSandboxClass(t, clsName, image)
 
 	testDialer.client.ClaimRes = &setecgrpcv1.ClaimPoolEntryResponse{
-		Claimed: true, Success: true, EntryId: "pool-entry-7", EntropyReseeded: true,
+		Claimed: true, Success: true, EntryId: "pool-entry-7",
+		EntropyReseeded: true, Uniquified: true,
+		ProvenanceVerified: true, EncryptedAtRest: true,
 	}
 	t.Cleanup(func() { testDialer.client.ClaimRes = nil })
 

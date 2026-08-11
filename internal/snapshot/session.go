@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -27,6 +28,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
 // Session-checkpoint event reasons (setec#194).
@@ -107,7 +109,10 @@ func (c *Coordinator) CheckpointSession(
 // are both cluster-scoped, so no node pinning applies (unlike the
 // local-disk Snapshot restore path). The node-agent's restore
 // invariants (entropy reseed, restore uniquification) apply
-// unchanged.
+// unchanged, and the ADR-0005 invariant gate guards the hand-over
+// exactly as on the warm-start path: an error wrapping
+// ErrInvariantGateViolation is terminal for the restored VM — the
+// caller must destroy it, never serve it.
 func (c *Coordinator) RestoreSessionCheckpoint(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
@@ -119,6 +124,31 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox", sb.Namespace+"/"+sb.Name))
 	start := time.Now()
+
+	// ADR-0005 gate, operator-verifiable half. A checkpoint resume is
+	// an intra-session restore only when the ref was minted by THIS
+	// sandbox's own checkpoint machinery (SessionCheckpointID
+	// namespace) — the per-session KEK then enforces the binding
+	// cryptographically (a foreign artifact cannot unseal under this
+	// session's KEK). A foreign ref reuses another session's state
+	// (invariants 1/3/4), so outside dev-mode it is refused BEFORE
+	// any state is loaded.
+	cls := c.classOf(ctx, sb)
+	bound := strings.HasPrefix(ref, sb.Namespace+"-"+sb.Name+"-ckpt-")
+	preflight := gate.Evidence{
+		CleanBase:          bound,
+		EntropyReseeded:    true, // verified post-RPC
+		IdentityUniquified: true, // verified post-RPC
+		SingleSession:      bound,
+		ProvenanceVerified: bound,
+		EncryptedAtRest:    true, // verified post-RPC
+	}
+	if decision, gateErr := c.Gate.Decide(ctx, cls, preflight); !decision.Allowed {
+		msg := c.gateRefusalMsg("session checkpoint "+ref, decision, gateErr)
+		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
+		setSpanErr(span, msg)
+		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
+	}
 
 	pod, err := c.getPod(ctx, sb)
 	if err != nil {
@@ -157,6 +187,39 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 		setSpanErr(span, msg)
 		c.recordDuration("checkpoint_restore", sb, time.Since(start))
 		return fmt.Errorf("coordinator: RestoreSandbox (checkpoint) RPC: %s", msg)
+	}
+
+	// ADR-0005 gate, full evidence. The node reported success — the
+	// checkpoint state is loaded into the VM — so a refusal here is
+	// terminal for this VM: pause it best-effort and surface the typed
+	// violation so the controller destroys it (the session then
+	// restarts on a fresh cold-booted VM against the durable
+	// workspace; the unverified state is never served).
+	ev := gate.Evidence{
+		CleanBase:          bound,
+		EntropyReseeded:    resp.GetEntropyReseeded(),
+		IdentityUniquified: resp.GetUniquified(),
+		SingleSession:      bound,
+		ProvenanceVerified: bound,
+		EncryptedAtRest:    resp.GetEncryptedAtRest(),
+	}
+	decision, gateErr := c.Gate.Decide(ctx, cls, ev)
+	if !decision.Allowed {
+		msg := c.gateRefusalMsg("session checkpoint "+ref, decision, gateErr)
+		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
+			SandboxId:        sb.Namespace + "/" + sb.Name,
+			KataSocketTarget: c.socketForPod(pod),
+		}); pauseErr != nil {
+			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
+		}
+		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
+		setSpanErr(span, msg)
+		c.recordDuration("checkpoint_restore", sb, time.Since(start))
+		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
+	}
+	if decision.DevOptOut {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonUnverifiedRestoreAllowed,
+			fmt.Sprintf("DEV-MODE OPT-OUT: serving session checkpoint resume %q despite %s", ref, decision.String()))
 	}
 
 	c.emit(sb, corev1.EventTypeNormal, EventReasonCheckpointRestored,
