@@ -355,20 +355,18 @@ func (s *spiffeSource) authorizePeer(verified [][]*x509.Certificate) error {
 // rotates reports that this source maintains its material in-process.
 func (s *spiffeSource) rotates() bool { return true }
 
-// dialing refuses to furnish client credentials from a SPIFFE source.
+// namesPeer reports that an X509-SVID carries no name the standard
+// hostname check can use.
 //
-// Serving and dialing are not symmetrical here. A server verifies the
-// client's chain with the standard machinery and then authorizes its
-// SPIFFE ID on top. A client cannot do the mirror image: an X509-SVID
-// carries no DNS name, so the hostname check that normally identifies a
-// server has to be *replaced* by a SPIFFE-ID check rather than added
-// to, which is a different piece of machinery. It lands with the client
-// dialers in setec#174.
+// An SVID identifies its holder by URI SAN and nothing else: there is
+// no DNS SAN for Go to match against the dial target. Saying so here is
+// what makes the Provider replace the hostname check with the SPIFFE-ID
+// check on the client side, rather than skip verification or fail every
+// handshake on a name that was never going to be there.
 //
-// Until then this is an error at startup rather than a connection that
-// fails at handshake time reading like a certificate problem.
-func (s *spiffeSource) dialing() error {
-	return errors.New(
-		"SPIFFE credential source: client credentials are not available in SPIFFE mode yet " +
-			"(setec#174); this source serves only")
-}
+// AuthorizedIDs means the same thing in both directions — the peers
+// this component completes a handshake with. On a server that is the
+// set of callers; on a client it is the set of servers worth talking
+// to, which is the check that makes chaining to the trust bundle
+// insufficient.
+func (s *spiffeSource) namesPeer() bool { return false }

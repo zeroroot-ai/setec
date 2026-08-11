@@ -62,6 +62,32 @@ Failed reconciles set the span status to `Error` with a message
 describing the cause (tenant label missing, class not found, constraint
 violation, etc.).
 
+### Collector authentication
+
+The OTLP channel has two shapes and never both. Configuring both is a
+startup error naming the conflict.
+
+**One-way TLS (default).** The collector is authenticated and the
+operator presents no identity. `--otel-ca-file` points at a PEM bundle;
+empty uses the host root store. A bundle that is set but unreadable or
+unparseable is fatal — silently widening back to the host roots would
+be the opposite of what the operator asked for. The floor on this hop is
+TLS 1.2 rather than setec's usual 1.3, because the peer is frequently a
+vendor gateway or a terminating proxy the operator does not control.
+
+Be precise about what this proves: the collector cannot use this channel
+to establish who is talking to it. It is not mTLS.
+
+**Mutual TLS over SPIFFE.** `--otel-spiffe-socket` points at the SPIFFE
+Workload API, and one or more `--otel-spiffe-server-id` flags name the
+full SPIFFE IDs the collector may present. The operator presents its own
+X509-SVID, and the collector's identity is checked rather than merely
+its certificate chain. An empty allow-list is a startup error: there is
+no accept-any-collector setting.
+
+**Plaintext.** `--otel-insecure` is an explicit dev-cluster opt-out and
+logs a loud warning. The chart disables it by default.
+
 ### Recommended dashboards
 
 The Setec team has published a reference Grafana dashboard on

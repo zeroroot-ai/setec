@@ -191,6 +191,31 @@ the `storage.StorageBackend` interface without operator changes.
   refuse to start without their TLS cert/key/client-ca triple, and
   the Helm chart always renders the corresponding Secret mounts.
 
+## Operator → node-agent credentials
+
+The operator drives snapshots by dialling each node-agent over mTLS.
+It runs in exactly one credential mode, selected the same way and with
+the same failure semantics as every setec server surface — configuring
+both or neither is a startup error naming the cause, and there is no
+fallback between them.
+
+**File mode (default).** `--nodeagent-tls-cert`, `--nodeagent-tls-key`
+and `--nodeagent-ca`. The operator presents a client certificate and
+accepts any node-agent whose certificate the configured CA issued and
+whose name matches the dial target.
+
+**SPIFFE mode.** `--nodeagent-spiffe-socket` plus one or more
+`--nodeagent-spiffe-authorized-id` flags. The operator's identity comes
+from the Workload API and rotates in-process, and — the part that
+differs from a server surface — it authorizes the *node-agent's* SPIFFE
+ID rather than checking a hostname. An X509-SVID carries no DNS name, so
+the identity check replaces the hostname check rather than being added
+alongside it; chaining to the trust bundle is not sufficient on its own.
+An empty allow-list is a startup error.
+
+The selected mode is logged at startup
+(`Resolved node-agent client credentials mode=file`).
+
 ## Snapshot security
 
 Snapshots are shared across warm-pool claims, so Setec enforces three

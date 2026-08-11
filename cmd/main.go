@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	grpccreds "google.golang.org/grpc/credentials"
 	nodev1 "k8s.io/api/node/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -53,6 +54,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/prereq"
@@ -137,6 +139,8 @@ func main() {
 		otlpEndpoint        string
 		otlpInsecure        bool
 		otlpCAFile          string
+		otlpSPIFFESocket    string
+		otlpSPIFFEServerIDs []string
 		webhookEnabled      bool
 		webhookCertDir      string
 
@@ -151,9 +155,7 @@ func main() {
 		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
 		snapshotsEnabled  bool
 		nodeAgentEndpoint string
-		nodeAgentTLSCert  string
-		nodeAgentTLSKey   string
-		nodeAgentTLSCA    string
+		nodeAgentCreds    nodeAgentCredentialFlags
 		kataSocketPattern string
 	)
 
@@ -183,7 +185,14 @@ func main() {
 	pflag.BoolVar(&otlpInsecure, "otel-insecure", false,
 		"DANGEROUS — export OTLP traces in plaintext. Set only in dev clusters; the operator logs a loud warning at startup.")
 	pflag.StringVar(&otlpCAFile, "otel-ca-file", "",
-		"Optional path to a PEM CA bundle used to verify the OTLP collector. Empty uses system roots.")
+		"Optional path to a PEM CA bundle used to verify the OTLP collector. Empty uses system roots. "+
+			"One-way TLS: the collector is authenticated and the operator presents no identity.")
+	pflag.StringVar(&otlpSPIFFESocket, "otel-spiffe-socket", "",
+		"SPIFFE Workload API socket for mTLS to the OTLP collector, e.g. "+
+			"unix:///run/spire/agent-sockets/api.sock. Mutually exclusive with --otel-ca-file.")
+	pflag.StringArrayVar(&otlpSPIFFEServerIDs, "otel-spiffe-server-id", nil,
+		"Full SPIFFE ID the OTLP collector must present. Repeat for each acceptable collector. "+
+			"Required with --otel-spiffe-socket; there is no accept-any-server setting.")
 	pflag.BoolVar(&webhookEnabled, "webhook-enabled", false,
 		"Register the validating admission webhook with the manager.")
 	pflag.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs",
@@ -227,12 +236,22 @@ func main() {
 	pflag.StringVar(&nodeAgentEndpoint, "nodeagent-endpoint-pattern",
 		"%s.setec-node-agent.setec-system.svc:50052",
 		"Phase 3: format string that renders a dial target from a node name. %s is substituted with Pod.Spec.NodeName.")
-	pflag.StringVar(&nodeAgentTLSCert, "nodeagent-tls-cert", "",
-		"Phase 3: path to the operator's client certificate for mTLS to node-agents.")
-	pflag.StringVar(&nodeAgentTLSKey, "nodeagent-tls-key", "",
-		"Phase 3: path to the operator's client private key.")
-	pflag.StringVar(&nodeAgentTLSCA, "nodeagent-ca", "",
-		"Phase 3: path to the CA used to verify node-agent server certificates. Required when --snapshots-enabled.")
+	pflag.StringVar(&nodeAgentCreds.certPath, "nodeagent-tls-cert", "",
+		"Phase 3: path to the operator's client certificate for mTLS to node-agents. "+
+			"Selects file credential mode, the default.")
+	pflag.StringVar(&nodeAgentCreds.keyPath, "nodeagent-tls-key", "",
+		"Phase 3: path to the operator's client private key. Selects file credential mode, the default.")
+	pflag.StringVar(&nodeAgentCreds.caPath, "nodeagent-ca", "",
+		"Phase 3: path to the CA used to verify node-agent server certificates. "+
+			"Selects file credential mode, the default.")
+	pflag.StringVar(&nodeAgentCreds.spiffeSocket, "nodeagent-spiffe-socket", "",
+		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
+			"Selects SPIFFE credential mode for the node-agent hop; mutually exclusive with the "+
+			"--nodeagent-tls-* flags.")
+	pflag.StringArrayVar(&nodeAgentCreds.spiffeAuthorizedIDs, "nodeagent-spiffe-authorized-id", nil,
+		"Full SPIFFE ID a node-agent must present, e.g. "+
+			"spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent. Repeat for each. Required in SPIFFE "+
+			"mode; there is no accept-any-server setting.")
 	pflag.StringVar(&kataSocketPattern, "kata-socket-pattern",
 		"/run/kata-containers/%s/firecracker.socket",
 		"Phase 3: format string used by the Coordinator to render a Firecracker socket path from a Pod UID.")
@@ -367,9 +386,11 @@ func main() {
 
 	// Phase 2: init tracing (no-op when otlpEndpoint is empty).
 	tracer, tracerShutdown, err := tracing.Setup(tracing.Config{
-		Endpoint: otlpEndpoint,
-		Insecure: otlpInsecure,
-		CAFile:   otlpCAFile,
+		Endpoint:      otlpEndpoint,
+		Insecure:      otlpInsecure,
+		CAFile:        otlpCAFile,
+		SPIFFESocket:  otlpSPIFFESocket,
+		SPIFFEServers: otlpSPIFFEServerIDs,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to initialise tracing")
@@ -393,13 +414,13 @@ func main() {
 	// Phase 2-equivalent.
 	var coordinator *snapshot.Coordinator
 	if snapshotsEnabled {
-		dialer := snapshot.NewGRPCDialer(nodeAgentEndpoint, nil)
-		tlsConfig, err := snapshot.LoadTLSConfig(nodeAgentTLSCert, nodeAgentTLSKey, nodeAgentTLSCA)
+		creds, credMode, err := nodeAgentClientCredentials(context.Background(), nodeAgentCreds)
 		if err != nil {
-			setupLog.Error(err, "unable to load node-agent TLS config")
+			setupLog.Error(err, "unable to load node-agent client credentials", "mode", credMode)
 			os.Exit(1)
 		}
-		dialer.TLSConfig = tlsConfig
+		setupLog.Info("Resolved node-agent client credentials", "mode", credMode)
+		dialer := snapshot.NewGRPCDialer(nodeAgentEndpoint, creds)
 		snapshotCoordRecorder := mgr.GetEventRecorder("snapshot-coordinator")
 		coordinator = &snapshot.Coordinator{
 			Client:            mgr.GetClient(),
@@ -517,6 +538,88 @@ func main() {
 		setupLog.Error(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// Credential mode names, used only in log and error output so an
+// operator can tell from a pod's logs which posture it is running.
+// They match cmd/frontend's and cmd/node-agent's names because an
+// operator comparing two pods' logs is comparing postures, not
+// components.
+const (
+	fileMode        = "file"
+	spiffeMode      = "spiffe"
+	conflictingMode = "conflicting"
+	unsetMode       = "unset"
+)
+
+// nodeAgentCredentialFlags carries the credential flags the operator
+// parsed for its client hop to the node-agents.
+type nodeAgentCredentialFlags struct {
+	certPath            string
+	keyPath             string
+	caPath              string
+	spiffeSocket        string
+	spiffeAuthorizedIDs []string
+}
+
+// config maps the flags onto a credentials.Config and names the mode
+// they selected.
+//
+// It deliberately validates nothing, and is deliberately the same
+// function cmd/frontend and cmd/node-agent have. A source is *selected*
+// by any of its flags being set, not by all of them; whether the
+// selection is coherent is credentials.New's decision, so every setec
+// component gives the same answer and the same message.
+func (f nodeAgentCredentialFlags) config() (credentials.Config, string) {
+	var (
+		cfg  credentials.Config
+		mode = unsetMode
+	)
+	if f.certPath != "" || f.keyPath != "" || f.caPath != "" {
+		cfg.Files = &credentials.FileSource{
+			CertFile: f.certPath,
+			KeyFile:  f.keyPath,
+			CAFile:   f.caPath,
+		}
+		mode = fileMode
+	}
+	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
+		cfg.SPIFFE = &credentials.SPIFFESource{
+			SocketPath:    f.spiffeSocket,
+			AuthorizedIDs: f.spiffeAuthorizedIDs,
+		}
+		mode = spiffeMode
+	}
+	if cfg.Files != nil && cfg.SPIFFE != nil {
+		mode = conflictingMode
+	}
+	return cfg, mode
+}
+
+// nodeAgentClientCredentials resolves the transport credentials the
+// snapshot dialer presents to node-agents, and names the mode it used.
+//
+// The operator is the client on this hop, so what it must get right is
+// whose node-agent it is willing to talk to. In SPIFFE mode that is the
+// allow-list of server SPIFFE IDs, checked in place of the hostname —
+// chaining to the trust bundle is not sufficient. The credential module
+// owns that decision; this function only names the surface it needs.
+func nodeAgentClientCredentials(
+	ctx context.Context, f nodeAgentCredentialFlags,
+) (grpccreds.TransportCredentials, string, error) {
+	cfg, mode := f.config()
+	provider, err := credentials.New(cfg)
+	if err != nil {
+		return nil, mode, err
+	}
+	// Acquiring the credentials here rather than lazily is what makes
+	// an unreachable SPIFFE Workload API a boot failure. There is no
+	// fallback to files.
+	creds, err := provider.ClientCredentials(ctx)
+	if err != nil {
+		return nil, mode, err
+	}
+	return creds, mode, nil
 }
 
 // runStartupPrereqCheck performs the one-shot cluster prerequisite check and

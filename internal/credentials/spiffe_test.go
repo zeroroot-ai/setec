@@ -160,20 +160,18 @@ func TestServerCredentials_SPIFFEReachableSocket(t *testing.T) {
 	}
 }
 
-func TestClientCredentials_SPIFFEModeRefused(t *testing.T) {
+func TestClientCredentials_SPIFFEModeAvailable(t *testing.T) {
 	t.Parallel()
-	// Dialing over SPIFFE lands with the client dialers. Refusing here
-	// keeps that gap loud: the alternative is a dial that fails at
-	// handshake time looking like a certificate problem.
+	// This test replaced one asserting that SPIFFE-mode client
+	// credentials were refused. That refusal was setec#172's explicit
+	// placeholder for this slice, named setec#174 in its message; it
+	// went away when the replacement it was waiting for arrived. No
+	// other test changed.
 	api := startWorkloadAPI(t, newCA(t))
 	p := mustSPIFFEProvider(t, api.addr, callerID)
 
-	_, err := p.ClientCredentials(t.Context())
-	if err == nil {
-		t.Fatal("ClientCredentials in SPIFFE mode: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "setec#174") {
-		t.Fatalf("error = %q, want it to name the follow-up", err)
+	if _, err := p.ClientCredentials(t.Context()); err != nil {
+		t.Fatalf("ClientCredentials against a reachable Workload API: %v", err)
 	}
 }
 
