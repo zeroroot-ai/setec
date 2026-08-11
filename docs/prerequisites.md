@@ -50,17 +50,27 @@ ls -l /dev/kvm
 kvm-ok   # from the cpu-checker package on Debian/Ubuntu-like distros
 ```
 
-Then install Kata Containers. This is out of Setec's scope; use the
-upstream project.
+For `kata-fc`, KVM is the only prerequisite: **the Setec chart prepares
+the node for you**. The portable installer DaemonSet (ADR-0003,
+`installer.enabled=true` by default) targets each x86 KVM-capable node
+and lays down the stock Kata + Firecracker release bundled in its image,
+provisions the containerd devmapper thin-pool with correct boot ordering,
+and registers the `kata-fc` handler with containerd (stock containerd and
+k3s are supported). The chart renders the `kata-fc` `RuntimeClass`, and
+the runtime-agent labels capable nodes. No manual node preparation is
+necessary.
+
+If your cluster already installs Kata out of band — `kata-deploy`, a
+baked node image, an administrator — the installer detects the existing
+`kata-fc` registration and stands down without touching the node. Upstream
+references for that path:
 
 - Project home: <https://katacontainers.io/>
-- Installation docs: <https://github.com/kata-containers/kata-containers/blob/main/docs/install/README.md>
-- `kata-deploy` (manifest-based installer):
+- `kata-deploy` (DaemonSet installer, also covers `kata-qemu`):
   <https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy>
 
-The quickest path on a prepared cluster is `kata-deploy`, which ships as
-a DaemonSet that lays down Kata binaries on every labeled Node and
-registers the Kata `RuntimeClass` objects (`kata-fc` and `kata-qemu`). If
+For `kata-qemu`, install Kata out of band (`kata-deploy` registers both
+`kata-fc` and `kata-qemu`); the Setec installer covers `kata-fc` only. If
 your environment uses non-default RuntimeClass names, set
 `runtime.kata-fc.runtimeClassName` / `runtime.kata-qemu.runtimeClassName`
 in `values.yaml` when installing the Setec chart.

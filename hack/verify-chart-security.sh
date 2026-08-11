@@ -180,6 +180,40 @@ render "$workdir/guard-off-agent.yaml" --set runtimeAgent.nodeGuard.enabled=fals
 assert_absent "$workdir/guard-off-agent.yaml" "node guard is omitted when disabled" \
 	"setec-runtime-agent-node-guard"
 
+# ---------------------------------------------------------------------------
+# Portable node installer (ADR-0003, setec#187).
+#
+# The installer is privileged by design (it writes host files and
+# restarts containerd — that is the product). What bounds its blast
+# radius is that it carries NO Kubernetes credentials: a compromised
+# installer pod is one node, never the cluster API. These assertions
+# pin that property, plus the containment of hostNetwork.
+# ---------------------------------------------------------------------------
+render "$workdir/installer.yaml" --show-only templates/installer-daemonset.yaml
+
+note "portable node installer (ADR-0003, setec#187)"
+assert_contains "$workdir/installer.yaml" "installer DaemonSet is rendered by default" \
+	"kind: DaemonSet" \
+	"app.kubernetes.io/component: installer"
+assert_contains "$workdir/installer.yaml" "installer mounts no ServiceAccount token" \
+	"automountServiceAccountToken: false"
+assert_absent "$workdir/installer.yaml" "installer names no ServiceAccount" \
+	"serviceAccountName:"
+assert_contains "$workdir/installer.yaml" "installer stays off the host network" \
+	"hostNetwork: false"
+assert_contains "$workdir/installer.yaml" "installer targets x86 Linux nodes only" \
+	"kubernetes.io/arch: amd64" \
+	"kubernetes.io/os: linux"
+
+# The installer's ServiceAccount-less-ness only matters if no RBAC
+# object sneaks in for it either.
+assert_absent "$workdir/default.yaml" "no RBAC object exists for the installer" \
+	"setec-installer-role"
+
+render "$workdir/installer-off.yaml" --set installer.enabled=false
+assert_absent "$workdir/installer-off.yaml" "installer is omitted when disabled" \
+	"app.kubernetes.io/component: installer"
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

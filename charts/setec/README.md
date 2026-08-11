@@ -25,12 +25,34 @@ to reconcile `Sandbox` resources into Kata-runtime Pods.
   DaemonSets hardcode a `kubernetes.io/arch: amd64` nodeSelector, and every
   Sandbox Pod carries a matching required node affinity, so mixed-arch
   clusters converge cleanly with the sandbox plane confined to x86 nodes.
-- [Kata Containers](https://github.com/kata-containers/kata-containers)
-  installed on the cluster. The recommended path is
-  [`kata-deploy`](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy),
-  which installs the Kata binaries, the `kata-fc` RuntimeClass, and labels
-  Kata-capable Nodes.
 - `helm` 3.8 or later.
+
+Kata Containers itself is NOT a prerequisite for `kata-fc`: the chart
+ships a portable installer DaemonSet (ADR-0003, `installer.enabled=true`
+by default) that converges every x86 KVM-capable Node — it lays down the
+stock Kata + Firecracker release bundled in its image, provisions the
+containerd devmapper thin-pool with boot ordering (containerd never
+starts before the pool exists), and registers the `kata-fc` handler with
+containerd (stock containerd and k3s are supported). The chart renders
+the `kata-fc` RuntimeClass (`runtimes.kata-fc.install=true`), and the
+runtime-agent labels capable Nodes. On a node where `kata-fc` is already
+registered by something else —
+[`kata-deploy`](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy),
+a baked node image, an administrator — the installer detects the foreign
+owner and stands down without touching the node; set
+`installer.enabled=false` to keep it out entirely. The `kata-qemu`
+backend is not covered by the installer and still needs an out-of-band
+Kata install.
+
+The installer's thin-pool defaults to sparse loop-backed files
+(`installer.thinpool.mode=loop`, portable, works anywhere). For
+production I/O, dedicate two block devices per node and set
+`installer.thinpool.mode=device` with
+`installer.thinpool.dataDevice` / `installer.thinpool.metadataDevice`.
+The EKS baked-AMI + Karpenter profile (`karpenter.enabled=true`,
+`packer/eks-kata-fc-ami/`) remains an optional optimisation that pre-bakes
+the same components for faster node-ready — never a requirement, and the
+default installer path references nothing AWS-specific.
 
 Setec is cloud-agnostic and makes no assumptions about the underlying
 infrastructure. Any conformant Kubernetes distribution whose worker Nodes

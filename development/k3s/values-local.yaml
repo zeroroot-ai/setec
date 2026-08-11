@@ -78,6 +78,19 @@ runtimeAgent:
     tag: "dev"
     pullPolicy: Never
 
+# The portable installer DaemonSet (ADR-0003) is the chart's DEFAULT
+# node-prep path, but this dev cluster's node prep is kata-deploy-owned
+# (20-install-kata.sh) — the installer would detect that and stand down
+# anyway, but running it here would also require building + importing its
+# payload-carrying image (Dockerfile.installer) like every other :dev
+# image. Keep it off; the installer path is exercised by
+# test/e2e/installer_test.go (SETEC_E2E_INSTALLER=1) with the working-tree
+# image:
+#   docker build -f Dockerfile.installer -t ghcr.io/zeroroot-ai/setec-installer:dev .
+#   docker save ghcr.io/zeroroot-ai/setec-installer:dev | sudo k3s ctr -n k8s.io images import -
+installer:
+  enabled: false
+
 # The dev cluster installs its isolation backends OUT OF BAND, before this
 # chart: kata-deploy (20-install-kata.sh) owns the kata-fc + kata-qemu
 # RuntimeClasses, and 21-install-gvisor.sh owns the gvisor RuntimeClass. So

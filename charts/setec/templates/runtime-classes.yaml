@@ -22,6 +22,20 @@ metadata:
     app.kubernetes.io/component: runtime-class
     setec.zeroroot.ai/runtime: {{ $name | quote }}
 handler: {{ include "setec.runtimeHandler" $name }}
+{{- with $cfg.defaultOverhead }}
+{{- /* Kubernetes' RuntimeClass admission controller REJECTS a Pod that
+carries spec.overhead when its RuntimeClass defines none — and the
+operator stamps every Sandbox Pod with the backend's defaultOverhead. So
+a chart-managed RuntimeClass must publish that same overhead, or no
+Sandbox can ever be admitted on the default (installer) node-prep path.
+Keeping the two in lockstep here is what makes install=true self-
+consistent; out-of-band RuntimeClasses (install=false, e.g. kata-deploy)
+must instead have defaultOverhead edited to match them (see
+development/k3s/values-local.yaml). */}}
+overhead:
+  podFixed:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
 scheduling:
   nodeSelector:
     setec.zeroroot.ai/runtime.{{ $name }}: "true"

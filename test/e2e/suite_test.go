@@ -272,6 +272,12 @@ func installChart() error {
 		"--set", "image.pullPolicy=Never",
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
 		"--set", "runtimeAgent.image.pullPolicy=Never",
+		// Node prep on the E2E host is kata-deploy-owned (preflight above
+		// requires the kata-fc RuntimeClass to pre-exist), so the portable
+		// installer DaemonSet (ADR-0003) stays out of the base install.
+		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
+		// with the locally-built installer image.
+		"--set", "installer.enabled=false",
 		// Enable the SandboxClass/Sandbox admission webhook with the
 		// self-signed serving cert created above, so TestPhase2_WebhookRejects
 		// exercises real admission. failurePolicy stays Fail (the chart

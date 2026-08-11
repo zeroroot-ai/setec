@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1.7
+
+# Dockerfile.installer — the portable node installer image (ADR-0003,
+# issue #187). Unlike the shared ./Dockerfile (pure Go binaries), this
+# image also carries the stock kata-containers static release as an
+# immutable payload, kata-deploy-style: the only network fetch a node
+# ever performs is the image pull itself, which keeps the installer
+# air-gap-friendly and makes the payload version an image property that
+# release engineering pins, not a runtime download a node performs.
+#
+# amd64 only: kata-fc is x86-only in setec (ADR-0001), and the chart's
+# installer DaemonSet pins kubernetes.io/arch: amd64.
+
+# ----------------------------------------------------------------------------
+# Build stage — same toolchain pin as ./Dockerfile (gibson#777).
+# ----------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.4@sha256:792443b89f65105abba56b9bd5e97f680a80074ac62fc844a584212f8c8102c3 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+      go build -trimpath -ldflags="-s -w" -o /out/installer ./cmd/installer
+
+# ----------------------------------------------------------------------------
+# Payload stage — fetch, verify, extract and prune the kata static release.
+# ----------------------------------------------------------------------------
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.4@sha256:792443b89f65105abba56b9bd5e97f680a80074ac62fc844a584212f8c8102c3 AS payload
+# Pinned kata release + digest. To bump: download the new
+# kata-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
+# (and the packer AMI pin if you want the profiles to match).
+ARG KATA_VERSION=3.28.0
+ARG KATA_SHA256=99cefb46d70bc27b7bcffd7595be9010c6bed43e1cdfcf8078554c19e7c9b19d
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends zstd; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    curl -fsSL --retry 3 -o /tmp/kata.tar.zst \
+      "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.zst"; \
+    echo "${KATA_SHA256}  /tmp/kata.tar.zst" | sha256sum -c -; \
+    mkdir -p /payload; \
+    # Extract only what the kata-fc handler needs. The full tarball also
+    # carries QEMU/CLH/TDX/SNP/NVIDIA variants that would quintuple the
+    # image for nothing.
+    tar --zstd -xf /tmp/kata.tar.zst -C /payload \
+      ./opt/kata/VERSION \
+      ./opt/kata/bin/containerd-shim-kata-v2 \
+      ./opt/kata/bin/firecracker \
+      ./opt/kata/bin/jailer \
+      ./opt/kata/bin/kata-runtime \
+      ./opt/kata/bin/kata-collect-data.sh \
+      ./opt/kata/share/defaults \
+      ./opt/kata/share/kata-containers; \
+    rm /tmp/kata.tar.zst; \
+    # Prune guest kernels/rootfs images the FC config does not reference,
+    # keeping the vmlinux.container / kata-containers.img symlinks plus
+    # their full resolution chains.
+    cd /payload/opt/kata/share/kata-containers; \
+    keep="vmlinux.container kata-containers.img"; \
+    for f in vmlinux.container kata-containers.img; do \
+      t="$f"; \
+      while [ -L "$t" ]; do t="$(basename "$(readlink "$t")")"; keep="$keep $t"; done; \
+    done; \
+    for f in *; do \
+      case " $keep " in *" $f "*) ;; *) rm -rf "$f" ;; esac; \
+    done
+
+# Payload gate: everything the kata-fc handler needs at runtime must be
+# in the pruned tree, including the kernel/image the FC config points at.
+# A bad prune fails the image build, never a node.
+RUN set -eux; \
+    test -x /payload/opt/kata/bin/containerd-shim-kata-v2; \
+    test -x /payload/opt/kata/bin/firecracker; \
+    test -x /payload/opt/kata/bin/jailer; \
+    test -x /payload/opt/kata/bin/kata-runtime; \
+    fc_conf=/payload/opt/kata/share/defaults/kata-containers/configuration-fc.toml; \
+    test -f "$fc_conf"; \
+    kernel="$(awk -F'"' '$1 ~ /^kernel = $/ {print $2; exit}' "$fc_conf")"; \
+    image="$(awk -F'"' '$1 ~ /^image = $/ {print $2; exit}' "$fc_conf")"; \
+    test -e "/payload$kernel"; \
+    test -e "/payload$image"; \
+    grep -qx "${KATA_VERSION}" /payload/opt/kata/VERSION
+
+# ----------------------------------------------------------------------------
+# Runtime stage — distroless static; the binary chroots into the host
+# mount to run host tools, so the image itself needs no shell.
+# ----------------------------------------------------------------------------
+FROM ghcr.io/zeroroot-ai/mirror/distroless-static-debian12:nonroot@sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1
+
+WORKDIR /
+
+COPY --from=builder /out/installer /entrypoint
+COPY --from=payload /payload/opt/kata /opt/kata
+
+# Root on purpose: the installer writes /opt/kata, /etc/systemd and
+# /etc/containerd ON THE HOST through the hostPath mount, and restarts
+# containerd. The DaemonSet pod is privileged by design (see the chart's
+# installer values and SECURITY.md); dropping to 65532 here would only
+# break the host writes while conveying no isolation.
+USER 0:0
+
+ENTRYPOINT ["/entrypoint"]

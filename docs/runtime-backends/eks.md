@@ -46,12 +46,17 @@ You must still install `runsc` and register a `gvisor` `RuntimeClass` on the wor
 
 If you need `kata-fc` for a subset of workloads (for example, untrusted model-agent code), run those on a dedicated bare-metal node group and leave the rest of the fleet on the default pool. Create a managed node group with a `.metal` instance type (verify current availability — `m7i.metal-24xl`, `c7i.metal-*`, `r7i.metal-*` are common at time of writing; check current vendor docs), taint it so only Sandboxes land there, and set the matching SandboxClass to request `kata-fc` with `fallback: [gvisor]`. Setec's node-agent will label the metal nodes `setec.zeroroot.ai/runtime.kata-fc=true` once KVM is detected, and the scheduler will place Sandboxes accordingly. See the top-level Kata installation docs for `runsc`- and `kata-runtime`-on-EKS procedures; verify against vendor docs for your EKS version.
 
-## Baked x86-metal AMI for kata-fc (recommended)
+## Baked x86-metal AMI for kata-fc (optional profile)
 
-The recommended production path for `kata-fc` on EKS is the **Packer-baked
-immutable AMI** in [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md)
-— it replaces kata-deploy's live containerd mutation (which can brick a node
-mid-run) with a node that either boots capable or fails loudly at boot:
+On any x86 KVM-capable node pool the chart's portable installer DaemonSet
+(`installer.enabled=true`, the default — ADR-0003) converges nodes with no
+AWS-specific setup, so a `.metal` x86 pool needs nothing beyond the chart
+install. The **Packer-baked immutable AMI** in
+[`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md) is the
+optional EKS optimisation profile: it pre-bakes the same components
+so a node boots already capable — faster node-ready for
+Karpenter scale-from-zero, and a node either boots capable or fails
+loudly at boot:
 
 - **Base**: current EKS-optimized AL2023 **x86_64** AMI (pinned Kubernetes
   version via the public SSM parameter). arm64 is unsupported per
