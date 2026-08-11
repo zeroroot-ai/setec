@@ -32,14 +32,20 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 // seedPool returns a Manager holding exactly one entry for class
-// "std" / image "img:v1", with raw state/memory files written under
-// the entry directory the way setec-pool-vm does.
-func seedPool(t *testing.T, writeStateFiles bool) *pool.Manager {
+// "std" / image "img:v1", with the full artifact layer written under
+// the entry directory the way setec-pool-vm does: encrypted
+// state/memory (when writeStateFiles), a sealed per-entry DEK, and a
+// class-image-boot provenance record. The returned kekPath must be
+// wired into the Server (PoolKEKPath) so ClaimPoolEntry can unseal.
+func seedPool(t *testing.T, writeStateFiles bool) (*pool.Manager, string) {
 	t.Helper()
+	kekPath := filepath.Join(t.TempDir(), "node.key")
 	pm := pool.New(
 		&storage.LocalDiskBackend{Root: t.TempDir()},
 		noPrefetch{},
@@ -58,24 +64,49 @@ func seedPool(t *testing.T, writeStateFiles bool) *pool.Manager {
 	if err := pm.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
 		t.Fatalf("seed pool: %v", err)
 	}
-	if writeStateFiles {
-		for _, e := range pm.QueryAvailable("std", "") {
-			if err := os.MkdirAll(e.StorageRef, 0o700); err != nil {
-				t.Fatalf("mkdir entry dir: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(e.StorageRef, "state.bin"), []byte("STATE"), 0o600); err != nil {
-				t.Fatalf("write state: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(e.StorageRef, "memory.bin"), []byte("MEMORY"), 0o600); err != nil {
-				t.Fatalf("write memory: %v", err)
+	kek, err := atrest.LoadOrCreateKEK(kekPath)
+	if err != nil {
+		t.Fatalf("seed KEK: %v", err)
+	}
+	for _, e := range pm.QueryAvailable("std", "") {
+		if err := os.MkdirAll(e.StorageRef, 0o700); err != nil {
+			t.Fatalf("mkdir entry dir: %v", err)
+		}
+		dek, err := atrest.NewDEK()
+		if err != nil {
+			t.Fatalf("seed DEK: %v", err)
+		}
+		if writeStateFiles {
+			for name, payload := range map[string]string{
+				poolentry.StateFile: "STATE",
+				poolentry.MemFile:   "MEMORY",
+			} {
+				p := filepath.Join(e.StorageRef, name)
+				if err := os.WriteFile(p, []byte(payload), 0o600); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+				if err := atrest.EncryptFile(p, dek); err != nil {
+					t.Fatalf("encrypt %s: %v", name, err)
+				}
 			}
 		}
+		prov := poolentry.Provenance{Source: poolentry.SourceClassImageBoot, ImageRef: "img:v1"}
+		sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(e.ID, prov))
+		if err != nil {
+			t.Fatalf("seal DEK: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(e.StorageRef, poolentry.DEKFile), sealed, 0o600); err != nil {
+			t.Fatalf("write sealed DEK: %v", err)
+		}
+		if err := poolentry.WriteProvenance(e.StorageRef, prov); err != nil {
+			t.Fatalf("write provenance: %v", err)
+		}
 	}
-	return pm
+	return pm, kekPath
 }
 
 func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
-	pm := seedPool(t, true)
+	pm, kekPath := seedPool(t, true)
 	entries := pm.QueryAvailable("std", "")
 	if len(entries) != 1 {
 		t.Fatalf("seeded entries = %d, want 1", len(entries))
@@ -84,6 +115,7 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 
 	fc := &fakeFirecracker{}
 	srv := newServer(t, fc, pm)
+	srv.PoolKEKPath = kekPath
 	var outcomes []string
 	srv.ClaimObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
 	cli := newBufconnClient(t, srv)
@@ -124,8 +156,9 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 }
 
 func TestClaimPoolEntry_MissIsNotAnError(t *testing.T) {
-	pm := seedPool(t, true)
+	pm, kekPath := seedPool(t, true)
 	srv := newServer(t, &fakeFirecracker{}, pm)
+	srv.PoolKEKPath = kekPath
 	var outcomes []string
 	srv.ClaimObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
 	cli := newBufconnClient(t, srv)
@@ -166,9 +199,10 @@ func TestClaimPoolEntry_NilPoolMisses(t *testing.T) {
 }
 
 func TestClaimPoolEntry_LoadFailureConsumesEntry(t *testing.T) {
-	pm := seedPool(t, true)
+	pm, kekPath := seedPool(t, true)
 	fc := &fakeFirecracker{loadErr: errors.New("socket refused")}
 	srv := newServer(t, fc, pm)
+	srv.PoolKEKPath = kekPath
 	var outcomes []string
 	srv.ClaimObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
 	cli := newBufconnClient(t, srv)
@@ -196,8 +230,9 @@ func TestClaimPoolEntry_LoadFailureConsumesEntry(t *testing.T) {
 }
 
 func TestClaimPoolEntry_MissingStateFilesConsumesEntry(t *testing.T) {
-	pm := seedPool(t, false) // no state.bin/memory.bin on disk
+	pm, kekPath := seedPool(t, false) // no state.bin/memory.bin on disk
 	srv := newServer(t, &fakeFirecracker{}, pm)
+	srv.PoolKEKPath = kekPath
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{

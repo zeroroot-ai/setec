@@ -63,6 +63,56 @@ plane, never present at snapshot time.**
   self-tests that it rejects a known-leaky fixture, so it cannot silently
   pass.
 
+### Snapshots encrypted at rest, destroyed with their owner
+
+A pool snapshot or session checkpoint is a full guest memory image and
+is node-durable, so at rest it is always encrypted — there is no
+opt-out flag and no plaintext write path (ADR-0005 invariant 5,
+`internal/snapshot/atrest`).
+
+- **Per-artifact keys, not cluster-global.** Every snapshot and every
+  pool entry is encrypted with its own fresh AES-256-GCM data key
+  (chunked/streaming, with truncation and reordering detection). Each
+  data key is sealed with a node-local key file and bound via AEAD
+  associated data to the artifact's identity, so sealed keys cannot be
+  swapped between artifacts. No external KMS is required (ADR-0003/0007
+  portability); the sealed keys live outside the artifact tree, so a
+  copy of the artifact tree (backup, object-store replica, reclaimed
+  disk) carries no key material.
+- **Deletion is crypto-erase.** Deleting a Snapshot (TTL, class change,
+  deletion) or releasing a pool entry destroys the sealed data key
+  FIRST — zero-overwrite, fsync, unlink — and then reclaims the
+  ciphertext. Even where the ciphertext overwrite is defeated
+  (copy-on-write filesystems), the artifact is cryptographically erased
+  once its only key is gone. The integration test
+  (`TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown`)
+  asserts artifacts are unreadable without their key and that teardown
+  removes artifact and key.
+- **Accepted residual:** an attacker with simultaneous root access to a
+  node's key file and its artifact tree can decrypt that node's
+  artifacts. The node boundary is the design point — keys never leave
+  the node, so the blast radius of a stolen artifact tree or a
+  compromised storage backend is zero.
+
+### Template provenance (pool entries)
+
+A pre-warm pool template is built ONLY from the trusted class image
+booted to guest-agent-ready, never from a used sandbox (ADR-0005
+invariant 4). This is enforced in code, not assumed:
+
+- `setec-pool-vm` refuses to run when a live process already answers on
+  the requested Firecracker socket — it only ever snapshots the VM it
+  cold-boots itself (`TestRunLauncher_RefusesLiveSocket`).
+- Every entry carries a provenance record naming the class-image boot
+  path, and the record is bound into the entry's sealed encryption key
+  via AEAD associated data — re-labelling a foreign artifact breaks its
+  key.
+- The pool manager refuses to hand out (and destroys) any entry whose
+  provenance record is missing or names another source
+  (`TestClaim_RefusesEntryWithoutProvenance`), and a reflection guard
+  (`TestLaunchOptions_CarriesNoSnapshotSource`) fails the build if the
+  pool launch surface ever grows a snapshot/template source field.
+
 ### Default-deny egress per SandboxClass
 
 Network egress is default-deny, opened only per SandboxClass policy. A

@@ -53,11 +53,18 @@ import (
 	"time"
 
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 )
 
 const (
 	// defaultFirecrackerBinary is the standard path kata-deploy lays down.
 	defaultFirecrackerBinary = "/usr/local/bin/firecracker"
+
+	// defaultKeyFile is the node-local KEK the per-entry DEK is sealed
+	// with (ADR-0005 invariant 5). Matches the node-agent's
+	// --snapshot-key-file default.
+	defaultKeyFile = "/var/lib/setec/keys/node.key"
 
 	// socketReadyPollInterval is how often we poll the Firecracker API
 	// socket during startup. 100ms keeps the tight worst-case budget
@@ -66,9 +73,10 @@ const (
 
 	// stateFileName and memFileName are the local filenames inside
 	// <storage-root>/<pool-entry-id>/ where Firecracker writes the
-	// serialised VM state and guest memory respectively.
-	stateFileName = "state.bin"
-	memFileName   = "memory.bin"
+	// serialised VM state and guest memory respectively. They are
+	// encrypted in place before the launcher commits the entry.
+	stateFileName = poolentry.StateFile
+	memFileName   = poolentry.MemFile
 
 	// vsockFileName is the local filename inside
 	// <storage-root>/<pool-entry-id>/ where Firecracker binds the
@@ -99,6 +107,7 @@ type Options struct {
 	ShutdownGracePause time.Duration
 	BootArgs           string
 	VsockUDSPath       string
+	KeyFile            string
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -125,6 +134,9 @@ func parseFlags(args []string) (Options, error) {
 	fs.StringVar(&o.VsockUDSPath, "vsock-uds-path", "",
 		"host path where Firecracker binds the guest vsock device's Unix socket "+
 			"(the entropy-reseed transport). Empty derives <storage-root>/<pool-entry-id>/vsock.sock")
+	fs.StringVar(&o.KeyFile, "key-file", defaultKeyFile,
+		"node-local key-encryption-key file the per-entry snapshot DEK is sealed with "+
+			"(created on first use). Snapshot state is ALWAYS encrypted at rest; there is no opt-out.")
 
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -145,6 +157,11 @@ func parseFlags(args []string) (Options, error) {
 	}
 	if o.PoolEntryID == "" {
 		missing = append(missing, "--pool-entry-id")
+	}
+	if o.KeyFile == "" {
+		// Encryption at rest is not optional (ADR-0005 invariant 5);
+		// an explicitly-emptied flag is a misconfiguration.
+		missing = append(missing, "--key-file")
 	}
 	if len(missing) > 0 {
 		return o, fmt.Errorf("missing required flag(s): %v", missing)
@@ -229,7 +246,15 @@ func runLauncher(
 		return fmt.Errorf("mkdir %q: %w", entryDir, mkErr)
 	}
 
-	// Clean any stale socket from a previous run so Firecracker can bind.
+	// Template provenance (ADR-0005 invariant 4): this launcher only
+	// ever snapshots the VM it cold-boots itself from the class
+	// kernel/rootfs/image. A LIVE process already answering on the
+	// requested socket would mean snapshotting a pre-existing —
+	// possibly used — VM, so refuse outright rather than adopting it.
+	if socketAlive(o.SocketPath) {
+		return fmt.Errorf("socket %q has a live listener; refusing to snapshot a pre-existing VM (template provenance, ADR-0005 invariant 4)", o.SocketPath)
+	}
+	// Clean any stale (dead) socket file so Firecracker can bind.
 	if rmErr := os.Remove(o.SocketPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return fmt.Errorf("remove stale socket %q: %w", o.SocketPath, rmErr)
 	}
@@ -278,6 +303,16 @@ func runLauncher(
 	}
 	if err := verifySnapshotFiles(statePath, memPath); err != nil {
 		return fmt.Errorf("verify snapshot: %w", err)
+	}
+
+	// Encrypt the entry at rest (ADR-0005 invariant 5): a fresh
+	// per-entry DEK encrypts both files in place (the plaintext is
+	// zero-overwritten before unlink), and the DEK is sealed with the
+	// node KEK under an AAD binding the entry's identity AND its
+	// class-image-boot provenance. Unencrypted pool state never
+	// survives this function.
+	if err := sealEntryAtRest(o, entryDir, statePath, memPath); err != nil {
+		return fmt.Errorf("seal entry at rest: %w", err)
 	}
 
 	// All good. Leave the paused VM alive for the node-agent to pick up.
@@ -399,6 +434,52 @@ func vsockUDSPath(o Options) string {
 		return o.VsockUDSPath
 	}
 	return filepath.Join(o.StorageRoot, o.PoolEntryID, vsockFileName)
+}
+
+// socketAlive reports whether a live listener answers on the Unix
+// socket at path. A dead leftover socket file does not connect.
+func socketAlive(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// sealEntryAtRest encrypts the entry's state/memory pair with a fresh
+// per-entry DEK, seals the DEK with the node KEK (AAD = entry identity
+// + provenance), and writes the provenance record. Called only after
+// verifySnapshotFiles, so both plaintext files exist and are non-empty.
+func sealEntryAtRest(o Options, entryDir, statePath, memPath string) error {
+	kek, err := atrest.LoadOrCreateKEK(o.KeyFile)
+	if err != nil {
+		return err
+	}
+	dek, err := atrest.NewDEK()
+	if err != nil {
+		return err
+	}
+	if err := atrest.EncryptFile(statePath, dek); err != nil {
+		return err
+	}
+	if err := atrest.EncryptFile(memPath, dek); err != nil {
+		return err
+	}
+	prov := poolentry.Provenance{
+		Source:     poolentry.SourceClassImageBoot,
+		ImageRef:   o.ImageRef,
+		KernelPath: o.KernelPath,
+		RootfsPath: o.RootfsPath,
+	}
+	sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(o.PoolEntryID, prov))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(entryDir, poolentry.DEKFile), sealed, 0o600); err != nil {
+		return fmt.Errorf("write sealed DEK: %w", err)
+	}
+	return poolentry.WriteProvenance(entryDir, prov)
 }
 
 // verifySnapshotFiles asserts both files exist and are non-empty.

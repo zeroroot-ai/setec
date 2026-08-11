@@ -201,20 +201,43 @@ no operator-managed template objects exist anywhere in the flow.
 
 Phase 3 ships one backend: local-disk. State files live under
 `/var/lib/setec/snapshots/<namespace>-<snapshot>/state.bin` with
-mode 0600 and a hex SHA256 sidecar at `state.bin.sha256`. Delete
-overwrites the state file with zeros before unlinking — a pragmatic
-defense-in-depth measure, not cryptographic erasure.
+mode 0600 and a hex SHA256 sidecar at `state.bin.sha256`.
+
+Every artifact is **encrypted at rest** — always, with no opt-out
+(ADR-0005 invariant 5). Each snapshot gets its own AES-256-GCM data
+key. The data key is sealed with a node-local key file
+(`snapshots.keysDir`, default `/var/lib/setec/keys`) and stored
+OUTSIDE the artifact tree, so a copy or backup of the snapshot
+directory carries ciphertext only, with no key material. Pre-warm pool
+entries get the same treatment: `setec-pool-vm` encrypts the entry's
+state/memory pair in place and seals the per-entry key against the
+entry's identity and provenance.
+
+Delete destroys the sealed data key first — zero-overwrite, sync,
+unlink — and then reclaims the ciphertext. The key destruction IS the
+erasure: even on a copy-on-write filesystem where the ciphertext
+overwrite is defeated, the artifact is cryptographically erased the
+moment its only key is gone.
+
+Snapshots written by a pre-encryption setec release have no sealed
+key and are treated as destroyed: restore refuses them, delete still
+reclaims them. Rebuild pools and re-create snapshots after upgrade;
+there is no plaintext read path.
 
 Future backends (object-store, content-addressable) slot in behind
-the `storage.StorageBackend` interface without operator changes.
+the `storage.StorageBackend` interface without operator changes; the
+encryption wrapper composes over any of them, and keys stay on the
+node.
 
 ## Operational considerations
 
 - **Disk fill**: `snapshots.localDisk.fillThreshold` (default 0.85)
   refuses new snapshots when the filesystem exceeds the threshold.
   A Sandbox requesting a snapshot on a nearly-full node fails fast
-  with `reason=InsufficientStorage` and is never paused. Filesystem
-  encryption at rest is recommended but not enforced by Setec.
+  with `reason=InsufficientStorage` and is never paused. Snapshot
+  artifacts are always encrypted at rest by Setec itself (see
+  "Storage backend" above); whole-filesystem encryption remains a
+  sensible additional layer for everything else on the node.
 - **GC policy**: the SnapshotReconciler deletes Snapshots whose
   TTL has elapsed AND whose reference count is zero. A Snapshot
   with live Sandbox references is never deleted automatically.

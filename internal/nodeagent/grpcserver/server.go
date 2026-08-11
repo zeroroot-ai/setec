@@ -43,6 +43,8 @@ import (
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -88,6 +90,13 @@ type Server struct {
 	// ClaimPoolEntry call: "restored", "miss", or "restore_failed"
 	// (metrics hook — setec_prewarm_pool_claims_total).
 	ClaimObserver func(outcome string)
+
+	// PoolKEKPath is the node-local key-encryption-key file pool
+	// entries' per-entry DEKs are sealed with (the same keyfile the
+	// EncryptedBackend uses). ClaimPoolEntry needs it to decrypt an
+	// entry's state/memory pair before LoadSnapshot — pool state is
+	// always encrypted at rest (ADR-0005 invariant 5).
+	PoolKEKPath string
 
 	// Tracer is optional.
 	Tracer trace.Tracer
@@ -148,8 +157,11 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	statePath := filepath.Join(dir, "state.bin")
 	memPath := filepath.Join(dir, "memory.bin")
 
-	// Ensure we clean up the temp files even on error paths.
-	defer func() { _ = os.RemoveAll(dir) }()
+	// Ensure we clean up the temp files even on error paths. The temp
+	// pair is the PLAINTEXT guest image (the durable copy written by
+	// Storage.Save is encrypted), so it gets the same zero-overwrite
+	// treatment the storage backend applies before unlinking.
+	defer func() { shredDir(dir) }()
 
 	if err := fc.CreateSnapshot(ctx, statePath, memPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker createSnapshot: %v", err)
@@ -418,18 +430,21 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	// not Release — is the teardown.
 	defer func() { _ = s.Pool.ReleaseClaimed(ctx, entry) }()
 
-	statePath := filepath.Join(entry.StorageRef, "state.bin")
-	memPath := filepath.Join(entry.StorageRef, "memory.bin")
-	for _, p := range []string{statePath, memPath} {
-		if _, statErr := os.Stat(p); statErr != nil {
-			s.observeClaim("restore_failed")
-			return &setecgrpcv1.ClaimPoolEntryResponse{
-				Claimed: true,
-				EntryId: entry.ID,
-				Error:   fmt.Sprintf("pool entry state missing: %v", statErr),
-			}, nil
-		}
+	// Pool entry state is encrypted at rest (ADR-0005 invariant 5):
+	// unseal the per-entry DEK and decrypt into a private temp dir for
+	// LoadSnapshot. Plain RemoveAll on the temp pair — Firecracker may
+	// keep the restored memory file mapped, so it must be unlinked,
+	// never overwritten (same rationale as RestoreSandbox).
+	statePath, memPath, cleanup, decErr := s.decryptPoolEntry(entry.StorageRef, entry.ID)
+	if decErr != nil {
+		s.observeClaim("restore_failed")
+		return &setecgrpcv1.ClaimPoolEntryResponse{
+			Claimed: true,
+			EntryId: entry.ID,
+			Error:   fmt.Sprintf("decrypt pool entry state: %v", decErr),
+		}, nil
 	}
+	defer cleanup()
 
 	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
 	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
@@ -487,6 +502,74 @@ func (s *Server) observeClaim(outcome string) {
 	if s.ClaimObserver != nil {
 		s.ClaimObserver(outcome)
 	}
+}
+
+// decryptPoolEntry unseals a claimed entry's DEK (bound to the entry's
+// identity + provenance record) and streams the encrypted state/memory
+// pair into a fresh temp dir as the plaintext files Firecracker's
+// LoadSnapshot needs. The returned cleanup unlinks the temp tree.
+func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath string, cleanup func(), err error) {
+	kek, err := atrest.LoadOrCreateKEK(s.poolKEKPath())
+	if err != nil {
+		return "", "", nil, err
+	}
+	sealed, err := os.ReadFile(filepath.Join(entryDir, poolentry.DEKFile))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("read sealed DEK: %w", err)
+	}
+	prov, err := poolentry.ReadProvenance(entryDir)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("read provenance: %w", err)
+	}
+	dek, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(entryID, prov))
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	dir := filepath.Join(s.tempDir(), "pool-claim-"+entryID+"-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", nil, err
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	statePath = filepath.Join(dir, poolentry.StateFile)
+	memPath = filepath.Join(dir, poolentry.MemFile)
+	if err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.StateFile), statePath, dek); err != nil {
+		cleanup()
+		return "", "", nil, err
+	}
+	if err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.MemFile), memPath, dek); err != nil {
+		cleanup()
+		return "", "", nil, err
+	}
+	return statePath, memPath, cleanup, nil
+}
+
+// poolKEKPath returns the configured KEK path, falling back to the
+// production default shared with cmd/node-agent and setec-pool-vm.
+func (s *Server) poolKEKPath() string {
+	if s.PoolKEKPath != "" {
+		return s.PoolKEKPath
+	}
+	return "/var/lib/setec/keys/node.key"
+}
+
+// shredDir zero-overwrites every regular file directly under dir
+// (best effort) before removing the tree. Used for the plaintext temp
+// pair CreateSnapshot hands to Firecracker; the restore path keeps
+// plain RemoveAll because Firecracker may still have the restored
+// memory file mapped — unlinking a mapped file is safe, overwriting
+// it is not.
+func shredDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			_ = atrest.Shred(filepath.Join(dir, e.Name()))
+		}
+	}
+	_ = os.RemoveAll(dir)
 }
 
 // --- framed stream helpers ----------------------------------------
