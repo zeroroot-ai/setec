@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,17 +53,24 @@ import (
 func main() {
 	var (
 		listenAddr        string
-		tlsCert           string
-		tlsKey            string
-		tlsClientCA       string
+		creds             credentialFlags
 		tenantLabelKey    string
 		metricsAddr       string
 		shutdownGraceTime time.Duration
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":50051", "gRPC server listen address.")
-	flag.StringVar(&tlsCert, "tls-cert", "", "Path to server TLS certificate. Required.")
-	flag.StringVar(&tlsKey, "tls-key", "", "Path to server TLS key. Required.")
-	flag.StringVar(&tlsClientCA, "tls-client-ca", "", "Path to client-CA bundle enabling mTLS. Required.")
+	flag.StringVar(&creds.tlsCert, "tls-cert", "",
+		"Path to server TLS certificate. Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsKey, "tls-key", "",
+		"Path to server TLS key. Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
+		"Path to client-CA bundle enabling mTLS. Selects file credential mode, the default.")
+	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
+		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
+			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
+	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
+		"Full SPIFFE ID allowed to call this frontend, e.g. spiffe://zeroroot.ai/ns/gibson/sa/gibson. "+
+			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
 	flag.StringVar(&tenantLabelKey, "tenant-namespace-label", "setec.zeroroot.ai/tenant",
 		"Label key used to map tenant → namespace.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
@@ -102,31 +110,26 @@ func main() {
 		TenantResolver: resolver,
 	}
 
-	// mTLS is mandatory. All three flags must be populated; missing
-	// any of them is a misconfiguration that the DaemonSet should
-	// restart out of, not paper over.
-	if tlsCert == "" || tlsKey == "" || tlsClientCA == "" {
-		fmt.Fprintln(os.Stderr,
-			"frontend: --tls-cert, --tls-key and --tls-client-ca are required; mTLS is mandatory")
-		os.Exit(1)
-	}
-	provider, err := credentials.New(credentials.Config{
-		Files: &credentials.FileSource{
-			CertFile: tlsCert,
-			KeyFile:  tlsKey,
-			CAFile:   tlsClientCA,
-		},
-	})
+	// mTLS is mandatory and the credential mode is explicit. Half a
+	// mode, both modes, or neither is a misconfiguration the Deployment
+	// should restart out of, not paper over; credentials.New is what
+	// decides that, so there is one answer and not one per component.
+	credConfig, credMode := creds.config()
+	provider, err := credentials.New(credConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "frontend: load TLS creds: %v\n", err)
+		fmt.Fprintf(os.Stderr, "frontend: credentials: %v\n", err)
 		os.Exit(1)
 	}
-	creds, err := provider.ServerCredentials(context.Background())
+	// Acquiring the credentials here rather than lazily is what makes
+	// an unreachable SPIFFE Workload API a boot failure. There is no
+	// fallback to files.
+	serverCreds, err := provider.ServerCredentials(context.Background())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "frontend: load TLS creds: %v\n", err)
+		fmt.Fprintf(os.Stderr, "frontend: credentials (%s mode): %v\n", credMode, err)
 		os.Exit(1)
 	}
-	grpcOpts := []grpc.ServerOption{grpc.Creds(creds)}
+	fmt.Fprintf(os.Stderr, "frontend: credential mode: %s\n", credMode)
+	grpcOpts := []grpc.ServerOption{grpc.Creds(serverCreds)}
 
 	grpcServer := grpc.NewServer(grpcOpts...)
 	setecv1grpc.RegisterSandboxServiceServer(grpcServer, srv)
@@ -168,6 +171,73 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: gRPC serve: %v\n", err)
 	}
+}
+
+// Credential mode names, used only in log and error output so an
+// operator can tell from a pod's logs which posture it is running.
+const (
+	fileMode        = "file"
+	spiffeMode      = "spiffe"
+	conflictingMode = "conflicting"
+	unsetMode       = "unset"
+)
+
+// credentialFlags carries the frontend's credential flags.
+type credentialFlags struct {
+	tlsCert             string
+	tlsKey              string
+	tlsClientCA         string
+	spiffeSocket        string
+	spiffeAuthorizedIDs repeatedString
+}
+
+// config maps the flags onto a credentials.Config and names the mode
+// they selected.
+//
+// It deliberately validates nothing. A source is *selected* by any of
+// its flags being set, not by all of them; whether the selection is
+// coherent — both modes, neither, or half of one — is
+// credentials.New's decision, so that every setec component gets the
+// same answer and the same message. Selecting on "any flag set" is what
+// makes a typo in one flag name a startup error naming the missing
+// piece rather than a silent switch to the other mode.
+func (f credentialFlags) config() (credentials.Config, string) {
+	var (
+		cfg  credentials.Config
+		mode = unsetMode
+	)
+	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
+		cfg.Files = &credentials.FileSource{
+			CertFile: f.tlsCert,
+			KeyFile:  f.tlsKey,
+			CAFile:   f.tlsClientCA,
+		}
+		mode = fileMode
+	}
+	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
+		cfg.SPIFFE = &credentials.SPIFFESource{
+			SocketPath:    f.spiffeSocket,
+			AuthorizedIDs: f.spiffeAuthorizedIDs,
+		}
+		mode = spiffeMode
+	}
+	if cfg.Files != nil && cfg.SPIFFE != nil {
+		mode = conflictingMode
+	}
+	return cfg, mode
+}
+
+// repeatedString collects a flag given more than once. The credential
+// allow-list is a list of full SPIFFE IDs, and repeating the flag keeps
+// each entry visible on its own line in a manifest rather than buried
+// in a delimited string.
+type repeatedString []string
+
+func (r *repeatedString) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedString) Set(v string) error {
+	*r = append(*r, v)
+	return nil
 }
 
 // labelTenantResolver maps a TenantID to a namespace by listing
