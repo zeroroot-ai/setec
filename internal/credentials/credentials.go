@@ -119,9 +119,16 @@ type source interface {
 	// takes effect without a restart. A source that says no is read
 	// once, at startup, which is what file mode has always done.
 	rotates() bool
-	// dialing reports whether the source can furnish credentials for
-	// dialing a peer, and names what is missing when it cannot.
-	dialing() error
+	// namesPeer reports whether a peer's certificate from this source
+	// carries a name the standard TLS hostname check can use.
+	//
+	// A cert-manager-issued certificate does: it has a DNS SAN, and
+	// Go's verification checks it. An X509-SVID does not — it
+	// identifies its holder by URI SAN alone — so for such a source
+	// the hostname check has to be *replaced* by the SPIFFE-ID check
+	// rather than added to it. This is what tells the Provider which
+	// of the two it is building.
+	namesPeer() bool
 }
 
 // New validates cfg and returns the Provider for it.
@@ -204,21 +211,107 @@ func (p *Provider) authorizePeer(_ [][]byte, verified [][]*x509.Certificate) err
 }
 
 // ClientCredentials returns the credentials for dialing a peer,
-// presenting this component's certificate and verifying the peer
-// against the configured trust anchors.
+// presenting this component's certificate and authorizing the peer it
+// reaches.
+//
+// A client's question is not the server's question turned around. A
+// server asks "did a trusted authority issue this, and is the holder
+// on my list"; a client asks that too, but the machinery differs
+// because the standard answer to "is this the server I meant" is a
+// hostname check, and not every identity carries a hostname. Which
+// machinery applies is the source's to declare, not the caller's.
+//
+// It acquires credentials once before returning, so a source that
+// cannot produce them is a startup failure rather than a dial that
+// fails later looking like a network problem.
 func (p *Provider) ClientCredentials(ctx context.Context) (grpccreds.TransportCredentials, error) {
-	if err := p.source.dialing(); err != nil {
+	cfg, err := p.clientConfig(ctx)
+	if err != nil {
 		return nil, err
 	}
+	if p.source.rotates() {
+		// Re-ask the source for every handshake so a rotated
+		// certificate is on the wire immediately. There is no
+		// client-side GetConfigForClient, so the identity is refreshed
+		// through this hook and the trust anchors are refreshed inside
+		// the verification callback.
+		cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			cert, err := p.source.identity(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &cert, nil
+		}
+	}
+	return grpccreds.NewTLS(cfg), nil
+}
+
+// clientConfig assembles one client TLS configuration from the source.
+// The TLS floor and the peer authorization hook are set here rather
+// than by the source, so no source can weaken them.
+func (p *Provider) clientConfig(ctx context.Context) (*tls.Config, error) {
 	cert, pool, err := p.materialise(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return grpccreds.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   minTLSVersion,
-		RootCAs:      pool,
-	}), nil
+	cfg := &tls.Config{
+		Certificates:          []tls.Certificate{cert},
+		MinVersion:            minTLSVersion,
+		RootCAs:               pool,
+		VerifyPeerCertificate: p.authorizePeer,
+	}
+	if !p.source.namesPeer() {
+		// The peer's certificate carries no name to check, so Go's
+		// standard verification cannot run. It is replaced rather than
+		// relaxed: authorizeUnnamedPeer performs the chain
+		// verification Go would have performed and then asks the
+		// source whether the verified identity is one this component
+		// talks to. Skipping verification here without that
+		// replacement would accept any certificate at all.
+		cfg.InsecureSkipVerify = true //nolint:gosec // replaced by authorizeUnnamedPeer, not dropped
+		cfg.VerifyPeerCertificate = p.authorizeUnnamedPeer(ctx)
+	}
+	return cfg, nil
+}
+
+// authorizeUnnamedPeer verifies and authorizes a peer whose certificate
+// carries no name the hostname check could use.
+//
+// It fetches the trust anchors per handshake rather than closing over
+// the pool built at startup, so a rotated bundle takes effect without a
+// restart — the client-side equivalent of the server's
+// GetConfigForClient.
+func (p *Provider) authorizeUnnamedPeer(ctx context.Context) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return errors.New("peer authorization: peer presented no certificate")
+		}
+		chain := make([]*x509.Certificate, 0, len(rawCerts))
+		for _, raw := range rawCerts {
+			cert, err := x509.ParseCertificate(raw)
+			if err != nil {
+				return fmt.Errorf("peer authorization: parse peer certificate: %w", err)
+			}
+			chain = append(chain, cert)
+		}
+		pool, err := p.source.trustAnchors(ctx)
+		if err != nil {
+			return fmt.Errorf("peer authorization: trust anchors: %w", err)
+		}
+		intermediates := x509.NewCertPool()
+		for _, cert := range chain[1:] {
+			intermediates.AddCert(cert)
+		}
+		verified, err := chain[0].Verify(x509.VerifyOptions{
+			Roots:         pool,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		if err != nil {
+			return fmt.Errorf("peer authorization: verify peer chain: %w", err)
+		}
+		return p.source.authorizePeer(verified)
+	}
 }
 
 // materialise acquires both halves of the credential from the source.
@@ -292,5 +385,9 @@ func (s *fileSource) authorizePeer([][]*x509.Certificate) error { return nil }
 // ESO are rotated by restarting the pod.
 func (s *fileSource) rotates() bool { return false }
 
-// dialing reports that a file source can furnish client credentials.
-func (s *fileSource) dialing() error { return nil }
+// namesPeer reports that a file-sourced certificate carries a name the
+// standard hostname check can use. cert-manager and every other issuer
+// setec's file mode is fed by put a DNS SAN on the certificates they
+// issue, and checking it is the only thing that ties a connection to
+// the endpoint the caller asked for.
+func (s *fileSource) namesPeer() bool { return true }

@@ -22,6 +22,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -33,6 +34,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	grpccreds "google.golang.org/grpc/credentials"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/credentials"
@@ -74,8 +76,20 @@ type Config struct {
 	//
 	// Note what this hop is: the collector is authenticated, setec is
 	// not. The exporter presents no client certificate, so a collector
-	// cannot use this channel to establish who is talking to it.
+	// cannot use this channel to establish who is talking to it. Set
+	// SPIFFESocket instead to make it mutual.
 	CAFile string
+
+	// SPIFFESocket is the SPIFFE Workload API endpoint. Setting it
+	// makes this hop mutual TLS: the operator presents its X509-SVID
+	// and authorizes the collector's SPIFFE ID, instead of merely
+	// verifying that the collector's certificate chains.
+	SPIFFESocket string
+
+	// SPIFFEServers is the allow-list of full SPIFFE IDs the collector
+	// may present. Required with SPIFFESocket; an empty list is a
+	// configuration error rather than "accept any collector".
+	SPIFFEServers []string
 }
 
 // Setup constructs an OTEL tracer backed by an OTLP/gRPC exporter. When
@@ -104,11 +118,7 @@ func Setup(cfg Config) (trace.Tracer, ShutdownFunc, error) {
 			"tracing: WARNING --otel-insecure set; OTLP traces will be exported in plaintext")
 		opts = append(opts, otlptracegrpc.WithInsecure())
 	} else {
-		// The collector is verified but setec presents no identity
-		// to it: this hop is one-way TLS, not mTLS, and the
-		// credential module names it as such. Nothing else in this
-		// package touches crypto/tls.
-		tlsCreds, err := credentials.TrustOnlyCredentials(credentials.TrustOnly{CAFile: cfg.CAFile})
+		tlsCreds, err := exporterCredentials(cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("tracing: build OTLP TLS credentials: %w", err)
 		}
@@ -150,6 +160,43 @@ func Setup(cfg Config) (trace.Tracer, ShutdownFunc, error) {
 	}
 
 	return tp.Tracer(TracerName), shutdown, nil
+}
+
+// exporterCredentials resolves the transport credentials for the OTLP
+// channel. Nothing in this package touches crypto/tls; the two shapes
+// this hop can take are both named by the credential module.
+//
+// Which shape applies is the operator's choice and is exclusive:
+//
+//   - Default — one-way TLS. The collector is authenticated against the
+//     host root store or an explicitly mounted bundle, and setec
+//     presents no identity. This is not mTLS, and the credential module
+//     says so in its type name rather than letting a reader infer
+//     otherwise from the word "TLS".
+//   - SPIFFESocket set — mutual TLS. The operator presents its
+//     X509-SVID and authorizes the collector's SPIFFE ID, which is a
+//     stronger statement than "the certificate chains".
+//
+// Configuring both is a startup error rather than a silent precedence
+// rule, for the same reason the credential modes are exclusive
+// everywhere else in setec: an operator must never have to work out
+// which one won.
+func exporterCredentials(cfg Config) (grpccreds.TransportCredentials, error) {
+	if cfg.SPIFFESocket == "" && len(cfg.SPIFFEServers) == 0 {
+		return credentials.TrustOnlyCredentials(credentials.TrustOnly{CAFile: cfg.CAFile})
+	}
+	if cfg.CAFile != "" {
+		return nil, errors.New(
+			"both --otel-ca-file and the --otel-spiffe-* flags are configured; exactly one must be")
+	}
+	provider, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+		SocketPath:    cfg.SPIFFESocket,
+		AuthorizedIDs: cfg.SPIFFEServers,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return provider.ClientCredentials(context.Background())
 }
 
 // StartSandboxSpan starts a root span for a Sandbox reconciliation or any
