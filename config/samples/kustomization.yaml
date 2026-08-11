@@ -1,4 +1,5 @@
 ## Append samples of your project ##
 resources:
 - setec_v1alpha1_sandbox.yaml
+- setec_v1alpha1_sandbox_session.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

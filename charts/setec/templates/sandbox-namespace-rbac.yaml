@@ -63,6 +63,15 @@ rules:
       - delete
       - patch
       - update
+  # Session lifecycle (ADR-0006/0007): the durable workspace PVC is
+  # created before the session Pod and deleted (wiped) at teardown.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - create
+      - delete
 {{- if $clusterWide }}
 ---
 # EXPLICIT cluster-wide grant. Chosen by setting

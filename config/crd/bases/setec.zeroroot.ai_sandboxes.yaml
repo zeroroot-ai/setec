@@ -36,12 +36,18 @@ spec:
       name: Exit-Code
       priority: 1
       type: integer
+    - jsonPath: .spec.lifecycle.mode
+      name: Lifecycle
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
           Sandbox is the Schema for the sandboxes API. Each Sandbox represents a
-          single ephemeral microVM execution.
+          single isolated microVM execution unit following one of two lifecycles
+          (ADR-0006): ephemeral (the default — one run, auto-destroy, stateless)
+          or session (long-lived, durable /workspace volume, explicit teardown).
         properties:
           apiVersion:
             description: |-
@@ -250,13 +256,51 @@ spec:
                 description: Lifecycle carries optional runtime constraints such as
                   a timeout.
                 properties:
+                  mode:
+                    default: ephemeral
+                    description: |-
+                      Mode selects the Sandbox lifecycle (ADR-0006): "ephemeral"
+                      (default; run-to-completion, auto-destroy, stateless) or "session"
+                      (long-lived, durable /workspace PVC, explicit teardown). Mode is
+                      immutable: the admission webhook rejects any update that changes
+                      the effective mode of an existing Sandbox.
+                    enum:
+                    - ephemeral
+                    - session
+                    type: string
                   timeout:
                     description: |-
                       Timeout bounds the maximum wall-clock runtime of the Sandbox. Once
                       the timeout elapses the controller terminates the underlying Pod and
                       marks the Sandbox Failed with reason "Timeout". Accepts any Go-style
                       duration string recognized by metav1.Duration (e.g. "30m", "8h").
+                      For session Sandboxes the timeout spans the whole session (measured
+                      from the first VM start), not each individual VM incarnation.
                     type: string
+                  workspace:
+                    description: |-
+                      Workspace configures the durable session workspace PVC. Only
+                      permitted when Mode=session.
+                    properties:
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: |-
+                          Size is the requested capacity of the workspace PVC. Defaults to
+                          10Gi when unset.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        description: |-
+                          StorageClassName names the StorageClass the workspace PVC is
+                          provisioned from. When unset the cluster default StorageClass is
+                          used. Encryption at rest is the StorageClass's responsibility:
+                          point this at a class whose CSI driver encrypts volumes (e.g. an
+                          encrypted EBS/Ceph/LUKS-backed class). Setec adds no encryption
+                          layer of its own.
+                        type: string
+                    type: object
                 type: object
               network:
                 description: |-

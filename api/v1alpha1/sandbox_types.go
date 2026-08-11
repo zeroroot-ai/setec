@@ -229,12 +229,72 @@ type Network struct {
 	Allow []NetworkAllow `json:"allow,omitempty"`
 }
 
-// Lifecycle carries optional runtime constraints on the Sandbox.
+// LifecycleMode selects which of the two Sandbox lifecycles (ADR-0006)
+// applies.
+// +kubebuilder:validation:Enum=ephemeral;session
+type LifecycleMode string
+
+const (
+	// LifecycleModeEphemeral is the run-to-completion lifecycle: the
+	// microVM executes one workload, auto-destroys on exit, and holds no
+	// durable state. This is the default and preserves the pre-lifecycle
+	// Sandbox semantics exactly.
+	LifecycleModeEphemeral LifecycleMode = "ephemeral"
+
+	// LifecycleModeSession is the long-lived lifecycle: the Sandbox
+	// lives across many calls, owns a durable workspace PVC mounted at
+	// /workspace, survives VM restart and node loss (the PVC re-attaches),
+	// and ends only on explicit teardown (deleting the Sandbox), which
+	// wipes and deletes the workspace. Per ADR-0005 invariant 3 a
+	// session VM and its workspace serve exactly one session and are
+	// never reused.
+	LifecycleModeSession LifecycleMode = "session"
+)
+
+// WorkspaceSpec configures the durable per-session workspace volume
+// (ADR-0007). The workspace is a dedicated ReadWriteOnce CSI
+// PersistentVolumeClaim the operator creates with the Sandbox and
+// deletes at session teardown. Only meaningful when
+// spec.lifecycle.mode=session; the webhook rejects it otherwise.
+type WorkspaceSpec struct {
+	// Size is the requested capacity of the workspace PVC. Defaults to
+	// 10Gi when unset.
+	// +optional
+	Size *resource.Quantity `json:"size,omitempty"`
+
+	// StorageClassName names the StorageClass the workspace PVC is
+	// provisioned from. When unset the cluster default StorageClass is
+	// used. Encryption at rest is the StorageClass's responsibility:
+	// point this at a class whose CSI driver encrypts volumes (e.g. an
+	// encrypted EBS/Ceph/LUKS-backed class). Setec adds no encryption
+	// layer of its own.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+}
+
+// Lifecycle declares which lifecycle the Sandbox follows and carries
+// optional runtime constraints.
 type Lifecycle struct {
+	// Mode selects the Sandbox lifecycle (ADR-0006): "ephemeral"
+	// (default; run-to-completion, auto-destroy, stateless) or "session"
+	// (long-lived, durable /workspace PVC, explicit teardown). Mode is
+	// immutable: the admission webhook rejects any update that changes
+	// the effective mode of an existing Sandbox.
+	// +kubebuilder:default=ephemeral
+	// +optional
+	Mode LifecycleMode `json:"mode,omitempty"`
+
+	// Workspace configures the durable session workspace PVC. Only
+	// permitted when Mode=session.
+	// +optional
+	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
+
 	// Timeout bounds the maximum wall-clock runtime of the Sandbox. Once
 	// the timeout elapses the controller terminates the underlying Pod and
 	// marks the Sandbox Failed with reason "Timeout". Accepts any Go-style
 	// duration string recognized by metav1.Duration (e.g. "30m", "8h").
+	// For session Sandboxes the timeout spans the whole session (measured
+	// from the first VM start), not each individual VM incarnation.
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
@@ -300,6 +360,24 @@ type SandboxSpec struct {
 	// gRPC service. Phase 3 feature.
 	// +optional
 	SnapshotRef *SandboxSnapshotRef `json:"snapshotRef,omitempty"`
+}
+
+// EffectiveLifecycleMode returns the lifecycle mode the Sandbox follows,
+// treating an absent lifecycle block or empty mode as ephemeral. This is
+// the single source of truth for mode resolution: the webhook's
+// immutability check, the controller, and the podspec builder all
+// consult it so a Sandbox created before the lifecycle field existed
+// behaves identically to one that says "ephemeral" explicitly.
+func (s *SandboxSpec) EffectiveLifecycleMode() LifecycleMode {
+	if s.Lifecycle == nil || s.Lifecycle.Mode == "" {
+		return LifecycleModeEphemeral
+	}
+	return s.Lifecycle.Mode
+}
+
+// IsSession reports whether the Sandbox follows the session lifecycle.
+func (s *SandboxSpec) IsSession() bool {
+	return s.EffectiveLifecycleMode() == LifecycleModeSession
 }
 
 // SandboxRuntimeStatus records the runtime backend that was actually selected
@@ -368,9 +446,12 @@ type SandboxStatus struct {
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:printcolumn:name="Exit-Code",type=integer,JSONPath=`.status.exitCode`,priority=1
+// +kubebuilder:printcolumn:name="Lifecycle",type=string,JSONPath=`.spec.lifecycle.mode`,priority=1
 
 // Sandbox is the Schema for the sandboxes API. Each Sandbox represents a
-// single ephemeral microVM execution.
+// single isolated microVM execution unit following one of two lifecycles
+// (ADR-0006): ephemeral (the default — one run, auto-destroy, stateless)
+// or session (long-lived, durable /workspace volume, explicit teardown).
 type Sandbox struct {
 	metav1.TypeMeta `json:",inline"`
 

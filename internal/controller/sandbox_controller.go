@@ -36,6 +36,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -88,6 +89,23 @@ const (
 	eventReasonPaused                = "Paused"
 	eventReasonResumed               = "Resumed"
 	eventReasonSnapshotCreateStarted = "SnapshotCreateStarted"
+	eventReasonWorkspaceCreated      = "WorkspaceCreated"
+	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
+	eventReasonSessionVMRestart      = "SessionVMRestart"
+
+	// workspaceFinalizer guards session-Sandbox deletion so the durable
+	// workspace PVC is wiped and deleted before the Sandbox object goes
+	// away (ADR-0005 invariant 3: one session, wiped at session end).
+	// Ephemeral Sandboxes never carry it.
+	workspaceFinalizer = "setec.zeroroot.ai/workspace-teardown"
+
+	// workspaceTeardownRequeue is how long the teardown path waits
+	// between checks that the workspace PVC deletion has been accepted.
+	workspaceTeardownRequeue = 2 * time.Second
+
+	// defaultWorkspaceSize is the workspace PVC capacity used when a
+	// session Sandbox does not declare spec.lifecycle.workspace.size.
+	defaultWorkspaceSize = "10Gi"
 
 	// runtimeUnavailableMessage is the vendor-neutral remediation guidance
 	// emitted when the configured RuntimeClass is missing. It links to the
@@ -201,6 +219,7 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
@@ -233,6 +252,28 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get Sandbox: %w", err)
+	}
+
+	// (1a) Session teardown. A Sandbox being deleted that still carries
+	// the workspace finalizer must have its workspace PVC deleted before
+	// the object is released (ADR-0005 invariant 3). Ephemeral Sandboxes
+	// never carry the finalizer and fall straight through to owner-ref GC.
+	if !sb.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+			return r.teardownWorkspace(ctx, logger, sb)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// (1b) Session Sandboxes acquire the workspace finalizer before any
+	// other work so no window exists in which the PVC could outlive its
+	// Sandbox unattended.
+	if sb.Spec.IsSession() && !controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+		original := sb.DeepCopy()
+		controllerutil.AddFinalizer(sb, workspaceFinalizer)
+		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add workspace finalizer: %w", err)
+		}
 	}
 
 	// (2) Phase 2: start OTEL span. The helper returns a no-op span when
@@ -371,7 +412,137 @@ func (r *SandboxReconciler) handleMissingPod(
 		}
 		return res, err
 	}
+	// Session lifecycle: the durable workspace PVC must exist before the
+	// Pod that mounts it. Like the NetworkPolicy, a failure here defers
+	// Pod creation rather than producing a Pod without its workspace.
+	if sb.Spec.IsSession() {
+		if err := r.ensureWorkspacePVC(ctx, logger, sb); err != nil {
+			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("ensure workspace PVC: %w", err))
+		}
+	}
 	return r.createPod(ctx, sb, cls, pinnedNode, sel)
+}
+
+// ensureWorkspacePVC creates the session Sandbox's durable workspace
+// claim when it does not exist yet (ADR-0007: a portable RWO CSI volume;
+// any CSI driver works). The claim is owner-referenced to the Sandbox as
+// defense in depth, but its authoritative teardown is the workspace
+// finalizer, which wipes it deterministically at session end.
+//
+// A workspace PVC found mid-deletion is an error, not a wait: per
+// ADR-0005 invariant 3 a workspace serves exactly one session, so a
+// name collision with a dying claim must fail loudly instead of
+// adopting or racing it.
+func (r *SandboxReconciler) ensureWorkspacePVC(
+	ctx context.Context,
+	logger logr.Logger,
+	sb *setecv1alpha1.Sandbox,
+) error {
+	name := podspec.WorkspacePVCName(sb.Name)
+	existing := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: name}, existing)
+	if err == nil {
+		if !existing.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("workspace PVC %q is terminating; a session workspace is never reused", name)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get workspace PVC %q: %w", name, err)
+	}
+
+	size := resource.MustParse(defaultWorkspaceSize)
+	var storageClassName *string
+	if sb.Spec.Lifecycle != nil && sb.Spec.Lifecycle.Workspace != nil {
+		ws := sb.Spec.Lifecycle.Workspace
+		if ws.Size != nil {
+			size = *ws.Size
+		}
+		storageClassName = ws.StorageClassName
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: sb.Namespace,
+			Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
+			},
+			StorageClassName: storageClassName,
+		},
+	}
+	if err := controllerutil.SetControllerReference(sb, pvc, r.Scheme); err != nil {
+		return fmt.Errorf("set owner on workspace PVC: %w", err)
+	}
+	if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create workspace PVC %q: %w", name, err)
+	}
+	logger.Info("created session workspace PVC", "pvc", name)
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonWorkspaceCreated, actionManageWorkspace,
+		"Created workspace PVC %q for session Sandbox", name)
+	return nil
+}
+
+// teardownWorkspace runs while a session Sandbox is being deleted and
+// still carries the workspace finalizer. It deletes the backing Pod
+// (a mounted claim cannot finish deleting under pvc-protection), then
+// deletes the workspace PVC, and releases the finalizer once the claim
+// is gone or its deletion has been accepted by the API server. A
+// Terminating claim can never bind again, so no cross-session reuse is
+// possible from that point; the CSI driver destroys the volume — and
+// with it every byte of session data — as soon as the Pod releases it
+// (ADR-0005 invariant 3).
+func (r *SandboxReconciler) teardownWorkspace(
+	ctx context.Context,
+	logger logr.Logger,
+	sb *setecv1alpha1.Sandbox,
+) (ctrl.Result, error) {
+	// (a) Delete the backing Pod first so the claim can unmount.
+	pod := &corev1.Pod{}
+	podKey := types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name + podspec.PodNameSuffix}
+	switch err := r.Get(ctx, podKey, pod); {
+	case err == nil:
+		if pod.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete session Pod during teardown: %w", err)
+			}
+		}
+	case !apierrors.IsNotFound(err):
+		return ctrl.Result{}, fmt.Errorf("get session Pod during teardown: %w", err)
+	}
+
+	// (b) Delete the workspace PVC.
+	pvcName := podspec.WorkspacePVCName(sb.Name)
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: pvcName}, pvc)
+	switch {
+	case apierrors.IsNotFound(err):
+		// Already gone — release the finalizer.
+	case err != nil:
+		return ctrl.Result{}, fmt.Errorf("get workspace PVC during teardown: %w", err)
+	case pvc.DeletionTimestamp.IsZero():
+		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete workspace PVC %q: %w", pvcName, err)
+		}
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonWorkspaceDeleted, actionManageWorkspace,
+			"Deleted workspace PVC %q at session end", pvcName)
+		return ctrl.Result{RequeueAfter: workspaceTeardownRequeue}, nil
+	default:
+		// Deletion accepted; pvc-protection completes it once the Pod
+		// releases the mount. Fall through to release the finalizer.
+	}
+
+	original := sb.DeepCopy()
+	controllerutil.RemoveFinalizer(sb, workspaceFinalizer)
+	if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("remove workspace finalizer: %w", err)
+	}
+	logger.Info("session workspace torn down", "pvc", pvcName)
+	return ctrl.Result{}, nil
 }
 
 // reconcileExistingPod handles the case where the owned Pod already exists:
@@ -409,6 +580,22 @@ func (r *SandboxReconciler) reconcileExistingPod(
 
 	// (11) Record phase transition metrics and span status.
 	r.recordTransition(sb, cls, prevPhase, desired, pod, tenantID)
+
+	// (11b) Session lifecycle: a dead VM is replaced, not mourned. When
+	// the Pod reached a terminal phase but the Sandbox itself is not
+	// terminal (Timeout still wins and stays terminal), delete the Pod;
+	// the next reconcile recreates it and the fresh VM re-mounts the
+	// durable workspace PVC, so session data survives the restart.
+	if sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
+		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
+		pod.DeletionTimestamp.IsZero() {
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
+			"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
+		}
+		return ctrl.Result{}, nil
+	}
 
 	// (11a) Phase 3: pause/resume lifecycle.
 	if r.Coordinator != nil {
@@ -1180,5 +1367,6 @@ func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&setecv1alpha1.Sandbox{}).
 		Owns(&corev1.Pod{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
 		Complete(r)
 }

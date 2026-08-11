@@ -135,9 +135,18 @@ func (v *SandboxValidator) ValidateCreate(ctx context.Context, obj *setecv1alpha
 	return v.validate(ctx, obj)
 }
 
-// ValidateUpdate reuses the create logic: any Sandbox mutation that leaves
-// the spec violating class constraints is just as bad as creation.
-func (v *SandboxValidator) ValidateUpdate(ctx context.Context, _, newObj *setecv1alpha1.Sandbox) (admission.Warnings, error) {
+// ValidateUpdate reuses the create logic (any Sandbox mutation that leaves
+// the spec violating class constraints is just as bad as creation) and
+// additionally enforces lifecycle-mode immutability: a Sandbox declared
+// ephemeral can never become a session and vice versa (ADR-0006). The
+// comparison is on the EFFECTIVE mode, so stamping an explicit
+// "ephemeral" onto a pre-lifecycle Sandbox is not a mutation.
+func (v *SandboxValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *setecv1alpha1.Sandbox) (admission.Warnings, error) {
+	if oldMode, newMode := oldObj.Spec.EffectiveLifecycleMode(), newObj.Spec.EffectiveLifecycleMode(); oldMode != newMode {
+		return nil, fmt.Errorf(
+			"spec.lifecycle.mode is immutable: cannot change %q to %q; delete the Sandbox and create a new one",
+			oldMode, newMode)
+	}
 	return v.validate(ctx, newObj)
 }
 
@@ -153,6 +162,21 @@ func (v *SandboxValidator) ValidateDelete(_ context.Context, _ *setecv1alpha1.Sa
 // once rather than playing whack-a-mole against one error per apply.
 func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandbox) (admission.Warnings, error) {
 	var errs []error
+
+	// (0) Lifecycle structural checks. A workspace block is a
+	// session-only concept; on an ephemeral Sandbox it would silently do
+	// nothing, which is worse than a rejection.
+	if lc := sb.Spec.Lifecycle; lc != nil && lc.Workspace != nil {
+		if !sb.Spec.IsSession() {
+			errs = append(errs, fmt.Errorf(
+				"spec.lifecycle.workspace requires spec.lifecycle.mode=session (effective mode is %q)",
+				sb.Spec.EffectiveLifecycleMode()))
+		}
+		if lc.Workspace.Size != nil && lc.Workspace.Size.Sign() <= 0 {
+			errs = append(errs, fmt.Errorf(
+				"spec.lifecycle.workspace.size must be > 0, got %q", lc.Workspace.Size.String()))
+		}
+	}
 
 	// (1) Tenant-label enforcement when multi-tenancy is enabled.
 	// Fail closed: a nil NamespaceGetter means mis-wired production

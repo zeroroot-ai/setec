@@ -188,15 +188,12 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 			})
 		}
 	}
-	if lc := req.GetLifecycle(); lc != nil && lc.GetTimeout() != "" {
-		d, err := time.ParseDuration(lc.GetTimeout())
+	if lc := req.GetLifecycle(); lc != nil {
+		spec, err := lifecycleFromRequest(lc)
 		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument,
-				"lifecycle.timeout %q: %v", lc.GetTimeout(), err)
+			return nil, err
 		}
-		sb.Spec.Lifecycle = &setecv1alpha1.Lifecycle{
-			Timeout: &metav1.Duration{Duration: d},
-		}
+		sb.Spec.Lifecycle = spec
 	}
 	for k, v := range req.GetEnv() {
 		sb.Spec.Env = append(sb.Spec.Env, corev1.EnvVar{Name: k, Value: v})
@@ -212,6 +209,64 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		Name:      sb.Name,
 		Namespace: sb.Namespace,
 	}, nil
+}
+
+// lifecycleFromRequest maps the wire Lifecycle message onto the CRD
+// Lifecycle spec, validating the timeout duration, the mode enum, and
+// the workspace quantities. A nil result (with nil error) means the
+// request carried an empty Lifecycle message and the CR field stays
+// unset — preserving pre-lifecycle ephemeral semantics exactly.
+func lifecycleFromRequest(lc *setecv1grpc.Lifecycle) (*setecv1alpha1.Lifecycle, error) {
+	out := &setecv1alpha1.Lifecycle{}
+	set := false
+
+	if t := lc.GetTimeout(); t != "" {
+		d, err := time.ParseDuration(t)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"lifecycle.timeout %q: %v", t, err)
+		}
+		out.Timeout = &metav1.Duration{Duration: d}
+		set = true
+	}
+
+	switch mode := lc.GetMode(); mode {
+	case "":
+		// Unset: the CRD default (ephemeral) applies.
+	case string(setecv1alpha1.LifecycleModeEphemeral), string(setecv1alpha1.LifecycleModeSession):
+		out.Mode = setecv1alpha1.LifecycleMode(mode)
+		set = true
+	default:
+		return nil, status.Errorf(codes.InvalidArgument,
+			"lifecycle.mode %q: must be %q or %q",
+			mode, setecv1alpha1.LifecycleModeEphemeral, setecv1alpha1.LifecycleModeSession)
+	}
+
+	if ws := lc.GetWorkspace(); ws != nil {
+		if out.Mode != setecv1alpha1.LifecycleModeSession {
+			return nil, status.Error(codes.InvalidArgument,
+				`lifecycle.workspace requires lifecycle.mode "session"`)
+		}
+		w := &setecv1alpha1.WorkspaceSpec{}
+		if s := ws.GetSize(); s != "" {
+			q, err := resource.ParseQuantity(s)
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument,
+					"lifecycle.workspace.size %q: %v", s, err)
+			}
+			w.Size = &q
+		}
+		if sc := ws.GetStorageClassName(); sc != "" {
+			w.StorageClassName = &sc
+		}
+		out.Workspace = w
+		set = true
+	}
+
+	if !set {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // Wait polls the Sandbox until it reaches a terminal phase and returns.
