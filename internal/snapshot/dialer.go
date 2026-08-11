@@ -121,6 +121,9 @@ func (s *grpcShim) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSand
 func (s *grpcShim) QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	return s.inner.QueryPool(ctx, in)
 }
+func (s *grpcShim) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
+	return s.inner.ClaimPoolEntry(ctx, in)
+}
 func (s *grpcShim) DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	return s.inner.DeleteSnapshot(ctx, in)
 }

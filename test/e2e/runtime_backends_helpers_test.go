@@ -151,21 +151,24 @@ func skipIfNodeLabelMissing(t *testing.T, label string) {
 }
 
 // scrapeOperatorMetrics port-forwards the operator's metrics service and
-// returns the parsed Prometheus metric families. The port-forward subprocess
-// is killed when ctx is cancelled.
+// returns the parsed Prometheus metric families.
 //
 // The metrics service is expected to be named "setec-metrics" in testNamespace,
 // listening on port 8080 (controller-runtime default).
 func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
-	// Use a fixed local port; the port-forward is short-lived and scoped to
-	// the test's context, so collisions are unlikely in practice.
-	const localPort = "19090"
+	return scrapeServiceMetrics(ctx, "setec-metrics", "8080", "19090")
+}
 
+// scrapeServiceMetrics port-forwards svc/<svcName>:<svcPort> in testNamespace
+// to 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed
+// Prometheus metric families. The port-forward subprocess is killed when ctx
+// is cancelled.
+func scrapeServiceMetrics(ctx context.Context, svcName, svcPort, localPort string) (map[string]*dto.MetricFamily, error) {
 	pf := exec.CommandContext(ctx,
 		"kubectl", "port-forward",
 		"-n", testNamespace,
-		"svc/setec-metrics",
-		localPort+":8080",
+		"svc/"+svcName,
+		localPort+":"+svcPort,
 	)
 	pf.Stderr = io.Discard
 	if err := pf.Start(); err != nil {
@@ -188,7 +191,7 @@ func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, e
 		resp = r
 		return true, nil
 	}); err != nil {
-		return nil, fmt.Errorf("port-forward to svc/setec-metrics not ready within 15s: %w", err)
+		return nil, fmt.Errorf("port-forward to svc/%s not ready within 15s: %w", svcName, err)
 	}
 
 	defer resp.Body.Close()

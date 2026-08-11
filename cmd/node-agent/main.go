@@ -208,7 +208,15 @@ func main() {
 		Name: "setec_node_entropy_reseed_total",
 		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
 	}, []string{"outcome"})
-	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds)
+	poolFill := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "setec_prewarm_pool_entries",
+		Help: "Number of pre-warmed pool entries currently paused on this node for a SandboxClass.",
+	}, []string{"node", "sandbox_class"})
+	poolClaims := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "setec_prewarm_pool_claims_total",
+		Help: "Pool claim attempts by outcome (restored, miss, restore_failed).",
+	}, []string{"outcome"})
+	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds, poolFill, poolClaims)
 	// Presence of /dev/kvm is our local ready signal; deeper health
 	// checks require the controller-side runtime class and are out
 	// of scope for the node agent.
@@ -297,6 +305,9 @@ func main() {
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()
 			},
+			ClaimObserver: func(outcome string) {
+				poolClaims.WithLabelValues(outcome).Inc()
+			},
 		}
 		// Active entropy reseed on restore (setec#72). The default is
 		// fail-closed: a restored sandbox is only reported successful
@@ -323,6 +334,16 @@ func main() {
 					Manager:  poolMgr,
 					Lister:   lister,
 					Interval: poolReconcileTick,
+					FillObserver: func(fills map[string]int) {
+						// Reset first so classes whose pools were torn
+						// down (class deleted or pool disabled) drop
+						// their stale series instead of freezing at the
+						// last non-zero value.
+						poolFill.Reset()
+						for class, n := range fills {
+							poolFill.WithLabelValues(nodeName, class).Set(float64(n))
+						}
+					},
 				}
 				go reconciler.Run(ctx)
 				fmt.Fprintf(os.Stderr, "node-agent: pool reconciler started at %s interval\n", poolReconcileTick)

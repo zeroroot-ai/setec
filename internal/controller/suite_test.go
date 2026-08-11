@@ -136,6 +136,8 @@ type fakeNodeAgentClient struct {
 	ResumeErr  error
 	DeleteRes  *setecgrpcv1.DeleteSnapshotResponse
 	DeleteErr  error
+	ClaimRes   *setecgrpcv1.ClaimPoolEntryResponse
+	ClaimErr   error
 }
 
 func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, _ *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
@@ -166,6 +168,12 @@ func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, _ *setecgrpcv1.Re
 }
 func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	return &setecgrpcv1.QueryPoolResponse{}, nil
+}
+func (f *fakeNodeAgentClient) ClaimPoolEntry(_ context.Context, _ *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
+	if f.ClaimRes == nil && f.ClaimErr == nil {
+		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: false}, nil
+	}
+	return f.ClaimRes, f.ClaimErr
 }
 func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	if f.DeleteRes == nil && f.DeleteErr == nil {

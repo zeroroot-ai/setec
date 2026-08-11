@@ -162,6 +162,41 @@ Pool entries are invisible as Snapshot CRs — they are node-agent
 internal state. The `setec_prewarm_pool_entries{node,sandbox_class}`
 gauge exposes fill level per node.
 
+The admission webhook enforces coherence of the declarative trio:
+
+- `preWarmPoolSize > 0` requires `preWarmImage` (the node-agent bakes
+  pool entries from the class image).
+- `preWarmTTL`, when set, must be a positive duration.
+- An active pool requires the `kata-fc` backend — pool restore drives
+  the Kata VM's Firecracker socket, which no other backend exposes.
+
+### Warm-start flow
+
+When an ephemeral Sandbox of a pool-declaring class (running exactly
+the class `preWarmImage`, without an explicit `spec.snapshotRef`)
+first transitions to `Running`, the operator makes a single warm-start
+attempt: it dials the node-agent on the Pod's node, atomically claims
+a matching pool entry (`ClaimPoolEntry` RPC), and restores the paused
+VM state into the Pod's Firecracker socket. Restored guests receive
+the same fail-closed entropy reseed as named-snapshot restores.
+
+The outcome is recorded once in `status.warmStart`:
+
+- `outcome: PoolRestored` with `entryID` — the Sandbox started from
+  the pool, inside a real `kata-fc` Pod (CNI, NetworkPolicy, and
+  observability all apply as usual).
+- `outcome: ColdBoot` with `reason: miss` or `reason: error` — no
+  compatible entry, an unreachable node-agent, or a failed restore.
+  The Sandbox continues its normal cold boot; a warm-start failure
+  never fails the Sandbox.
+
+Events `WarmStartRestored` / `WarmStartColdBoot` narrate the attempt
+on the Sandbox. A claimed entry is consumed even when its restore
+fails — pool state is never restored twice (ADR-0005) — and the pool
+reconciler reprovisions the missing entry on its next tick. Deleting
+the SandboxClass (or setting `preWarmPoolSize: 0`) drains the pool;
+no operator-managed template objects exist anywhere in the flow.
+
 ## Storage backend
 
 Phase 3 ships one backend: local-disk. State files live under
@@ -262,7 +297,13 @@ Phase 3 adds these collectors to the existing Prometheus suite:
   histogram of snapshot operation durations. `operation` is one of
   `create`, `restore`, `delete`, `pause`, `resume`.
 - `setec_prewarm_pool_entries{node,sandbox_class}` — gauge of
-  currently-paused pool entries per node/class.
+  currently-paused pool entries per node/class, exported by the
+  node-agent after every pool reconcile tick.
+- `setec_prewarm_pool_claims_total{outcome}` — node-agent counter of
+  pool claim attempts; `outcome` is `restored`, `miss`, or
+  `restore_failed`.
+- `setec_warmstart_total{outcome,sandbox_class}` — operator counter of
+  warm-start attempts; `outcome` is `restored`, `miss`, or `error`.
 - `setec_node_entropy_reseed_total{outcome}` — counter of post-restore
   entropy reseed attempts on the node-agent, `outcome` is `success` or
   `failure`. A `failure` always corresponds to a restore that failed

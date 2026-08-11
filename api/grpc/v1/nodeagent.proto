@@ -47,6 +47,16 @@ service NodeAgentService {
   // means the operator falls back to cold boot.
   rpc QueryPool(QueryPoolRequest) returns (QueryPoolResponse);
 
+  // ClaimPoolEntry atomically removes a matching pre-warmed pool
+  // entry and restores its paused-VM state into the caller-provided
+  // Kata Firecracker socket (ADR-0004 declarative warm-start). The
+  // claimed entry is consumed regardless of restore outcome —
+  // ADR-0005 forbids restoring the same snapshot state twice. A
+  // response with claimed=false (pool empty or no image match) or
+  // claimed=true/success=false (restore failed) tells the operator to
+  // fall back to cold boot; neither is an RPC error.
+  rpc ClaimPoolEntry(ClaimPoolEntryRequest) returns (ClaimPoolEntryResponse);
+
   // DeleteSnapshot securely erases the persisted state files and
   // returns success. Called by the SnapshotReconciler when a
   // Snapshot CR is being deleted (TTL elapsed, user kubectl
@@ -169,6 +179,49 @@ message PoolEntry {
   string image_ref = 2;
   bool available = 3;
   int64 age_seconds = 4;
+}
+
+// ClaimPoolEntryRequest identifies the class (and optionally image)
+// an ephemeral Sandbox wants a warm start for, plus the Firecracker
+// socket of the Sandbox's freshly-created kata-fc Pod that the pool
+// state should be restored into.
+message ClaimPoolEntryRequest {
+  // sandbox_class is the SandboxClass the pool entry must belong to.
+  string sandbox_class = 1;
+
+  // image_ref, when set, requires the claimed entry's baked image to
+  // match. Empty accepts any entry for the class.
+  string image_ref = 2;
+
+  // kata_socket_target is the Firecracker API socket the target Pod's
+  // Kata sandbox has exposed; the restored VM state lands here.
+  string kata_socket_target = 3;
+
+  // sandbox_id is the composite <namespace>/<name> of the requesting
+  // Sandbox. Observability only.
+  string sandbox_id = 4;
+}
+
+// ClaimPoolEntryResponse reports the claim + restore outcome.
+message ClaimPoolEntryResponse {
+  // claimed is false when no compatible entry existed. The caller
+  // falls back to cold boot; this is not an error.
+  bool claimed = 1;
+
+  // success reports the restore outcome for a claimed entry. A
+  // claimed entry that failed to restore is torn down node-side; the
+  // caller falls back to cold boot.
+  bool success = 2;
+
+  // entry_id identifies the consumed entry (empty when claimed=false).
+  string entry_id = 3;
+
+  string error = 4;
+
+  // entropy_reseeded mirrors RestoreSandboxResponse.entropy_reseeded:
+  // the restored guest's CSPRNG verifiably received fresh entropy
+  // (setec#72) before the warm start was reported successful.
+  bool entropy_reseeded = 5;
 }
 
 // DeleteSnapshotRequest / DeleteSnapshotResponse wrap a

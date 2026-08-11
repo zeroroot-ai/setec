@@ -435,6 +435,49 @@ type SandboxStatus struct {
 	// Populated by the reconciler after backend selection; nil while Pending.
 	// +optional
 	Runtime *SandboxRuntimeStatus `json:"runtime,omitempty"`
+
+	// WarmStart records the outcome of the one-shot pool warm-start
+	// attempt for Sandboxes whose class maintains a pre-warm pool
+	// (ADR-0004). Nil when no attempt was made (class has no pool,
+	// image mismatch, or explicit snapshotRef). Its presence is the
+	// idempotency marker: the controller attempts a warm start at
+	// most once per Sandbox.
+	// +optional
+	WarmStart *SandboxWarmStartStatus `json:"warmStart,omitempty"`
+}
+
+// SandboxWarmStartOutcome enumerates how a pool warm-start attempt
+// ended.
+// +kubebuilder:validation:Enum=PoolRestored;ColdBoot
+type SandboxWarmStartOutcome string
+
+const (
+	// SandboxWarmStartPoolRestored means a pre-warmed pool entry was
+	// claimed and restored into this Sandbox's kata-fc Pod.
+	SandboxWarmStartPoolRestored SandboxWarmStartOutcome = "PoolRestored"
+	// SandboxWarmStartColdBoot means no pool entry was used (pool
+	// empty, node-agent unreachable, or restore failed) and the
+	// Sandbox continued its normal cold boot. Cold boot is the
+	// fallback, never a failure.
+	SandboxWarmStartColdBoot SandboxWarmStartOutcome = "ColdBoot"
+)
+
+// SandboxWarmStartStatus reports the pool warm-start outcome for one
+// Sandbox.
+type SandboxWarmStartStatus struct {
+	// Outcome is PoolRestored when the Sandbox started from a pool
+	// entry, ColdBoot otherwise.
+	Outcome SandboxWarmStartOutcome `json:"outcome"`
+
+	// EntryID identifies the consumed pool entry when Outcome is
+	// PoolRestored.
+	// +optional
+	EntryID string `json:"entryID,omitempty"`
+
+	// Reason carries a short human-readable explanation for a
+	// ColdBoot outcome ("miss", "error").
+	// +optional
+	Reason string `json:"reason,omitempty"`
 }
 
 // +kubebuilder:object:root=true

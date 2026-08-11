@@ -51,6 +51,7 @@ type NodeAgentClient interface {
 	PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error)
 	ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error)
 	QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error)
+	ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error)
 	DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error)
 }
 
@@ -121,6 +122,25 @@ const (
 	EventReasonInsufficientStorage    = "InsufficientStorage"
 	EventReasonNodeAgentUnreachable   = "NodeAgentUnreachable"
 	EventReasonSnapshotNameConflict   = "SnapshotNameConflict"
+	EventReasonWarmStartRestored      = "WarmStartRestored"
+	EventReasonWarmStartColdBoot      = "WarmStartColdBoot"
+)
+
+// WarmStartOutcome classifies the result of a pool warm-start attempt.
+// The values are bounded so they can double as metric label values.
+type WarmStartOutcome string
+
+const (
+	// WarmStartRestored: a pool entry was claimed and its state
+	// restored into the Sandbox's kata-fc Pod.
+	WarmStartRestored WarmStartOutcome = "restored"
+	// WarmStartMiss: no compatible pool entry existed on the
+	// Sandbox's node; the Sandbox continues its cold boot.
+	WarmStartMiss WarmStartOutcome = "miss"
+	// WarmStartError: an entry was claimed but the restore failed, or
+	// the node-agent was unreachable; the Sandbox continues its cold
+	// boot.
+	WarmStartError WarmStartOutcome = "error"
 )
 
 // defaultKataSocketPattern is used when the Coordinator's
@@ -348,6 +368,89 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 	c.recordDuration("restore", sb, time.Since(start))
 	return nil
+}
+
+// WarmStartFromPool attempts the ADR-0004 declarative warm start for
+// an ephemeral Sandbox whose class maintains a pre-warm pool: it dials
+// the node-agent on the Sandbox Pod's node and asks it to claim a pool
+// entry and restore the paused-VM state into the Pod's Firecracker
+// socket.
+//
+// The method NEVER returns an error — every failure mode (unscheduled
+// pod, unreachable node-agent, empty pool, failed restore) resolves to
+// a cold-boot fallback, which is the acceptance contract of setec#188:
+// a restore failure must not fail the Sandbox. The returned outcome +
+// entry id are for status/metrics; Events are emitted here.
+func (c *Coordinator) WarmStartFromPool(
+	ctx context.Context,
+	sb *setecv1alpha1.Sandbox,
+	cls *setecv1alpha1.SandboxClass,
+) (WarmStartOutcome, string) {
+	ctx, span := c.startSpan(ctx, "snapshot.WarmStartFromPool")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("setec.sandbox", sb.Namespace+"/"+sb.Name),
+		attribute.String("setec.class", cls.Name),
+	)
+	start := time.Now()
+
+	fallback := func(reason string) (WarmStartOutcome, string) {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
+			fmt.Sprintf("warm-start unavailable, continuing cold boot: %s", reason))
+		setSpanErr(span, reason)
+		c.recordWarmStart(WarmStartError, cls.Name)
+		return WarmStartError, ""
+	}
+
+	pod, err := c.getPod(ctx, sb)
+	if err != nil {
+		return fallback(err.Error())
+	}
+	if pod.Spec.NodeName == "" {
+		return fallback("pod not scheduled")
+	}
+	na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName)
+	if dialErr != nil {
+		return fallback(fmt.Sprintf("dial node-agent on %q: %v", pod.Spec.NodeName, dialErr))
+	}
+
+	resp, rpcErr := na.ClaimPoolEntry(ctx, &setecgrpcv1.ClaimPoolEntryRequest{
+		SandboxClass:     cls.Name,
+		ImageRef:         cls.Spec.PreWarmImage,
+		KataSocketTarget: c.socketForPod(pod),
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+	})
+	switch {
+	case rpcErr != nil:
+		return fallback(fmt.Sprintf("ClaimPoolEntry RPC: %v", rpcErr))
+	case !resp.GetClaimed():
+		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
+			fmt.Sprintf("no pre-warmed pool entry for class %q on node %q; continuing cold boot",
+				cls.Name, pod.Spec.NodeName))
+		c.recordWarmStart(WarmStartMiss, cls.Name)
+		return WarmStartMiss, ""
+	case !resp.GetSuccess():
+		return fallback(fmt.Sprintf("pool entry %q restore failed: %s", resp.GetEntryId(), resp.GetError()))
+	}
+
+	c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartRestored,
+		fmt.Sprintf("warm-started from pool entry %q on node %q", resp.GetEntryId(), pod.Spec.NodeName))
+	if resp.GetEntropyReseeded() {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
+			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (pool entry %q)", resp.GetEntryId()))
+	}
+	c.recordWarmStart(WarmStartRestored, cls.Name)
+	c.recordDuration("warmstart", sb, time.Since(start))
+	return WarmStartRestored, resp.GetEntryId()
+}
+
+// recordWarmStart increments the warm-start outcome counter when
+// metrics are enabled.
+func (c *Coordinator) recordWarmStart(outcome WarmStartOutcome, class string) {
+	if c.Metrics == nil {
+		return
+	}
+	c.Metrics.IncWarmStart(string(outcome), class)
 }
 
 // Pause invokes the node-agent Firecracker pause RPC.

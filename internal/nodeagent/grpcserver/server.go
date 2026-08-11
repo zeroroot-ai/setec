@@ -84,6 +84,11 @@ type Server struct {
 	// after each reseed attempt (metrics hook).
 	ReseedObserver func(outcome string)
 
+	// ClaimObserver, when non-nil, receives the outcome of every
+	// ClaimPoolEntry call: "restored", "miss", or "restore_failed"
+	// (metrics hook — setec_prewarm_pool_claims_total).
+	ClaimObserver func(outcome string)
+
 	// Tracer is optional.
 	Tracer trace.Tracer
 }
@@ -364,6 +369,124 @@ func (s *Server) QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest
 		})
 	}
 	return resp, nil
+}
+
+// ClaimPoolEntry atomically claims a pre-warmed pool entry for the
+// requested class/image and restores its paused-VM state into the
+// caller-provided Kata Firecracker socket (ADR-0004). Pool entries
+// persist raw state.bin/memory.bin files under their entry directory
+// (written by setec-pool-vm) — not the framed stream the Storage
+// backend uses — so the restore reads them directly.
+//
+// The claimed entry is consumed no matter how the restore ends:
+// ADR-0005 forbids restoring the same snapshot state twice, so a
+// failed restore releases the entry rather than returning it to the
+// pool. Both "no entry" and "restore failed" are reported as
+// non-error responses; the operator's fallback to cold boot is the
+// expected path, not an exception.
+func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
+	ctx, span := s.tracer().Start(ctx, "nodeagent.ClaimPoolEntry")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("setec.class", in.GetSandboxClass()),
+		attribute.String("setec.sandbox_id", in.GetSandboxId()),
+	)
+
+	if in.GetSandboxClass() == "" {
+		return nil, status.Error(codes.InvalidArgument, "sandbox_class required")
+	}
+	if in.GetKataSocketTarget() == "" {
+		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	}
+	if s.Pool == nil {
+		s.observeClaim("miss")
+		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: false}, nil
+	}
+
+	entry, ok, err := s.Pool.Claim(ctx, in.GetSandboxClass(), in.GetImageRef())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "pool claim: %v", err)
+	}
+	if !ok {
+		s.observeClaim("miss")
+		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: false}, nil
+	}
+
+	// The entry is consumed from here on: erase its on-disk state when
+	// we return, success or not (ADR-0005 single-restore invariant).
+	// Claim already detached it from pool state, so ReleaseClaimed —
+	// not Release — is the teardown.
+	defer func() { _ = s.Pool.ReleaseClaimed(ctx, entry) }()
+
+	statePath := filepath.Join(entry.StorageRef, "state.bin")
+	memPath := filepath.Join(entry.StorageRef, "memory.bin")
+	for _, p := range []string{statePath, memPath} {
+		if _, statErr := os.Stat(p); statErr != nil {
+			s.observeClaim("restore_failed")
+			return &setecgrpcv1.ClaimPoolEntryResponse{
+				Claimed: true,
+				EntryId: entry.ID,
+				Error:   fmt.Sprintf("pool entry state missing: %v", statErr),
+			}, nil
+		}
+	}
+
+	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
+		s.observeClaim("restore_failed")
+		return &setecgrpcv1.ClaimPoolEntryResponse{
+			Claimed: true,
+			EntryId: entry.ID,
+			Error:   fmt.Sprintf("firecracker loadSnapshot: %v", err),
+		}, nil
+	}
+
+	// Active entropy reseed (setec#72), identical fail-closed contract
+	// to RestoreSandbox: the pool entry's CSPRNG state is shared with
+	// the paused template VM, so the restored clone must confirm fresh
+	// entropy before it is handed over. On failure the VM is paused
+	// and the operator falls back to cold boot.
+	if s.Reseeder != nil {
+		candidates := []string{
+			filepath.Join(entry.StorageRef, "vsock.sock"),
+			filepath.Join(filepath.Dir(in.GetKataSocketTarget()), "vsock.sock"),
+		}
+		if err := entropy.ReseedFirst(ctx, s.Reseeder, candidates); err != nil {
+			s.observeReseed("failure")
+			s.observeClaim("restore_failed")
+			msg := fmt.Sprintf("entropy reseed after pool restore failed (failing closed): %v", err)
+			if pauseErr := fc.Pause(ctx); pauseErr != nil {
+				msg += fmt.Sprintf("; additionally failed to pause the unreseeded VM: %v", pauseErr)
+			}
+			return &setecgrpcv1.ClaimPoolEntryResponse{
+				Claimed: true,
+				EntryId: entry.ID,
+				Error:   msg,
+			}, nil
+		}
+		s.observeReseed("success")
+		s.observeClaim("restored")
+		return &setecgrpcv1.ClaimPoolEntryResponse{
+			Claimed:         true,
+			Success:         true,
+			EntryId:         entry.ID,
+			EntropyReseeded: true,
+		}, nil
+	}
+
+	s.observeClaim("restored")
+	return &setecgrpcv1.ClaimPoolEntryResponse{
+		Claimed: true,
+		Success: true,
+		EntryId: entry.ID,
+	}, nil
+}
+
+// observeClaim invokes the optional pool-claim metrics hook.
+func (s *Server) observeClaim(outcome string) {
+	if s.ClaimObserver != nil {
+		s.ClaimObserver(outcome)
+	}
 }
 
 // --- framed stream helpers ----------------------------------------

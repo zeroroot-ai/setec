@@ -40,6 +40,11 @@ type TickReconciler struct {
 	// Logger is an optional logging hook. Defaults to the standard
 	// library log package when nil.
 	Logger func(format string, args ...any)
+	// FillObserver, when non-nil, receives the per-class entry counts
+	// after every reconcile pass. The node-agent wires this to the
+	// setec_prewarm_pool_entries gauge so pool state is observable
+	// without a gRPC round-trip (ADR-0004 acceptance).
+	FillObserver func(fills map[string]int)
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval. The
@@ -75,6 +80,9 @@ func (r *TickReconciler) runOnce(ctx context.Context) {
 	classes := r.Lister()
 	if err := r.Manager.ReconcilePools(ctx, classes); err != nil {
 		r.logf("pool reconciler: ReconcilePools returned: %v", err)
+	}
+	if r.FillObserver != nil {
+		r.FillObserver(r.Manager.FillByClass())
 	}
 }
 
