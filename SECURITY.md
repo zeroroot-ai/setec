@@ -152,8 +152,8 @@ without reading source:
 |---|---|
 | frontend server (`cmd/frontend`) | file or SPIFFE |
 | node-agent server (`cmd/node-agent`) | file or SPIFFE |
-| operator → node-agent client (snapshots) | file only |
-| operator → OTLP collector (tracing) | one-way TLS, not mTLS |
+| operator → node-agent client (snapshots) | file or SPIFFE |
+| operator → OTLP collector (tracing) | one-way TLS by default, or SPIFFE mTLS |
 
 What SPIFFE mode proves on a covered surface:
 
