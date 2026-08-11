@@ -20,8 +20,15 @@ spec:
     spec:
       serviceAccountName: {{ include "setec.fullname" . }}-node-agent
       hostNetwork: false
+      {{- /* kubernetes.io/arch is hardcoded, not values-driven: the sandbox
+      substrate is x86 only (ADR-0001) and node-agent images are published
+      single-arch linux/amd64 (setec#186). Extra keys merge from values;
+      the arch key is omitted there so it cannot be overridden. */}}
       nodeSelector:
-        {{- toYaml .Values.nodeAgent.nodeSelector | nindent 8 }}
+        kubernetes.io/arch: amd64
+        {{- with omit .Values.nodeAgent.nodeSelector "kubernetes.io/arch" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       # The agent is privileged because devmapper operations require
       # the kernel device cgroup and mounting /dev. Capabilities are
       # scoped to the minimum set explained in the chart README.

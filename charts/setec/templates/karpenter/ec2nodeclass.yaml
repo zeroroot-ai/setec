@@ -1,6 +1,6 @@
 {{- /*
-Karpenter EC2NodeClass for the baked kata-fc Graviton-metal AMI
-(packer/eks-kata-fc-ami). Rendered only when karpenter.enabled=true and
+Karpenter EC2NodeClass for the baked kata-fc x86-metal AMI
+(packer/eks-kata-fc-ami; x86 only per ADR-0001). Rendered only when karpenter.enabled=true and
 requires the Karpenter v1 CRDs (karpenter.k8s.aws/v1) to be installed —
 the chart does not manage Karpenter itself.
 */ -}}

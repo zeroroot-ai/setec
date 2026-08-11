@@ -16,9 +16,15 @@ to reconcile `Sandbox` resources into Kata-runtime Pods.
   without it a `hostNetwork` Pod steps around the namespace default-deny
   NetworkPolicy, so the chart states 1.30 as its floor rather than
   rendering containment conditionally.
-- At least one Node with KVM access (bare-metal Linux or a VM with nested
-  virtualization enabled). Setec runs Firecracker microVMs, which require
-  `/dev/kvm`.
+- At least one **x86-64 (amd64)** Node with KVM access (bare-metal Linux or
+  a VM with nested virtualization enabled). Setec runs Firecracker
+  microVMs, which require `/dev/kvm`. arm64 is unsupported for the
+  untrusted-execution plane
+  ([ADR-0001](../../docs/adr/0001-x86-substrate.md)): every published setec
+  image is single-arch `linux/amd64`, the node-agent and runtime-agent
+  DaemonSets hardcode a `kubernetes.io/arch: amd64` nodeSelector, and every
+  Sandbox Pod carries a matching required node affinity, so mixed-arch
+  clusters converge cleanly with the sandbox plane confined to x86 nodes.
 - [Kata Containers](https://github.com/kata-containers/kata-containers)
   installed on the cluster. The recommended path is
   [`kata-deploy`](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy),
@@ -245,7 +251,8 @@ verify the expected new manifests appear via `helm template`.
   or enable `webhook.certManager.enabled=true` and supply a cert-manager
   `IssuerRef`.
 - `nodeAgent.enabled=true` installs the DaemonSet targeting the
-  `nodeAgent.nodeSelector` (default `katacontainers.io/kata-runtime=true`).
+  `nodeAgent.nodeSelector` (default `katacontainers.io/kata-runtime=true`)
+  plus a hardcoded `kubernetes.io/arch=amd64` selector (ADR-0001).
   Provide `thinpoolDataDevice` and `thinpoolMetadataDevice` block devices per
   node. The agent exposes Prometheus metrics on port 9090. It runs privileged
   (SYS_ADMIN only) because device-mapper control requires it.
@@ -362,7 +369,7 @@ feature incrementally:
 
 `karpenter.enabled=true` renders a Karpenter `EC2NodeClass` + `NodePool`
 (Karpenter >= 1.0 CRDs required, installed out of band) that provision
-Graviton bare-metal nodes (`c6gd.metal` / `m6gd.metal`, cheapest first) from
+x86 bare-metal nodes (`c6id.metal` / `m6id.metal`, cheapest first) from
 the baked kata-fc AMI (`packer/eks-kata-fc-ami`) on demand and scale to
 zero when no kata Sandbox is running. Nodes carry the
 `setec.zeroroot.ai/runtime.kata-fc=true` label and a `kata=true:NoSchedule`

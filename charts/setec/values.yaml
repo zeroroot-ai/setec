@@ -190,10 +190,11 @@ runtimeAgent:
     tag: ""
     # -- pullPolicy one of Always, Never, IfNotPresent.
     pullPolicy: IfNotPresent
-  # -- nodeSelector constrains the runtime-agent DaemonSet. Published images
-  # are amd64-only (setec#132), so mixed-arch clusters should set
-  # {kubernetes.io/arch: amd64} until multi-arch images ship. Empty keeps the
-  # original run-everywhere behavior.
+  # -- nodeSelector adds EXTRA scheduling constraints to the runtime-agent
+  # DaemonSet. The template always hardcodes {kubernetes.io/arch: amd64}: the
+  # sandbox substrate is x86 only (ADR-0001) and every published image is
+  # single-arch linux/amd64, so an arch key set here is ignored. Empty keeps
+  # the run-on-every-amd64-node default.
   nodeSelector: {}
   # -- tolerations placed on the runtime-agent DaemonSet. The default
   # matches every taint, because a node the agent never probed looks
@@ -657,7 +658,7 @@ preWarmPool:
   enabled: false
 
 # -- karpenter optionally renders a Karpenter EC2NodeClass + NodePool that
-# provision Graviton bare-metal nodes from the baked kata-fc AMI
+# provision x86 bare-metal nodes (ADR-0001) from the baked kata-fc AMI
 # (packer/eks-kata-fc-ami) ON DEMAND and scale to zero when no kata Sandbox
 # is running — the bare-metal floor is paid only during actual microVM
 # execution. Requires Karpenter >= 1.0 (karpenter.sh/v1 +
@@ -695,13 +696,15 @@ karpenter:
   securityGroupSelectorTerms: []
   # -- tags are propagated to every EC2 instance the NodePool provisions.
   tags: {}
-  # -- instanceTypes restricts provisioning to Graviton bare metal with
-  # local NVMe (KVM for Firecracker + instance-store for the devmapper
-  # thin-pool). Karpenter automatically picks the cheapest eligible type
-  # (c6gd.metal < m6gd.metal at time of writing — verify current pricing).
+  # -- instanceTypes restricts provisioning to x86 bare metal with local
+  # NVMe (VT-x KVM for Firecracker + instance-store for the devmapper
+  # thin-pool). arm64/Graviton types are not eligible: the sandbox substrate
+  # is x86 only (ADR-0001) and the NodePool hardcodes
+  # kubernetes.io/arch=amd64. Karpenter automatically picks the cheapest
+  # eligible type — verify current pricing before pinning.
   instanceTypes:
-    - c6gd.metal
-    - m6gd.metal
+    - c6id.metal
+    - m6id.metal
   # -- capacityTypes defaults to on-demand ONLY: a spot interruption kills
   # every running microVM on the node with two minutes' notice. Add "spot"
   # only for interruption-tolerant workloads.
@@ -729,6 +732,6 @@ karpenter:
   # -- expireAfter force-recycles nodes for AMI/patch hygiene. 720h = 30d.
   expireAfter: 720h
   # -- limits caps the pool's total resources as a runaway-cost guard.
-  # c6gd.metal/m6gd.metal are 64 vCPU each; cpu: "256" = at most 4 nodes.
+  # c6id.metal/m6id.metal are 128 vCPU each; cpu: "256" = at most 2 nodes.
   limits:
     cpu: "256"

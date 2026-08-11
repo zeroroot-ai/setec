@@ -1,5 +1,13 @@
 # Setec kata-fc Graviton-metal EKS AMI (Packer)
 
+> **STALE — arm64 bake (setec#195).** The sandbox substrate is x86 only
+> ([ADR-0001](../../docs/adr/0001-x86-substrate.md)); the chart's Karpenter
+> NodePool now requires `kubernetes.io/arch=amd64` and defaults to
+> `c6id.metal` / `m6id.metal`, so the arm64/Graviton AMI this template
+> currently bakes can no longer be provisioned by it. The x86 rebake of this
+> template is tracked in
+> [setec#195](https://github.com/zeroroot-ai/setec/issues/195).
+
 Bakes an **immutable** arm64 EKS node AMI that boots ready to run `kata-fc`
 Firecracker microVMs — **no kata-deploy**, no live containerd mutation. A
 node either boots capable or fails loudly in `setec-thinpool.service`.

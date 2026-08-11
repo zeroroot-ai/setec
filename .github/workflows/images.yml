@@ -17,9 +17,13 @@ name: images
 # workflow_call in the same run and passes the fresh tag as version_tag.
 # The tags trigger + tag_pattern remain for hand-pushed tags (which DO fire).
 #
-# Images are multi-arch (linux/amd64 + linux/arm64): the runtime-agent
-# DaemonSet schedules on every node, including Graviton (setec#132), and the
-# Dockerfile cross-compiles from the build platform so arm64 adds no QEMU.
+# Images are single-arch linux/amd64 ONLY (ADR-0001, setec#186): the sandbox
+# substrate is x86 exclusively, so no multi-arch manifests are published and
+# nothing silently attempts arm64. This supersedes the brief multi-arch
+# window opened for setec#132 — mixed-arch clusters converge via the
+# kubernetes.io/arch=amd64 selectors the chart now hardcodes, not via arm64
+# images. hack/verify-x86-substrate.sh guards these platforms lines;
+# re-adding arm64 requires a new ADR.
 
 on:
   push:
@@ -56,7 +60,7 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec
       tag_pattern: (v.*)
-      platforms: linux/amd64,linux/arm64
+      platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=manager
@@ -76,7 +80,7 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-node-agent
       tag_pattern: (v.*)
-      platforms: linux/amd64,linux/arm64
+      platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=node-agent
@@ -96,7 +100,7 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-frontend
       tag_pattern: (v.*)
-      platforms: linux/amd64,linux/arm64
+      platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=frontend
@@ -116,7 +120,7 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-runtime-agent
       tag_pattern: (v.*)
-      platforms: linux/amd64,linux/arm64
+      platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=runtime-agent
@@ -136,7 +140,7 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-guest-agent
       tag_pattern: (v.*)
-      platforms: linux/amd64,linux/arm64
+      platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=setec-guest-agent

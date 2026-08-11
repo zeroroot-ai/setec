@@ -4,7 +4,7 @@ Short playbook for choosing Setec runtime backends on Amazon EKS. One page, copy
 
 ## What's available per node type
 
-- **`.metal` instance types (bare metal)** — the Nitro bare-metal sizes (for example `m7i.metal-24xl`, `m7i.metal-48xl`, `m6i.metal`, `c7i.metal-*`, `r7i.metal-*`) expose Intel VT-x directly to the OS. These are the nodes where `kata-fc` works without fuss — `/dev/kvm` is present and KVM modules load normally. Graviton-based `.metal` sizes (for example `m7g.metal`, `c7g.metal`) expose ARM virt extensions; kata-fc support on ARM depends on the kata build — verify against vendor docs.
+- **`.metal` instance types (bare metal)** — the Nitro bare-metal sizes (for example `m7i.metal-24xl`, `m7i.metal-48xl`, `m6i.metal`, `c7i.metal-*`, `r7i.metal-*`) expose Intel VT-x directly to the OS. These are the nodes where `kata-fc` works without fuss — `/dev/kvm` is present and KVM modules load normally. Graviton-based `.metal` sizes (for example `m7g.metal`, `c7g.metal`) are **not supported**: the sandbox substrate is x86 only ([ADR-0001](../adr/0001-x86-substrate.md)) — setec images are `linux/amd64` single-arch and every sandbox component pins `kubernetes.io/arch=amd64`.
 - **Virtualized EC2 instances with nested-virt (C8i, M8i, R8i)** — AWS announced support for nested KVM/Hyper-V on C8i, M8i, and R8i virtual (non-metal) instances in February 2026 ([AWS announcement](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-ec2-nested-virtualization-on-virtual/)). On these instance types a non-metal EKS node can run `kata-fc` or `kata-qemu`. Confirm the region and launch template before depending on this — check current vendor docs.
 - **All other default EKS node types (m7i/m6i/m5/c7i/c6i/t3/t3a/c7g/m7g etc., non-metal, non-C8i/M8i/R8i)** — do **not** expose `/dev/kvm`. Kata-fc and kata-qemu will fail to start Sandboxes on these nodes. Practical backends: **gvisor** and **runc**.
 
@@ -46,20 +46,23 @@ You must still install `runsc` and register a `gvisor` `RuntimeClass` on the wor
 
 If you need `kata-fc` for a subset of workloads (for example, untrusted model-agent code), run those on a dedicated bare-metal node group and leave the rest of the fleet on the default pool. Create a managed node group with a `.metal` instance type (verify current availability — `m7i.metal-24xl`, `c7i.metal-*`, `r7i.metal-*` are common at time of writing; check current vendor docs), taint it so only Sandboxes land there, and set the matching SandboxClass to request `kata-fc` with `fallback: [gvisor]`. Setec's node-agent will label the metal nodes `setec.zeroroot.ai/runtime.kata-fc=true` once KVM is detected, and the scheduler will place Sandboxes accordingly. See the top-level Kata installation docs for `runsc`- and `kata-runtime`-on-EKS procedures; verify against vendor docs for your EKS version.
 
-## Baked Graviton-metal AMI for kata-fc (recommended)
+## Baked x86-metal AMI for kata-fc (recommended)
 
 The recommended production path for `kata-fc` on EKS is the **Packer-baked
 immutable AMI** in [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md)
 — it replaces kata-deploy's live containerd mutation (which can brick a node
 mid-run) with a node that either boots capable or fails loudly at boot:
 
-- **Base**: current EKS-optimized AL2023 **arm64** AMI (pinned Kubernetes
-  version via the public SSM parameter).
-- **Targets**: cheapest Graviton bare metal with local NVMe —
-  **`c6gd.metal` / `m6gd.metal`**. `.metal` supplies `/dev/kvm`; the `d`
-  suffix supplies the instance-store NVMe the devmapper thin-pool is built
-  from. (On arm64, KVM is compiled into the kernel — the runtime-agent
-  probe accepts the built-in `kvm` module, so the node self-labels
+- **Base**: current EKS-optimized AL2023 **x86_64** AMI (pinned Kubernetes
+  version via the public SSM parameter). arm64 is unsupported per
+  [ADR-0001](../adr/0001-x86-substrate.md); the Packer template still
+  reflects the earlier Graviton bake and its x86 rebake is tracked in
+  [setec#195](https://github.com/zeroroot-ai/setec/issues/195).
+- **Targets**: cheapest x86 bare metal with local NVMe —
+  **`c6id.metal` / `m6id.metal`**. `.metal` supplies `/dev/kvm` (VT-x); the
+  `d` suffix supplies the instance-store NVMe the devmapper thin-pool is
+  built from. (The runtime-agent probe verifies the loaded
+  `kvm_intel`/`kvm_amd` module, so the node self-labels
   `setec.zeroroot.ai/runtime.kata-fc=true`.)
 - **Baked in**: pinned kata-containers static release (bundles Firecracker)
   under `/opt/kata`; containerd statically configured via an
@@ -83,8 +86,8 @@ Build instructions and the on-node verification checklist (including the
 ## Karpenter scale-to-zero for the baked kata AMI
 
 The chart can render a Karpenter `EC2NodeClass` + `NodePool` (Karpenter >=
-1.0, installed out of band) that provision the cheapest Graviton bare metal
-(`c6gd.metal` / `m6gd.metal`) from the [baked kata-fc AMI](#baked-graviton-metal-ami-for-kata-fc-recommended)
+1.0, installed out of band) that provision the cheapest x86 bare metal
+(`c6id.metal` / `m6id.metal`) from the [baked kata-fc AMI](#baked-x86-metal-ami-for-kata-fc-recommended)
 **on demand** and **scale to zero** when no kata Sandbox is running:
 
 ```bash
@@ -102,8 +105,9 @@ How the pieces line up:
 - The `EC2NodeClass` selects the baked AMI (`setec-kata-fc-*` by name, or
   pin an AMI id) with `amiFamily: AL2023` so Karpenter emits standard
   nodeadm user data.
-- The `NodePool` restricts to `c6gd.metal` / `m6gd.metal` (on-demand only
-  by default), stamps the `setec.zeroroot.ai/runtime.kata-fc=true` label the
+- The `NodePool` requires `kubernetes.io/arch=amd64` (ADR-0001) and
+  restricts to `c6id.metal` / `m6id.metal` (on-demand only by default),
+  stamps the `setec.zeroroot.ai/runtime.kata-fc=true` label the
   kata-fc RuntimeClass schedules on, and taints the node
   `kata=true:NoSchedule` so only Sandbox pods (and tolerating DaemonSets,
   like Setec's runtime-agent) land on the expensive metal.
@@ -135,8 +139,7 @@ How the pieces line up:
 
 - **On-demand metal floor**: you pay the `.metal` hourly rate only while a
   node exists. Karpenter picks the cheapest eligible type automatically
-  (`c6gd.metal` undercuts `m6gd.metal` at time of writing — verify current
-  pricing). `karpenter.limits` caps runaway scale-out.
+  (verify current pricing across the eligible x86 metal types). `karpenter.limits` caps runaway scale-out.
 - **Scale-to-zero**: idle cost ≈ $0 — no standing node group, no
   kata-deploy DaemonSet keeping nodes warm. The trade is the cold-start
   gap (metal boot, typically minutes); Setec's warm-pool/snapshot machinery
