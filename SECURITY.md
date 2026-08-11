@@ -127,54 +127,177 @@ Residual risk and scope limits, stated precisely:
 
 ### What mTLS proves, per credential mode
 
-Every setec hop is mTLS. mTLS on its own is an authentication control,
-not an authorization one, and the two modes prove different things.
-Reading "mTLS" and inferring "only the intended caller can reach this"
-is wrong in one of them.
+Every setec control-plane hop is mTLS. mTLS on its own is an
+authentication control, not an authorization one, and the two modes
+prove different things. Reading "mTLS" and inferring "only the intended
+caller can reach this" is wrong in one of them.
 
-**File mode** (`--tls-cert` / `--tls-key` / `--tls-client-ca`; the
-default, and every setec hop's only mode until SPIFFE mode landed):
+#### File mode — the default
+
+Selected by the `--tls-*` flags: `--tls-cert` / `--tls-key` /
+`--tls-client-ca` on the frontend and the node-agent, and
+`--nodeagent-tls-cert` / `--nodeagent-tls-key` / `--nodeagent-ca` on the
+operator's client to the node-agent. This is the default, and it was
+every setec hop's only mode before SPIFFE mode landed.
 
 - Proves the peer holds a certificate issued by the configured CA, and
   that the connection is TLS 1.3 with a client certificate present.
-- **Does not prove which peer it is.** Any holder of any certificate
-  from that CA is accepted. If the CA issues to more workloads than the
-  ones meant to call setec, all of them can.
+- **It authenticates CA issuance. It does not authorize which peer is
+  calling.** Any holder of any certificate from that CA is accepted. If
+  the CA issues to more workloads than the ones meant to call setec, all
+  of them can call setec. Narrowing that is what SPIFFE mode is for; in
+  file mode it has to be done outside setec, by keeping the CA's
+  issuance scope as narrow as the caller set.
 - The credential is a file. Anything that can read the mounted Secret is
   the workload. Rotation is the delivery pipeline's job, and a pipeline
   that stops delivering shows up as an expiry.
 
-**SPIFFE mode** (`--spiffe-socket` / `--spiffe-authorized-id`). Covered
-surfaces today — an operator should be able to state their own posture
-without reading source:
+#### SPIFFE mode
 
-| Hop | Mode selection |
-|---|---|
-| frontend server (`cmd/frontend`) | file or SPIFFE |
-| node-agent server (`cmd/node-agent`) | file or SPIFFE |
-| operator → node-agent client (snapshots) | file or SPIFFE |
-| operator → OTLP collector (tracing) | one-way TLS by default, or SPIFFE mTLS |
+Selected by `--spiffe-socket` plus at least one `--spiffe-authorized-id`
+on the frontend and the node-agent, and by `--nodeagent-spiffe-socket`
+plus `--nodeagent-spiffe-authorized-id` on the operator's client to the
+node-agent. It proves everything file mode proves, and then:
 
-What SPIFFE mode proves on a covered surface:
+- **It authorizes the peer.** The peer's SPIFFE ID must appear on an
+  explicit allow-list of full SPIFFE IDs. A certificate validly signed
+  by the trusted authority but carrying an unlisted identity is refused.
+  This is the difference between authentication and authorization, and
+  it is the whole point of the mode.
+- **The trust domain is matched, not just the path.** Allow-list entries
+  are full IDs such as
+  `spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon`, so an identical
+  path under a foreign trust domain is a different principal and is
+  refused.
+- **The identity is attested, not possessed.** It is issued to this
+  workload by the local SPIRE agent rather than read from a file
+  anything in the container could read, and it rotates in-process, so a
+  handshake uses the SVID as it stands at that moment. A watch failure
+  is reported when it happens rather than surfacing later as the last
+  SVID expiring.
+- **An empty allow-list is a startup error.** There is no
+  accept-everyone setting, so "authorize everyone" cannot be reached by
+  omitting configuration.
 
-- Proves everything file mode proves, and additionally that the peer's
-  SPIFFE ID is on an explicit allow-list of full SPIFFE IDs. A
-  certificate validly signed by the trusted authority but carrying an
-  unlisted identity is refused.
-- Matches the trust domain as well as the path, so an identical path
-  under a foreign trust domain is a different principal.
-- The identity is attested by the local SPIRE agent rather than read
-  from a file, and it rotates in-process. Losing the Workload API is
-  reported when it happens rather than when the last SVID expires.
-- An empty allow-list is a startup error. There is no accept-everyone
-  setting, and no fallback from SPIFFE to files: a component that cannot
-  reach its Workload API fails to boot.
+#### The Workload API socket, and what happens without it
 
-One caveat an operator should hear rather than infer: in a cluster where
-any principal can create a Pod with an arbitrary `serviceAccountName`,
-SVID identity reduces to workload-create RBAC, because Kubernetes has no
-`serviceaccounts/use` verb. That is a property of the consuming cluster,
-not of setec.
+`--spiffe-socket` (and its `--nodeagent-` and `--otel-` siblings) takes
+either a filesystem path to the SPIRE agent's socket or a full endpoint
+address. The conventional path, and the one setec's flag help quotes, is:
+
+```
+unix:///run/spire/agent-sockets/api.sock
+```
+
+Mount the SPIRE agent's socket directory into the setec container at
+that path — usually as a `hostPath` or via the SPIFFE CSI driver — and
+pass it as the flag value. setec deliberately does **not** consult the
+`SPIFFE_ENDPOINT_SOCKET` environment variable: which socket a component
+talks to is part of its configuration, not of its ambient environment.
+
+If the socket is absent or unreachable, the component **fails to
+start**. The first fetch is bounded (30 seconds when the caller's
+context carries no deadline of its own) rather than retried behind an
+indefinite backoff, so a missing SPIRE agent is a visible boot failure
+and not a process that hangs.
+
+**There is no fallback from SPIFFE mode to file mode.** This is
+deliberate: a silent downgrade to a weaker credential source, at the
+moment the stronger one breaks, is precisely the failure this design
+exists to prevent. Configuring both modes on one component is a startup
+error too, and so is configuring neither, so an operator never has to
+work out which one won.
+
+#### Which hops are covered
+
+An operator should be able to state their posture from this table
+without reading source. The default on every row is the non-SPIFFE
+option — file mTLS on the three control-plane hops, one-way TLS on the
+tracing hop. The Helm chart selects those defaults and does not yet
+expose the SPIFFE flags, so SPIFFE mode is reached today by setting the
+flags directly.
+
+| Hop | Credential modes | Flags |
+|---|---|---|
+| caller → frontend server (`cmd/frontend`) | file mTLS or SPIFFE mTLS | `--tls-cert` / `--tls-key` / `--tls-client-ca`, or `--spiffe-socket` / `--spiffe-authorized-id` |
+| operator → node-agent server (`cmd/node-agent`) | file mTLS or SPIFFE mTLS | `--tls-cert` / `--tls-key` / `--tls-client-ca`, or `--spiffe-socket` / `--spiffe-authorized-id` |
+| operator → node-agent client (snapshots) | file mTLS or SPIFFE mTLS | `--nodeagent-tls-cert` / `--nodeagent-tls-key` / `--nodeagent-ca`, or `--nodeagent-spiffe-socket` / `--nodeagent-spiffe-authorized-id` |
+| operator → OTLP collector (tracing) | **one-way TLS by default**, SPIFFE mTLS on request | `--otel-ca-file`, or `--otel-spiffe-socket` / `--otel-spiffe-server-id` |
+
+Hops that are **not** setec mTLS surfaces, stated so their absence is
+not read as coverage:
+
+- **The admission webhook's serving certificate.** It is served by
+  controller-runtime from `--webhook-cert-dir` (`tls.crt` / `tls.key`,
+  cert-manager-issued in the chart). The apiserver verifies the webhook;
+  the webhook does not authorize the apiserver.
+- **The metrics endpoints** on the operator (`--metrics-bind-address`),
+  the frontend and the node-agent (`--metrics-addr`). Plain HTTP,
+  intended to be reachable only from the cluster's scrape path.
+- **The node-agent → guest agent control channel.** AF_VSOCK, not TCP,
+  and not reachable from the sandboxed workload's egress path at all.
+
+#### The tracing exporter is not an mTLS surface by default
+
+The OTLP exporter is the one hop where "TLS" does not mean "mTLS", and
+it is worth being exact about it.
+
+By default the exporter uses one-way TLS: setec verifies the collector
+against the host root store, or against a bundle given with
+`--otel-ca-file`, and **presents no identity of its own**. A collector
+cannot use this channel to establish who is talking to it. The floor on
+this hop is **TLS 1.2**, one notch below the TLS 1.3 floor every mTLS
+hop holds — a deliberate, narrow concession, because the peer is a
+third-party endpoint outside setec's control (frequently a vendor
+gateway or a TLS-terminating proxy) and this channel carries spans
+rather than the authority to run a microVM. The mTLS floor is not
+negotiable and is unaffected.
+
+Setting `--otel-spiffe-socket` together with at least one
+`--otel-spiffe-server-id` opts this hop into mutual TLS: the operator
+presents its X509-SVID and authorizes the collector's SPIFFE ID, with
+the same allow-list-and-trust-domain rules as every other SPIFFE
+surface. `--otel-ca-file` and the `--otel-spiffe-*` flags are mutually
+exclusive; configuring both is a startup error.
+
+`--otel-insecure` exports spans in **plaintext**. It is a dev-cluster
+setting, the chart leaves it off, and the operator logs a loud warning
+at startup when it is on.
+
+#### One module owns this, and a guard keeps it that way
+
+Every credential above is built in one place, `internal/credentials`,
+behind a narrow interface: configuration in, transport credentials out.
+The TLS floor, the mandatory client certificate and the peer
+authorization hook are properties of that module, so they hold on every
+hop rather than on whichever call site remembered them.
+
+That is enforced, not merely intended. `internal/credguard` fails the
+build when a TLS credential is assembled anywhere else — a hand-built
+`tls.Config`, a hand-assembled trust pool, a gRPC TLS-credential
+constructor, or a `go-spiffe` import. It runs in `make check` and
+`make test` (and alone as `make guard-credentials`), it walks the whole
+tree including the separate Go modules under `examples/`, test files
+included, and it fails rather than passes when its scan root is empty
+or missing. Its allow-list lives in `internal/credguard/exemptions.go`;
+every entry names one file or one directory and carries the reason it
+is there, and an entry that stops being needed fails the build too.
+
+#### One caveat an operator should hear rather than infer
+
+In a cluster where any principal can create a Pod with an arbitrary
+`serviceAccountName`, SVID identity reduces to workload-create RBAC,
+because Kubernetes has no `serviceaccounts/use` verb. Anyone who can
+create a workload in a namespace can create it with the identity setec
+authorizes, and the SPIFFE ID then proves only that the caller could
+schedule a Pod under that service account.
+
+That is a property of the *consuming* cluster, not of setec, and
+addressing it is the cluster operator's work: narrow workload-create
+grants, and an admission policy keyed on the requesting user. setec
+implements SPIFFE correctly regardless — but no operator should be told
+that turning on SPIFFE mode bought them a boundary their cluster does
+not enforce.
 
 ## Scope
 

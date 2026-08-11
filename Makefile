@@ -79,6 +79,22 @@ E2E_TIMEOUT ?= 30m
 SETEC_E2E_CHART ?= $(shell pwd)/charts/setec
 SETEC_E2E_RUNTIMECLASS ?= kata-fc
 
+# Credential guard. internal/credentials owns every mTLS credential in the
+# module; internal/credguard is what keeps that true. It walks the whole tree
+# — including the separate Go modules under examples/, which the root module's
+# tooling cannot otherwise reach — and fails on a hand-built tls.Config, a
+# hand-assembled trust pool, a gRPC TLS-credential constructor, or a go-spiffe
+# import outside the allow-list in internal/credguard/exemptions.go. It also
+# fails on an empty or missing scan root, so it can never pass having examined
+# nothing.
+#
+# It is a Go test, so `make test` and the CI Go suites already run it. This
+# target is the way to run it alone, and `check` names it so the guard is
+# visible in the gate rather than buried in the test output.
+.PHONY: guard-credentials
+guard-credentials: ## Fail if an mTLS credential is built outside internal/credentials.
+	go test ./internal/credguard/...
+
 .PHONY: e2e
 e2e: ## Run the hardware-gated e2e suite (requires KVM + Kata on the host).
 	SETEC_E2E_CHART="$(SETEC_E2E_CHART)" \
@@ -184,7 +200,7 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test ## Run the local gate (test only — run 'make lint' separately).
+check: test guard-credentials ## Run the local gate (tests + credential guard — run 'make lint' separately).
 
 ##@ Deployment
 
