@@ -125,6 +125,47 @@ Residual risk and scope limits, stated precisely:
   snapshot-load path in the runtime). Pause/resume of the *same* VM does not
   clone CSPRNG state and needs no reseed.
 
+### What mTLS proves, per credential mode
+
+Every setec hop is mTLS. mTLS on its own is an authentication control,
+not an authorization one, and the two modes prove different things.
+Reading "mTLS" and inferring "only the intended caller can reach this"
+is wrong in one of them.
+
+**File mode** (`--tls-cert` / `--tls-key` / `--tls-client-ca`; the
+default, and every setec hop's only mode until SPIFFE mode landed):
+
+- Proves the peer holds a certificate issued by the configured CA, and
+  that the connection is TLS 1.3 with a client certificate present.
+- **Does not prove which peer it is.** Any holder of any certificate
+  from that CA is accepted. If the CA issues to more workloads than the
+  ones meant to call setec, all of them can.
+- The credential is a file. Anything that can read the mounted Secret is
+  the workload. Rotation is the delivery pipeline's job, and a pipeline
+  that stops delivering shows up as an expiry.
+
+**SPIFFE mode** (`--spiffe-socket` / `--spiffe-authorized-id`, frontend
+server surface only today):
+
+- Proves everything file mode proves, and additionally that the peer's
+  SPIFFE ID is on an explicit allow-list of full SPIFFE IDs. A
+  certificate validly signed by the trusted authority but carrying an
+  unlisted identity is refused.
+- Matches the trust domain as well as the path, so an identical path
+  under a foreign trust domain is a different principal.
+- The identity is attested by the local SPIRE agent rather than read
+  from a file, and it rotates in-process. Losing the Workload API is
+  reported when it happens rather than when the last SVID expires.
+- An empty allow-list is a startup error. There is no accept-everyone
+  setting, and no fallback from SPIFFE to files: a component that cannot
+  reach its Workload API fails to boot.
+
+One caveat an operator should hear rather than infer: in a cluster where
+any principal can create a Pod with an arbitrary `serviceAccountName`,
+SVID identity reduces to workload-create RBAC, because Kubernetes has no
+`serviceaccounts/use` verb. That is a property of the consuming cluster,
+not of setec.
+
 ## Scope
 
 In scope for coordinated disclosure:

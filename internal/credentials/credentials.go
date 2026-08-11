@@ -27,13 +27,14 @@ limitations under the License.
 // surface added later cannot reintroduce direct file loading without
 // deliberately going around this package.
 //
-// Today the only credential source is a set of PEM files on disk, which
-// is what every setec component has always used. Additional sources
-// (notably the SPIFFE Workload API) plug in behind the same Provider
-// methods as a new field on Config; callers do not change and no
-// signature moves. There is deliberately no "which source am I using"
-// accessor and no boolean mode switch in the API — the source is chosen
-// once, at construction, from configuration.
+// There are two credential sources: PEM files on disk, which is what
+// every setec component has always used and remains the default, and
+// the SPIFFE Workload API. They plug in behind the same Provider
+// methods as fields on Config; callers do not change and no signature
+// moves. There is deliberately no "which source am I using" accessor
+// and no boolean mode switch in the API — the source is chosen once, at
+// construction, from configuration, and exactly one source is a
+// configuration this package will build.
 //
 // A Provider performs no I/O until a credentials method is called, and
 // components are expected to call it once at startup so that a bad
@@ -60,12 +61,21 @@ const minTLSVersion = tls.VersionTLS13
 // Config selects a credential source and carries its settings.
 //
 // Exactly one source must be set. Zero configured sources is an error
-// rather than a silent plaintext or system-roots default; when a second
-// source lands, more than one will be an error too, so an operator
-// never has to reason about which source won.
+// rather than a silent plaintext or system-roots default, and more than
+// one is an error too, so an operator never has to reason about which
+// source won. There is no fallback between them: a SPIFFE
+// configuration whose Workload API cannot be reached fails, rather than
+// quietly reverting to files and running weaker credentials than the
+// operator asked for.
 type Config struct {
 	// Files configures PEM files on disk as the credential source.
+	// This is the default posture and the one a standalone setec
+	// install with no SPIRE deployment uses.
 	Files *FileSource
+
+	// SPIFFE configures the SPIFFE Workload API as the credential
+	// source, with peer authorization by SPIFFE ID.
+	SPIFFE *SPIFFESource
 }
 
 // FileSource reads the component's identity and its trust anchors from
@@ -98,6 +108,20 @@ type source interface {
 	identity(ctx context.Context) (tls.Certificate, error)
 	// trustAnchors returns the pool used to verify the peer.
 	trustAnchors(ctx context.Context) (*x509.CertPool, error)
+	// authorizePeer decides whether a peer whose chain has already
+	// been verified against trustAnchors is one this component talks
+	// to. Chain verification proves a trusted authority issued the
+	// certificate; this is the separate question of who is holding it.
+	authorizePeer(verified [][]*x509.Certificate) error
+	// rotates reports whether the source maintains its material
+	// in-process. A source that says yes is re-asked for every
+	// handshake, so a rotated certificate or an updated trust bundle
+	// takes effect without a restart. A source that says no is read
+	// once, at startup, which is what file mode has always done.
+	rotates() bool
+	// dialing reports whether the source can furnish credentials for
+	// dialing a peer, and names what is missing when it cannot.
+	dialing() error
 }
 
 // New validates cfg and returns the Provider for it.
@@ -108,36 +132,84 @@ type source interface {
 // successful New means the configuration is coherent, not that the
 // credentials exist.
 func New(cfg Config) (*Provider, error) {
-	if cfg.Files == nil {
+	switch {
+	case cfg.Files != nil && cfg.SPIFFE != nil:
+		return nil, errors.New(
+			"both the file and SPIFFE credential sources are configured; exactly one must be")
+	case cfg.Files != nil:
+		src, err := newFileSource(*cfg.Files)
+		if err != nil {
+			return nil, err
+		}
+		return &Provider{source: src}, nil
+	case cfg.SPIFFE != nil:
+		src, err := newSPIFFESource(*cfg.SPIFFE)
+		if err != nil {
+			return nil, err
+		}
+		return &Provider{source: src}, nil
+	default:
 		return nil, errors.New("no credential source configured")
 	}
-	src, err := newFileSource(*cfg.Files)
-	if err != nil {
-		return nil, err
-	}
-	return &Provider{source: src}, nil
 }
 
 // ServerCredentials returns the credentials for a gRPC server that
 // requires and verifies a client certificate. Client authentication is
 // mandatory and not configurable; every setec server surface is mTLS.
+//
+// It acquires credentials once before returning, so a source that
+// cannot produce them is a startup failure rather than a listener that
+// refuses every connection.
 func (p *Provider) ServerCredentials(ctx context.Context) (grpccreds.TransportCredentials, error) {
+	cfg, err := p.serverConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if p.source.rotates() {
+		// Rebuild from the source for every connection so a rotated
+		// certificate or an updated trust bundle is on the wire
+		// immediately. The nested configuration comes from the same
+		// function, so the guarantees it sets hold on every handshake
+		// and not only the first; it carries no GetConfigForClient of
+		// its own, so this does not recurse.
+		cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			return p.serverConfig(hello.Context())
+		}
+	}
+	return grpccreds.NewTLS(cfg), nil
+}
+
+// serverConfig assembles one server TLS configuration from the source.
+// The TLS floor, the mandatory client certificate and the peer
+// authorization hook are set here rather than by the source, so no
+// source can weaken them.
+func (p *Provider) serverConfig(ctx context.Context) (*tls.Config, error) {
 	cert, pool, err := p.materialise(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return grpccreds.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   minTLSVersion,
-		ClientCAs:    pool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}), nil
+	return &tls.Config{
+		Certificates:          []tls.Certificate{cert},
+		MinVersion:            minTLSVersion,
+		ClientCAs:             pool,
+		ClientAuth:            tls.RequireAndVerifyClientCert,
+		VerifyPeerCertificate: p.authorizePeer,
+	}, nil
+}
+
+// authorizePeer runs after the standard chain verification and asks the
+// source whether the authenticated peer is one this component accepts.
+func (p *Provider) authorizePeer(_ [][]byte, verified [][]*x509.Certificate) error {
+	return p.source.authorizePeer(verified)
 }
 
 // ClientCredentials returns the credentials for dialing a peer,
 // presenting this component's certificate and verifying the peer
 // against the configured trust anchors.
 func (p *Provider) ClientCredentials(ctx context.Context) (grpccreds.TransportCredentials, error) {
+	if err := p.source.dialing(); err != nil {
+		return nil, err
+	}
 	cert, pool, err := p.materialise(ctx)
 	if err != nil {
 		return nil, err
@@ -207,3 +279,18 @@ func (s *fileSource) trustAnchors(context.Context) (*x509.CertPool, error) {
 	}
 	return pool, nil
 }
+
+// authorizePeer accepts any peer the configured CA issued a certificate
+// to. That is the whole of what file mode proves, and stating it here
+// as an explicit answer rather than an absent check is the point: a
+// reader of this package can see that file mode authenticates the peer
+// and does not authorize it. Narrowing that is what SPIFFE mode is for.
+func (s *fileSource) authorizePeer([][]*x509.Certificate) error { return nil }
+
+// rotates reports that files are read once, at startup — the behaviour
+// file mode has always had. Certificates delivered by cert-manager or
+// ESO are rotated by restarting the pod.
+func (s *fileSource) rotates() bool { return false }
+
+// dialing reports that a file source can furnish client credentials.
+func (s *fileSource) dialing() error { return nil }

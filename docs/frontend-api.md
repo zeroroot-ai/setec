@@ -23,20 +23,71 @@ See `api/grpc/v1/sandbox.proto` for the full message schema.
 
 ## Authentication
 
-mTLS is mandatory. Supply the frontend with:
+mTLS is mandatory, TLS 1.3 is the floor, and every client must present a
+certificate. What that certificate has to prove depends on the
+credential mode.
+
+The frontend runs in exactly one mode. Configuring both or neither is a
+startup error naming the cause, and there is no fallback between them:
+a SPIFFE frontend that cannot reach its Workload API fails to boot
+rather than quietly reverting to files.
+
+### File mode (default)
 
 - `--tls-cert=/etc/setec/tls/tls.crt` and `--tls-key=/etc/setec/tls/tls.key`
   (server cert + key).
 - `--tls-client-ca=/etc/setec/tls-ca/ca.crt` (client-cert CA bundle).
 
 All three are required; the process refuses to start if any one is
-missing. TLS 1.3 is required and every client must present a
-certificate. The server extracts the tenant identity from the peer
-cert in precedence order: SPIFFE URI SAN, DNS SAN, Subject CN.
+missing. **A client is accepted if the configured CA issued its
+certificate — any client, not a particular one.** Narrowing that is what
+SPIFFE mode is for.
 
 The Helm chart refuses to render the frontend Deployment when either
 `frontend.tlsCertSecretName` or `frontend.tlsClientCASecretName` is
 unset. There is no insecure fallback.
+
+### SPIFFE mode
+
+- `--spiffe-socket=unix:///run/spire/agent-sockets/api.sock` — the SPIFFE
+  Workload API endpoint. A bare filesystem path is also accepted and
+  read as `unix://<path>`. The `SPIFFE_ENDPOINT_SOCKET` environment
+  variable is deliberately not consulted.
+- `--spiffe-authorized-id=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon` —
+  repeat once per caller. **Required**: an empty allow-list is a startup
+  error, so "accept everyone" cannot be reached by omitting
+  configuration.
+
+The frontend's own X509-SVID and the trust bundle come from the socket,
+and both are re-read for every handshake, so a rotated SVID is on the
+wire without a restart. A client is accepted only if its chain verifies
+against the bundle **and** its SPIFFE ID is on the allow-list. Entries
+are full SPIFFE IDs: the trust domain is matched as well as the path, so
+the same path under a foreign trust domain is refused.
+
+Losing the Workload API is reported immediately rather than becoming
+visible when the last SVID expires.
+
+SPIFFE mode is server-side only today. The snapshot dialer and tracing
+exporter still use file credentials, and asking for client credentials
+from a SPIFFE-configured frontend is an error rather than a silent
+downgrade (setec#174).
+
+### Startup log line
+
+The selected mode is stated once at startup, so a pod's logs say which
+posture it is running:
+
+```
+frontend: credential mode: spiffe
+```
+
+### Tenant identity
+
+Independently of the mode, the server derives the *tenant* from the peer
+certificate in precedence order: SPIFFE URI SAN, DNS SAN, Subject CN.
+That is a different question from authorization — it answers which
+tenant a call is for, not whether the caller may make it.
 
 ## Tenant resolution
 
@@ -227,3 +278,5 @@ enforces per-tenant request rate limits.
 
 - JWT auth is not implemented; mTLS is the only supported authentication
   mechanism.
+- SPIFFE mode covers the frontend's server surface only. The node-agent
+  (setec#173) and the outbound dialers (setec#174) remain file-based.
