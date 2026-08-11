@@ -21,8 +21,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -44,11 +42,11 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/frontend"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 func main() {
@@ -112,7 +110,18 @@ func main() {
 			"frontend: --tls-cert, --tls-key and --tls-client-ca are required; mTLS is mandatory")
 		os.Exit(1)
 	}
-	creds, err := loadTLSCreds(tlsCert, tlsKey, tlsClientCA)
+	provider, err := credentials.New(credentials.Config{
+		Files: &credentials.FileSource{
+			CertFile: tlsCert,
+			KeyFile:  tlsKey,
+			CAFile:   tlsClientCA,
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "frontend: load TLS creds: %v\n", err)
+		os.Exit(1)
+	}
+	creds, err := provider.ServerCredentials(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: load TLS creds: %v\n", err)
 		os.Exit(1)
@@ -159,30 +168,6 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: gRPC serve: %v\n", err)
 	}
-}
-
-// loadTLSCreds builds mTLS credentials. The caFile MUST be non-empty;
-// callers validate that before invoking this helper.
-func loadTLSCreds(certFile, keyFile, caFile string) (credentials.TransportCredentials, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server cert: %w", err)
-	}
-	pool := x509.NewCertPool()
-	ca, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read client CA: %w", err)
-	}
-	if !pool.AppendCertsFromPEM(ca) {
-		return nil, fmt.Errorf("client CA %q is not a PEM bundle", caFile)
-	}
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-		ClientCAs:    pool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}
-	return credentials.NewTLS(tlsCfg), nil
 }
 
 // labelTenantResolver maps a TenantID to a namespace by listing
