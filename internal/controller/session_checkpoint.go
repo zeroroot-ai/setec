@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/status"
 )
@@ -423,13 +425,36 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	} else {
 		restoreErr = r.Coordinator.RestoreSessionCheckpoint(ctx, sb, ck.Ref, ck.Backend, kek)
 	}
-	if restoreErr != nil {
+	switch {
+	case errors.Is(restoreErr, snapshot.ErrInvariantGateViolation):
+		// ADR-0005 invariant gate refusal: the VM already holds the
+		// checkpoint state but its verifications did not pass, so the
+		// VM is DESTROYED — never served. The session itself survives
+		// per ADR-0006: the deleted Pod is recreated and the fresh VM
+		// cold-boots against the durable workspace (the checkpoint is
+		// consumed below either way).
+		recovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
+			"ADR-0005 invariant gate refused checkpoint resume #%d (%v); destroying the VM that received the unverified state — session restarts from durable workspace",
+			ck.Sequence, restoreErr)
+		logger.Error(restoreErr, "invariant gate refused session checkpoint resume; destroying VM")
+		podName := sb.Status.PodName
+		if podName == "" {
+			podName = sb.Name + "-vm"
+		}
+		pod := &corev1.Pod{}
+		if perr := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: podName}, pod); perr == nil && pod.DeletionTimestamp.IsZero() {
+			if derr := r.Delete(ctx, pod); derr != nil && !apierrors.IsNotFound(derr) {
+				return ctrl.Result{}, true, fmt.Errorf("delete Pod after invariant-gate refusal: %w", derr)
+			}
+		}
+	case restoreErr != nil:
 		recovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
 			"Checkpoint restore failed (%v); session restarted from durable workspace — no data lost, process state since checkpoint #%d gone",
 			restoreErr, ck.Sequence)
 		logger.Error(restoreErr, "session checkpoint restore failed; degraded to restart-from-workspace")
-	} else {
+	default:
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonResumedFromCheckpoint, actionManageCheckpoint,
 			"Session resumed from checkpoint #%d; process state intact", ck.Sequence)
 	}

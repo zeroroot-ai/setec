@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -81,7 +82,7 @@ func TestRestoreSessionCheckpointNoNodePinning(t *testing.T) {
 	sb := sessionSandbox()
 	pod := newPodForSandbox(sb, "node-b") // NOT the node that wrote the checkpoint
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: true},
+		restoreRes: verifiedRestoreRes(),
 	}
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
@@ -103,9 +104,12 @@ func TestRestoreSessionCheckpointFailurePropagates(t *testing.T) {
 		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: "corrupted snapshot"},
 	}
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
-	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "ref", "s3", bytes.Repeat([]byte{1}, 32))
+	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-9", "s3", bytes.Repeat([]byte{1}, 32))
 	if err == nil {
 		t.Fatal("want error from failed restore")
+	}
+	if errors.Is(err, ErrInvariantGateViolation) {
+		t.Fatalf("a node-side restore failure must not be a gate violation: %v", err)
 	}
 }
 

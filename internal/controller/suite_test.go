@@ -59,6 +59,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	snapshotpkg "github.com/zeroroot-ai/setec/internal/snapshot"
+	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
 // Process-wide state populated by TestMain and consumed by every test
@@ -140,17 +141,30 @@ type fakeNodeAgentClient struct {
 	ClaimErr   error
 }
 
-func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, _ *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
+func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	if f.CreateResp == nil && f.CreateErr == nil {
+		// Mirror the real backends (LocalDisk/S3): the storage ref
+		// echoes the snapshot id. Session-checkpoint refs therefore
+		// stay inside the SessionCheckpointID namespace the invariant
+		// gate's same-session binding checks.
 		return &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: "test-ref", SizeBytes: 1024, Sha256: "cafe",
+			StorageRef: in.GetSnapshotId(), SizeBytes: 1024, Sha256: "cafe",
 		}, nil
 	}
 	return f.CreateResp, f.CreateErr
 }
 func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, _ *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	if f.RestoreRes == nil && f.RestoreErr == nil {
-		return &setecgrpcv1.RestoreSandboxResponse{Success: true}, nil
+		// The default fake models a healthy production node: every
+		// ADR-0005 per-restore verification is confirmed, so the
+		// invariant gate admits the restore. Scenarios that exercise
+		// the gate override RestoreRes with a degraded response.
+		return &setecgrpcv1.RestoreSandboxResponse{
+			Success:         true,
+			EntropyReseeded: true,
+			Uniquified:      true,
+			EncryptedAtRest: true,
+		}, nil
 	}
 	return f.RestoreRes, f.RestoreErr
 }
@@ -340,6 +354,7 @@ func TestMain(m *testing.M) {
 	classReconciler := &SandboxClassReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}
 	if err := classReconciler.SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "setup SandboxClass reconciler: %v\n", err)

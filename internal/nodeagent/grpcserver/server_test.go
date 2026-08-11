@@ -240,6 +240,46 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	if len(fc.loadCalls) != 1 {
 		t.Fatalf("LoadSnapshot calls = %d", len(fc.loadCalls))
 	}
+	// The bare LocalDiskBackend does not attest encryption at rest, so
+	// the signal for the operator-side invariant gate must be false —
+	// never inferred (ADR-0005 invariant 5).
+	if resp.GetEncryptedAtRest() {
+		t.Fatal("encrypted_at_rest must be false for an unencrypted backend")
+	}
+}
+
+// TestRestoreSandbox_ReportsEncryptedAtRest pins that the response
+// signal tracks the storage backend's AtRestReporter capability: with
+// the EncryptedBackend wrapper (the only production write path) the
+// node attests encryption at rest per restore.
+func TestRestoreSandbox_ReportsEncryptedAtRest(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	keys := t.TempDir()
+	srv.Storage = &storage.EncryptedBackend{
+		Inner: &storage.LocalDiskBackend{Root: t.TempDir()},
+		KEK:   &storage.FileKEKSource{Path: filepath.Join(keys, "node.key")},
+		DEKs:  &storage.DirDEKStore{Dir: filepath.Join(keys, "deks")},
+	}
+	cli := newBufconnClient(t, srv)
+	ctx := context.Background()
+
+	framed := makeFramedPayload(t, []byte("STATE-BYTES"), []byte("MEM-BYTES"))
+	if _, _, err := srv.Storage.Save(ctx, "snap-enc", bytes.NewReader(framed)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId:       "snap-enc",
+		StorageRef:       "snap-enc",
+		StorageBackend:   "local-disk",
+		KataSocketTarget: "/tmp/fc-target.sock",
+	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !resp.GetEncryptedAtRest() {
+		t.Fatal("encrypted_at_rest must be true when serving through the EncryptedBackend")
+	}
 }
 
 func TestRestoreSandbox_MissingArgs(t *testing.T) {

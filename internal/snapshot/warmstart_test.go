@@ -74,9 +74,7 @@ func newWarmStartCoord(t *testing.T, na *fakeNodeAgentClient, dialErr error) (*C
 
 func TestWarmStartFromPool_Restored(t *testing.T) {
 	na := &fakeNodeAgentClient{
-		claimRes: &setecgrpcv1.ClaimPoolEntryResponse{
-			Claimed: true, Success: true, EntryId: "entry-1", EntropyReseeded: true,
-		},
+		claimRes: verifiedClaimRes("entry-1"),
 	}
 	coord, rec := newWarmStartCoord(t, na, nil)
 	sb := newSandboxForCoord()

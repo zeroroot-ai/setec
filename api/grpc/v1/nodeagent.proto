@@ -177,6 +177,15 @@ message RestoreSandboxResponse {
   // success=true can only happen when the operator explicitly opted
   // out (--restore-uniquify=off).
   bool uniquified = 4;
+
+  // encrypted_at_rest reports whether the restored state was read
+  // through the sealed-DEK encrypted storage path (ADR-0005
+  // invariant 5). Production wires the EncryptedBackend as the ONLY
+  // persistence path, so this is true on every production restore;
+  // false means the node served the state from an unencrypted
+  // backend and the operator-side invariant gate must refuse the
+  // restore outside dev.
+  bool encrypted_at_rest = 5;
 }
 
 // PauseSandboxRequest / PauseSandboxResponse wrap a direct
@@ -285,6 +294,22 @@ message ClaimPoolEntryResponse {
   // its vsock CID was confirmed unique on the node (ADR-0005
   // invariant 2, setec#189).
   bool uniquified = 6;
+
+  // provenance_verified reports that the claimed entry's template
+  // provenance record was read, claims the class-image boot path
+  // (never a used sandbox), and was cryptographically bound into the
+  // entry's sealed DEK (the seal's AAD covers the provenance, so a
+  // tampered or foreign record makes the DEK unopenable) — ADR-0005
+  // invariants 1 and 4, setec#190. Always true on a successful claim
+  // because the decrypt path IS the verification; reported explicitly
+  // so the operator-side invariant gate never has to infer it.
+  bool provenance_verified = 7;
+
+  // encrypted_at_rest mirrors RestoreSandboxResponse.encrypted_at_rest
+  // (ADR-0005 invariant 5): pool entry state is only ever persisted
+  // through the per-entry sealed-DEK path, so a successful claim
+  // implies true.
+  bool encrypted_at_rest = 8;
 }
 
 // DeleteSnapshotRequest / DeleteSnapshotResponse wrap a

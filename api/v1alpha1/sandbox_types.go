@@ -545,7 +545,7 @@ type SandboxCheckpointStatus struct {
 
 // SandboxWarmStartOutcome enumerates how a pool warm-start attempt
 // ended.
-// +kubebuilder:validation:Enum=PoolRestored;ColdBoot
+// +kubebuilder:validation:Enum=PoolRestored;ColdBoot;Rejected
 type SandboxWarmStartOutcome string
 
 const (
@@ -557,6 +557,13 @@ const (
 	// Sandbox continued its normal cold boot. Cold boot is the
 	// fallback, never a failure.
 	SandboxWarmStartColdBoot SandboxWarmStartOutcome = "ColdBoot"
+	// SandboxWarmStartRejected means the restore succeeded node-side
+	// but the ADR-0005 invariant gate refused to serve it: one or more
+	// per-restore invariant verifications did not pass and no dev-mode
+	// opt-out was active. The Sandbox is destroyed (Failed with reason
+	// InvariantGateViolation) because its VM already received the
+	// unverified restored state — cold boot is not a safe fallback.
+	SandboxWarmStartRejected SandboxWarmStartOutcome = "Rejected"
 )
 
 // SandboxWarmStartStatus reports the pool warm-start outcome for one

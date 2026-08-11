@@ -73,6 +73,16 @@ rules:
 - apiGroups:
   - setec.zeroroot.ai
   resources:
+  - sandboxclasses/status
+  - sandboxes/status
+  - snapshots/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - setec.zeroroot.ai
+  resources:
   - sandboxes
   - snapshots
   verbs:
@@ -89,13 +99,4 @@ rules:
   - sandboxes/finalizers
   - snapshots/finalizers
   verbs:
-  - update
-- apiGroups:
-  - setec.zeroroot.ai
-  resources:
-  - sandboxes/status
-  - snapshots/status
-  verbs:
-  - get
-  - patch
   - update

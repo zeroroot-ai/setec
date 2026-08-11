@@ -61,6 +61,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/prereq"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
+	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 	"github.com/zeroroot-ai/setec/internal/tracing"
 	"github.com/zeroroot-ai/setec/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -441,6 +442,10 @@ func main() {
 			Metrics:           collectors,
 			Tracer:            tracer,
 			KataSocketPattern: kataSocketPattern,
+			// ADR-0005 invariant gate: enforcement is unconditional
+			// inside the Coordinator; this only wires the dev-mode
+			// opt-out lookup (class annotation + gate-namespace label).
+			Gate: &gate.Gate{Reader: mgr.GetClient()},
 		}
 	}
 
@@ -479,10 +484,12 @@ func main() {
 		}
 	}
 
-	// Phase 2: SandboxClass controller (trivial watch).
+	// SandboxClass controller: keeps the ADR-0005 dev-mode opt-out
+	// condition (UnverifiedRestoresAllowed) truthful on every class.
 	if err := (&controller.SandboxClassReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxClassReconciler")
 		os.Exit(1)

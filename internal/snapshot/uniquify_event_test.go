@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,11 +41,11 @@ func TestRestoreSandbox_PassesIdentityFieldsToNodeAgent(t *testing.T) {
 	pod.Status.PodIP = "10.7.8.9"
 	snap := &setecv1alpha1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{Node: "node-a", StorageRef: "t-a-snap-1"},
+		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a", StorageRef: "t-a-snap-1"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
-		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true},
+		restoreRes: verifiedRestoreRes(),
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
 
@@ -64,18 +65,23 @@ func TestRestoreSandbox_PassesIdentityFieldsToNodeAgent(t *testing.T) {
 
 // TestRestoreSandbox_EmitsSandboxUniquifiedEvent asserts the
 // Coordinator surfaces the node-agent's uniquified confirmation as a
-// Normal event on the Sandbox — and only on explicit confirmation.
+// Normal event on a served restore — and that an UNCONFIRMED
+// uniquification is refused outright by the ADR-0005 invariant gate
+// (no event, terminal error) instead of being served quietly.
 func TestRestoreSandbox_EmitsSandboxUniquifiedEvent(t *testing.T) {
 	for _, confirmed := range []bool{true, false} {
 		sb := newSandboxForCoord()
 		pod := newPodForSandbox(sb, "node-a")
 		snap := &setecv1alpha1.Snapshot{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-			Spec:       setecv1alpha1.SnapshotSpec{Node: "node-a"},
+			Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 		}
 		c := newFakeClient(t, sb, pod, snap)
+		res := verifiedRestoreRes()
+		res.Uniquified = confirmed
 		na := &fakeNodeAgentClient{
-			restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: true, Uniquified: confirmed},
+			restoreRes: res,
+			pauseRes:   &setecgrpcv1.PauseSandboxResponse{Success: true},
 		}
 		rec := testutil.NewFakeEventsRecorder(32)
 		coord := &Coordinator{
@@ -84,8 +90,12 @@ func TestRestoreSandbox_EmitsSandboxUniquifiedEvent(t *testing.T) {
 			Recorder: rec,
 			Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
 		}
-		if err := coord.RestoreSandbox(context.Background(), sb, snap); err != nil {
+		err := coord.RestoreSandbox(context.Background(), sb, snap)
+		if confirmed && err != nil {
 			t.Fatalf("RestoreSandbox: %v", err)
+		}
+		if !confirmed && !errors.Is(err, ErrInvariantGateViolation) {
+			t.Fatalf("err = %v, want ErrInvariantGateViolation for an unconfirmed uniquification", err)
 		}
 		saw := false
 		for {
@@ -120,9 +130,7 @@ func TestWarmStart_PassesIdentityFieldsToClaim(t *testing.T) {
 	}
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{
-		claimRes: &setecgrpcv1.ClaimPoolEntryResponse{
-			Claimed: true, Success: true, EntryId: "entry-1", Uniquified: true,
-		},
+		claimRes: verifiedClaimRes("entry-1"),
 	}
 	rec := testutil.NewFakeEventsRecorder(32)
 	coord := &Coordinator{

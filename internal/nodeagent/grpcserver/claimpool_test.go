@@ -135,6 +135,16 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 	if resp.GetEntryId() == "" {
 		t.Fatal("entry_id must identify the consumed entry")
 	}
+	// ADR-0005 attestations for the operator-side invariant gate: the
+	// claim path verified the template provenance (AAD-bound into the
+	// sealed DEK) and decrypted always-encrypted state, so both signals
+	// must be reported affirmatively.
+	if !resp.GetProvenanceVerified() {
+		t.Fatal("provenance_verified must be true on a successful claim")
+	}
+	if !resp.GetEncryptedAtRest() {
+		t.Fatal("encrypted_at_rest must be true on a successful claim")
+	}
 
 	// The restore drove LoadSnapshot with the entry's raw state files.
 	if len(fc.loadCalls) != 1 || !strings.Contains(fc.loadCalls[0], "state.bin") {

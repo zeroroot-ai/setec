@@ -89,3 +89,22 @@ type StorageBackend interface {
 	// nil) rather than an error.
 	Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error)
 }
+
+// AtRestReporter is the optional capability a StorageBackend
+// implements to attest that every artifact it serves is encrypted at
+// rest (ADR-0005 invariant 5). The node-agent consults it per restore
+// to populate the encrypted_at_rest response signal the operator-side
+// invariant gate verifies. A backend that does not implement the
+// interface is treated as unencrypted — the signal is never inferred.
+type AtRestReporter interface {
+	// EncryptedAtRest reports whether the backend persists and serves
+	// state exclusively through an encrypted path.
+	EncryptedAtRest() bool
+}
+
+// IsEncryptedAtRest reports whether the given backend attests
+// encryption at rest via the AtRestReporter capability.
+func IsEncryptedAtRest(b StorageBackend) bool {
+	r, ok := b.(AtRestReporter)
+	return ok && r.EncryptedAtRest()
+}

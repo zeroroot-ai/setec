@@ -196,6 +196,13 @@ type EncryptedBackend struct {
 	DEKs SealedDEKStore
 }
 
+// EncryptedAtRest implements the AtRestReporter capability: every
+// artifact this wrapper serves was written through the per-snapshot
+// sealed-DEK path — there is no plaintext write path behind it. The
+// node-agent reports it per restore so the operator-side invariant
+// gate (ADR-0005) never has to infer encryption.
+func (b *EncryptedBackend) EncryptedAtRest() bool { return true }
+
 // dekAAD binds a sealed DEK to the snapshot it protects, so a sealed
 // blob cannot be moved between snapshots.
 func dekAAD(snapshotID string) string {

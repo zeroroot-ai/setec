@@ -51,6 +51,14 @@ const (
 	// not populate a more specific reason string.
 	ReasonContainerExitedNonZero = "ContainerExitedNonZero"
 
+	// ReasonInvariantGateViolation is recorded on Failed when the
+	// ADR-0005 invariant gate refused a snapshot restore/resume: the
+	// node restored state into the Sandbox's VM but one or more
+	// per-restore invariant verifications did not pass and no dev-mode
+	// opt-out was active. Terminal — the VM holds unverified restored
+	// state, so the Pod is destroyed rather than cold-boot-recycled.
+	ReasonInvariantGateViolation = "InvariantGateViolation"
+
 	// ReasonSessionVMRestarting is recorded on Pending when a session
 	// Sandbox's VM exited or died. A session ends only on explicit
 	// teardown (ADR-0006), so a dead VM is not terminal: the controller
