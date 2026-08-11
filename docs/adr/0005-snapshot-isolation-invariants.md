@@ -23,9 +23,12 @@ A snapshot-restored (or resumed) Sandbox MUST satisfy:
 2. **Per-restore uniquification.** Each restore/resume gets: a **fresh CSPRNG
    reseed** verified before hand-over (`RNDADDENTROPY` in the guest-agent + the
    coordinator's `EntropyReseeded` event, setec#72 ✅ — closes the Firecracker
-   "cloned VMs share the CSPRNG" pitfall); a **unique vsock CID**; a **fresh k8s
-   Pod network identity** (CNI-assigned, reconciling the snapshot's stale view);
-   a **unique machine-id / hostname / boot-id**.
+   "cloned VMs share the CSPRNG" pitfall); a **unique vsock CID** (node-local
+   allocator + guest-reported CID registry, setec#189 ✅); a **fresh k8s
+   Pod network identity** (CNI-assigned, reconciling the snapshot's stale view,
+   setec#189 ✅); a **unique machine-id / hostname / boot-id** (host-minted,
+   guest-verified, `SandboxUniquified` event, setec#189 ✅). All are enforced
+   fail-closed by the node-agent's `--restore-uniquify=require` default.
 3. **One-session-then-destroy.** A VM (and its durable workspace + checkpoints)
    serves exactly **one session** — intra-session suspend/resume is allowed
    (ADR-0006), but it is **never** reused across sessions or tenants, and is
@@ -45,8 +48,11 @@ is gated on 1-5 holding, with 2's entropy reseed *verified* per restore.
 
 ## Consequences
 
-- Residuals to verify/close before GA: unique vsock CID, fresh net identity,
-  machine-id/boot-id regeneration, and the one-session wipe path. (Entropy
-  reseed, secret-scan, encryption-at-rest + key destruction, and template
-  provenance are done.)
-- A restore that cannot verify the entropy reseed fails closed.
+- Residuals to verify/close before GA: the one-session wipe path. (Entropy
+  reseed, secret-scan, unique vsock CID, fresh net identity,
+  machine-id/hostname/boot-id regeneration, encryption-at-rest + key
+  destruction, and template provenance are done — setec#72, setec#189,
+  setec#190.)
+- A restore that cannot verify the entropy reseed — or any part of its
+  identity uniquification — fails closed: the VM is paused and never handed
+  to a caller.

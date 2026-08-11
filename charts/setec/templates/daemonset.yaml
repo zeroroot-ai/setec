@@ -60,6 +60,7 @@ spec:
             - --snapshot-fill-threshold={{ .Values.snapshots.localDisk.fillThreshold }}
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
             - --entropy-reseed={{ .Values.snapshots.entropyReseed }}
+            - --restore-uniquify={{ .Values.snapshots.restoreUniquify }}
             - --tls-cert=/etc/setec/nodeagent-tls/tls.crt
             - --tls-key=/etc/setec/nodeagent-tls/tls.key
             - --tls-client-ca=/etc/setec/nodeagent-ca/ca.crt

@@ -59,7 +59,7 @@ func TestLaunchOptionsFrom_DoesNotCopySandboxClassSecrets(t *testing.T) {
 		},
 	}
 	cls.Name = "fast"
-	opts := LaunchOptionsFrom(cls, "entry-1", "/run/sock", "/var/state", "/k", "/r", 2, 2048)
+	opts := LaunchOptionsFrom(cls, "entry-1", "/run/sock", "/var/state", "/k", "/r", 2, 2048, 7)
 
 	if opts.ImageRef != "ghcr.io/org/app:1.2.3" {
 		t.Fatalf("unexpected ImageRef: %q", opts.ImageRef)
@@ -67,5 +67,8 @@ func TestLaunchOptionsFrom_DoesNotCopySandboxClassSecrets(t *testing.T) {
 	// The rendered options must contain only the declared, non-secret fields.
 	if opts.ClassName != "fast" || opts.EntryID != "entry-1" {
 		t.Fatalf("unexpected pool entry identity: %+v", opts)
+	}
+	if opts.GuestCID != 7 {
+		t.Fatalf("guest CID not propagated: %+v", opts)
 	}
 }

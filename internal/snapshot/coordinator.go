@@ -117,6 +117,7 @@ const (
 	EventReasonSnapshotRestoreFailed  = "SnapshotRestoreFailed"
 	EventReasonSnapshotRestoreStarted = "SnapshotRestoreStarted"
 	EventReasonEntropyReseeded        = "EntropyReseeded"
+	EventReasonSandboxUniquified      = "SandboxUniquified"
 	EventReasonPauseFailed            = "PauseFailed"
 	EventReasonResumeFailed           = "ResumeFailed"
 	EventReasonInsufficientStorage    = "InsufficientStorage"
@@ -347,6 +348,9 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		StorageRef:       snap.Spec.StorageRef,
 		StorageBackend:   snap.Spec.StorageBackend,
 		KataSocketTarget: c.socketForPod(pod),
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+		PodIp:            pod.Status.PodIP,
+		Hostname:         sb.Name,
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -365,6 +369,15 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	if resp.GetEntropyReseeded() {
 		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
 			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (snapshot %q)", snap.Name))
+	}
+	// Surface the node-agent's uniquification confirmation (ADR-0005
+	// invariant 2, setec#189): the restored guest verifiably adopted a
+	// fresh machine-id/boot-id/hostname, observes its CNI-assigned Pod
+	// IP, and its vsock CID is unique on the node. Only emitted on
+	// explicit confirmation — never inferred.
+	if resp.GetUniquified() {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
+			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (snapshot %q)", snap.Name))
 	}
 	c.recordDuration("restore", sb, time.Since(start))
 	return nil
@@ -419,6 +432,8 @@ func (c *Coordinator) WarmStartFromPool(
 		ImageRef:         cls.Spec.PreWarmImage,
 		KataSocketTarget: c.socketForPod(pod),
 		SandboxId:        sb.Namespace + "/" + sb.Name,
+		PodIp:            pod.Status.PodIP,
+		Hostname:         sb.Name,
 	})
 	switch {
 	case rpcErr != nil:
@@ -438,6 +453,10 @@ func (c *Coordinator) WarmStartFromPool(
 	if resp.GetEntropyReseeded() {
 		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
 			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (pool entry %q)", resp.GetEntryId()))
+	}
+	if resp.GetUniquified() {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
+			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (pool entry %q)", resp.GetEntryId()))
 	}
 	c.recordWarmStart(WarmStartRestored, cls.Name)
 	c.recordDuration("warmstart", sb, time.Since(start))

@@ -49,6 +49,12 @@ type LaunchOptions struct {
 	// <StorageRoot>/<EntryID>/ and writes state/memory.
 	StorageRoot string
 	EntryID     string
+	// GuestCID is the vsock context id assigned to the entry's guest.
+	// The Manager allocates it from the node-local CIDAllocator so
+	// every pool entry — and therefore every sandbox warm-started
+	// from the pool — carries a distinct CID (ADR-0005 invariant 2).
+	// Zero lets setec-pool-vm fall back to its default.
+	GuestCID uint32
 }
 
 // Launcher is the narrow surface the pool Manager uses to boot a new
@@ -103,6 +109,9 @@ func (l *ExecLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	if opts.ImageRef != "" {
 		args = append(args, "--image-ref", opts.ImageRef)
 	}
+	if opts.GuestCID != 0 {
+		args = append(args, "--guest-cid", strconv.FormatUint(uint64(opts.GuestCID), 10))
+	}
 	args = append(args, l.ExtraArgs...)
 
 	bin := l.BinaryPath
@@ -139,6 +148,7 @@ func LaunchOptionsFrom(
 	rootfsPath string,
 	vcpus int,
 	memMiB int,
+	guestCID uint32,
 ) LaunchOptions {
 	return LaunchOptions{
 		ClassName:   cls.Name,
@@ -150,5 +160,6 @@ func LaunchOptionsFrom(
 		SocketPath:  socketPath,
 		StorageRoot: storageRoot,
 		EntryID:     entryID,
+		GuestCID:    guestCID,
 	}
 }

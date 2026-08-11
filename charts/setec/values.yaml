@@ -739,6 +739,14 @@ snapshots:
   # restored clones then rely only on the passive virtio-rng mechanism
   # (see SECURITY.md "Entropy reseed on restore" for the residual risk).
   entropyReseed: require
+  # restoreUniquify controls the per-restore identity uniquification
+  # (ADR-0005 invariant 2, setec#189). "require" (default, fail-closed):
+  # a restore only succeeds once the in-guest setec-guest-agent has
+  # confirmed a fresh machine-id/boot-id/hostname, the CNI-assigned Pod
+  # IP, and a node-unique vsock CID — guest images MUST bundle
+  # setec-guest-agent. "off" is an explicit, auditable opt-out; restored
+  # clones then keep the machine identity captured at snapshot time.
+  restoreUniquify: require
   # mTLS configuration for the operator<->node-agent gRPC channel. When
   # certManager.enabled is true the chart renders Certificate resources
   # and the Deployment/DaemonSet mount the resulting Secrets. Otherwise

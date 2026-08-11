@@ -113,6 +113,25 @@ message RestoreSandboxRequest {
   // restore. When zero-valued the shape baked into the snapshot is
   // used as-is.
   Resources resources = 5;
+
+  // sandbox_id is the composite <namespace>/<name> of the Sandbox the
+  // restore targets. Used as the ownership key for the node-local
+  // vsock-CID uniqueness registry (ADR-0005 invariant 2): two
+  // Sandboxes restored from the same snapshot state would otherwise
+  // share the snapshotted guest CID undetected.
+  string sandbox_id = 6;
+
+  // pod_ip is the CNI-assigned IP of the Sandbox's Pod. The restored
+  // guest carries the snapshot-time network state in memory; the
+  // node-agent directs the in-guest agent to reconcile its primary
+  // interface to this address and fails the restore closed when the
+  // guest cannot confirm it (ADR-0005 invariant 2).
+  string pod_ip = 7;
+
+  // hostname is the fresh hostname the restored guest must adopt
+  // (derived from the Sandbox name). Part of the per-restore
+  // uniquification set together with machine-id and boot-id.
+  string hostname = 8;
 }
 
 // RestoreSandboxResponse reports success/failure of the restore.
@@ -129,6 +148,16 @@ message RestoreSandboxResponse {
   // (--entropy-reseed=off), leaving only the passive virtio-rng
   // mechanism.
   bool entropy_reseeded = 3;
+
+  // uniquified reports whether the restored guest verifiably applied
+  // its per-restore identity (fresh machine-id, boot-id, hostname,
+  // CNI-assigned Pod IP) and its vsock CID was confirmed unique on
+  // the node (ADR-0005 invariant 2, setec#189). When the node-agent
+  // runs with restore uniquification enforcement (the default),
+  // success=true implies uniquified=true; false alongside
+  // success=true can only happen when the operator explicitly opted
+  // out (--restore-uniquify=off).
+  bool uniquified = 4;
 }
 
 // PauseSandboxRequest / PauseSandboxResponse wrap a direct
@@ -198,8 +227,17 @@ message ClaimPoolEntryRequest {
   string kata_socket_target = 3;
 
   // sandbox_id is the composite <namespace>/<name> of the requesting
-  // Sandbox. Observability only.
+  // Sandbox. Also the ownership key for the node-local vsock-CID
+  // uniqueness registry (ADR-0005 invariant 2).
   string sandbox_id = 4;
+
+  // pod_ip is the CNI-assigned IP of the Sandbox's Pod; the restored
+  // guest must observe it (see RestoreSandboxRequest.pod_ip).
+  string pod_ip = 5;
+
+  // hostname is the fresh hostname the restored guest must adopt
+  // (see RestoreSandboxRequest.hostname).
+  string hostname = 6;
 }
 
 // ClaimPoolEntryResponse reports the claim + restore outcome.
@@ -222,6 +260,12 @@ message ClaimPoolEntryResponse {
   // the restored guest's CSPRNG verifiably received fresh entropy
   // (setec#72) before the warm start was reported successful.
   bool entropy_reseeded = 5;
+
+  // uniquified mirrors RestoreSandboxResponse.uniquified: the
+  // restored guest verifiably applied its per-restore identity and
+  // its vsock CID was confirmed unique on the node (ADR-0005
+  // invariant 2, setec#189).
+  bool uniquified = 6;
 }
 
 // DeleteSnapshotRequest / DeleteSnapshotResponse wrap a

@@ -46,6 +46,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
 // Server implements NodeAgentServiceServer.
@@ -85,6 +86,29 @@ type Server struct {
 	// ReseedObserver, when non-nil, receives "success" or "failure"
 	// after each reseed attempt (metrics hook).
 	ReseedObserver func(outcome string)
+
+	// Uniquifier drives the per-restore identity uniquification over
+	// the same vsock UDS after the entropy reseed (ADR-0005 invariant
+	// 2, setec#189): fresh machine-id/boot-id/hostname, the
+	// CNI-assigned Pod IP reconciled in-guest, and the guest's vsock
+	// CID reported for the node-local uniqueness check. When non-nil
+	// the restore FAILS CLOSED: the RPC only reports success once the
+	// guest has verifiably applied the directed identity, and an
+	// unconfirmed VM is paused rather than handed over. nil disables
+	// enforcement (explicit --restore-uniquify=off opt-out).
+	Uniquifier uniquify.Uniquifier
+
+	// CIDs is the node-local vsock CID registry shared with the pool
+	// Manager. The restore path registers the CID a restored guest
+	// reports and fails closed when another live sandbox on the node
+	// already holds it (two restores of one Snapshot would otherwise
+	// share the snapshotted CID undetected). nil skips the registry
+	// check (tests); Verify still requires a non-zero reported CID.
+	CIDs *uniquify.CIDAllocator
+
+	// UniquifyObserver, when non-nil, receives "success" or "failure"
+	// after each uniquification attempt (metrics hook).
+	UniquifyObserver func(outcome string)
 
 	// ClaimObserver, when non-nil, receives the outcome of every
 	// ClaimPoolEntry call: "restored", "miss", or "restore_failed"
@@ -239,17 +263,19 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		}, status.Errorf(codes.Internal, "firecracker loadSnapshot: %v", err)
 	}
 
+	candidates := defaultReseedVsockPaths(in)
+	if s.ReseedVsockPaths != nil {
+		candidates = s.ReseedVsockPaths(in)
+	}
+
 	// Active entropy reseed (setec#72). The snapshot's CSPRNG state is
 	// shared by every clone restored from it; before the restore is
 	// reported usable, push fresh entropy into the guest and require
 	// the in-guest agent's digest-verified ack. Fail closed: an
 	// unconfirmed reseed pauses the VM and fails the RPC so the
 	// Sandbox is never marked Ready.
+	reseeded := false
 	if s.Reseeder != nil {
-		candidates := defaultReseedVsockPaths(in)
-		if s.ReseedVsockPaths != nil {
-			candidates = s.ReseedVsockPaths(in)
-		}
 		if err := entropy.ReseedFirst(ctx, s.Reseeder, candidates); err != nil {
 			s.observeReseed("failure")
 			msg := fmt.Sprintf("entropy reseed after restore failed (failing closed): %v", err)
@@ -262,10 +288,76 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 			}, status.Error(codes.Internal, msg)
 		}
 		s.observeReseed("success")
-		return &setecgrpcv1.RestoreSandboxResponse{Success: true, EntropyReseeded: true}, nil
+		reseeded = true
 	}
 
-	return &setecgrpcv1.RestoreSandboxResponse{Success: true}, nil
+	// Per-restore uniquification (ADR-0005 invariant 2, setec#189):
+	// direct the restored guest to adopt a fresh machine-id, boot-id,
+	// and hostname, reconcile its interface to the CNI-assigned Pod
+	// IP, and report its vsock CID for the node-local uniqueness
+	// check. Same fail-closed contract as the reseed: an unconfirmed
+	// identity pauses the VM and fails the RPC.
+	uniquified := false
+	if s.Uniquifier != nil {
+		if err := s.uniquifyRestored(ctx, candidates, in.GetSandboxId(), in.GetHostname(), in.GetPodIp(), 0); err != nil {
+			s.observeUniquify("failure")
+			msg := fmt.Sprintf("restore uniquification failed (failing closed): %v", err)
+			if pauseErr := fc.Pause(ctx); pauseErr != nil {
+				msg += fmt.Sprintf("; additionally failed to pause the un-uniquified VM: %v", pauseErr)
+			}
+			return &setecgrpcv1.RestoreSandboxResponse{
+				Success: false,
+				Error:   msg,
+			}, status.Error(codes.Internal, msg)
+		}
+		s.observeUniquify("success")
+		uniquified = true
+	}
+
+	return &setecgrpcv1.RestoreSandboxResponse{
+		Success:         true,
+		EntropyReseeded: reseeded,
+		Uniquified:      uniquified,
+	}, nil
+}
+
+// uniquifyRestored mints a fresh per-restore identity, pushes it to
+// the restored guest through the first reachable vsock candidate, and
+// registers the guest's reported CID in the node-local registry.
+// expectedCID, when non-zero, additionally pins the report to the CID
+// the pool entry was booted with. Any failure means the restore must
+// not be handed over.
+func (s *Server) uniquifyRestored(
+	ctx context.Context,
+	candidates []string,
+	owner, hostname, podIP string,
+	expectedCID uint32,
+) error {
+	spec, err := uniquify.NewSpec(hostname, podIP)
+	if err != nil {
+		return err
+	}
+	report, err := uniquify.UniquifyFirst(ctx, s.Uniquifier, candidates, spec)
+	if err != nil {
+		return err
+	}
+	if expectedCID != 0 && report.GuestCID != expectedCID {
+		return fmt.Errorf("uniquify: guest reports CID %d but the pool entry was booted with %d",
+			report.GuestCID, expectedCID)
+	}
+	if s.CIDs != nil {
+		if err := s.CIDs.Observe(report.GuestCID, owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// observeUniquify invokes the optional metrics hook.
+func (s *Server) observeUniquify(outcome string) {
+	if s.UniquifyObserver != nil {
+		s.UniquifyObserver(outcome)
+	}
 }
 
 // observeReseed invokes the optional metrics hook.
@@ -456,16 +548,18 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 		}, nil
 	}
 
+	candidates := []string{
+		filepath.Join(entry.StorageRef, "vsock.sock"),
+		filepath.Join(filepath.Dir(in.GetKataSocketTarget()), "vsock.sock"),
+	}
+
 	// Active entropy reseed (setec#72), identical fail-closed contract
 	// to RestoreSandbox: the pool entry's CSPRNG state is shared with
 	// the paused template VM, so the restored clone must confirm fresh
 	// entropy before it is handed over. On failure the VM is paused
 	// and the operator falls back to cold boot.
+	reseeded := false
 	if s.Reseeder != nil {
-		candidates := []string{
-			filepath.Join(entry.StorageRef, "vsock.sock"),
-			filepath.Join(filepath.Dir(in.GetKataSocketTarget()), "vsock.sock"),
-		}
 		if err := entropy.ReseedFirst(ctx, s.Reseeder, candidates); err != nil {
 			s.observeReseed("failure")
 			s.observeClaim("restore_failed")
@@ -480,20 +574,40 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 			}, nil
 		}
 		s.observeReseed("success")
-		s.observeClaim("restored")
-		return &setecgrpcv1.ClaimPoolEntryResponse{
-			Claimed:         true,
-			Success:         true,
-			EntryId:         entry.ID,
-			EntropyReseeded: true,
-		}, nil
+		reseeded = true
+	}
+
+	// Per-restore uniquification (ADR-0005 invariant 2, setec#189),
+	// identical fail-closed contract: the warm-started clone must
+	// verifiably adopt its fresh identity (machine-id / boot-id /
+	// hostname / Pod IP) and its vsock CID — pinned to the one the
+	// entry was booted with — must be unique on the node.
+	uniquified := false
+	if s.Uniquifier != nil {
+		if err := s.uniquifyRestored(ctx, candidates, in.GetSandboxId(), in.GetHostname(), in.GetPodIp(), entry.GuestCID); err != nil {
+			s.observeUniquify("failure")
+			s.observeClaim("restore_failed")
+			msg := fmt.Sprintf("restore uniquification failed (failing closed): %v", err)
+			if pauseErr := fc.Pause(ctx); pauseErr != nil {
+				msg += fmt.Sprintf("; additionally failed to pause the un-uniquified VM: %v", pauseErr)
+			}
+			return &setecgrpcv1.ClaimPoolEntryResponse{
+				Claimed: true,
+				EntryId: entry.ID,
+				Error:   msg,
+			}, nil
+		}
+		s.observeUniquify("success")
+		uniquified = true
 	}
 
 	s.observeClaim("restored")
 	return &setecgrpcv1.ClaimPoolEntryResponse{
-		Claimed: true,
-		Success: true,
-		EntryId: entry.ID,
+		Claimed:         true,
+		Success:         true,
+		EntryId:         entry.ID,
+		EntropyReseeded: reseeded,
+		Uniquified:      uniquified,
 	}, nil
 }
 

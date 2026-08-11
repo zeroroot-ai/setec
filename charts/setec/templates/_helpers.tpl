@@ -196,3 +196,16 @@ the security posture.
 {{- fail (printf "snapshots validation: snapshots.entropyReseed=%q is invalid; use \"require\" (fail-closed active reseed on restore, default) or \"off\" (explicit opt-out, passive virtio-rng only)." $mode) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Validate snapshots.restoreUniquify (ADR-0005 invariant 2, setec#189):
+only "require" (fail-closed per-restore identity uniquification) and
+"off" (explicit opt-out) are meaningful; anything else would silently
+change the security posture.
+*/}}
+{{- define "setec.validateRestoreUniquify" -}}
+{{- $mode := .Values.snapshots.restoreUniquify | default "require" -}}
+{{- if not (has $mode (list "require" "off")) -}}
+{{- fail (printf "snapshots validation: snapshots.restoreUniquify=%q is invalid; use \"require\" (fail-closed per-restore identity uniquification, default) or \"off\" (explicit opt-out)." $mode) -}}
+{{- end -}}
+{{- end -}}
