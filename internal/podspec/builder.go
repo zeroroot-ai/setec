@@ -129,7 +129,29 @@ const (
 
 	// scratchMountPath is where the scratch volume is mounted.
 	scratchMountPath = "/tmp"
+
+	// WorkspaceVolumeName is the Pod volume name for the durable
+	// per-session workspace PVC (session lifecycle only, ADR-0006/0007).
+	WorkspaceVolumeName = "workspace"
+
+	// WorkspaceMountPath is where the session workspace is mounted
+	// inside the microVM. The workload's durable state (worktree,
+	// corpus, findings) lives here and survives VM restart and node
+	// loss because the backing PVC re-attaches.
+	WorkspaceMountPath = "/workspace"
+
+	// WorkspacePVCSuffix is appended to the Sandbox name to derive the
+	// workspace PVC name (e.g. Sandbox "foo" → PVC "foo-workspace").
+	WorkspacePVCSuffix = "-workspace"
 )
+
+// WorkspacePVCName derives the deterministic name of the workspace PVC
+// owned by the named session Sandbox. Centralised so the controller
+// (which creates and deletes the claim) and the builder (which mounts
+// it) can never disagree.
+func WorkspacePVCName(sandboxName string) string {
+	return sandboxName + WorkspacePVCSuffix
+}
 
 // sandboxCapabilities are the Linux capabilities added back after
 // dropping ALL.
@@ -263,6 +285,32 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			}},
 		},
+	}
+
+	// Session lifecycle: mount the durable workspace PVC at /workspace.
+	// The controller creates the claim before the Pod, so the mount can
+	// reference it by its deterministic name. Ephemeral Sandboxes get no
+	// workspace volume — their Pod spec is byte-for-byte what it was
+	// before the lifecycle field existed.
+	if sb.Spec.IsSession() {
+		// A freshly provisioned PVC is root-owned; the workload runs as
+		// the unprivileged sandbox user. FSGroup makes the kubelet chown
+		// the volume on attach so /workspace is writable. Set only for
+		// sessions to keep the ephemeral Pod spec unchanged.
+		pod.Spec.SecurityContext.FSGroup = new(sandboxGID)
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: WorkspaceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: WorkspacePVCName(sb.Name),
+				},
+			},
+		})
+		c := &pod.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name:      WorkspaceVolumeName,
+			MountPath: WorkspaceMountPath,
+		})
 	}
 
 	// Resolve names through the operator-configured resolvers rather than

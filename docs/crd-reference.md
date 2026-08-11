@@ -60,8 +60,12 @@ status:
 | `network.allow[].host` | string (`minLength: 1`) | yes | — | DNS name or IP address permitted as an egress target. Resolved to `ipBlock` peers on the generated rule and re-resolved periodically; also recorded on a `setec.zeroroot.ai/allow-<port>` annotation. A name that does not resolve is **dropped** from the policy (recorded on `setec.zeroroot.ai/unresolved-allow`), never widened to `0.0.0.0/0`. |
 | `network.allow[].port` | int32 (`1`–`65535`) | yes | — | Destination TCP port permitted for this host. |
 | `network.allow[].cidr` | string | no | — | Address block this entry is pinned to, replacing resolution of `host` for that rule. Set it when the destination range is genuinely known, or when the name does not resolve from inside the cluster. |
-| `lifecycle` | object | no | `{}` | Runtime constraints applied to the Sandbox. |
-| `lifecycle.timeout` | Go duration string (`metav1.Duration`) | no | unset (unbounded) | Maximum wall-clock runtime. When exceeded, the controller terminates the Pod and marks the Sandbox `Failed` with reason `Timeout`. Examples: `30m`, `8h`. |
+| `lifecycle` | object | no | `{}` | Lifecycle selection and runtime constraints applied to the Sandbox. |
+| `lifecycle.mode` | enum `ephemeral` \| `session` | no | `ephemeral` | Which lifecycle the Sandbox follows (ADR-0006). `ephemeral` is today's run-to-completion behavior, unchanged. `session` is long-lived with a durable `/workspace` PVC and explicit teardown. **Immutable** — the admission webhook rejects any update that changes the effective mode. See [`spec.lifecycle.mode`](#speclifecyclemode). |
+| `lifecycle.workspace` | object | no (session only) | `{}` | Durable per-session workspace volume configuration. Rejected at admission unless `lifecycle.mode: session`. |
+| `lifecycle.workspace.size` | resource.Quantity | no | `10Gi` | Requested capacity of the workspace PVC. Must be > 0. |
+| `lifecycle.workspace.storageClassName` | string | no | cluster default | StorageClass the workspace PVC is provisioned from. Any CSI driver works. **Encryption at rest is this StorageClass's responsibility** — point it at a class whose driver encrypts volumes; Setec adds no encryption layer of its own. |
+| `lifecycle.timeout` | Go duration string (`metav1.Duration`) | no | unset (unbounded) | Maximum wall-clock runtime. When exceeded, the controller terminates the Pod and marks the Sandbox `Failed` with reason `Timeout`. For sessions the timeout spans the whole session, measured from the first VM start. Examples: `30m`, `8h`. |
 
 ### `spec.resources`
 
@@ -120,6 +124,39 @@ Enforcement is the CNI's job. A NetworkPolicy on a cluster whose CNI does
 not implement `networking.k8s.io/v1` is inert, and nothing in this
 operator can detect that. Verify enforcement on the cluster itself.
 
+### `spec.lifecycle.mode`
+
+A Sandbox declares one of two lifecycles (ADR-0006). The mode is
+immutable for the life of the object; to change it, delete the Sandbox
+and create a new one.
+
+**`ephemeral` (default).** Run-to-completion: one workload, auto-destroy
+on exit, stateless. A Sandbox with no `lifecycle` block, or with
+`mode: ephemeral`, behaves exactly as before the mode existed.
+
+**`session`.** Long-lived, ended only by explicit teardown (deleting the
+Sandbox, or `Kill` on the gRPC frontend):
+
+- **Durable workspace.** The operator creates a dedicated `ReadWriteOnce`
+  CSI PVC named `<sandbox>-workspace` *before* the Pod and mounts it at
+  `/workspace`. Data written there survives VM restart and node loss —
+  on node failure the CSI driver re-attaches the claim to the failover
+  node (ADR-0007). Any CSI driver works; there is no cloud-specific
+  storage dependency.
+- **VM restart, not completion.** The workload exiting (any exit code)
+  does not finish a session. The controller deletes the dead Pod and
+  recreates it; the fresh microVM re-mounts the workspace and continues.
+  Status transiently shows `Pending` with reason `SessionVMRestarting`.
+  `lifecycle.timeout` still fails the Sandbox terminally, keeping the
+  restart loop bounded.
+- **Teardown wipes the workspace.** Deleting the Sandbox triggers the
+  `setec.zeroroot.ai/workspace-teardown` finalizer: the Pod is deleted,
+  then the workspace PVC is deleted; the CSI driver destroys the volume
+  and every byte of session data with it. One session per VM and per
+  workspace — nothing is reusable across sessions (ADR-0005
+  invariant 3). Pair `storageClassName` with an encrypting StorageClass
+  so at-rest deletion is also a cryptographic erase.
+
 ### `spec.lifecycle.timeout`
 
 Accepts any duration string recognized by `metav1.Duration`
@@ -135,7 +172,7 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`; on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |

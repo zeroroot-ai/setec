@@ -31,6 +31,17 @@ rules:
       - get
       - list
       - watch
+  # Session lifecycle: workspace PVC READS are cluster-wide for the same
+  # controller-runtime cache reason as Pods. Writes live in the
+  # -sandbox-namespace ClusterRole.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - node.k8s.io
     resources:

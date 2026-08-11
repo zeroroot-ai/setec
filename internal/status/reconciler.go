@@ -51,6 +51,13 @@ const (
 	// not populate a more specific reason string.
 	ReasonContainerExitedNonZero = "ContainerExitedNonZero"
 
+	// ReasonSessionVMRestarting is recorded on Pending when a session
+	// Sandbox's VM exited or died. A session ends only on explicit
+	// teardown (ADR-0006), so a dead VM is not terminal: the controller
+	// deletes the exited Pod and recreates it, and the fresh VM
+	// re-mounts the durable workspace PVC.
+	ReasonSessionVMRestarting = "SessionVMRestarting"
+
 	// waitReasonImagePullBackOff and waitReasonErrImagePull are the two
 	// well-known ContainerStateWaiting reasons the kubelet uses while an
 	// image pull is failing. They are strings, not exported constants in
@@ -111,6 +118,18 @@ func Derive(
 	// against a dead VM.
 	if isCoordinatorPhase(out.Phase) && pod.Status.Phase == corev1.PodRunning {
 		return out
+	}
+
+	// Session lifecycle (ADR-0006): the workload exiting does not end the
+	// session — only explicit teardown does. A terminal Pod therefore maps
+	// to Pending/SessionVMRestarting instead of Completed/Failed; the
+	// controller reacts by deleting the dead Pod and recreating it against
+	// the durable workspace. Timeout is the exception: it is evaluated on
+	// the Running branch below and still fails the Sandbox terminally, so
+	// a runaway session stays bounded.
+	if sb.Spec.IsSession() &&
+		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) {
+		return setPhase(out, setecv1alpha1.SandboxPhasePending, ReasonSessionVMRestarting, now)
 	}
 
 	switch pod.Status.Phase {

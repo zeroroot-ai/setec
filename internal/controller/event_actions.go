@@ -36,6 +36,8 @@ const (
 	actionRunRuntimeFallback  = "RunRuntimeFallback"
 	actionEnforceTimeout      = "EnforceTimeout"
 	actionFinalizeSandbox     = "FinalizeSandbox"
+	actionManageWorkspace     = "ManageWorkspace"
+	actionRestartSessionVM    = "RestartSessionVM"
 )
 
 // SnapshotReconciler actions.

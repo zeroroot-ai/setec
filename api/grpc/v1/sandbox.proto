@@ -99,6 +99,32 @@ message NetworkAllow {
 // Lifecycle mirrors Sandbox.spec.lifecycle.
 message Lifecycle {
   string timeout = 1; // Go-style duration: "30m", "8h"
+
+  // mode selects the Sandbox lifecycle (ADR-0006): "ephemeral"
+  // (default when empty; run-to-completion, auto-destroy, stateless)
+  // or "session" (long-lived, durable /workspace volume, explicit
+  // teardown via Kill). Mode is immutable for the life of a Sandbox.
+  string mode = 2;
+
+  // workspace configures the durable per-session workspace volume.
+  // Only meaningful when mode is "session"; rejected otherwise.
+  Workspace workspace = 3;
+}
+
+// Workspace mirrors Sandbox.spec.lifecycle.workspace: the durable
+// per-session ReadWriteOnce CSI volume mounted at /workspace. Data
+// written there survives VM restart and node loss, and is wiped and
+// deleted at session teardown.
+message Workspace {
+  // size is the requested PVC capacity as a resource.Quantity string
+  // ("10Gi", "512Mi"). Empty means the operator default (10Gi).
+  string size = 1;
+
+  // storage_class_name selects the StorageClass the workspace is
+  // provisioned from; empty means the cluster default. Encryption at
+  // rest is the StorageClass's responsibility — point this at a class
+  // whose CSI driver encrypts volumes.
+  string storage_class_name = 2;
 }
 
 // StreamLogsRequest selects the Sandbox and optionally follows new
