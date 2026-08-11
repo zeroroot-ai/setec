@@ -87,9 +87,7 @@ func main() {
 
 		// Phase 3 flags.
 		grpcListenAddr       string
-		tlsCertPath          string
-		tlsKeyPath           string
-		tlsClientCAPath      string
+		creds                credentialFlags
 		snapshotBackend      string
 		snapshotRoot         string
 		snapshotFillFraction float64
@@ -122,13 +120,21 @@ func main() {
 	// Phase 3 flags.
 	flag.StringVar(&grpcListenAddr, "grpc-listen-addr", ":50052",
 		"Phase 3: address the NodeAgentService gRPC server listens on. Empty disables the server.")
-	flag.StringVar(&tlsCertPath, "tls-cert", "",
-		"Phase 3: path to the PEM-encoded server certificate for mTLS. Required when --grpc-listen-addr is non-empty.")
-	flag.StringVar(&tlsKeyPath, "tls-key", "",
-		"Phase 3: path to the PEM-encoded server private key. Required when --grpc-listen-addr is non-empty.")
-	flag.StringVar(&tlsClientCAPath, "tls-client-ca", "",
-		"Phase 3: path to the PEM-encoded CA used to verify operator client certificates."+
-			" Required when --grpc-listen-addr is non-empty.")
+	flag.StringVar(&creds.tlsCert, "tls-cert", "",
+		"Phase 3: path to the PEM-encoded server certificate for mTLS. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsKey, "tls-key", "",
+		"Phase 3: path to the PEM-encoded server private key. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
+		"Phase 3: path to the PEM-encoded CA used to verify operator client certificates. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
+		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
+			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
+	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
+		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://zeroroot.ai/ns/setec/sa/setec. "+
+			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
 	flag.StringVar(&snapshotBackend, "snapshot-backend", "local-disk",
 		"Phase 3: storage backend identifier. Only local-disk is supported in Phase 3.")
 	flag.StringVar(&snapshotRoot, "snapshot-root", "/var/lib/setec/snapshots",
@@ -306,11 +312,7 @@ func main() {
 				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 					"restored snapshot clones rely on passive virtio-rng only")
 		}
-		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, credentialFlags{
-			certPath:     tlsCertPath,
-			keyPath:      tlsKeyPath,
-			clientCAPath: tlsClientCAPath,
-		}))
+		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
 
 		if poolReconcileTick > 0 {
 			lister, err := newSandboxClassLister()
@@ -411,68 +413,111 @@ func prefetchErrorReason(err error) string {
 	}
 }
 
-// credentialFlags carries the credential-related flag values the
-// node-agent parsed. It exists so the translation from flags to a
-// credential source happens in exactly one place, and so a test can
-// exercise that translation without the process exiting.
+// Credential mode names, used only in log and error output so an
+// operator can tell from a pod's logs which posture it is running.
+// They match cmd/frontend's names because an operator comparing two
+// pods' logs is comparing postures, not components.
+const (
+	fileMode        = "file"
+	spiffeMode      = "spiffe"
+	conflictingMode = "conflicting"
+	unsetMode       = "unset"
+)
+
+// credentialFlags carries the node-agent's credential flags.
 type credentialFlags struct {
-	certPath     string
-	keyPath      string
-	clientCAPath string
+	tlsCert             string
+	tlsKey              string
+	tlsClientCA         string
+	spiffeSocket        string
+	spiffeAuthorizedIDs repeatedString
 }
 
-// credentialConfig translates the parsed flags into the credential
-// module's configuration, or reports why this component must not
-// start.
+// config maps the flags onto a credentials.Config and names the mode
+// they selected.
 //
-// The frontend performs the identical translation. Keeping the two in
-// step is the point of routing both through one module: an operator
-// must never end up with the frontend taking its identity from one
-// source and the node-agent silently taking it from another.
-func (f credentialFlags) credentialConfig() (credentials.Config, error) {
-	if f.certPath == "" || f.keyPath == "" || f.clientCAPath == "" {
-		return credentials.Config{}, errors.New(
-			"--tls-cert, --tls-key and --tls-client-ca are required; mTLS is mandatory")
+// It deliberately validates nothing, and it is deliberately a copy of
+// cmd/frontend's function rather than an approximation of it. A source
+// is *selected* by any of its flags being set, not by all of them;
+// whether the selection is coherent — both modes, neither, or half of
+// one — is credentials.New's decision, so that every setec component
+// gets the same answer and the same message. An operator must not be
+// able to end up with the frontend on SPIFFE and the node-agent
+// silently still on files, and the way to guarantee that is for
+// neither component to hold an opinion of its own.
+func (f credentialFlags) config() (credentials.Config, string) {
+	var (
+		cfg  credentials.Config
+		mode = unsetMode
+	)
+	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
+		cfg.Files = &credentials.FileSource{
+			CertFile: f.tlsCert,
+			KeyFile:  f.tlsKey,
+			CAFile:   f.tlsClientCA,
+		}
+		mode = fileMode
 	}
-	return credentials.Config{
-		Files: &credentials.FileSource{
-			CertFile: f.certPath,
-			KeyFile:  f.keyPath,
-			CAFile:   f.clientCAPath,
-		},
-	}, nil
+	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
+		cfg.SPIFFE = &credentials.SPIFFESource{
+			SocketPath:    f.spiffeSocket,
+			AuthorizedIDs: f.spiffeAuthorizedIDs,
+		}
+		mode = spiffeMode
+	}
+	if cfg.Files != nil && cfg.SPIFFE != nil {
+		mode = conflictingMode
+	}
+	return cfg, mode
+}
+
+// repeatedString collects a flag given more than once. The credential
+// allow-list is a list of full SPIFFE IDs, and repeating the flag keeps
+// each entry visible on its own line in a manifest rather than buried
+// in a delimited string.
+type repeatedString []string
+
+func (r *repeatedString) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedString) Set(v string) error {
+	*r = append(*r, v)
+	return nil
 }
 
 // serverCredentials resolves the gRPC server option carrying this
-// node-agent's mTLS credentials. Where the key material comes from,
-// what the TLS floor is, and the fact that a client certificate is
-// required and verified are all properties of internal/credentials —
-// this function only says which surface it needs.
-func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, error) {
-	cfg, err := f.credentialConfig()
-	if err != nil {
-		return nil, err
-	}
+// node-agent's mTLS credentials, and names the mode it used.
+//
+// Where the key material comes from, what the TLS floor is, whether a
+// client certificate is required and verified, and which peers are
+// authorized are all properties of internal/credentials — this
+// function only says which surface it needs.
+func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, string, error) {
+	cfg, mode := f.config()
 	provider, err := credentials.New(cfg)
 	if err != nil {
-		return nil, err
+		return nil, mode, err
 	}
+	// Acquiring the credentials here rather than lazily is what makes
+	// an unreachable SPIFFE Workload API a boot failure. There is no
+	// fallback to files.
 	creds, err := provider.ServerCredentials(ctx)
 	if err != nil {
-		return nil, err
+		return nil, mode, err
 	}
-	return grpc.Creds(creds), nil
+	return grpc.Creds(creds), mode, nil
 }
 
 // grpcTLS returns the credentials option for the gRPC server. mTLS is
-// mandatory: any credential failure causes the process to exit so the
-// DaemonSet surfaces the misconfiguration via its restart count.
+// mandatory and the credential mode is explicit: half a mode, both
+// modes, or neither causes the process to exit so the DaemonSet
+// surfaces the misconfiguration via its restart count.
 func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
-	opt, err := serverCredentials(ctx, f)
+	opt, mode, err := serverCredentials(ctx, f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: %v\n", err)
+		fmt.Fprintf(os.Stderr, "node-agent: credentials (%s mode): %v\n", mode, err)
 		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "node-agent: credential mode: %s\n", mode)
 	return opt
 }
 

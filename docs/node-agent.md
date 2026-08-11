@@ -66,6 +66,31 @@ gauges. When the fill percentage exceeds `fillThreshold` (default 80)
 the agent logs a warning; future revisions will emit a
 `SetecThinPoolDegraded=true` `NodeCondition`.
 
+## Credential modes
+
+The node-agent's gRPC surface (`--grpc-listen-addr`, default `:50052`)
+is mTLS with TLS 1.3 as the floor and a mandatory, verified client
+certificate. It runs in exactly one credential mode, selected the same
+way and with the same failure semantics as the frontend — configuring
+both or neither is a startup error naming the cause, and there is no
+fallback between them.
+
+**File mode (default).** `--tls-cert`, `--tls-key` and
+`--tls-client-ca`. A caller is accepted if the configured CA issued its
+certificate — any caller, not a particular one.
+
+**SPIFFE mode.** `--spiffe-socket` points at the SPIFFE Workload API
+(for example `unix:///run/spire/agent-sockets/api.sock`), and one or
+more `--spiffe-authorized-id` flags list the full SPIFFE IDs allowed to
+call this node-agent. The agent's own SVID and the trust bundle come
+from the socket and rotate in-process. An empty allow-list is a startup
+error: there is no accept-everyone setting. A node-agent that cannot
+reach its Workload API fails to boot rather than reverting to files.
+
+The selected mode is stated on stderr at startup
+(`node-agent: credential mode: file`), so a pod's logs answer the
+question without a manifest diff.
+
 ## Troubleshooting
 
 - Agent exits immediately → check `/dev/kvm` exists on the node.
