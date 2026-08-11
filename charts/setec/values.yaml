@@ -747,6 +747,34 @@ snapshots:
   # setec-guest-agent. "off" is an explicit, auditable opt-out; restored
   # clones then keep the machine identity captured at snapshot time.
   restoreUniquify: require
+  # s3 configures the S3-compatible object store session memory
+  # checkpoints are written to (setec#194, ADR-0007): real S3 on EKS,
+  # MinIO (or any S3-compatible endpoint) when self-hosted. Disabled by
+  # default; session suspend/resume-on-drain requires it. Checkpoints
+  # are encrypted with per-checkpoint keys sealed under a per-session
+  # KEK Secret the operator manages — the bucket never holds usable key
+  # material (see SECURITY.md "Snapshot encryption at rest").
+  s3:
+    enabled: false
+    # endpoint is the base URL of the store, e.g.
+    # http://minio.minio.svc:9000. Empty uses the AWS default endpoint
+    # resolution for region (real S3).
+    endpoint: ""
+    # bucket holds the checkpoint objects. Required when enabled.
+    bucket: ""
+    # region is the signing region; MinIO accepts any non-empty value.
+    region: us-east-1
+    # prefix is an optional key prefix for every checkpoint object.
+    prefix: ""
+    # pathStyle forces path-style addressing (required by MinIO and
+    # most self-hosted stores; set false for real S3).
+    pathStyle: true
+    # credentialsSecret names an existing Secret (in the release
+    # namespace) whose keys are injected into the node-agent
+    # environment — typically AWS_ACCESS_KEY_ID and
+    # AWS_SECRET_ACCESS_KEY. Empty relies on the AWS default
+    # credential chain instead (IRSA on EKS).
+    credentialsSecret: ""
   # mTLS configuration for the operator<->node-agent gRPC channel. When
   # certManager.enabled is true the chart renders Certificate resources
   # and the Deployment/DaemonSet mount the resulting Secrets. Otherwise

@@ -99,6 +99,13 @@ func main() {
 		orphanReapTick       time.Duration
 		entropyReseedMode    string
 		restoreUniquifyMode  string
+
+		// Session-checkpoint (S3-compatible) flags — setec#194.
+		s3Endpoint  string
+		s3Bucket    string
+		s3Region    string
+		s3Prefix    string
+		s3PathStyle bool
 	)
 	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
 		"Name of the devicemapper thin-pool to manage.")
@@ -159,6 +166,20 @@ func main() {
 		"Interval between sweeps that force-remove orphaned NotReady kata sandboxes "+
 			"(microVMs leaked by a failed teardown that still hold a containerd "+
 			"name reservation). 0 disables the reaper.")
+	flag.StringVar(&s3Endpoint, "s3-endpoint", "",
+		"Base URL of the S3-compatible object store session checkpoints are written to "+
+			"(e.g. http://minio.minio.svc:9000 for MinIO). Empty uses the AWS default "+
+			"endpoint resolution for --s3-region (real S3 on EKS).")
+	flag.StringVar(&s3Bucket, "s3-bucket", "",
+		"Bucket for session memory checkpoints. Empty disables the S3 checkpoint backend; "+
+			"session suspend/resume-on-drain is then unavailable on this node (ADR-0007).")
+	flag.StringVar(&s3Region, "s3-region", "us-east-1",
+		"Signing region for the S3-compatible store. MinIO accepts any non-empty value.")
+	flag.StringVar(&s3Prefix, "s3-prefix", "",
+		"Optional key prefix applied to every checkpoint object.")
+	flag.BoolVar(&s3PathStyle, "s3-path-style", true,
+		"Use path-style S3 addressing (required by MinIO and most self-hosted stores; "+
+			"set false for real S3 virtual-hosted addressing).")
 	flag.StringVar(&entropyReseedMode, "entropy-reseed", "require",
 		"Active entropy reseed on snapshot restore (setec#72). 'require' (default) fails a "+
 			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
@@ -319,8 +340,8 @@ func main() {
 				Root:          snapshotRoot,
 				FillThreshold: snapshotFillFraction,
 			},
-			KEKPath: snapshotKeyFile,
-			KeyDir:  snapshotDEKDir,
+			KEK:  &storage.FileKEKSource{Path: snapshotKeyFile},
+			DEKs: &storage.DirDEKStore{Dir: snapshotDEKDir},
 		}
 		ffactory := func(sock string) firecracker.Client {
 			return firecracker.NewClientFromSocket(sock)
@@ -342,8 +363,43 @@ func main() {
 			poolMgr.SocketPattern = kataSocketPattern
 		}
 
+		// S3-compatible session-checkpoint backend (setec#194,
+		// ADR-0007). Checkpoints are node-independent so a session can
+		// resume on a different node; their DEKs are sealed with the
+		// per-session KEK the operator forwards per call, never the
+		// node-local keyfile. Credentials come from the AWS default
+		// chain (env vars injected from the chart's credentialsSecret,
+		// or IRSA on EKS).
+		var sessionStorage func(kek []byte) storage.StorageBackend
+		if s3Bucket != "" {
+			s3Backend, s3Err := storage.NewS3Backend(ctx, storage.S3Config{
+				Endpoint:     s3Endpoint,
+				Bucket:       s3Bucket,
+				Region:       s3Region,
+				Prefix:       s3Prefix,
+				UsePathStyle: s3PathStyle,
+			})
+			if s3Err != nil {
+				fmt.Fprintf(os.Stderr, "node-agent: build s3 checkpoint backend: %v\n", s3Err)
+				os.Exit(1)
+			}
+			dekStore := s3Backend.DEKStore()
+			sessionStorage = func(kek []byte) storage.StorageBackend {
+				return &storage.EncryptedBackend{
+					Inner: s3Backend,
+					KEK:   storage.StaticKEKSource(kek),
+					DEKs:  dekStore,
+				}
+			}
+			fmt.Fprintf(os.Stderr, "node-agent: s3 session-checkpoint backend enabled (bucket=%q endpoint=%q)\n",
+				s3Bucket, s3Endpoint)
+		} else {
+			fmt.Fprintln(os.Stderr, "node-agent: s3 session-checkpoint backend disabled (--s3-bucket empty)")
+		}
+
 		srv := &grpcserver.Server{
 			Storage:            backend,
+			SessionStorage:     sessionStorage,
 			FirecrackerFactory: ffactory,
 			Pool:               poolMgr,
 			PoolKEKPath:        snapshotKeyFile,

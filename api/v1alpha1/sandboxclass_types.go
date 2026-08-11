@@ -231,6 +231,51 @@ type SandboxClassSpec struct {
 	// always refreshes the clock in time.
 	// +optional
 	SessionIdleTimeout *metav1.Duration `json:"sessionIdleTimeout,omitempty"`
+
+	// SessionCheckpoint enables L2 memory checkpoints for session
+	// Sandboxes of this class (setec#194, ADR-0006/0007): periodic
+	// checkpoints while Running, checkpoint-on-drain when the node is
+	// cordoned or the VM Pod is evicted, and suspend-instead-of-evict
+	// when the sessionIdleTimeout deadline passes — the idle session
+	// checkpoints, releases its microVM, and resumes transparently on
+	// the next reattach, on whichever node the scheduler picks. Nil
+	// disables checkpoints: sessions then survive VM loss only via
+	// their durable workspace, and idle sessions are hard-evicted per
+	// sessionIdleTimeout.
+	// +optional
+	SessionCheckpoint *SessionCheckpointSpec `json:"sessionCheckpoint,omitempty"`
+}
+
+// SessionCheckpointSpec tunes the per-class memory-checkpoint policy
+// (setec#194). Checkpoints are encrypted with a per-checkpoint DEK
+// sealed under the session's cluster-scoped KEK Secret, stored on the
+// S3-compatible checkpoint store, and destroyed at session end.
+type SessionCheckpointSpec struct {
+	// Interval is the cadence of periodic memory checkpoints while
+	// the session is Running. Because the durable workspace already
+	// provides continuous data safety (ADR-0007), checkpoints serve
+	// process continuity only and SHOULD be infrequent — the trade is
+	// bandwidth/cost against how much process replay a resume loses.
+	// Unset or zero disables periodic checkpoints; checkpoints are
+	// then taken only on suspend and drain.
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
+
+	// Backend names the portable StorageBackend checkpoints are
+	// written to. Only "s3" (any S3-compatible store — real S3,
+	// MinIO, …) is supported. Defaults to "s3".
+	// +kubebuilder:validation:Enum=s3
+	// +kubebuilder:default=s3
+	// +optional
+	Backend string `json:"backend,omitempty"`
+}
+
+// CheckpointBackend returns the effective checkpoint backend name.
+func (s *SessionCheckpointSpec) CheckpointBackend() string {
+	if s == nil || s.Backend == "" {
+		return "s3"
+	}
+	return s.Backend
 }
 
 // SandboxClassStatus reflects the observed state of a SandboxClass. Phase 2

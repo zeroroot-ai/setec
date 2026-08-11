@@ -321,6 +321,39 @@ spec:
                   RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
                   controller falls back to its --runtime-class-name flag.
                 type: string
+              sessionCheckpoint:
+                description: |-
+                  SessionCheckpoint enables L2 memory checkpoints for session
+                  Sandboxes of this class (setec#194, ADR-0006/0007): periodic
+                  checkpoints while Running, checkpoint-on-drain when the node is
+                  cordoned or the VM Pod is evicted, and suspend-instead-of-evict
+                  when the sessionIdleTimeout deadline passes — the idle session
+                  checkpoints, releases its microVM, and resumes transparently on
+                  the next reattach, on whichever node the scheduler picks. Nil
+                  disables checkpoints: sessions then survive VM loss only via
+                  their durable workspace, and idle sessions are hard-evicted per
+                  sessionIdleTimeout.
+                properties:
+                  backend:
+                    default: s3
+                    description: |-
+                      Backend names the portable StorageBackend checkpoints are
+                      written to. Only "s3" (any S3-compatible store — real S3,
+                      MinIO, …) is supported. Defaults to "s3".
+                    enum:
+                    - s3
+                    type: string
+                  interval:
+                    description: |-
+                      Interval is the cadence of periodic memory checkpoints while
+                      the session is Running. Because the durable workspace already
+                      provides continuous data safety (ADR-0007), checkpoints serve
+                      process continuity only and SHOULD be infrequent — the trade is
+                      bandwidth/cost against how much process replay a resume loses.
+                      Unset or zero disables periodic checkpoints; checkpoints are
+                      then taken only on suspend and drain.
+                    type: string
+                type: object
               sessionIdleTimeout:
                 description: |-
                   SessionIdleTimeout is the idle-eviction threshold for session

@@ -80,6 +80,12 @@ func SessionIdleDeadline(
 // consuming a microVM, terminal phases are already over, and the
 // coordinator-owned phases (Paused/Snapshotting/Restoring) belong to
 // the suspend machinery (setec#194). Like Derive, the function is pure.
+//
+// When the class enables sessionCheckpoint, idleness is owned by the
+// suspend machinery instead (setec#194): the same deadline suspends
+// the session — checkpoint, release the microVM, resume on reattach —
+// rather than hard-failing it, so this policy passes the status
+// through untouched.
 func ApplySessionIdlePolicy(
 	sb *setecv1alpha1.Sandbox,
 	cls *setecv1alpha1.SandboxClass,
@@ -87,6 +93,9 @@ func ApplySessionIdlePolicy(
 	now time.Time,
 ) setecv1alpha1.SandboxStatus {
 	if in.Phase != setecv1alpha1.SandboxPhaseRunning {
+		return in
+	}
+	if cls != nil && cls.Spec.SessionCheckpoint != nil {
 		return in
 	}
 	deadline, ok := SessionIdleDeadline(sb, cls)

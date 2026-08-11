@@ -168,6 +168,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	// declarative surface: a pool needs an image to bake, and a TTL of zero
 	// or less would recycle entries in a hot loop.
 	allErrs = append(allErrs, validatePreWarm(class)...)
+	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
@@ -348,4 +349,27 @@ func (w *SandboxClassWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		WithDefaulter(w).
 		WithValidator(w).
 		Complete()
+}
+
+// validateSessionCheckpoint enforces the coherence rules of the
+// session-checkpoint surface (spec.sessionCheckpoint, setec#194):
+// the interval, when set, must be positive, and the backend — already
+// enum-restricted by the CRD schema — must be "s3" or empty.
+func validateSessionCheckpoint(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var allErrs field.ErrorList
+	sc := class.Spec.SessionCheckpoint
+	if sc == nil {
+		return allErrs
+	}
+	path := field.NewPath("spec", "sessionCheckpoint")
+	if sc.Interval != nil && sc.Interval.Duration <= 0 {
+		allErrs = append(allErrs, field.Invalid(
+			path.Child("interval"), sc.Interval.Duration.String(),
+			"must be positive; omit interval to disable periodic checkpoints"))
+	}
+	if sc.Backend != "" && sc.Backend != "s3" {
+		allErrs = append(allErrs, field.NotSupported(
+			path.Child("backend"), sc.Backend, []string{"s3"}))
+	}
+	return allErrs
 }

@@ -178,6 +178,16 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 		}
 	}
 
+	// (0a) Suspend is a session-checkpoint concept (setec#194): an
+	// ephemeral Sandbox has nothing to resume into, and a session
+	// whose class ships no checkpoint store could only "suspend" by
+	// discarding its process state.
+	if sb.Spec.DesiredState == setecv1alpha1.SandboxDesiredStateSuspended && !sb.Spec.IsSession() {
+		errs = append(errs, fmt.Errorf(
+			"spec.desiredState=Suspended requires spec.lifecycle.mode=session (effective mode is %q)",
+			sb.Spec.EffectiveLifecycleMode()))
+	}
+
 	// (1) Tenant-label enforcement when multi-tenancy is enabled.
 	// Fail closed: a nil NamespaceGetter means mis-wired production
 	// and the webhook refuses the Sandbox rather than silently
@@ -219,6 +229,12 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 		// Class resolved cleanly: run the pure validator.
 		for _, vio := range class.Validate(sb, cls) {
 			errs = append(errs, errors.New(vio.String()))
+		}
+		// Suspend needs somewhere to put the checkpoint (setec#194).
+		if sb.Spec.DesiredState == setecv1alpha1.SandboxDesiredStateSuspended &&
+			sb.Spec.IsSession() && cls.Spec.SessionCheckpoint == nil {
+			errs = append(errs, fmt.Errorf(
+				"spec.desiredState=Suspended requires SandboxClass %q to enable spec.sessionCheckpoint", cls.Name))
 		}
 	}
 

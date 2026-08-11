@@ -167,3 +167,30 @@ func TestApplySessionIdlePolicy(t *testing.T) {
 		}
 	})
 }
+
+// TestApplySessionIdlePolicy_CheckpointClassDefersToSuspend asserts
+// that a class enabling sessionCheckpoint opts its sessions out of
+// hard idle eviction: the suspend machinery (setec#194) owns the idle
+// deadline instead, so the derived status passes through untouched no
+// matter how stale the activity clock is.
+func TestApplySessionIdlePolicy_CheckpointClassDefersToSuspend(t *testing.T) {
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
+		},
+		Spec: setecv1alpha1.SandboxSpec{
+			Lifecycle: &setecv1alpha1.Lifecycle{Mode: setecv1alpha1.LifecycleModeSession},
+		},
+	}
+	cls := &setecv1alpha1.SandboxClass{
+		Spec: setecv1alpha1.SandboxClassSpec{
+			SessionIdleTimeout: &metav1.Duration{Duration: time.Minute},
+			SessionCheckpoint:  &setecv1alpha1.SessionCheckpointSpec{Backend: "s3"},
+		},
+	}
+	in := setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning}
+	out := ApplySessionIdlePolicy(sb, cls, in, time.Now())
+	if out.Phase != setecv1alpha1.SandboxPhaseRunning || out.Reason != "" {
+		t.Fatalf("checkpoint-enabled class must not idle-evict; got %s/%s", out.Phase, out.Reason)
+	}
+}
