@@ -1,10 +1,15 @@
 name: images
 
 # Builds + pushes setec, setec-node-agent, setec-frontend,
-# setec-runtime-agent, and setec-guest-agent to GHCR.
+# setec-runtime-agent, setec-guest-agent, and setec-installer to GHCR.
 # Adopts the org reusable image-build workflow (slice 1.2, .github#47).
 #
-# All images share a single Dockerfile; CMD build-arg selects the binary.
+# All service images share a single Dockerfile; CMD build-arg selects the
+# binary. setec-installer builds from Dockerfile.installer instead: it
+# additionally bundles the pinned kata-containers static release as an
+# immutable payload (ADR-0003, setec#187) and is amd64-only — the kata
+# payload is x86 (ADR-0001) and the chart's installer DaemonSet pins
+# kubernetes.io/arch: amd64.
 # setec-guest-agent is not a runnable service image: it exists so microVM
 # rootfs builders can COPY the static binary out of it (the in-guest half
 # of the entropy reseed on snapshot restore, setec#72).
@@ -144,3 +149,22 @@ jobs:
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=setec-guest-agent
+
+  setec-installer:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-installer
+      component_path: .
+      dockerfile_path: Dockerfile.installer
+      image_name: ghcr.io/zeroroot-ai/setec-installer
+      tag_pattern: (v.*)
+      # amd64 only: the bundled kata static payload is x86 (ADR-0001).
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}

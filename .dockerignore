@@ -9,3 +9,7 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include go:embed assets (the installer's boot-time thin-pool
+# provisioner script — internal/installer/thinpool.go embeds it).
+!internal/installer/payload/*.sh

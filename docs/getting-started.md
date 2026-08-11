@@ -41,9 +41,18 @@ You should see a character device owned by `root:kvm` (or similar). If you see "
 
 ## Step 2: Install the runtime
 
-Setec does not ship runtime backends. It treats them as prerequisites and talks to them through the standard Kubernetes `RuntimeClass` abstraction. Pick the install path for your chosen backend:
+Setec talks to runtime backends through the standard Kubernetes `RuntimeClass` abstraction. Pick the install path for your chosen backend:
 
-**kata-fc / kata-qemu** (the upstream `kata-deploy` installer lays down Kata binaries on every labelled node and registers both `RuntimeClasses`):
+**kata-fc** (the default backend): **no manual step**. The Setec chart ships a portable installer DaemonSet (ADR-0003, `installer.enabled=true` by default) that converges every x86 KVM-capable node: it lays down the stock Kata + Firecracker release bundled in its image, provisions the containerd devmapper thin-pool with boot ordering, and registers the `kata-fc` handler with containerd (stock containerd and k3s). The chart renders the `kata-fc` `RuntimeClass` itself (`runtimes.kata-fc.install=true`). After the chart install in Step 3, verify with:
+
+```bash
+kubectl -n setec-system rollout status ds/setec-installer --timeout=5m
+kubectl get runtimeclass kata-fc
+```
+
+If Kata is already installed out of band (`kata-deploy`, a baked node image), the installer detects the foreign `kata-fc` registration and stands down; set `runtimes.kata-fc.install=false` so the chart does not fight for the `RuntimeClass` either.
+
+**kata-qemu** (the upstream `kata-deploy` installer lays down Kata binaries on every labelled node and registers both `RuntimeClasses`; the Setec installer covers `kata-fc` only):
 
 ```bash
 kubectl apply -k "github.com/kata-containers/kata-containers/tools/packaging/kata-deploy/kata-deploy/base?ref=main"

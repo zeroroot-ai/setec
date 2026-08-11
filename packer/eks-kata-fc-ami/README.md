@@ -1,5 +1,12 @@
 # Setec kata-fc Graviton-metal EKS AMI (Packer)
 
+> **Optional deployment profile** (ADR-0003). The DEFAULT node-prep path
+> is the chart's portable installer DaemonSet (`installer.enabled=true`),
+> which converges any x86 KVM-capable node with no AWS dependency. This
+> AMI pre-bakes the same components for faster node-ready on EKS +
+> Karpenter (`karpenter.enabled=true`) — an optimisation, never a
+> requirement.
+>
 > **STALE — arm64 bake (setec#195).** The sandbox substrate is x86 only
 > ([ADR-0001](../../docs/adr/0001-x86-substrate.md)); the chart's Karpenter
 > NodePool now requires `kubernetes.io/arch=amd64` and defaults to

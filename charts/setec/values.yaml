@@ -252,6 +252,100 @@ runtimeAgent:
   # acceptable.
   mountContainerdConfig: true
 
+# -- installer configures the portable node installer DaemonSet (ADR-0003,
+# issue #187): given any x86 KVM-capable node it lays down the stock
+# Kata+Firecracker release bundled in its image, provisions the containerd
+# devmapper thin-pool with boot ordering (containerd never starts before
+# the pool exists), and registers the kata-fc handler with containerd
+# (stock containerd drop-in, or the k3s config template). The kata-fc
+# RuntimeClass itself is rendered by this chart (runtimes.kata-fc), and
+# node capability labels stay owned by the runtime-agent — the installer
+# has NO Kubernetes API access (automountServiceAccountToken: false, no
+# ServiceAccount, no RBAC).
+#
+# This is the DEFAULT node-prep path and references nothing
+# cloud-specific. The EKS baked-AMI + Karpenter profile (see the
+# karpenter block below and packer/eks-kata-fc-ami) is an optional
+# optimisation, never a requirement; its Graviton (arm64) nodes are
+# outside this DaemonSet's amd64 node selector by construction.
+#
+# The installer is idempotent and ownership-aware: on a node where
+# kata-fc is already registered by something else (kata-deploy, a baked
+# image, an administrator) it stands down without touching the node, and
+# a re-run on a converged node performs zero writes and zero containerd
+# restarts.
+installer:
+  # -- enabled gates the DaemonSet. Disable on clusters where node prep
+  # is owned out of band (kata-deploy, baked images) — though leaving it
+  # on is safe: the installer detects foreign ownership and idles.
+  enabled: true
+  image:
+    # -- repository is the installer image (built from
+    # Dockerfile.installer; carries the pinned kata static release as
+    # payload). Override for private mirrors.
+    repository: ghcr.io/zeroroot-ai/setec-installer
+    # -- tag defaults to .Chart.AppVersion when left empty. Pin
+    # explicitly for reproducible deploys.
+    tag: ""
+    # -- pullPolicy one of Always, Never, IfNotPresent.
+    pullPolicy: IfNotPresent
+  # -- nodeSelector pins the DaemonSet to x86 Linux nodes: the bundled
+  # kata payload is amd64-only (ADR-0001 x86 substrate). KVM capability
+  # cannot be expressed as a selector, so the installer probes /dev/kvm
+  # at runtime and idles (untouched node, Ready pod) when it is absent.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+  # -- tolerations default to matching every taint, mirroring the
+  # runtime-agent: any node that might host a kata-fc Sandbox must be
+  # convergeable. Narrow it alongside runtimeAgent.tolerations when
+  # Sandboxes are deliberately kept off some nodes.
+  tolerations:
+    - operator: Exists
+  # -- verifyInterval is how often the installer re-verifies convergence
+  # (Go duration). Drift (a wiped thin-pool, a deleted drop-in) is
+  # repaired on the next tick.
+  verifyInterval: 10m
+  # -- thinpool configures the devmapper thin-pool backing the containerd
+  # devmapper snapshotter (Firecracker requires a block device per
+  # container rootfs; overlayfs cannot provide one).
+  thinpool:
+    # -- mode is the pool backing. "loop" (default) carves the pool out
+    # of sparse files on the node's root filesystem — works anywhere,
+    # with loop-device indirection overhead. "device" builds it from two
+    # dedicated block devices (below) for production I/O.
+    mode: loop
+    # -- poolName is the devicemapper pool device name registered with
+    # containerd.
+    poolName: setec-thinpool
+    # -- loopDir is the host directory for the sparse backing files
+    # (loop mode).
+    loopDir: /var/lib/setec/thinpool
+    # -- loopDataSizeGB / loopMetaSizeGB size the sparse data and
+    # metadata files in GiB (loop mode). Sparse: disk is consumed as
+    # sandboxes write, not at creation.
+    loopDataSizeGB: 50
+    loopMetaSizeGB: 2
+    # -- dataDevice / metadataDevice are the dedicated block devices
+    # (device mode). Both REQUIRED when mode=device. The metadata
+    # device's superblock is zeroed on first use — the devices belong to
+    # setec once listed here.
+    dataDevice: ""
+    metadataDevice: ""
+  # -- resources sizes the installer container. It is near-idle after
+  # convergence (a periodic verification pass).
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # -- healthPort is the TCP port the installer serves /healthz on
+  # (readiness only; no liveness probe, so a node that cannot converge
+  # shows NotReady instead of restart-looping).
+  healthPort: 8090
+
 # -- nodeSelectorLabel is the Node label key the startup prerequisite check
 # uses to determine whether any Kata-capable Nodes exist. Informational only;
 # actual scheduling uses the RuntimeClass.
