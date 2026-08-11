@@ -280,6 +280,13 @@ jobs:
         # parses.
         run: ./hack/verify-chart-security.sh charts/setec
 
+      - name: x86-substrate assertions (ADR-0001)
+        # The sandbox substrate is x86 only (setec#186): image publishing
+        # must stay single-arch linux/amd64 and the node-facing DaemonSets
+        # and Karpenter NodePool must keep their kubernetes.io/arch=amd64
+        # gating. This fails the build if either is reintroduced.
+        run: ./hack/verify-x86-substrate.sh charts/setec
+
       - name: Helm template (Phase 3 enabled)
         # Catches regressions in Phase 3 chart extensions without
         # requiring a live cluster. mTLS is mandatory so the tls

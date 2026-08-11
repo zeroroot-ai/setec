@@ -53,7 +53,7 @@ helm install setec ./charts/setec \
   --create-namespace
 ```
 
-Prerequisites: a Kubernetes 1.30+ cluster plus at least one runtime backend's node-level requirements:
+Prerequisites: a Kubernetes 1.30+ cluster with **x86-64 (amd64) worker nodes** for the execution plane — arm64 is unsupported for the untrusted-execution plane ([ADR-0001](docs/adr/0001-x86-substrate.md)): all setec images are published `linux/amd64` single-arch and sandbox components pin `kubernetes.io/arch=amd64` — plus at least one runtime backend's node-level requirements:
 
 - `kata-fc` — worker node with `/dev/kvm` + [Kata Containers](https://katacontainers.io/docs/how-to/how-to-use-kata-containers-with-kata-deploy/) installed so the `kata-fc` `RuntimeClass` is present. Strongest isolation; requires bare metal or nested-virt-capable nodes.
 - `kata-qemu` — same KVM requirement; uses QEMU instead of Firecracker. Falls back to TCG where hardware virt is unavailable.

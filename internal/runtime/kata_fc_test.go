@@ -54,8 +54,8 @@ func TestKataFCDispatcher_NodeAffinity(t *testing.T) {
 		t.Fatalf("expected 1 NodeSelectorTerm, got %d", len(req.NodeSelectorTerms))
 	}
 	exprs := req.NodeSelectorTerms[0].MatchExpressions
-	if len(exprs) != 2 {
-		t.Fatalf("expected 2 MatchExpressions, got %d", len(exprs))
+	if len(exprs) != 3 {
+		t.Fatalf("expected 3 MatchExpressions, got %d", len(exprs))
 	}
 
 	// First expression: backend capability label.
@@ -76,6 +76,15 @@ func TestKataFCDispatcher_NodeAffinity(t *testing.T) {
 	}
 	if len(exprs[1].Values) != 1 || exprs[1].Values[0] != "linux" {
 		t.Errorf("MatchExpressions[1].Values = %v, want [linux]", exprs[1].Values)
+	}
+
+	// Third expression: architecture constraint. The sandbox substrate is
+	// x86 only (ADR-0001), so every backend pins kubernetes.io/arch=amd64.
+	if exprs[2].Key != "kubernetes.io/arch" {
+		t.Errorf("MatchExpressions[2].Key = %q, want kubernetes.io/arch", exprs[2].Key)
+	}
+	if len(exprs[2].Values) != 1 || exprs[2].Values[0] != "amd64" {
+		t.Errorf("MatchExpressions[2].Values = %v, want [amd64]", exprs[2].Values)
 	}
 }
 

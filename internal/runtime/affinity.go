@@ -21,11 +21,14 @@ import (
 )
 
 // requiredRuntimeNodeAffinity returns a NodeAffinity with a single required
-// NodeSelectorTerm containing two MatchExpressions:
+// NodeSelectorTerm containing three MatchExpressions:
 //
 //  1. label=value with operator In (the backend-specific capability label, e.g.
 //     "setec.zeroroot.ai/runtime.kata-fc" = "true").
 //  2. "kubernetes.io/os" In ["linux"] — all Setec backends require Linux nodes.
+//  3. "kubernetes.io/arch" In ["amd64"] — the sandbox substrate is x86 only
+//     (ADR-0001): every published image is linux/amd64 single-arch, so a
+//     Sandbox Pod must never land on an arm64 node.
 //
 // The returned value is always non-nil and is freshly allocated so callers may
 // embed it without aliasing concerns.
@@ -44,6 +47,11 @@ func requiredRuntimeNodeAffinity(label string) *corev1.NodeAffinity {
 							Key:      "kubernetes.io/os",
 							Operator: corev1.NodeSelectorOpIn,
 							Values:   []string{"linux"},
+						},
+						{
+							Key:      "kubernetes.io/arch",
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"amd64"},
 						},
 					},
 				},
