@@ -93,11 +93,14 @@ type Collectors struct {
 	// Phase 3 only.
 	SnapshotDuration *prometheus.HistogramVec
 
-	// PoolFill gauges the number of pre-warmed pool entries currently
-	// paused on a given node for a given SandboxClass. Populated by
-	// the node-agent pool manager and exposed via the node-agent
-	// metrics endpoint. Phase 3 only.
-	PoolFill *prometheus.GaugeVec
+	// WarmStartTotal counts pool warm-start attempts by outcome.
+	// Bounded outcome values: "restored" (claimed + restored),
+	// "miss" (no compatible pool entry; cold boot), "error" (claim or
+	// restore failed; cold boot). The per-node pool-fill gauge
+	// (setec_prewarm_pool_entries) lives on the node-agent's own
+	// registry — the pool is node-local state and the node-agent is
+	// the only process that knows it.
+	WarmStartTotal *prometheus.CounterVec
 
 	// FallbackTotal counts runtime fallback events. Labels:
 	//   from — the runtime that was attempted (bounded: see LabelRuntime)
@@ -175,12 +178,12 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			},
 			[]string{LabelOperation, LabelSandboxClass},
 		),
-		PoolFill: prometheus.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Name: "setec_prewarm_pool_entries",
-				Help: "Number of pre-warmed pool entries currently paused on a node for a class.",
+		WarmStartTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "setec_warmstart_total",
+				Help: "Pool warm-start attempts by outcome (restored, miss, error) and SandboxClass.",
 			},
-			[]string{LabelNode, LabelSandboxClass},
+			[]string{"outcome", LabelSandboxClass},
 		),
 		FallbackTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -208,7 +211,7 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 	if reg != nil {
 		reg.MustRegister(
 			c.SandboxTotal, c.SandboxDuration, c.SandboxColdStart, c.SandboxActive,
-			c.SnapshotDuration, c.PoolFill,
+			c.SnapshotDuration, c.WarmStartTotal,
 			c.FallbackTotal, c.NodeRuntimeAvailable, c.NodeRuntimeProbeErrors,
 		)
 	}
@@ -292,14 +295,14 @@ func (c *Collectors) RecordSnapshotDuration(operation, class string, d time.Dura
 	c.SnapshotDuration.WithLabelValues(operation, class).Observe(d.Seconds())
 }
 
-// SetPoolFill sets the pool-fill gauge for a given node/class pair.
-// Phase 3 only; called by the node-agent pool manager after
-// ReconcilePools.
-func (c *Collectors) SetPoolFill(node, class string, entries int) {
+// IncWarmStart increments the warm-start counter for a bounded
+// outcome ("restored", "miss", "error") and SandboxClass. Called by
+// the snapshot Coordinator after every pool warm-start attempt.
+func (c *Collectors) IncWarmStart(outcome, class string) {
 	if c == nil {
 		return
 	}
-	c.PoolFill.WithLabelValues(node, class).Set(float64(entries))
+	c.WarmStartTotal.WithLabelValues(outcome, class).Inc()
 }
 
 // IncFallback increments FallbackTotal for the given from/to runtime pair.

@@ -164,6 +164,11 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		))
 	}
 
+	// Pre-warm pool knobs (ADR-0004, setec#188). The three fields are one
+	// declarative surface: a pool needs an image to bake, and a TTL of zero
+	// or less would recycle entries in a hot loop.
+	allErrs = append(allErrs, validatePreWarm(class)...)
+
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
 	// webhooks bypassed). Treat it as "no runtime constraint to validate" —
@@ -238,6 +243,48 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		return nil, nil
 	}
 	return nil, allErrs.ToAggregate()
+}
+
+// validatePreWarm enforces the coherence rules of the declarative
+// pre-warm pool surface (PreWarmPoolSize / PreWarmImage / PreWarmTTL,
+// ADR-0004):
+//
+//   - a non-zero pool size requires a PreWarmImage — the node-agent
+//     bakes pool entries from the class image and has nothing to boot
+//     otherwise;
+//   - PreWarmTTL, when set, must be positive;
+//   - an active pool requires the class's effective backend to be
+//     kata-fc — the pool restore path drives the Kata VM's Firecracker
+//     socket, which no other backend exposes. The backend rule is only
+//     evaluated when Runtime is populated (the defaulting webhook runs
+//     first in the admission chain, so it always is on the normal path).
+func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	specPath := field.NewPath("spec")
+
+	poolActive := class.Spec.PreWarmPoolSize > 0
+	if poolActive && class.Spec.PreWarmImage == "" {
+		errs = append(errs, field.Required(
+			specPath.Child("preWarmImage"),
+			fmt.Sprintf("preWarmPoolSize=%d requires preWarmImage: the node-agent builds pool entries from the class image",
+				class.Spec.PreWarmPoolSize)))
+	}
+	if class.Spec.PreWarmTTL != nil && class.Spec.PreWarmTTL.Duration <= 0 {
+		errs = append(errs, field.Invalid(
+			specPath.Child("preWarmTTL"),
+			class.Spec.PreWarmTTL.Duration.String(),
+			"preWarmTTL must be a positive duration"))
+	}
+	if poolActive && class.Spec.Runtime != nil &&
+		class.Spec.Runtime.Backend != "" &&
+		class.Spec.Runtime.Backend != runtime.BackendKataFC {
+		errs = append(errs, field.Invalid(
+			specPath.Child("runtime", "backend"),
+			class.Spec.Runtime.Backend,
+			fmt.Sprintf("pre-warm pools require the %q backend: pool restore drives the Kata VM's Firecracker socket",
+				runtime.BackendKataFC)))
+	}
+	return errs
 }
 
 // validateBackendEnabled returns a field.Error when backend is not present in

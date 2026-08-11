@@ -177,6 +177,7 @@ deletes the backing Pod; status converges to `Failed` with
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
 | `lastTransitionTime` | `metav1.Time` | Timestamp of the most recent phase change. |
+| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (ADR-0004) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a claimed pool entry, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
 
 ## Phase state machine
 

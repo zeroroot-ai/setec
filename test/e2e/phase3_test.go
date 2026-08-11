@@ -25,11 +25,13 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -232,19 +234,155 @@ func TestPhase3_PauseResume(t *testing.T) {
 	waitForPhaseCtx(ctx, t, ns, sb.Name, setecv1alpha1.SandboxPhaseRunning, 30*time.Second)
 }
 
-// TestPhase3_PoolColdStart asserts that launching a Sandbox against a
-// class with a pre-warmed pool completes in under 100ms (observed via
-// the setec_sandbox_cold_start_seconds histogram). The exact probe is
-// via the operator's /metrics endpoint.
-func TestPhase3_PoolColdStart(t *testing.T) {
+// scrapeNodeAgentMetrics port-forwards the node-agent metrics service
+// and returns the parsed Prometheus families. Uses a dedicated local
+// port so it can never collide with a concurrent operator scrape.
+func scrapeNodeAgentMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
+	return scrapeServiceMetrics(ctx, "setec-node-agent", "9090", "19091")
+}
+
+// poolEntriesGauge returns the current value of
+// setec_prewarm_pool_entries{sandbox_class=<class>} summed across node
+// labels, and whether any matching sample exists.
+func poolEntriesGauge(families map[string]*dto.MetricFamily, class string) (float64, bool) {
+	mf, ok := families["setec_prewarm_pool_entries"]
+	if !ok {
+		return 0, false
+	}
+	var total float64
+	found := false
+	for _, m := range mf.GetMetric() {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "sandbox_class" && lp.GetValue() == class {
+				if g := m.GetGauge(); g != nil {
+					total += g.GetValue()
+					found = true
+				}
+			}
+		}
+	}
+	return total, found
+}
+
+// TestPhase3_PoolWarmStartLifecycle exercises the ADR-0004 declarative
+// pre-warm pool end to end (setec#188): setting preWarmPoolSize on a
+// SandboxClass builds the pool, an ephemeral Sandbox of that class
+// warm-starts from a claimed entry inside a real kata-fc Pod, and
+// deleting the class auto-destroys the pool — with no operator-managed
+// template objects anywhere.
+func TestPhase3_PoolWarmStartLifecycle(t *testing.T) {
 	if !envtestOK(t) || !phase3Enabled(t) {
 		// Feature-flag guard: skip when cluster is absent or the
 		// chart was installed without snapshots.enabled=true.
 		t.Skip("Phase 3 E2E requires snapshots.enabled=true")
 	}
-	// Launcher + reconcile tick landed in Phase 4; the test body now
-	// runs on the bare-metal E2E runner. The assertion is driven from
-	// operator /metrics; no launcher-tooling skip remains.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+
+	const poolImage = "docker.io/library/alpine:3.19"
+	clsName := fmt.Sprintf("e2e-prewarm-%d", time.Now().Unix())
+	cls := &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: clsName},
+		Spec: setecv1alpha1.SandboxClassSpec{
+			Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
+			PreWarmPoolSize: 1,
+			PreWarmImage:    poolImage,
+			PreWarmTTL:      &metav1.Duration{Duration: time.Hour},
+			DefaultResources: &setecv1alpha1.Resources{
+				VCPU:   1,
+				Memory: resource.MustParse("256Mi"),
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, cls); err != nil {
+		t.Fatalf("create SandboxClass: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), &setecv1alpha1.SandboxClass{
+			ObjectMeta: metav1.ObjectMeta{Name: clsName},
+		})
+	})
+
+	// Step 1: the node-agent builds the pool from the class image —
+	// observable via setec_prewarm_pool_entries.
+	buildDeadline := time.Now().Add(6 * time.Minute)
+	for {
+		scrapeCtx, scrapeCancel := context.WithTimeout(ctx, 30*time.Second)
+		families, err := scrapeNodeAgentMetrics(scrapeCtx)
+		scrapeCancel()
+		if err == nil {
+			if n, ok := poolEntriesGauge(families, clsName); ok && n >= 1 {
+				break
+			}
+		}
+		if time.Now().After(buildDeadline) {
+			t.Fatalf("pool for class %q did not reach 1 entry within 6m (last scrape err: %v)", clsName, err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+
+	// Step 2: an ephemeral Sandbox of the class warm-starts from the
+	// pool inside a real kata-fc Pod.
+	ns := "p3-pool"
+	createTenantNamespace(ctx, t, ns)
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "warm"},
+		Spec: setecv1alpha1.SandboxSpec{
+			SandboxClassName: clsName,
+			Image:            poolImage,
+			Command:          []string{"sh", "-c", "sleep 300"},
+			Resources: setecv1alpha1.Resources{
+				VCPU:   1,
+				Memory: resource.MustParse("256Mi"),
+			},
+		},
+	}
+	if err := k8sClient.Create(ctx, sb); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	waitForPhaseCtx(ctx, t, ns, sb.Name, setecv1alpha1.SandboxPhaseRunning, 3*time.Minute)
+
+	deadline := time.Now().Add(1 * time.Minute)
+	var ws *setecv1alpha1.SandboxWarmStartStatus
+	for time.Now().Before(deadline) {
+		got := &setecv1alpha1.Sandbox{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sb.Name}, got); err == nil &&
+			got.Status.WarmStart != nil {
+			ws = got.Status.WarmStart
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if ws == nil {
+		t.Fatal("status.warmStart was never stamped on the pool-eligible Sandbox")
+	}
+	if ws.Outcome != setecv1alpha1.SandboxWarmStartPoolRestored {
+		t.Fatalf("warmStart outcome = %q (reason %q), want PoolRestored — the pool was built and must serve the restore",
+			ws.Outcome, ws.Reason)
+	}
+	if ws.EntryID == "" {
+		t.Fatal("warmStart.entryID empty on a PoolRestored outcome")
+	}
+
+	// Step 3: deleting the class auto-destroys the pool.
+	if err := k8sClient.Delete(ctx, cls); err != nil {
+		t.Fatalf("delete SandboxClass: %v", err)
+	}
+	destroyDeadline := time.Now().Add(3 * time.Minute)
+	for {
+		scrapeCtx, scrapeCancel := context.WithTimeout(ctx, 30*time.Second)
+		families, err := scrapeNodeAgentMetrics(scrapeCtx)
+		scrapeCancel()
+		if err == nil {
+			if n, ok := poolEntriesGauge(families, clsName); !ok || n == 0 {
+				break
+			}
+		}
+		if time.Now().After(destroyDeadline) {
+			t.Fatalf("pool for deleted class %q was not torn down within 3m", clsName)
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // TestPhase3_StorageFillProtection fills the snapshot root to 90% via

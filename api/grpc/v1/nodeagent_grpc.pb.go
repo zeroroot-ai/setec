@@ -32,6 +32,7 @@ const (
 	NodeAgentService_PauseSandbox_FullMethodName   = "/setec.v1.NodeAgentService/PauseSandbox"
 	NodeAgentService_ResumeSandbox_FullMethodName  = "/setec.v1.NodeAgentService/ResumeSandbox"
 	NodeAgentService_QueryPool_FullMethodName      = "/setec.v1.NodeAgentService/QueryPool"
+	NodeAgentService_ClaimPoolEntry_FullMethodName = "/setec.v1.NodeAgentService/ClaimPoolEntry"
 	NodeAgentService_DeleteSnapshot_FullMethodName = "/setec.v1.NodeAgentService/DeleteSnapshot"
 )
 
@@ -67,6 +68,15 @@ type NodeAgentServiceClient interface {
 	// this to pick a pool-hosting node at scheduling time. Empty result
 	// means the operator falls back to cold boot.
 	QueryPool(ctx context.Context, in *QueryPoolRequest, opts ...grpc.CallOption) (*QueryPoolResponse, error)
+	// ClaimPoolEntry atomically removes a matching pre-warmed pool
+	// entry and restores its paused-VM state into the caller-provided
+	// Kata Firecracker socket (ADR-0004 declarative warm-start). The
+	// claimed entry is consumed regardless of restore outcome —
+	// ADR-0005 forbids restoring the same snapshot state twice. A
+	// response with claimed=false (pool empty or no image match) or
+	// claimed=true/success=false (restore failed) tells the operator to
+	// fall back to cold boot; neither is an RPC error.
+	ClaimPoolEntry(ctx context.Context, in *ClaimPoolEntryRequest, opts ...grpc.CallOption) (*ClaimPoolEntryResponse, error)
 	// DeleteSnapshot securely erases the persisted state files and
 	// returns success. Called by the SnapshotReconciler when a
 	// Snapshot CR is being deleted (TTL elapsed, user kubectl
@@ -132,6 +142,16 @@ func (c *nodeAgentServiceClient) QueryPool(ctx context.Context, in *QueryPoolReq
 	return out, nil
 }
 
+func (c *nodeAgentServiceClient) ClaimPoolEntry(ctx context.Context, in *ClaimPoolEntryRequest, opts ...grpc.CallOption) (*ClaimPoolEntryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimPoolEntryResponse)
+	err := c.cc.Invoke(ctx, NodeAgentService_ClaimPoolEntry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *nodeAgentServiceClient) DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*DeleteSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteSnapshotResponse)
@@ -174,6 +194,15 @@ type NodeAgentServiceServer interface {
 	// this to pick a pool-hosting node at scheduling time. Empty result
 	// means the operator falls back to cold boot.
 	QueryPool(context.Context, *QueryPoolRequest) (*QueryPoolResponse, error)
+	// ClaimPoolEntry atomically removes a matching pre-warmed pool
+	// entry and restores its paused-VM state into the caller-provided
+	// Kata Firecracker socket (ADR-0004 declarative warm-start). The
+	// claimed entry is consumed regardless of restore outcome —
+	// ADR-0005 forbids restoring the same snapshot state twice. A
+	// response with claimed=false (pool empty or no image match) or
+	// claimed=true/success=false (restore failed) tells the operator to
+	// fall back to cold boot; neither is an RPC error.
+	ClaimPoolEntry(context.Context, *ClaimPoolEntryRequest) (*ClaimPoolEntryResponse, error)
 	// DeleteSnapshot securely erases the persisted state files and
 	// returns success. Called by the SnapshotReconciler when a
 	// Snapshot CR is being deleted (TTL elapsed, user kubectl
@@ -203,6 +232,9 @@ func (UnimplementedNodeAgentServiceServer) ResumeSandbox(context.Context, *Resum
 }
 func (UnimplementedNodeAgentServiceServer) QueryPool(context.Context, *QueryPoolRequest) (*QueryPoolResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryPool not implemented")
+}
+func (UnimplementedNodeAgentServiceServer) ClaimPoolEntry(context.Context, *ClaimPoolEntryRequest) (*ClaimPoolEntryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimPoolEntry not implemented")
 }
 func (UnimplementedNodeAgentServiceServer) DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*DeleteSnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteSnapshot not implemented")
@@ -318,6 +350,24 @@ func _NodeAgentService_QueryPool_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeAgentService_ClaimPoolEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimPoolEntryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeAgentServiceServer).ClaimPoolEntry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeAgentService_ClaimPoolEntry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeAgentServiceServer).ClaimPoolEntry(ctx, req.(*ClaimPoolEntryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NodeAgentService_DeleteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -362,6 +412,10 @@ var NodeAgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryPool",
 			Handler:    _NodeAgentService_QueryPool_Handler,
+		},
+		{
+			MethodName: "ClaimPoolEntry",
+			Handler:    _NodeAgentService_ClaimPoolEntry_Handler,
 		},
 		{
 			MethodName: "DeleteSnapshot",

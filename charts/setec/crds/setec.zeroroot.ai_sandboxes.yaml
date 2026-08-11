@@ -522,6 +522,36 @@ spec:
                   Running.
                 format: date-time
                 type: string
+              warmStart:
+                description: |-
+                  WarmStart records the outcome of the one-shot pool warm-start
+                  attempt for Sandboxes whose class maintains a pre-warm pool
+                  (ADR-0004). Nil when no attempt was made (class has no pool,
+                  image mismatch, or explicit snapshotRef). Its presence is the
+                  idempotency marker: the controller attempts a warm start at
+                  most once per Sandbox.
+                properties:
+                  entryID:
+                    description: |-
+                      EntryID identifies the consumed pool entry when Outcome is
+                      PoolRestored.
+                    type: string
+                  outcome:
+                    description: |-
+                      Outcome is PoolRestored when the Sandbox started from a pool
+                      entry, ColdBoot otherwise.
+                    enum:
+                    - PoolRestored
+                    - ColdBoot
+                    type: string
+                  reason:
+                    description: |-
+                      Reason carries a short human-readable explanation for a
+                      ColdBoot outcome ("miss", "error").
+                    type: string
+                required:
+                - outcome
+                type: object
             type: object
         required:
         - spec

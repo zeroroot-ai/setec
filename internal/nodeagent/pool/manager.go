@@ -372,6 +372,16 @@ func (m *Manager) Claim(_ context.Context, className, imageRef string) (Entry, b
 	return Entry{}, false, nil
 }
 
+// ReleaseClaimed tears down an entry that was already removed from
+// the pool by Claim. Claim detaches the entry from internal state, so
+// Release (which looks the entry up by ID) cannot find it; callers
+// that consumed an entry — successfully restored or not — use this to
+// erase its on-disk state (ADR-0005: pool state is never restored
+// twice).
+func (m *Manager) ReleaseClaimed(ctx context.Context, e Entry) error {
+	return m.releaseEntry(ctx, &e)
+}
+
 // Release tears down a claimed or expired entry: it deletes the
 // storage backing and resumes the Firecracker VM long enough to
 // terminate it. In Phase 3 the termination is the launcher's
@@ -424,6 +434,20 @@ func (m *Manager) Size() int {
 // CountClass returns the number of entries for a single class.
 func (m *Manager) CountClass(className string) int {
 	return m.countClass(className)
+}
+
+// FillByClass returns a snapshot of the per-class entry counts.
+// Classes whose pools drained to zero in the last reconcile do not
+// appear — callers that export gauges should Reset before applying
+// the map so stale series disappear with their pools.
+func (m *Manager) FillByClass() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int, len(m.state))
+	for className, entries := range m.state {
+		out[className] = len(entries)
+	}
+	return out
 }
 
 func (m *Manager) countClass(className string) int {

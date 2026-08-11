@@ -570,6 +570,14 @@ func (r *SandboxReconciler) reconcileExistingPod(
 
 	// (10) Derive status and patch when changed.
 	desired := status.Derive(sb, pod, time.Now())
+
+	// (10a) ADR-0004 declarative warm start: on the Sandbox's first
+	// transition into Running, attempt exactly once to claim a
+	// pre-warmed pool entry on the Pod's node and restore it into the
+	// Pod's Firecracker socket. Every failure mode resolves to a
+	// recorded ColdBoot — a restore failure never fails the Sandbox.
+	desired = r.maybeWarmStart(ctx, sb, cls, desired, prevPhase)
+
 	if !statusEqual(sb.Status, desired) {
 		original := sb.DeepCopy()
 		sb.Status = desired
@@ -684,6 +692,50 @@ func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.
 		return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// maybeWarmStart performs the one-shot pool warm-start attempt for a
+// Sandbox that is transitioning into Running for the first time, and
+// stamps the outcome into the returned status. The stamped
+// status.warmStart doubles as the idempotency marker — once set, no
+// further attempt is ever made for this Sandbox.
+//
+// Eligibility (all must hold):
+//   - the Phase 3 Coordinator is wired,
+//   - the resolved class maintains a pool (PreWarmPoolSize > 0 with a
+//     PreWarmImage),
+//   - the Sandbox runs exactly the class's pre-warm image (a different
+//     image cannot match any pool entry),
+//   - no explicit spec.snapshotRef (the E10 named-snapshot path wins),
+//   - this reconcile observes the first Pending/other → Running edge.
+func (r *SandboxReconciler) maybeWarmStart(
+	ctx context.Context,
+	sb *setecv1alpha1.Sandbox,
+	cls *setecv1alpha1.SandboxClass,
+	desired setecv1alpha1.SandboxStatus,
+	prevPhase setecv1alpha1.SandboxPhase,
+) setecv1alpha1.SandboxStatus {
+	if r.Coordinator == nil || cls == nil ||
+		cls.Spec.PreWarmPoolSize <= 0 || cls.Spec.PreWarmImage == "" ||
+		sb.Spec.Image != cls.Spec.PreWarmImage ||
+		(sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") ||
+		desired.WarmStart != nil ||
+		desired.Phase != setecv1alpha1.SandboxPhaseRunning ||
+		prevPhase == setecv1alpha1.SandboxPhaseRunning {
+		return desired
+	}
+
+	outcome, entryID := r.Coordinator.WarmStartFromPool(ctx, sb, cls)
+	ws := &setecv1alpha1.SandboxWarmStartStatus{}
+	if outcome == snapshot.WarmStartRestored {
+		ws.Outcome = setecv1alpha1.SandboxWarmStartPoolRestored
+		ws.EntryID = entryID
+	} else {
+		ws.Outcome = setecv1alpha1.SandboxWarmStartColdBoot
+		ws.Reason = string(outcome)
+	}
+	desired.WarmStart = ws
+	return desired
 }
 
 // resolveSnapshotRef resolves and validates the Snapshot referenced by

@@ -60,6 +60,10 @@ type fakeNodeAgentClient struct {
 	lastRestore *setecgrpcv1.RestoreSandboxRequest
 	lastPause   *setecgrpcv1.PauseSandboxRequest
 	lastResume  *setecgrpcv1.ResumeSandboxRequest
+
+	claimRes  *setecgrpcv1.ClaimPoolEntryResponse
+	claimErr  error
+	lastClaim *setecgrpcv1.ClaimPoolEntryRequest
 }
 
 func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
@@ -80,6 +84,10 @@ func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, in *setecgrpcv1.R
 }
 func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
 	return nil, nil
+}
+func (f *fakeNodeAgentClient) ClaimPoolEntry(_ context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
+	f.lastClaim = in
+	return f.claimRes, f.claimErr
 }
 func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	return f.deleteRes, f.deleteErr
