@@ -26,6 +26,15 @@ import (
 // serialized.  DeepCopy methods are generated via controller-gen; do not
 // edit zz_generated.deepcopy.go by hand.
 
+// AnnotationLastActivity is the Sandbox annotation carrying the last
+// recorded caller activity for a session Sandbox, as an RFC 3339 UTC
+// timestamp. The frontend stamps it on Attach and heartbeats it while
+// a client stream is open; the operator reads it to decide whether a
+// session is idle (SandboxClass.spec.sessionIdleTimeout, ADR-0006).
+// It lives on the Sandbox object — not in the frontend — so idle
+// detection survives frontend restarts with no datastore.
+const AnnotationLastActivity = "setec.zeroroot.ai/last-activity"
+
 // NetworkMode selects the egress posture applied to a Sandbox microVM.
 //
 // Every mode produces a NetworkPolicy. There is no mode that means "emit no

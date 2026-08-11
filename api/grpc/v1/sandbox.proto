@@ -42,6 +42,29 @@ service SandboxService {
   // Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
   // NetworkPolicy.
   rpc Kill(KillRequest) returns (KillResponse);
+
+  // Attach resolves a session handle (the sandbox_id returned by
+  // Launch) to its live session so a caller that disconnected — or a
+  // caller talking to a restarted frontend — can reattach and continue
+  // with the streaming RPCs (StreamLogs, Wait) against the same
+  // running microVM. Resolution is stateless: the frontend holds no
+  // session table, so the handle resolves from cluster state alone and
+  // reattach works across frontend restarts by construction.
+  //
+  // Attach also registers caller activity for the session, which
+  // exempts it from per-SandboxClass idle eviction (ADR-0006: a
+  // session in active use is never idle-reaped).
+  //
+  // Failure shapes (each carries an AttachFailure detail so callers
+  // can switch on reason without parsing message text):
+  //   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+  //     Sandbox (never existed, already deleted, or the UID in the
+  //     handle belongs to an earlier Sandbox with the same name).
+  //   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
+  //     the session is over (terminal phase, or teardown in progress).
+  //   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
+  //     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+  rpc Attach(AttachRequest) returns (AttachResponse);
 }
 
 // LaunchRequest carries everything needed to construct the Sandbox spec.
@@ -161,3 +184,51 @@ message KillRequest {
 // KillResponse is currently empty; a Sandbox that could not be deleted
 // surfaces the failure via gRPC status.
 message KillResponse {}
+
+// AttachRequest presents the session handle to reattach to. The handle
+// is the sandbox_id returned by Launch (<namespace>/<name>/<uid>); the
+// UID pins the handle to one session so a later same-name Sandbox can
+// never be reached with an old handle.
+message AttachRequest {
+  string sandbox_id = 1;
+}
+
+// AttachResponse confirms the handle resolved to a live session and
+// reports where the session currently stands. The returned sandbox_id
+// equals the request handle and remains the key for every subsequent
+// RPC (StreamLogs, Wait, Kill).
+message AttachResponse {
+  string sandbox_id = 1;
+  string name = 2;
+  string namespace = 3;
+
+  // phase is the session Sandbox's current lifecycle phase (Pending,
+  // Running, Paused, ...). A session whose VM is being replaced after
+  // a crash reports Pending with the VM restart under way; the caller
+  // may attach and stream as soon as the fresh VM is up.
+  string phase = 4;
+}
+
+// AttachFailure is attached to the gRPC status details of a failed
+// Attach so callers can act on the failure class programmatically.
+message AttachFailure {
+  // Reason is the typed failure class.
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    // REASON_SESSION_NOT_FOUND: the handle resolves to no live
+    // Sandbox in the caller's namespace (unknown name, deleted
+    // Sandbox, or a UID that belongs to an earlier same-name Sandbox).
+    REASON_SESSION_NOT_FOUND = 1;
+    // REASON_SESSION_ENDED: the Sandbox exists but its session is
+    // over — it reached a terminal phase or teardown is in progress.
+    REASON_SESSION_ENDED = 2;
+    // REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
+    // lifecycle, which rejects reattach (ADR-0006).
+    REASON_NOT_A_SESSION = 3;
+  }
+  Reason reason = 1;
+
+  // phase carries the Sandbox's terminal phase when reason is
+  // REASON_SESSION_ENDED ("Completed" or "Failed"); empty otherwise.
+  string phase = 2;
+}

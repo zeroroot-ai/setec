@@ -31,6 +31,7 @@ const (
 	SandboxService_StreamLogs_FullMethodName = "/setec.v1.SandboxService/StreamLogs"
 	SandboxService_Wait_FullMethodName       = "/setec.v1.SandboxService/Wait"
 	SandboxService_Kill_FullMethodName       = "/setec.v1.SandboxService/Kill"
+	SandboxService_Attach_FullMethodName     = "/setec.v1.SandboxService/Attach"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -64,6 +65,28 @@ type SandboxServiceClient interface {
 	// Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
 	// NetworkPolicy.
 	Kill(ctx context.Context, in *KillRequest, opts ...grpc.CallOption) (*KillResponse, error)
+	// Attach resolves a session handle (the sandbox_id returned by
+	// Launch) to its live session so a caller that disconnected — or a
+	// caller talking to a restarted frontend — can reattach and continue
+	// with the streaming RPCs (StreamLogs, Wait) against the same
+	// running microVM. Resolution is stateless: the frontend holds no
+	// session table, so the handle resolves from cluster state alone and
+	// reattach works across frontend restarts by construction.
+	//
+	// Attach also registers caller activity for the session, which
+	// exempts it from per-SandboxClass idle eviction (ADR-0006: a
+	// session in active use is never idle-reaped).
+	//
+	// Failure shapes (each carries an AttachFailure detail so callers
+	// can switch on reason without parsing message text):
+	//   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+	//     Sandbox (never existed, already deleted, or the UID in the
+	//     handle belongs to an earlier Sandbox with the same name).
+	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
+	//     the session is over (terminal phase, or teardown in progress).
+	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
+	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+	Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error)
 }
 
 type sandboxServiceClient struct {
@@ -123,6 +146,16 @@ func (c *sandboxServiceClient) Kill(ctx context.Context, in *KillRequest, opts .
 	return out, nil
 }
 
+func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AttachResponse)
+	err := c.cc.Invoke(ctx, SandboxService_Attach_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
 // for forward compatibility.
@@ -154,6 +187,28 @@ type SandboxServiceServer interface {
 	// Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
 	// NetworkPolicy.
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
+	// Attach resolves a session handle (the sandbox_id returned by
+	// Launch) to its live session so a caller that disconnected — or a
+	// caller talking to a restarted frontend — can reattach and continue
+	// with the streaming RPCs (StreamLogs, Wait) against the same
+	// running microVM. Resolution is stateless: the frontend holds no
+	// session table, so the handle resolves from cluster state alone and
+	// reattach works across frontend restarts by construction.
+	//
+	// Attach also registers caller activity for the session, which
+	// exempts it from per-SandboxClass idle eviction (ADR-0006: a
+	// session in active use is never idle-reaped).
+	//
+	// Failure shapes (each carries an AttachFailure detail so callers
+	// can switch on reason without parsing message text):
+	//   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+	//     Sandbox (never existed, already deleted, or the UID in the
+	//     handle belongs to an earlier Sandbox with the same name).
+	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
+	//     the session is over (terminal phase, or teardown in progress).
+	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
+	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+	Attach(context.Context, *AttachRequest) (*AttachResponse, error)
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -175,6 +230,9 @@ func (UnimplementedSandboxServiceServer) Wait(context.Context, *WaitRequest) (*W
 }
 func (UnimplementedSandboxServiceServer) Kill(context.Context, *KillRequest) (*KillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Kill not implemented")
+}
+func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
 func (UnimplementedSandboxServiceServer) testEmbeddedByValue()                        {}
@@ -262,6 +320,24 @@ func _SandboxService_Kill_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttachRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).Attach(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_Attach_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).Attach(ctx, req.(*AttachRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -280,6 +356,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Kill",
 			Handler:    _SandboxService_Kill_Handler,
+		},
+		{
+			MethodName: "Attach",
+			Handler:    _SandboxService_Attach_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
