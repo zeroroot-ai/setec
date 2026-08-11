@@ -28,8 +28,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,7 +42,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -53,6 +50,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
@@ -308,7 +306,11 @@ func main() {
 				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 					"restored snapshot clones rely on passive virtio-rng only")
 		}
-		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(tlsCertPath, tlsKeyPath, tlsClientCAPath))
+		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, credentialFlags{
+			certPath:     tlsCertPath,
+			keyPath:      tlsKeyPath,
+			clientCAPath: tlsClientCAPath,
+		}))
 
 		if poolReconcileTick > 0 {
 			lister, err := newSandboxClassLister()
@@ -409,37 +411,69 @@ func prefetchErrorReason(err error) string {
 	}
 }
 
+// credentialFlags carries the credential-related flag values the
+// node-agent parsed. It exists so the translation from flags to a
+// credential source happens in exactly one place, and so a test can
+// exercise that translation without the process exiting.
+type credentialFlags struct {
+	certPath     string
+	keyPath      string
+	clientCAPath string
+}
+
+// credentialConfig translates the parsed flags into the credential
+// module's configuration, or reports why this component must not
+// start.
+//
+// The frontend performs the identical translation. Keeping the two in
+// step is the point of routing both through one module: an operator
+// must never end up with the frontend taking its identity from one
+// source and the node-agent silently taking it from another.
+func (f credentialFlags) credentialConfig() (credentials.Config, error) {
+	if f.certPath == "" || f.keyPath == "" || f.clientCAPath == "" {
+		return credentials.Config{}, errors.New(
+			"--tls-cert, --tls-key and --tls-client-ca are required; mTLS is mandatory")
+	}
+	return credentials.Config{
+		Files: &credentials.FileSource{
+			CertFile: f.certPath,
+			KeyFile:  f.keyPath,
+			CAFile:   f.clientCAPath,
+		},
+	}, nil
+}
+
+// serverCredentials resolves the gRPC server option carrying this
+// node-agent's mTLS credentials. Where the key material comes from,
+// what the TLS floor is, and the fact that a client certificate is
+// required and verified are all properties of internal/credentials —
+// this function only says which surface it needs.
+func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, error) {
+	cfg, err := f.credentialConfig()
+	if err != nil {
+		return nil, err
+	}
+	provider, err := credentials.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := provider.ServerCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return grpc.Creds(creds), nil
+}
+
 // grpcTLS returns the credentials option for the gRPC server. mTLS is
-// mandatory: missing any of cert/key/client-ca causes the process to
-// exit so the DaemonSet surfaces the misconfiguration via its restart
-// count.
-func grpcTLS(certPath, keyPath, clientCAPath string) grpc.ServerOption {
-	if certPath == "" || keyPath == "" || clientCAPath == "" {
-		fmt.Fprintln(os.Stderr,
-			"node-agent: --tls-cert/--tls-key/--tls-client-ca are required; mTLS is mandatory")
-		os.Exit(1)
-	}
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+// mandatory: any credential failure causes the process to exit so the
+// DaemonSet surfaces the misconfiguration via its restart count.
+func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
+	opt, err := serverCredentials(ctx, f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: load tls keypair: %v\n", err)
+		fmt.Fprintf(os.Stderr, "node-agent: %v\n", err)
 		os.Exit(1)
 	}
-	caBytes, err := os.ReadFile(clientCAPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: read client-ca: %v\n", err)
-		os.Exit(1)
-	}
-	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(caBytes) {
-		fmt.Fprintf(os.Stderr, "node-agent: client-ca file contains no usable certificates\n")
-		os.Exit(1)
-	}
-	return grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    certPool,
-		MinVersion:   tls.VersionTLS13,
-	}))
+	return opt
 }
 
 // newSandboxClassLister builds a controller-runtime client and
