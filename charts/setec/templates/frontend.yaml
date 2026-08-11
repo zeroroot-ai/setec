@@ -101,9 +101,13 @@ metadata:
   labels:
     {{- include "setec.labels" . | nindent 4 }}
 rules:
+  # patch: the frontend stamps the last-activity annotation on session
+  # Sandboxes (Attach + stream heartbeats) so the operator's idle
+  # eviction can tell an active session from an abandoned one. It is a
+  # metadata-only merge patch; the frontend never writes spec or status.
   - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxes]
-    verbs: [create, delete, get, list, watch]
+    verbs: [create, delete, get, list, patch, watch]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]

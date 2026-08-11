@@ -321,6 +321,25 @@ spec:
                   RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
                   controller falls back to its --runtime-class-name flag.
                 type: string
+              sessionIdleTimeout:
+                description: |-
+                  SessionIdleTimeout is the idle-eviction threshold for session
+                  Sandboxes in this class (ADR-0006). A Running session whose last
+                  recorded activity — the setec.zeroroot.ai/last-activity
+                  annotation the frontend stamps on Attach and heartbeats while a
+                  client stream is open, falling back to status.startedAt and then
+                  the creation timestamp — is older than this duration is evicted:
+                  the operator marks it Failed with reason=IdleTimeout and deletes
+                  its VM Pod. An actively-used session is therefore never
+                  idle-reaped, because its activity timestamp keeps moving.
+
+                  Only session Sandboxes are subject to this policy; ephemeral
+                  Sandboxes are bounded by spec.lifecycle.timeout instead. Unset,
+                  zero, or negative means sessions in this class are never
+                  idle-evicted. Set it comfortably above one minute — the
+                  frontend's activity heartbeat interval — so an attached client
+                  always refreshes the clock in time.
+                type: string
               tolerations:
                 description: |-
                   Tolerations is injected into every Sandbox Pod produced under this

@@ -77,6 +77,7 @@ const (
 	eventReasonPodCreateFailed       = "PodCreateFailed"
 	eventReasonPodCreated            = "PodCreated"
 	eventReasonTimeout               = "TimeoutExceeded"
+	eventReasonIdleTimeout           = "IdleTimeoutExceeded"
 	eventReasonReconcileError        = "ReconcileError"
 	eventReasonClassNotFound         = "ClassNotFound"
 	eventReasonConstraintViolated    = "ConstraintViolated"
@@ -569,7 +570,8 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	}
 
 	// (10) Derive status and patch when changed.
-	desired := status.Derive(sb, pod, time.Now())
+	now := time.Now()
+	desired := status.Derive(sb, pod, now)
 
 	// (10a) ADR-0004 declarative warm start: on the Sandbox's first
 	// transition into Running, attempt exactly once to claim a
@@ -578,6 +580,13 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// recorded ColdBoot — a restore failure never fails the Sandbox.
 	desired = r.maybeWarmStart(ctx, sb, cls, desired, prevPhase)
 
+	// (10b) Session idle eviction (ADR-0006), layered on the derived
+	// status: a Running session past its per-SandboxClass idle
+	// deadline — no Attach and no client-stream heartbeat within
+	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
+	// sessions keep their last-activity annotation fresh, so they are
+	// never idle-reaped.
+	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
 	if !statusEqual(sb.Status, desired) {
 		original := sb.DeepCopy()
 		sb.Status = desired
@@ -612,14 +621,24 @@ func (r *SandboxReconciler) reconcileExistingPod(
 		}
 	}
 
-	// (12) Delete timed-out Pod (guard against repeated deletes).
-	if desired.Phase == setecv1alpha1.SandboxPhaseFailed &&
-		desired.Reason == status.ReasonTimeout &&
-		pod.DeletionTimestamp.IsZero() {
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTimeout, actionEnforceTimeout,
-			"Sandbox exceeded lifecycle.timeout; deleting Pod %q", pod.Name)
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after timeout: %w", err))
+	// (12) Delete the Pod of a Sandbox a wall-clock policy just failed —
+	// the lifecycle timeout or the session idle eviction (guard against
+	// repeated deletes). The terminal Failed phase is already persisted,
+	// so the session-restart branch (11b) cannot resurrect the VM.
+	if desired.Phase == setecv1alpha1.SandboxPhaseFailed && pod.DeletionTimestamp.IsZero() {
+		switch desired.Reason {
+		case status.ReasonTimeout:
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTimeout, actionEnforceTimeout,
+				"Sandbox exceeded lifecycle.timeout; deleting Pod %q", pod.Name)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after timeout: %w", err))
+			}
+		case status.ReasonIdleTimeout:
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonIdleTimeout, actionEnforceIdleTimeout,
+				"Session idle beyond the class sessionIdleTimeout; deleting Pod %q", pod.Name)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after idle eviction: %w", err))
+			}
 		}
 	}
 
@@ -639,10 +658,57 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// Only this path requeues. The creation path also applies the policy,
 	// but there RequeueAfter means "do not create the Pod yet", so
 	// reusing it for a refresh would defer the launch instead.
+	result := ctrl.Result{}
 	if netpol.DependsOnDNS(sb, cls) {
-		return ctrl.Result{RequeueAfter: r.NetPol.EffectiveRefreshInterval()}, nil
+		result.RequeueAfter = r.NetPol.EffectiveRefreshInterval()
 	}
-	return ctrl.Result{}, nil
+
+	// (14) Deadline-driven requeue. The lifecycle timeout and the
+	// session idle policy fire on the wall clock, not on cluster events:
+	// a quietly sleeping Pod emits nothing, so without an explicit
+	// requeue a Running Sandbox would only meet its deadline on the next
+	// unrelated reconcile. Come back exactly when the earliest deadline
+	// is due (whichever of the two is sooner also wins over the slower
+	// DNS-refresh cadence).
+	if after, ok := nextLifecycleDeadline(sb, cls, desired, time.Now()); ok &&
+		(result.RequeueAfter == 0 || after < result.RequeueAfter) {
+		result.RequeueAfter = after
+	}
+	return result, nil
+}
+
+// nextLifecycleDeadline returns how long until the earliest wall-clock
+// deadline of a Running Sandbox — the lifecycle timeout or, for
+// sessions, the class idle-eviction deadline — and whether any deadline
+// is pending at all. The result is floored at one second so a deadline
+// that passed while the status patch was in flight cannot produce a hot
+// requeue loop.
+func nextLifecycleDeadline(
+	sb *setecv1alpha1.Sandbox,
+	cls *setecv1alpha1.SandboxClass,
+	st setecv1alpha1.SandboxStatus,
+	now time.Time,
+) (time.Duration, bool) {
+	if st.Phase != setecv1alpha1.SandboxPhaseRunning {
+		return 0, false
+	}
+	var earliest time.Time
+	if st.StartedAt != nil && sb.Spec.Lifecycle != nil &&
+		sb.Spec.Lifecycle.Timeout != nil && sb.Spec.Lifecycle.Timeout.Duration > 0 {
+		earliest = st.StartedAt.Add(sb.Spec.Lifecycle.Timeout.Duration)
+	}
+	if d, ok := status.SessionIdleDeadline(sb, cls); ok &&
+		(earliest.IsZero() || d.Before(earliest)) {
+		earliest = d
+	}
+	if earliest.IsZero() {
+		return 0, false
+	}
+	after := earliest.Sub(now)
+	if after < time.Second {
+		after = time.Second
+	}
+	return after, true
 }
 
 // checkPrereqs verifies that the required RuntimeClass(es) exist in the cluster.

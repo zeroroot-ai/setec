@@ -35,6 +35,7 @@ const (
 	actionRequestSnapshot     = "RequestSnapshot"
 	actionRunRuntimeFallback  = "RunRuntimeFallback"
 	actionEnforceTimeout      = "EnforceTimeout"
+	actionEnforceIdleTimeout  = "EnforceIdleTimeout"
 	actionFinalizeSandbox     = "FinalizeSandbox"
 	actionManageWorkspace     = "ManageWorkspace"
 	actionRestartSessionVM    = "RestartSessionVM"

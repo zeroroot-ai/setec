@@ -16,10 +16,41 @@ service SandboxService {
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
   rpc Wait(WaitRequest) returns (WaitResponse);
   rpc Kill(KillRequest) returns (KillResponse);
+  rpc Attach(AttachRequest) returns (AttachResponse);
 }
 ```
 
 See `api/grpc/v1/sandbox.proto` for the full message schema.
+
+## Session reattach (`Attach`)
+
+A **session** Sandbox (`lifecycle.mode: session`, ADR-0006) outlives any
+one connection. The `sandbox_id` returned by `Launch`
+(`<namespace>/<name>/<uid>`) is the **session handle**: a caller that
+disconnected calls `Attach` with the handle and continues with
+`StreamLogs`/`Wait` against the same running microVM. Resolution is
+stateless — the frontend keeps no session table, the handle resolves
+from cluster state alone — so reattach works identically after a
+frontend restart or against a different frontend replica. The UID in
+the handle pins it to one session: a later Sandbox with the same name
+is a different session and is not reachable through the old handle.
+
+Failure shapes, each carrying a typed `AttachFailure` detail in the
+gRPC status:
+
+| Condition | Code | `AttachFailure.reason` |
+|---|---|---|
+| Handle resolves to no live Sandbox (unknown, deleted, or stale UID) | `NOT_FOUND` | `REASON_SESSION_NOT_FOUND` |
+| Session over (terminal phase) or teardown in progress | `FAILED_PRECONDITION` | `REASON_SESSION_ENDED` (with the phase) |
+| Sandbox is ephemeral | `FAILED_PRECONDITION` | `REASON_NOT_A_SESSION` |
+
+`Attach` also registers caller activity: it stamps the Sandbox's
+`setec.zeroroot.ai/last-activity` annotation, and `StreamLogs` on a
+session heartbeats the same annotation once a minute while the stream
+is open (plus a final stamp at disconnect). The operator's idle
+eviction (`SandboxClass.spec.sessionIdleTimeout`) reads that
+annotation, so an attached session is never idle-reaped; the idle clock
+starts when the last client disconnects.
 
 ## Authentication
 

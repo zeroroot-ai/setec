@@ -149,6 +149,19 @@ Sandbox, or `Kill` on the gRPC frontend):
   Status transiently shows `Pending` with reason `SessionVMRestarting`.
   `lifecycle.timeout` still fails the Sandbox terminally, keeping the
   restart loop bounded.
+- **Reattach by handle.** The session's handle (the frontend's
+  `sandbox_id`, `<namespace>/<name>/<uid>`) is the whole reattach
+  credential: the frontend `Attach` RPC resolves it from cluster state
+  alone, so a caller reattaches to the same live session after a
+  disconnect or a frontend restart. Ephemeral Sandboxes reject
+  `Attach`. See `docs/frontend-api.md`.
+- **Idle eviction, active exemption.** When the Sandbox's class sets
+  `spec.sessionIdleTimeout`, a `Running` session with no recorded
+  activity for that long is evicted (`Failed`, `reason=IdleTimeout`;
+  Pod deleted; workspace kept until teardown). Activity is the
+  `setec.zeroroot.ai/last-activity` annotation, stamped by the frontend
+  on `Attach` and heartbeaten while a client stream is open — an active
+  session is never idle-reaped.
 - **Teardown wipes the workspace.** Deleting the Sandbox triggers the
   `setec.zeroroot.ai/workspace-teardown` finalizer: the Pod is deleted,
   then the workspace PVC is deleted; the CSI driver destroys the volume
@@ -172,7 +185,7 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`; on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, ADR-0006), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`; on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
@@ -275,6 +288,18 @@ Administrators author classes; tenants reference them by name in
   sandbox-host nodes) — without a matching toleration the Pod stays
   `Pending` forever.
 - `spec.default` — boolean. Exactly zero or one class may carry this.
+- `spec.sessionIdleTimeout` — Go duration (optional). Idle-eviction
+  threshold for **session** Sandboxes in this class (ADR-0006). A
+  `Running` session whose last recorded activity — the
+  `setec.zeroroot.ai/last-activity` annotation the gRPC frontend stamps
+  on `Attach` and heartbeats (every minute) while a client stream is
+  open, with `status.startedAt` and then the creation timestamp as
+  floors — is older than this duration is evicted: `Failed` with
+  `reason=IdleTimeout`, VM Pod deleted. The workspace PVC survives
+  until explicit teardown. An actively-used session is never evicted
+  because its activity timestamp keeps moving. Unset, zero, or negative
+  disables idle eviction for the class. Set it comfortably above one
+  minute so the frontend heartbeat always outruns it.
 
 ### Validation rules (enforced by the SandboxClass webhook)
 

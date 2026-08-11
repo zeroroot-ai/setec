@@ -354,6 +354,15 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 		return status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
 	}
 
+	// An open client stream is caller activity: while it lives the
+	// session's last-activity annotation is heartbeaten so the operator
+	// never idle-evicts a session someone is watching (ADR-0006), and
+	// the final stamp on disconnect starts the idle clock there.
+	if sb.Spec.IsSession() {
+		stopHeartbeat := s.keepSessionActive(ctx, ns, name)
+		defer stopHeartbeat()
+	}
+
 	if s.Clientset == nil {
 		return status.Error(codes.FailedPrecondition,
 			"StreamLogs: kubernetes clientset is not configured on the frontend")

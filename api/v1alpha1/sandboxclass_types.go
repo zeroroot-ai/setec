@@ -212,6 +212,25 @@ type SandboxClassSpec struct {
 	// pauses are unbounded.
 	// +optional
 	MaxPauseDuration *metav1.Duration `json:"maxPauseDuration,omitempty"`
+
+	// SessionIdleTimeout is the idle-eviction threshold for session
+	// Sandboxes in this class (ADR-0006). A Running session whose last
+	// recorded activity — the setec.zeroroot.ai/last-activity
+	// annotation the frontend stamps on Attach and heartbeats while a
+	// client stream is open, falling back to status.startedAt and then
+	// the creation timestamp — is older than this duration is evicted:
+	// the operator marks it Failed with reason=IdleTimeout and deletes
+	// its VM Pod. An actively-used session is therefore never
+	// idle-reaped, because its activity timestamp keeps moving.
+	//
+	// Only session Sandboxes are subject to this policy; ephemeral
+	// Sandboxes are bounded by spec.lifecycle.timeout instead. Unset,
+	// zero, or negative means sessions in this class are never
+	// idle-evicted. Set it comfortably above one minute — the
+	// frontend's activity heartbeat interval — so an attached client
+	// always refreshes the clock in time.
+	// +optional
+	SessionIdleTimeout *metav1.Duration `json:"sessionIdleTimeout,omitempty"`
 }
 
 // SandboxClassStatus reflects the observed state of a SandboxClass. Phase 2
