@@ -53,8 +53,20 @@ import (
 type Server struct {
 	setecgrpcv1.UnimplementedNodeAgentServiceServer
 
-	// Storage is the backend all snapshot state is persisted to.
+	// Storage is the node-local default backend snapshot state is
+	// persisted to (requests with storage_backend "" or "local-disk").
 	Storage storage.StorageBackend
+
+	// SessionStorage builds the portable session-checkpoint backend
+	// ("s3", ADR-0007) for one call. The caller-provided kek is the
+	// per-session key-encryption key the operator read from the
+	// session's Kubernetes Secret and forwarded over the mTLS control
+	// channel; it lives only for the duration of the RPC. kek may be
+	// nil for Delete/Stat, which never touch the KEK. nil
+	// SessionStorage means the node has no S3-compatible store
+	// configured and session-checkpoint RPCs fail with
+	// FailedPrecondition.
+	SessionStorage func(kek []byte) storage.StorageBackend
 
 	// FirecrackerFactory constructs a Firecracker client for a given
 	// API socket path. Tests inject a mock here; production wires
@@ -142,6 +154,34 @@ func (s *Server) tracer() trace.Tracer {
 	return tracenoop.NewTracerProvider().Tracer("setec.nodeagent.grpc")
 }
 
+// sessionBackendName is the storage_backend identifier of the
+// portable S3-compatible session-checkpoint backend (ADR-0007).
+const sessionBackendName = "s3"
+
+// backendFor routes a request's storage_backend (plus optional
+// per-session KEK) to the concrete StorageBackend. "" and
+// "local-disk" resolve to the node-local default; "s3" resolves to
+// the session-checkpoint composition built around the forwarded
+// session KEK.
+func (s *Server) backendFor(backendName string, sessionKEK []byte) (storage.StorageBackend, error) {
+	switch backendName {
+	case "", "local-disk":
+		if len(sessionKEK) > 0 {
+			return nil, status.Error(codes.InvalidArgument,
+				"session_kek is only valid with the s3 storage backend")
+		}
+		return s.Storage, nil
+	case sessionBackendName:
+		if s.SessionStorage == nil {
+			return nil, status.Error(codes.FailedPrecondition,
+				"s3 session-checkpoint backend is not configured on this node (--s3-bucket)")
+		}
+		return s.SessionStorage(sessionKEK), nil
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unknown storage backend %q", backendName)
+	}
+}
+
 // frameHeaderSize is the size of the leading 16-byte framing header
 // written to storage by CreateSnapshot: [stateSize uint64][memSize
 // uint64]. The framing keeps the two Firecracker output files paired
@@ -166,6 +206,10 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	}
 	if in.GetSourceKataSocket() == "" {
 		return nil, status.Error(codes.InvalidArgument, "source_kata_socket required")
+	}
+	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
+	if err != nil {
+		return nil, err
 	}
 
 	fc := s.FirecrackerFactory(in.GetSourceKataSocket())
@@ -202,7 +246,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	}
 	defer func() { _ = combined.Close() }()
 
-	size, ref, saveErr := s.Storage.Save(ctx, in.GetSnapshotId(), combined)
+	size, ref, saveErr := backend.Save(ctx, in.GetSnapshotId(), combined)
 	if saveErr != nil {
 		if errors.Is(saveErr, storage.ErrInsufficientStorage) {
 			return nil, status.Errorf(codes.ResourceExhausted, "storage: %v", saveErr)
@@ -230,8 +274,12 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	if in.GetKataSocketTarget() == "" {
 		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
 	}
+	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
+	if err != nil {
+		return nil, err
+	}
 
-	rc, err := s.Storage.Open(ctx, in.GetStorageRef())
+	rc, err := backend.Open(ctx, in.GetStorageRef())
 	if err != nil {
 		if errors.Is(err, storage.ErrCorrupted) {
 			return nil, status.Errorf(codes.DataLoss, "corrupted snapshot: %v", err)
@@ -438,7 +486,11 @@ func (s *Server) DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnaps
 	if in.GetStorageRef() == "" {
 		return nil, status.Error(codes.InvalidArgument, "storage_ref required")
 	}
-	if err := s.Storage.Delete(ctx, in.GetStorageRef()); err != nil {
+	backend, berr := s.backendFor(in.GetStorageBackend(), nil)
+	if berr != nil {
+		return nil, berr
+	}
+	if err := backend.Delete(ctx, in.GetStorageRef()); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			// Idempotent: treat missing state as success so repeated
 			// reconciles don't churn.

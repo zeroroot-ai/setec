@@ -229,6 +229,71 @@ the `storage.StorageBackend` interface without operator changes; the
 encryption wrapper composes over any of them, and keys stay on the
 node.
 
+## Session memory checkpoints (S3-compatible backend)
+
+Session Sandboxes (ADR-0006 L2) add a second, PORTABLE storage
+composition: memory checkpoints on an **S3-compatible object store**
+(real S3 on EKS, MinIO or any S3-compatible endpoint when
+self-hosted — ADR-0007). Enable it on the node-agent via the chart:
+
+```yaml
+snapshots:
+  s3:
+    enabled: true
+    endpoint: http://minio.minio.svc:9000   # empty = real S3
+    bucket: setec-checkpoints
+    pathStyle: true                          # required by MinIO
+    credentialsSecret: setec-s3-creds        # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY;
+                                             # empty = IRSA / default chain
+```
+
+and per SandboxClass:
+
+```yaml
+spec:
+  sessionCheckpoint:
+    interval: 10m   # optional periodic cadence; omit for on-event only
+    backend: s3
+  sessionIdleTimeout: 15m
+```
+
+With `sessionCheckpoint` set, a session Sandbox gets:
+
+- **Suspend-on-idle** — the `sessionIdleTimeout` deadline (setec#193's
+  idle signal) checkpoints the VM and releases it (`phase: Suspended`,
+  reason `SuspendedIdle`) instead of hard-failing it. A reattach (the
+  frontend's `Attach` stamps the last-activity annotation) or an
+  explicit `desiredState: Running` resumes it transparently — on
+  whichever node the scheduler picks.
+- **Explicit suspend** — `spec.desiredState: Suspended` (reason
+  `UserSuspended`); resume with `desiredState: Running`.
+- **Checkpoint-on-drain** — a cordoned node or an evicted VM Pod
+  triggers an immediate checkpoint (reason `CheckpointOnDrain`) and
+  the session resumes on another node with process state intact; the
+  workspace PVC re-attaches alongside.
+- **Periodic checkpoints** — `interval` bounds how much process replay
+  a node death costs. Because the durable workspace already provides
+  continuous DATA safety, checkpoints serve process continuity only
+  and should stay infrequent.
+- **Degraded recovery, surfaced** — a VM lost with no usable
+  checkpoint restarts from the durable workspace and says so:
+  `status.checkpoint.lastRecovery: RestartedFromWorkspace` plus a
+  `SessionRestartedFromWorkspace` warning event. Data is never lost;
+  only process state since the last checkpoint is.
+
+A session keeps AT MOST one live checkpoint: a new one replaces (and
+destroys) its predecessor, and a restore CONSUMES the checkpoint it
+used — the same single-restore rule every snapshot obeys (ADR-0005).
+`status.checkpoint` records the ref, sequence, timestamps, and the
+last recovery outcome.
+
+Key handling differs from node-local snapshots on purpose: see
+SECURITY.md ("Two sealing domains"). The per-checkpoint data key is
+sealed under a **cluster-scoped per-session KEK** held in a Kubernetes
+Secret (`<sandbox>-session-kek`), created at session start and deleted
+at session end — that deletion cryptographically erases every
+checkpoint the session ever wrote, wherever the bucket is replicated.
+
 ## Operational considerations
 
 - **Disk fill**: `snapshots.localDisk.fillThreshold` (default 0.85)

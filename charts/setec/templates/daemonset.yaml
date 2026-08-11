@@ -61,6 +61,13 @@ spec:
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
             - --entropy-reseed={{ .Values.snapshots.entropyReseed }}
             - --restore-uniquify={{ .Values.snapshots.restoreUniquify }}
+            {{- if .Values.snapshots.s3.enabled }}
+            - --s3-endpoint={{ .Values.snapshots.s3.endpoint }}
+            - --s3-bucket={{ required "snapshots.s3.bucket is required when snapshots.s3.enabled" .Values.snapshots.s3.bucket }}
+            - --s3-region={{ .Values.snapshots.s3.region }}
+            - --s3-prefix={{ .Values.snapshots.s3.prefix }}
+            - --s3-path-style={{ .Values.snapshots.s3.pathStyle }}
+            {{- end }}
             - --tls-cert=/etc/setec/nodeagent-tls/tls.crt
             - --tls-key=/etc/setec/nodeagent-tls/tls.key
             - --tls-client-ca=/etc/setec/nodeagent-ca/ca.crt
@@ -72,6 +79,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+          {{- if and .Values.snapshots.s3.enabled .Values.snapshots.s3.credentialsSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.snapshots.s3.credentialsSecret }}
+          {{- end }}
           ports:
             - name: metrics
               containerPort: 9090

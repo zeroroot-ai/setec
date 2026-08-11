@@ -86,6 +86,7 @@ spec:
                 enum:
                 - Running
                 - Paused
+                - Suspended
                 type: string
               env:
                 description: |-
@@ -460,6 +461,60 @@ spec:
           status:
             description: status reflects the observed state of the Sandbox.
             properties:
+              checkpoint:
+                description: |-
+                  Checkpoint records the session's latest memory checkpoint and
+                  its recovery bookkeeping (setec#194, ADR-0006 L2). Nil for
+                  ephemeral Sandboxes and for sessions whose class does not
+                  enable sessionCheckpoint.
+                properties:
+                  backend:
+                    description: |-
+                      Backend names the storage backend holding the checkpoint
+                      (currently always "s3").
+                    type: string
+                  lastRecovery:
+                    description: |-
+                      LastRecovery reports how the most recent VM (re)start recovered
+                      the session: ResumedFromCheckpoint (process continued) or
+                      RestartedFromWorkspace (distinct degraded condition — process
+                      restarted against the durable workspace; no data lost).
+                    enum:
+                    - ResumedFromCheckpoint
+                    - RestartedFromWorkspace
+                    type: string
+                  pendingRestore:
+                    description: |-
+                      PendingRestore is set when the next VM start should restore
+                      from Ref (the session was suspended, drained, or its VM was
+                      lost while a checkpoint existed). Cleared after the restore
+                      attempt — success or failure — so a restore is attempted at
+                      most once per checkpoint.
+                    type: boolean
+                  ref:
+                    description: |-
+                      Ref is the storage reference of the latest checkpoint. Empty
+                      when no live checkpoint exists (none taken yet, or the last one
+                      was consumed by a restore).
+                    type: string
+                  sequence:
+                    description: |-
+                      Sequence increments with every checkpoint taken for this
+                      session; it namespaces the storage ref so a new checkpoint
+                      never collides with the one it replaces.
+                    format: int64
+                    type: integer
+                  sizeBytes:
+                    description: |-
+                      SizeBytes is the stored (ciphertext) size of the latest
+                      checkpoint.
+                    format: int64
+                    type: integer
+                  takenAt:
+                    description: TakenAt is when the latest checkpoint completed.
+                    format: date-time
+                    type: string
+                type: object
               exitCode:
                 description: |-
                   ExitCode is the exit status of the workload container once the
@@ -492,6 +547,7 @@ spec:
                 - Paused
                 - Snapshotting
                 - Restoring
+                - Suspended
                 type: string
               podName:
                 description: |-

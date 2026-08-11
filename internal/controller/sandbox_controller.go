@@ -42,9 +42,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
@@ -221,8 +226,9 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=node.k8s.io,resources=runtimeclasses,verbs=get;list
@@ -387,6 +393,36 @@ func (r *SandboxReconciler) handleMissingPod(
 		logger.V(1).Info("Sandbox is terminal; not recreating Pod", "phase", sb.Status.Phase)
 		return ctrl.Result{}, nil
 	}
+	// Session checkpoints (setec#194): a Suspended session stays
+	// suspended — no Pod — until its resume condition holds (fresh
+	// activity for an idle suspend, desiredState=Running for a user
+	// suspend, immediately after a drain). Resuming falls through to
+	// ordinary Pod creation, deliberately unpinned: the checkpoint
+	// store and the session KEK are cluster-scoped, so the scheduler
+	// is free to pick a different node than the one that wrote the
+	// checkpoint.
+	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended {
+		if !suspendedSandboxAction(sb) {
+			return ctrl.Result{}, nil
+		}
+		logger.Info("resuming suspended session", "reason", sb.Status.Reason)
+	}
+	if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
+		// The per-session KEK must exist before the first checkpoint
+		// could ever be taken, and a VM that vanished while a live
+		// checkpoint exists must restore from it once the fresh VM
+		// runs.
+		if err := r.ensureSessionKEK(ctx, sb); err != nil {
+			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("ensure session KEK: %w", err))
+		}
+		if ck := sb.Status.Checkpoint; ck != nil && ck.Ref != "" && !ck.PendingRestore {
+			original := sb.DeepCopy()
+			sb.Status.Checkpoint.PendingRestore = true
+			if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("mark checkpoint pending restore: %w", err)
+			}
+		}
+	}
 	sel, selErr := r.selectRuntime(ctx, sb, cls)
 	if selErr != nil {
 		if errors.Is(selErr, runtimepkg.ErrNoEligibleRuntime) {
@@ -502,6 +538,12 @@ func (r *SandboxReconciler) teardownWorkspace(
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
 ) (ctrl.Result, error) {
+	// (a0) Session-checkpoint teardown (setec#194): delete the
+	// per-session KEK Secret — cryptographically erasing every
+	// checkpoint sealed under it — then best-effort delete the stored
+	// checkpoint objects. Idempotent; never blocks teardown.
+	r.teardownSessionCheckpoint(ctx, logger, sb)
+
 	// (a) Delete the backing Pod first so the claim can unmount.
 	pod := &corev1.Pod{}
 	podKey := types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name + podspec.PodNameSuffix}
@@ -569,6 +611,15 @@ func (r *SandboxReconciler) reconcileExistingPod(
 		return ctrl.Result{}, err
 	}
 
+	// (9a) A just-suspended session's Pod is still terminating: hold
+	// the Suspended phase steady until the Pod is gone (setec#194).
+	// Deriving from the dying Pod here would flip the phase back to
+	// Running and re-trigger the suspend.
+	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
+		!pod.DeletionTimestamp.IsZero() {
+		return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
+	}
+
 	// (10) Derive status and patch when changed.
 	now := time.Now()
 	desired := status.Derive(sb, pod, now)
@@ -598,6 +649,23 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// (11) Record phase transition metrics and span status.
 	r.recordTransition(sb, cls, prevPhase, desired, pod, tenantID)
 
+	var checkpointRequeue time.Duration
+
+	// (11c) Session-checkpoint state machine (setec#194): transparent
+	// resume-from-checkpoint on the fresh VM's Running edge,
+	// checkpoint-on-drain when the node is cordoned or the Pod
+	// evicted, suspend on explicit request or on the class idle
+	// deadline, and periodic checkpoints while Running.
+	if sb.Spec.IsSession() {
+		res, handled, err := r.reconcileSessionCheckpoint(ctx, log.FromContext(ctx), sb, cls, pod, desired)
+		if err != nil || handled {
+			return res, err
+		}
+		if res.RequeueAfter > 0 {
+			checkpointRequeue = res.RequeueAfter
+		}
+	}
+
 	// (11b) Session lifecycle: a dead VM is replaced, not mourned. When
 	// the Pod reached a terminal phase but the Sandbox itself is not
 	// terminal (Timeout still wins and stays terminal), delete the Pod;
@@ -608,6 +676,26 @@ func (r *SandboxReconciler) reconcileExistingPod(
 		pod.DeletionTimestamp.IsZero() {
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
 			"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
+		// Degraded-recovery visibility (setec#194): a checkpoint-enabled
+		// session losing its VM with NO live checkpoint can only restart
+		// from the durable workspace — surface that as the distinct
+		// condition before the replacement VM comes up. (With a live
+		// checkpoint the replacement restores from it instead, marked
+		// PendingRestore by handleMissingPod.)
+		if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
+			if ck := sb.Status.Checkpoint; ck == nil || ck.Ref == "" {
+				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
+					"Session VM lost with no checkpoint; restarting from durable workspace — no data lost, process state gone")
+				original := sb.DeepCopy()
+				if sb.Status.Checkpoint == nil {
+					sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
+				}
+				sb.Status.Checkpoint.LastRecovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
+				if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
+					return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
+				}
+			}
+		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
 		}
@@ -661,6 +749,9 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	result := ctrl.Result{}
 	if netpol.DependsOnDNS(sb, cls) {
 		result.RequeueAfter = r.NetPol.EffectiveRefreshInterval()
+	}
+	if checkpointRequeue > 0 && (result.RequeueAfter == 0 || checkpointRequeue < result.RequeueAfter) {
+		result.RequeueAfter = checkpointRequeue
 	}
 
 	// (14) Deadline-driven requeue. The lifecycle timeout and the
@@ -1486,5 +1577,54 @@ func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(r.sandboxesOnCordonedNode),
+			builder.WithPredicates(nodeCordonPredicate())).
 		Complete(r)
+}
+
+// nodeCordonPredicate admits only Node events where the node is (or
+// just became) unschedulable — the checkpoint-on-drain trigger
+// (setec#194). Create/delete/generic events for schedulable nodes are
+// filtered out so ordinary node churn does not fan out reconciles.
+func nodeCordonPredicate() predicate.Funcs {
+	cordoned := func(obj client.Object) bool {
+		node, ok := obj.(*corev1.Node)
+		return ok && node.Spec.Unschedulable
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return cordoned(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return cordoned(e.ObjectNew) && !cordoned(e.ObjectOld) },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(e event.GenericEvent) bool { return cordoned(e.Object) },
+	}
+}
+
+// sandboxesOnCordonedNode maps a cordoned Node to the session
+// Sandboxes whose VM Pods run on it, so checkpoint-on-drain fires
+// proactively at cordon time instead of waiting for the eviction to
+// reach each Pod.
+func (r *SandboxReconciler) sandboxesOnCordonedNode(ctx context.Context, obj client.Object) []reconcile.Request {
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		return nil
+	}
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.HasLabels{podspec.SandboxLabelKey}); err != nil {
+		log.FromContext(ctx).Error(err, "list sandbox Pods for cordoned node", "node", node.Name)
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range podList.Items {
+		p := &podList.Items[i]
+		if p.Spec.NodeName != node.Name {
+			continue
+		}
+		if sbName, ok := p.Labels[podspec.SandboxLabelKey]; ok && sbName != "" {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: p.Namespace, Name: sbName},
+			})
+		}
+	}
+	return reqs
 }

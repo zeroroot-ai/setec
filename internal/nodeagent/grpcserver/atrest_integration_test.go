@@ -99,9 +99,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &storage.EncryptedBackend{
-		Inner:   &storage.LocalDiskBackend{Root: root},
-		KEKPath: filepath.Join(base, "keys", "node.key"),
-		KeyDir:  keyDir,
+		Inner: &storage.LocalDiskBackend{Root: root},
+		KEK:   &storage.FileKEKSource{Path: filepath.Join(base, "keys", "node.key")},
+		DEKs:  &storage.DirDEKStore{Dir: keyDir},
 	}
 	fc := &capturingFC{}
 	srv := &Server{

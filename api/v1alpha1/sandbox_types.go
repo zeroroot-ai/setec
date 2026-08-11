@@ -73,7 +73,7 @@ const (
 )
 
 // SandboxPhase is the high-level lifecycle state of a Sandbox.
-// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Paused;Snapshotting;Restoring
+// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Paused;Snapshotting;Restoring;Suspended
 type SandboxPhase string
 
 const (
@@ -95,11 +95,18 @@ const (
 	// SandboxPhaseRestoring indicates the node-agent is loading a
 	// Firecracker snapshot before the microVM resumes. Transient.
 	SandboxPhaseRestoring SandboxPhase = "Restoring"
+	// SandboxPhaseSuspended indicates a session Sandbox whose microVM
+	// has been checkpointed to portable storage and released
+	// (setec#194, ADR-0006 L2). The durable workspace PVC and the
+	// checkpoint survive; no Pod exists while Suspended. A reattach,
+	// fresh activity, or desiredState=Running resumes the session —
+	// on whichever node the scheduler picks.
+	SandboxPhaseSuspended SandboxPhase = "Suspended"
 )
 
 // SandboxDesiredState expresses the user's intent with respect to
-// pause/resume. Only Running and Paused are meaningful in Phase 3.
-// +kubebuilder:validation:Enum=Running;Paused
+// pause/suspend/resume.
+// +kubebuilder:validation:Enum=Running;Paused;Suspended
 type SandboxDesiredState string
 
 const (
@@ -110,6 +117,32 @@ const (
 	// to a paused state. CPU/memory consumption drops to near-zero;
 	// state is preserved in memory (not on disk) until Resume.
 	SandboxDesiredStatePaused SandboxDesiredState = "Paused"
+	// SandboxDesiredStateSuspended requests that a session Sandbox
+	// checkpoint its memory to the portable checkpoint store and
+	// release its microVM entirely (setec#194). Only valid for
+	// session Sandboxes whose SandboxClass enables sessionCheckpoint;
+	// the admission webhook rejects it otherwise. Setting the state
+	// back to Running resumes the session from the checkpoint.
+	SandboxDesiredStateSuspended SandboxDesiredState = "Suspended"
+)
+
+// SessionRecoveryKind enumerates how a session VM (re)start recovered
+// its state after a suspend, drain, or VM loss.
+// +kubebuilder:validation:Enum=ResumedFromCheckpoint;RestartedFromWorkspace
+type SessionRecoveryKind string
+
+const (
+	// SessionRecoveryResumedFromCheckpoint: the VM's process state was
+	// restored from the latest memory checkpoint — the session
+	// continued where it left off (the L2 good case, ADR-0006).
+	SessionRecoveryResumedFromCheckpoint SessionRecoveryKind = "ResumedFromCheckpoint"
+	// SessionRecoveryRestartedFromWorkspace: no usable checkpoint
+	// existed (node died between checkpoints, or the restore failed),
+	// so the workload process restarted fresh against the durable
+	// workspace PVC. Process state since the last checkpoint is gone;
+	// workspace data is never lost (the L2 degraded case — surfaced
+	// as this DISTINCT condition, never silently).
+	SessionRecoveryRestartedFromWorkspace SessionRecoveryKind = "RestartedFromWorkspace"
 )
 
 // SandboxSnapshotAfterCreate enumerates the states a Sandbox may
@@ -445,6 +478,13 @@ type SandboxStatus struct {
 	// +optional
 	Runtime *SandboxRuntimeStatus `json:"runtime,omitempty"`
 
+	// Checkpoint records the session's latest memory checkpoint and
+	// its recovery bookkeeping (setec#194, ADR-0006 L2). Nil for
+	// ephemeral Sandboxes and for sessions whose class does not
+	// enable sessionCheckpoint.
+	// +optional
+	Checkpoint *SandboxCheckpointStatus `json:"checkpoint,omitempty"`
+
 	// WarmStart records the outcome of the one-shot pool warm-start
 	// attempt for Sandboxes whose class maintains a pre-warm pool
 	// (ADR-0004). Nil when no attempt was made (class has no pool,
@@ -453,6 +493,54 @@ type SandboxStatus struct {
 	// most once per Sandbox.
 	// +optional
 	WarmStart *SandboxWarmStartStatus `json:"warmStart,omitempty"`
+}
+
+// SandboxCheckpointStatus tracks the single retained memory checkpoint
+// of a session Sandbox plus how the last VM (re)start recovered. A
+// session keeps AT MOST one live checkpoint: taking a new one destroys
+// the previous, and a restore consumes the checkpoint it used
+// (ADR-0005 forbids restoring the same state twice).
+type SandboxCheckpointStatus struct {
+	// Ref is the storage reference of the latest checkpoint. Empty
+	// when no live checkpoint exists (none taken yet, or the last one
+	// was consumed by a restore).
+	// +optional
+	Ref string `json:"ref,omitempty"`
+
+	// Backend names the storage backend holding the checkpoint
+	// (currently always "s3").
+	// +optional
+	Backend string `json:"backend,omitempty"`
+
+	// Sequence increments with every checkpoint taken for this
+	// session; it namespaces the storage ref so a new checkpoint
+	// never collides with the one it replaces.
+	// +optional
+	Sequence int64 `json:"sequence,omitempty"`
+
+	// TakenAt is when the latest checkpoint completed.
+	// +optional
+	TakenAt *metav1.Time `json:"takenAt,omitempty"`
+
+	// SizeBytes is the stored (ciphertext) size of the latest
+	// checkpoint.
+	// +optional
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+
+	// PendingRestore is set when the next VM start should restore
+	// from Ref (the session was suspended, drained, or its VM was
+	// lost while a checkpoint existed). Cleared after the restore
+	// attempt — success or failure — so a restore is attempted at
+	// most once per checkpoint.
+	// +optional
+	PendingRestore bool `json:"pendingRestore,omitempty"`
+
+	// LastRecovery reports how the most recent VM (re)start recovered
+	// the session: ResumedFromCheckpoint (process continued) or
+	// RestartedFromWorkspace (distinct degraded condition — process
+	// restarted against the durable workspace; no data lost).
+	// +optional
+	LastRecovery SessionRecoveryKind `json:"lastRecovery,omitempty"`
 }
 
 // SandboxWarmStartOutcome enumerates how a pool warm-start attempt

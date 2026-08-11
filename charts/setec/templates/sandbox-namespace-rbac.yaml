@@ -72,6 +72,21 @@ rules:
     verbs:
       - create
       - delete
+  # Session checkpoints (setec#194): the per-session checkpoint KEK
+  # Secret is created at session start and deleted at session end
+  # (deleting it crypto-erases every checkpoint it sealed). Secret
+  # READS are here too — not cluster-wide in the -manager role —
+  # because the operator's client bypasses the cache for Secrets, so
+  # it never LISTs or WATCHes them and only ever touches Secrets in
+  # Sandbox namespaces.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - delete
 {{- if $clusterWide }}
 ---
 # EXPLICIT cluster-wide grant. Chosen by setting

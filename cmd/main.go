@@ -39,6 +39,7 @@ import (
 
 	"github.com/spf13/pflag"
 	grpccreds "google.golang.org/grpc/credentials"
+	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -371,6 +372,17 @@ func main() {
 		LeaderElection:                enableLeaderElect,
 		LeaderElectionID:              "setec.zeroroot.ai",
 		LeaderElectionReleaseOnCancel: true,
+		// Secrets are read straight from the API server, never cached:
+		// caching would LIST/WATCH every Secret in the cluster, which
+		// both leaks far beyond the operator's need (only the
+		// per-session checkpoint KEK Secrets in Sandbox namespaces,
+		// setec#194) and would force a cluster-wide secret-read RBAC
+		// grant. The uncached path needs only namespace-scoped `get`.
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.Secret{}},
+			},
+		},
 	}
 	if webhookEnabled {
 		mgrOpts.WebhookServer = webhookserver.NewServer(webhookserver.Options{

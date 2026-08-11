@@ -39,6 +39,7 @@ const (
 	actionFinalizeSandbox     = "FinalizeSandbox"
 	actionManageWorkspace     = "ManageWorkspace"
 	actionRestartSessionVM    = "RestartSessionVM"
+	actionManageCheckpoint    = "ManageCheckpoint"
 )
 
 // SnapshotReconciler actions.

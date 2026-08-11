@@ -94,6 +94,43 @@ opt-out flag and no plaintext write path (ADR-0005 invariant 5,
   the node, so the blast radius of a stolen artifact tree or a
   compromised storage backend is zero.
 
+### Two sealing domains: node-local snapshots vs session checkpoints
+
+The per-artifact data-key design above has TWO key-wrapping domains,
+split by what must be able to read the artifact (setec#194):
+
+- **Node-local KEK (keyfile)** — pool entries and local-disk
+  snapshots. These artifacts never leave the node that wrote them, so
+  the smallest sufficient trust domain is that node's 0600 keyfile.
+  Unchanged from the description above.
+- **Per-session KEK (Kubernetes Secret)** — session memory checkpoints
+  on the S3-compatible backend. Checkpoint-on-drain exists precisely
+  so a DIFFERENT node can resume a session after the writing node is
+  cordoned or dead, which a node-local keyfile cannot support. Each
+  session gets its own 32-byte KEK in a Secret
+  (`<sandbox>-session-kek`) in the Sandbox's namespace, created at
+  session start and deleted at session end. The operator reads it and
+  forwards it to the node-agent per RPC over the mutually
+  authenticated operator↔node-agent mTLS channel; the node-agent holds
+  it in memory for the duration of the call only and never persists
+  it. Per-checkpoint data keys are sealed under it (AEAD-bound to the
+  checkpoint's identity) and the sealed blobs live beside the
+  ciphertext in the bucket — safe, because the KEK itself never enters
+  the bucket: a copy of the bucket still carries zero usable key
+  material.
+- **Crypto-erase at session end.** Deleting the per-session KEK Secret
+  — which session teardown does before releasing its finalizer —
+  cryptographically erases every checkpoint the session ever wrote,
+  including copies in bucket replicas or backups the operator cannot
+  reach. The subsequent ciphertext delete is belt-and-braces.
+- **Residuals:** anyone who can read the session's KEK Secret
+  (Kubernetes RBAC on Secrets in sandbox namespaces) plus the bucket
+  can decrypt that ONE session's current checkpoint — the per-session
+  split keeps a leaked KEK from unsealing any other session, past or
+  future. The operator deliberately reads Secrets uncached and holds
+  no cluster-wide secret-read grant; its Secret access is bound
+  per-sandbox-namespace, alongside its Pod writes.
+
 ### Template provenance (pool entries)
 
 A pre-warm pool template is built ONLY from the trusted class image

@@ -184,13 +184,14 @@ deletes the backing Pod; status converges to `Failed` with
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. |
+| `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` \| `Paused` \| `Snapshotting` \| `Restoring` \| `Suspended` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. `Suspended` (session + class `sessionCheckpoint` only, setec#194) means the microVM was checkpointed to the portable store and released; no Pod exists while suspended, and the workspace PVC plus the checkpoint survive. |
 | `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, ADR-0006), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`; on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
 | `lastTransitionTime` | `metav1.Time` | Timestamp of the most recent phase change. |
 | `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (ADR-0004) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a claimed pool entry, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
+| `checkpoint` | object | Session memory-checkpoint bookkeeping (setec#194; session + class `sessionCheckpoint` only). `ref`/`backend`/`sequence`/`takenAt`/`sizeBytes` describe the single retained checkpoint (a new one replaces its predecessor; a restore consumes it). `pendingRestore` marks a fresh VM that must restore from `ref`. `lastRecovery` reports how the most recent VM (re)start recovered: `ResumedFromCheckpoint` (process continued) or `RestartedFromWorkspace` (the distinct degraded condition — the process restarted against the durable workspace; no data lost). While `Suspended`, `status.reason` is one of `SuspendedIdle`, `UserSuspended`, or `CheckpointOnDrain`. |
 
 ## Phase state machine
 
@@ -299,7 +300,23 @@ Administrators author classes; tenants reference them by name in
   until explicit teardown. An actively-used session is never evicted
   because its activity timestamp keeps moving. Unset, zero, or negative
   disables idle eviction for the class. Set it comfortably above one
-  minute so the frontend heartbeat always outruns it.
+  minute so the frontend heartbeat always outruns it. When the class
+  also sets `sessionCheckpoint`, the same deadline **suspends** the
+  session (checkpoint + release the microVM, resumable on reattach)
+  instead of failing it — see `spec.sessionCheckpoint`.
+- `spec.sessionCheckpoint` — object (optional; setec#194, ADR-0006 L2 /
+  ADR-0007). Enables memory checkpoints for session Sandboxes of this
+  class on the S3-compatible checkpoint store (requires
+  `snapshots.s3.enabled` on the node-agents). Fields:
+  `interval` (Go duration, optional) — periodic checkpoint cadence
+  while `Running`; positive when set, omit for on-event checkpoints
+  only. `backend` (enum, only `s3`, default `s3`). With this set,
+  sessions gain suspend-on-idle, explicit suspend
+  (`spec.desiredState: Suspended`), checkpoint-on-drain with
+  resume-on-another-node, and the `RestartedFromWorkspace` degraded
+  condition. Checkpoints are always encrypted, sealed under a
+  per-session KEK Secret the operator manages, and destroyed at
+  session end (see SECURITY.md).
 
 ### Validation rules (enforced by the SandboxClass webhook)
 
@@ -322,6 +339,10 @@ Administrators author classes; tenants reference them by name in
   side-effect of naming it in the defaults block.
 - `spec.vmm` and `spec.runtime.backend` are mutually exclusive; if both
   are provided, admission fails. Migration: set one and delete the other.
+- `spec.sessionCheckpoint.interval`, when set, must be positive;
+  `spec.sessionCheckpoint.backend` must be `s3` (or empty). On the
+  Sandbox side, `spec.desiredState: Suspended` is rejected unless the
+  Sandbox is a session AND its class sets `spec.sessionCheckpoint`.
 
 ### Example (multi-backend with fallback)
 

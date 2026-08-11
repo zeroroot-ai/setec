@@ -50,9 +50,9 @@ func newEncryptedBackend(t *testing.T) (*EncryptedBackend, string, string) {
 		t.Fatal(err)
 	}
 	b := &EncryptedBackend{
-		Inner:   &LocalDiskBackend{Root: root},
-		KEKPath: filepath.Join(keys, "node.key"),
-		KeyDir:  filepath.Join(keys, "dek"),
+		Inner: &LocalDiskBackend{Root: root},
+		KEK:   &FileKEKSource{Path: filepath.Join(keys, "node.key")},
+		DEKs:  &DirDEKStore{Dir: filepath.Join(keys, "dek")},
 	}
 	return b, root, keys
 }
@@ -133,7 +133,7 @@ func TestEncryptedBackend_UnreadableWithoutKey(t *testing.T) {
 	}
 	// Destroy only the sealed DEK: the ciphertext remains on disk but
 	// the artifact must be unreadable — cryptographically erased.
-	if err := atrest.Shred(b.dekPath("snap-1")); err != nil {
+	if err := atrest.Shred(b.DEKs.(*DirDEKStore).path("snap-1")); err != nil {
 		t.Fatalf("shred DEK: %v", err)
 	}
 	if _, err := b.Open(ctx, "snap-1"); !errors.Is(err, ErrNotFound) {
@@ -154,11 +154,11 @@ func TestEncryptedBackend_KeyIsPerSnapshot(t *testing.T) {
 	if _, _, err := b.Save(ctx, "snap-b", bytes.NewReader(plaintextMarker)); err != nil {
 		t.Fatalf("Save b: %v", err)
 	}
-	ka, err := os.ReadFile(b.dekPath("snap-a"))
+	ka, err := os.ReadFile(b.DEKs.(*DirDEKStore).path("snap-a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	kb, err := os.ReadFile(b.dekPath("snap-b"))
+	kb, err := os.ReadFile(b.DEKs.(*DirDEKStore).path("snap-b"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestEncryptedBackend_KeyIsPerSnapshot(t *testing.T) {
 	}
 	// A sealed DEK is bound to its snapshot: grafting a's key onto b
 	// must fail authentication, not decrypt b.
-	if err := os.WriteFile(b.dekPath("snap-b"), ka, 0o600); err != nil {
+	if err := os.WriteFile(b.DEKs.(*DirDEKStore).path("snap-b"), ka, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.Open(ctx, "snap-b"); !errors.Is(err, ErrCorrupted) {
@@ -184,7 +184,7 @@ func TestEncryptedBackend_DeleteDestroysArtifactAndKey(t *testing.T) {
 	if err := b.Delete(ctx, "snap-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := os.Stat(b.dekPath("snap-1")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(b.DEKs.(*DirDEKStore).path("snap-1")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("sealed DEK survives Delete: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "snap-1")); !errors.Is(err, os.ErrNotExist) {
@@ -220,7 +220,7 @@ func TestEncryptedBackend_FailedInnerSaveDestroysKey(t *testing.T) {
 	if _, _, err := b.Save(ctx, "snap-1", bytes.NewReader(plaintextMarker)); !errors.Is(err, ErrInsufficientStorage) {
 		t.Fatalf("expected ErrInsufficientStorage, got %v", err)
 	}
-	if _, err := os.Stat(b.dekPath("snap-1")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(b.DEKs.(*DirDEKStore).path("snap-1")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("orphan sealed DEK left behind after failed Save: %v", err)
 	}
 }
