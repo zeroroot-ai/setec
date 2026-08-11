@@ -28,8 +28,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,7 +42,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -53,6 +50,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
@@ -89,9 +87,7 @@ func main() {
 
 		// Phase 3 flags.
 		grpcListenAddr       string
-		tlsCertPath          string
-		tlsKeyPath           string
-		tlsClientCAPath      string
+		creds                credentialFlags
 		snapshotBackend      string
 		snapshotRoot         string
 		snapshotFillFraction float64
@@ -124,13 +120,21 @@ func main() {
 	// Phase 3 flags.
 	flag.StringVar(&grpcListenAddr, "grpc-listen-addr", ":50052",
 		"Phase 3: address the NodeAgentService gRPC server listens on. Empty disables the server.")
-	flag.StringVar(&tlsCertPath, "tls-cert", "",
-		"Phase 3: path to the PEM-encoded server certificate for mTLS. Required when --grpc-listen-addr is non-empty.")
-	flag.StringVar(&tlsKeyPath, "tls-key", "",
-		"Phase 3: path to the PEM-encoded server private key. Required when --grpc-listen-addr is non-empty.")
-	flag.StringVar(&tlsClientCAPath, "tls-client-ca", "",
-		"Phase 3: path to the PEM-encoded CA used to verify operator client certificates."+
-			" Required when --grpc-listen-addr is non-empty.")
+	flag.StringVar(&creds.tlsCert, "tls-cert", "",
+		"Phase 3: path to the PEM-encoded server certificate for mTLS. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsKey, "tls-key", "",
+		"Phase 3: path to the PEM-encoded server private key. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
+		"Phase 3: path to the PEM-encoded CA used to verify operator client certificates. "+
+			"Selects file credential mode, the default.")
+	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
+		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
+			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
+	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
+		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://zeroroot.ai/ns/setec/sa/setec. "+
+			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
 	flag.StringVar(&snapshotBackend, "snapshot-backend", "local-disk",
 		"Phase 3: storage backend identifier. Only local-disk is supported in Phase 3.")
 	flag.StringVar(&snapshotRoot, "snapshot-root", "/var/lib/setec/snapshots",
@@ -308,7 +312,7 @@ func main() {
 				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 					"restored snapshot clones rely on passive virtio-rng only")
 		}
-		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(tlsCertPath, tlsKeyPath, tlsClientCAPath))
+		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
 
 		if poolReconcileTick > 0 {
 			lister, err := newSandboxClassLister()
@@ -409,37 +413,112 @@ func prefetchErrorReason(err error) string {
 	}
 }
 
+// Credential mode names, used only in log and error output so an
+// operator can tell from a pod's logs which posture it is running.
+// They match cmd/frontend's names because an operator comparing two
+// pods' logs is comparing postures, not components.
+const (
+	fileMode        = "file"
+	spiffeMode      = "spiffe"
+	conflictingMode = "conflicting"
+	unsetMode       = "unset"
+)
+
+// credentialFlags carries the node-agent's credential flags.
+type credentialFlags struct {
+	tlsCert             string
+	tlsKey              string
+	tlsClientCA         string
+	spiffeSocket        string
+	spiffeAuthorizedIDs repeatedString
+}
+
+// config maps the flags onto a credentials.Config and names the mode
+// they selected.
+//
+// It deliberately validates nothing, and it is deliberately a copy of
+// cmd/frontend's function rather than an approximation of it. A source
+// is *selected* by any of its flags being set, not by all of them;
+// whether the selection is coherent — both modes, neither, or half of
+// one — is credentials.New's decision, so that every setec component
+// gets the same answer and the same message. An operator must not be
+// able to end up with the frontend on SPIFFE and the node-agent
+// silently still on files, and the way to guarantee that is for
+// neither component to hold an opinion of its own.
+func (f credentialFlags) config() (credentials.Config, string) {
+	var (
+		cfg  credentials.Config
+		mode = unsetMode
+	)
+	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
+		cfg.Files = &credentials.FileSource{
+			CertFile: f.tlsCert,
+			KeyFile:  f.tlsKey,
+			CAFile:   f.tlsClientCA,
+		}
+		mode = fileMode
+	}
+	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
+		cfg.SPIFFE = &credentials.SPIFFESource{
+			SocketPath:    f.spiffeSocket,
+			AuthorizedIDs: f.spiffeAuthorizedIDs,
+		}
+		mode = spiffeMode
+	}
+	if cfg.Files != nil && cfg.SPIFFE != nil {
+		mode = conflictingMode
+	}
+	return cfg, mode
+}
+
+// repeatedString collects a flag given more than once. The credential
+// allow-list is a list of full SPIFFE IDs, and repeating the flag keeps
+// each entry visible on its own line in a manifest rather than buried
+// in a delimited string.
+type repeatedString []string
+
+func (r *repeatedString) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedString) Set(v string) error {
+	*r = append(*r, v)
+	return nil
+}
+
+// serverCredentials resolves the gRPC server option carrying this
+// node-agent's mTLS credentials, and names the mode it used.
+//
+// Where the key material comes from, what the TLS floor is, whether a
+// client certificate is required and verified, and which peers are
+// authorized are all properties of internal/credentials — this
+// function only says which surface it needs.
+func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, string, error) {
+	cfg, mode := f.config()
+	provider, err := credentials.New(cfg)
+	if err != nil {
+		return nil, mode, err
+	}
+	// Acquiring the credentials here rather than lazily is what makes
+	// an unreachable SPIFFE Workload API a boot failure. There is no
+	// fallback to files.
+	creds, err := provider.ServerCredentials(ctx)
+	if err != nil {
+		return nil, mode, err
+	}
+	return grpc.Creds(creds), mode, nil
+}
+
 // grpcTLS returns the credentials option for the gRPC server. mTLS is
-// mandatory: missing any of cert/key/client-ca causes the process to
-// exit so the DaemonSet surfaces the misconfiguration via its restart
-// count.
-func grpcTLS(certPath, keyPath, clientCAPath string) grpc.ServerOption {
-	if certPath == "" || keyPath == "" || clientCAPath == "" {
-		fmt.Fprintln(os.Stderr,
-			"node-agent: --tls-cert/--tls-key/--tls-client-ca are required; mTLS is mandatory")
-		os.Exit(1)
-	}
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+// mandatory and the credential mode is explicit: half a mode, both
+// modes, or neither causes the process to exit so the DaemonSet
+// surfaces the misconfiguration via its restart count.
+func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
+	opt, mode, err := serverCredentials(ctx, f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: load tls keypair: %v\n", err)
+		fmt.Fprintf(os.Stderr, "node-agent: credentials (%s mode): %v\n", mode, err)
 		os.Exit(1)
 	}
-	caBytes, err := os.ReadFile(clientCAPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: read client-ca: %v\n", err)
-		os.Exit(1)
-	}
-	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(caBytes) {
-		fmt.Fprintf(os.Stderr, "node-agent: client-ca file contains no usable certificates\n")
-		os.Exit(1)
-	}
-	return grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    certPool,
-		MinVersion:   tls.VersionTLS13,
-	}))
+	fmt.Fprintf(os.Stderr, "node-agent: credential mode: %s\n", mode)
+	return opt
 }
 
 // newSandboxClassLister builds a controller-runtime client and

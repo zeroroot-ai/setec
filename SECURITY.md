@@ -144,8 +144,18 @@ default, and every setec hop's only mode until SPIFFE mode landed):
   the workload. Rotation is the delivery pipeline's job, and a pipeline
   that stops delivering shows up as an expiry.
 
-**SPIFFE mode** (`--spiffe-socket` / `--spiffe-authorized-id`, frontend
-server surface only today):
+**SPIFFE mode** (`--spiffe-socket` / `--spiffe-authorized-id`). Covered
+surfaces today — an operator should be able to state their own posture
+without reading source:
+
+| Hop | Mode selection |
+|---|---|
+| frontend server (`cmd/frontend`) | file or SPIFFE |
+| node-agent server (`cmd/node-agent`) | file or SPIFFE |
+| operator → node-agent client (snapshots) | file only |
+| operator → OTLP collector (tracing) | one-way TLS, not mTLS |
+
+What SPIFFE mode proves on a covered surface:
 
 - Proves everything file mode proves, and additionally that the peer's
   SPIFFE ID is on an explicit allow-list of full SPIFFE IDs. A
