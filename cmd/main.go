@@ -559,7 +559,9 @@ func (f nodeAgentCredentialFlags) credentialConfig() (credentials.Config, error)
 // on this hop, so what it must get right is whose node-agent it is
 // willing to talk to — the credential module owns that decision, and
 // this function only names the surface it needs.
-func nodeAgentClientCredentials(ctx context.Context, f nodeAgentCredentialFlags) (grpccreds.TransportCredentials, error) {
+func nodeAgentClientCredentials(
+	ctx context.Context, f nodeAgentCredentialFlags,
+) (grpccreds.TransportCredentials, error) {
 	cfg, err := f.credentialConfig()
 	if err != nil {
 		return nil, err

@@ -62,7 +62,7 @@ func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if _, err := queryPool(t, client); err != nil {
+	if err := queryPool(t, client); err != nil {
 		t.Fatalf("QueryPool against a trusted node-agent: %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if _, err := queryPool(t, client); err == nil {
+	if err := queryPool(t, client); err == nil {
 		t.Fatal("QueryPool against a node-agent from an untrusted CA: want refusal, got success")
 	}
 }
@@ -106,7 +106,7 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if _, err := queryPool(t, client); err == nil {
+	if err := queryPool(t, client); err == nil {
 		t.Fatal("QueryPool with an identity the node-agent does not trust: want refusal, got success")
 	}
 }
@@ -123,7 +123,7 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if _, err := queryPool(t, client); err == nil {
+	if err := queryPool(t, client); err == nil {
 		t.Fatal("QueryPool against a plaintext listener: want refusal, got success")
 	}
 }
@@ -242,12 +242,15 @@ func serve(t *testing.T, opt grpc.ServerOption) string {
 	return "%.0s" + lis.Addr().String()
 }
 
-// queryPool forces the lazy gRPC handshake by issuing one RPC.
-func queryPool(t *testing.T, client NodeAgentClient) (*setecgrpcv1.QueryPoolResponse, error) {
+// queryPool forces the lazy gRPC handshake by issuing one RPC and
+// returns whatever it produced. The response body carries nothing the
+// tests care about; the error is the observation.
+func queryPool(t *testing.T, client NodeAgentClient) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	return client.QueryPool(ctx, &setecgrpcv1.QueryPoolRequest{})
+	_, err := client.QueryPool(ctx, &setecgrpcv1.QueryPoolRequest{})
+	return err
 }
 
 // testCA is a throwaway certificate authority for one test.
