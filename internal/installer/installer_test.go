@@ -608,3 +608,37 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// verify() must answer questions about the tree the installer wrote, not about
+// the machine running the tests (setec#220).
+//
+// kataShimLink is a symlink to a host-absolute target, so the original
+// os.Stat followed it out of HostRoot and onto the real filesystem: green on a
+// workstation that happens to have /opt/kata, red on every clean CI runner.
+// The assertions below fail on that implementation regardless of which kind of
+// machine runs them.
+func TestVerifyChecksTheInstalledTreeNotTheHost(t *testing.T) {
+	fx := newHostFixture(t, "containerd")
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+	if _, err := inst.Converge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting the shim binary INSIDE the fake root must fail verification.
+	// os.Stat on the link would still succeed on any host with a real
+	// /opt/kata, so this is the assertion that pins root-relative checking.
+	if err := os.Remove(filepath.Join(fx.root, kataShimBin)); err != nil {
+		t.Fatalf("remove root-relative shim target: %v", err)
+	}
+	flavor, err := detectFlavor(inst.cfg)
+	if err != nil {
+		t.Fatalf("detect flavor: %v", err)
+	}
+	if err := inst.verify(context.Background(), flavor); err == nil {
+		t.Fatal("verify passed with the shim target absent from the installed tree — " +
+			"it is resolving the symlink against the real filesystem instead of HostRoot")
+	}
+}
