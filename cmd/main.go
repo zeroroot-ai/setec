@@ -701,6 +701,32 @@ func runStartupPrereqCheck(
 // server from controller-runtime's built-in handler is what allows the
 // structured body; the built-in handler supports only plain-text verbose
 // output.
+// probeServer serves /healthz and /readyz on EVERY replica, leader or not.
+//
+// It exists as a named type purely to implement
+// manager.LeaderElectionRunnable. controller-runtime sorts a Runnable into
+// the leader-election group unless it says otherwise, so a bare
+// manager.RunnableFunc does not bind its listener until leadership is won.
+// That is fatal at the chart's default two replicas: the standby answers
+// nothing on the probe port, the kubelet's liveness probe gets
+// "connection refused", and it is killed and restarted on a ~60s loop
+// forever — the Deployment never reaches 2/2, the previous ReplicaSet is
+// never retired, and the Deployment trips its progress deadline, which in
+// turn fails the Argo sync of whatever installs it (setec#225).
+//
+// Health is a property of the process, not of leadership: a standby that
+// is up and waiting for the lease is healthy, and that is exactly what the
+// probes must be able to observe.
+type probeServer struct {
+	run func(context.Context) error
+}
+
+func (p probeServer) Start(ctx context.Context) error { return p.run(ctx) }
+
+// NeedLeaderElection reports false so the manager starts this server
+// immediately rather than after acquiring the lease.
+func (probeServer) NeedLeaderElection() bool { return false }
+
 func newProbeServer(addr string, state *readyzState) manager.Runnable {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -720,7 +746,7 @@ func newProbeServer(addr string, state *readyzState) manager.Runnable {
 		_ = json.NewEncoder(w).Encode(body)
 	})
 
-	return manager.RunnableFunc(func(ctx context.Context) error {
+	return probeServer{run: func(ctx context.Context) error {
 		srv := &http.Server{
 			Addr:              addr,
 			Handler:           mux,
@@ -745,5 +771,5 @@ func newProbeServer(addr string, state *readyzState) manager.Runnable {
 		}
 		<-shutdownDone
 		return nil
-	})
+	}}
 }
