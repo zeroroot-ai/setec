@@ -42,11 +42,18 @@ else
     fail=1
 fi
 
-# The drop-in must parse as TOML (AL2023 ships python3 with tomllib).
-if python3 -c 'import tomllib,sys; tomllib.load(open("/etc/containerd/config.d/99-setec-kata-fc.toml","rb"))'; then
-    echo "PASS: containerd drop-in parses as TOML"
+# The drop-in must parse. Validate it with containerd itself — the real
+# consumer — rather than a language TOML library (AL2023 ships python 3.9,
+# which predates the stdlib tomllib module). Pointing containerd at the
+# drop-in as its config file makes it TOML-decode the file on load;
+# `config dump` prints the effective config and exits non-zero on a parse
+# error.
+DROPIN=/etc/containerd/config.d/99-setec-kata-fc.toml
+if containerd -c "${DROPIN}" config dump >/dev/null 2>&1; then
+    echo "PASS: containerd accepts the kata-fc drop-in"
 else
-    echo "FAIL: containerd drop-in is not valid TOML" >&2
+    echo "FAIL: containerd rejected the kata-fc drop-in:" >&2
+    containerd -c "${DROPIN}" config dump >/dev/null || true
     fail=1
 fi
 
