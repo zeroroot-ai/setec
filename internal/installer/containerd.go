@@ -479,8 +479,23 @@ func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor) error {
 	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "info", in.cfg.PoolName); err != nil {
 		return fmt.Errorf("thin-pool %s not active: %w", in.cfg.PoolName, err)
 	}
-	if _, err := os.Stat(in.hostPath(kataShimLink)); err != nil {
-		return fmt.Errorf("kata-fc shim missing at %s: %w", kataShimLink, err)
+	// Lstat the link, then Stat its target THROUGH hostPath (setec#220).
+	//
+	// kataShimLink is a symlink whose target is a host-absolute path
+	// (kataShimBin, /opt/kata/bin/...). os.Stat follows it, and an absolute
+	// target resolves against the real filesystem — escaping the configured
+	// HostRoot that every other path here goes through. On a real node
+	// HostRoot is "/" and the two agree, so the bug is invisible in
+	// production; under a fake root it asks whether THIS MACHINE has kata
+	// installed, which is a question about the test runner rather than about
+	// the tree the installer just wrote. That is why the installer tests
+	// passed on a workstation with /opt/kata left over and failed on every
+	// clean CI runner.
+	if _, err := os.Lstat(in.hostPath(kataShimLink)); err != nil {
+		return fmt.Errorf("kata-fc shim link missing at %s: %w", kataShimLink, err)
+	}
+	if _, err := os.Stat(in.hostPath(kataShimBin)); err != nil {
+		return fmt.Errorf("kata-fc shim target missing at %s: %w", kataShimBin, err)
 	}
 	return nil
 }
