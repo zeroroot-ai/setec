@@ -1,4 +1,4 @@
-# Setec kata-fc Graviton-metal EKS AMI (Packer)
+# Setec kata-fc x86-metal EKS AMI (Packer)
 
 > **Optional deployment profile** (ADR-0003). The DEFAULT node-prep path
 > is the chart's portable installer DaemonSet (`installer.enabled=true`),
@@ -6,34 +6,36 @@
 > AMI pre-bakes the same components for faster node-ready on EKS +
 > Karpenter (`karpenter.enabled=true`) — an optimisation, never a
 > requirement.
->
-> **STALE — arm64 bake (setec#195).** The sandbox substrate is x86 only
-> ([ADR-0001](../../docs/adr/0001-x86-substrate.md)); the chart's Karpenter
-> NodePool now requires `kubernetes.io/arch=amd64` and defaults to
-> `c6id.metal` / `m6id.metal`, so the arm64/Graviton AMI this template
-> currently bakes can no longer be provisioned by it. The x86 rebake of this
-> template is tracked in
-> [setec#195](https://github.com/zeroroot-ai/setec/issues/195).
 
-Bakes an **immutable** arm64 EKS node AMI that boots ready to run `kata-fc`
+Bakes an **immutable** x86_64 EKS node AMI that boots ready to run `kata-fc`
 Firecracker microVMs — **no kata-deploy**, no live containerd mutation. A
 node either boots capable or fails loudly in `setec-thinpool.service`.
 
-Built from the current **EKS-optimized AL2023 arm64** base (resolved via the
-public SSM parameter for the pinned Kubernetes version). Target instance
-types are the cheapest Graviton bare metal with local NVMe: **`c6gd.metal` /
-`m6gd.metal`** (KVM requires `.metal`; the devmapper thin-pool requires the
-`d` suffix's NVMe instance store).
+Built from the current **EKS-optimized AL2023 x86_64** base (resolved via the
+public SSM parameter for the pinned Kubernetes version). The sandbox
+substrate is x86 only ([ADR-0001](../../docs/adr/0001-x86-substrate.md)).
+Target instance types are the cheapest x86 bare metal with local NVMe:
+**`c6id.metal` / `m6id.metal`** — the chart's Karpenter NodePool defaults
+(KVM requires `.metal`; the devmapper thin-pool requires the `d` suffix's
+NVMe instance store).
 
 ## What the AMI bakes in
 
 | Piece | Where | Why |
 |---|---|---|
-| kata-containers static release (pinned, includes Firecracker + jailer + guest kernel/rootfs) | `/opt/kata` | the VMM stack |
+| kata-containers static release (pinned by version AND sha256, includes Firecracker + jailer + guest kernel/rootfs) | `/opt/kata` | the VMM stack |
 | `containerd-shim-kata-fc-v2` symlink | `/usr/local/bin` | kata-deploy-parity shim resolution for `runtime_type = "io.containerd.kata-fc.v2"` |
 | static containerd drop-in: kata-fc handler + devmapper snapshotter | `/etc/containerd/config.d/99-setec-kata-fc.toml` | the nodeadm-rendered containerd config imports `config.d/*.toml` at every boot — zero runtime rewrites. The config **schema version (2 vs 3) is detected once at bake time** from the base image's containerd |
 | boot-time thin-pool provisioner | `setec-thinpool.service` → `/usr/local/sbin/setec-thinpool.sh` | builds an LVM thin-pool (`setec-thinpool`) from unused NVMe **instance-store** devices, idempotent across reboots; rebuilds + clears stale devmapper snapshotter state after a stop/start wiped the ephemeral disks. Ordered `Before=containerd.service`, and containerd `Requires=` it |
 | static RuntimeClass manifest | `/etc/setec/manifests/runtimeclass-kata-fc.yaml` (also in `files/`) | `kata-fc` handler, kata-deploy-parity `overhead.podFixed` (130Mi / 250m), scheduling nodeSelector `setec.zeroroot.ai/runtime.kata-fc=true` |
+
+The end state matches what the portable installer DaemonSet (ADR-0003,
+`Dockerfile.installer`) produces on a stock node: same kata payload (same
+version, same sha256 pin), same containerd drop-in content, same shim
+symlinks, same RuntimeClass. The AMI is just the pre-baked fast path — a
+node boots already converged instead of converging on first
+installer-pod start. On baked nodes the installer detects the existing
+registration and stands down.
 
 Firecracker needs a block device per container rootfs (no overlayfs) — hence
 the devmapper snapshotter bound to the local-NVMe thin-pool. Regular (runc)
@@ -46,30 +48,25 @@ root; only `kata-fc` pods hit devmapper (per-runtime `snapshotter` field).
 cd packer/eks-kata-fc-ami
 packer init .
 packer validate .
-packer build \
-  -var 'region=us-east-1' \
-  -var 'k8s_version=1.33' \
-  -var 'kata_version=3.28.0' \
-  -var 'kata_sha256=<sha256 of kata-static-3.28.0-arm64.tar.xz>' \
-  .
+packer build -var 'region=us-east-1' .
 ```
 
-The build instance is a cheap non-metal Graviton (`m7g.xlarge` default) —
+The build instance is a cheap non-metal x86 type (`m7i.xlarge` default) —
 baking only writes files; KVM is not needed until a node runs microVMs.
 
 | Variable | Default | Notes |
 |---|---|---|
 | `region` | `us-east-1` | build region |
-| `k8s_version` | `1.33` | selects the EKS-optimized AL2023 arm64 base via SSM |
+| `k8s_version` | `1.33` | selects the EKS-optimized AL2023 x86_64 base via SSM |
 | `kata_version` | `3.28.0` | pinned kata static release (bundles Firecracker) |
-| `kata_sha256` | `""` | **pin this** for a reproducible bake; empty falls back to the release `.sha256sum` sidecar |
-| `build_instance_type` | `m7g.xlarge` | any arm64 type works |
+| `kata_sha256` | sha256 of `kata-static-3.28.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
+| `build_instance_type` | `m7i.xlarge` | any x86_64 type works |
 | `ami_name_prefix` | `setec-kata-fc` | AMI selectors should match `setec-kata-fc-*` |
 | `root_volume_size_gb` | `100` | EBS root (images via overlayfs, kata guest artifacts) |
 
 ## Launching nodes
 
-Launch the AMI on `c6gd.metal` / `m6gd.metal` with standard EKS **nodeadm**
+Launch the AMI on `c6id.metal` / `m6id.metal` with standard EKS **nodeadm**
 user data (managed node group launch template or Karpenter `EC2NodeClass`
 with `amiFamily: AL2023` semantics — see `docs/runtime-backends/eks.md`).
 The bake changes nothing about node bootstrap: nodeadm joins the cluster
@@ -84,9 +81,10 @@ scheduler accounting):
 kubectl apply -f files/runtimeclass-kata-fc.yaml
 ```
 
-Setec's runtime-agent DaemonSet probes the node (`/dev/kvm` + the built-in
-arm64 `kvm` module) and labels it `setec.zeroroot.ai/runtime.kata-fc=true`,
-which satisfies the RuntimeClass scheduling nodeSelector.
+Setec's runtime-agent DaemonSet probes the node (`/dev/kvm` + the loaded
+`kvm_intel`/`kvm_amd` module) and labels it
+`setec.zeroroot.ai/runtime.kata-fc=true`, which satisfies the RuntimeClass
+scheduling nodeSelector.
 
 ## On-node verification checklist
 
@@ -113,6 +111,8 @@ dmsetup info setec-thinpool
 
 ## Upgrades
 
-Never mutate a running node. Bump `kata_version` / `k8s_version`, rebuild,
-and roll nodes onto the new AMI (Karpenter drift or a node-group AMI
-update). That is the whole point.
+Never mutate a running node. Bump `kata_version` **and** `kata_sha256`
+(compute `sha256sum` of the new `kata-static-<ver>-amd64.tar.zst`; update
+the `Dockerfile.installer` pin in the same change), rebuild, and roll nodes
+onto the new AMI (Karpenter drift or a node-group AMI update). That is the
+whole point.

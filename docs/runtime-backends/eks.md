@@ -60,9 +60,7 @@ loudly at boot:
 
 - **Base**: current EKS-optimized AL2023 **x86_64** AMI (pinned Kubernetes
   version via the public SSM parameter). arm64 is unsupported per
-  [ADR-0001](../adr/0001-x86-substrate.md); the Packer template still
-  reflects the earlier Graviton bake and its x86 rebake is tracked in
-  [setec#195](https://github.com/zeroroot-ai/setec/issues/195).
+  [ADR-0001](../adr/0001-x86-substrate.md).
 - **Targets**: cheapest x86 bare metal with local NVMe —
   **`c6id.metal` / `m6id.metal`**. `.metal` supplies `/dev/kvm` (VT-x); the
   `d` suffix supplies the instance-store NVMe the devmapper thin-pool is

@@ -1,7 +1,7 @@
-# eks-kata-fc.pkr.hcl — Packer build for the Setec kata-fc Graviton-metal
-# EKS node AMI.
+# eks-kata-fc.pkr.hcl — Packer build for the Setec kata-fc x86-metal EKS
+# node AMI (ADR-0001: the sandbox substrate is x86 only).
 #
-# Produces an arm64 AMI from the current EKS-optimized AL2023 base that boots
+# Produces an x86_64 AMI from the current EKS-optimized AL2023 base that boots
 # READY to run kata-fc Firecracker microVMs with zero runtime config
 # mutation — no kata-deploy DaemonSet, no live containerd rewrites:
 #
@@ -18,8 +18,9 @@
 #     cluster; see README.md).
 #
 # The build instance does NOT need KVM or bare metal — baking only writes
-# files. Target instance types at runtime are the cheapest Graviton metal
-# with local NVMe: c6gd.metal / m6gd.metal.
+# files. Target instance types at runtime are the cheapest x86 metal with
+# local NVMe: c6id.metal / m6id.metal (the chart's Karpenter NodePool
+# defaults).
 #
 # Usage:
 #   packer init .
@@ -48,7 +49,7 @@ variable "region" {
 variable "k8s_version" {
   type        = string
   default     = "1.33"
-  description = "EKS Kubernetes minor version. Selects the EKS-optimized AL2023 arm64 base AMI via the public SSM parameter."
+  description = "EKS Kubernetes minor version. Selects the EKS-optimized AL2023 x86_64 base AMI via the public SSM parameter."
 }
 
 variable "kata_version" {
@@ -59,14 +60,14 @@ variable "kata_version" {
 
 variable "kata_sha256" {
   type        = string
-  default     = ""
-  description = "Optional pinned sha256 of kata-static-<version>-arm64.tar.xz. Empty falls back to the release's .sha256sum sidecar (transport-integrity only). Pin this for a fully reproducible bake."
+  default     = "99cefb46d70bc27b7bcffd7595be9010c6bed43e1cdfcf8078554c19e7c9b19d"
+  description = "Pinned sha256 of kata-static-<kata_version>-amd64.tar.zst. REQUIRED — kata >= 3.28.0 publishes no .sha256sum sidecars, so the bake fails without a pin. Keep in lockstep with the Dockerfile.installer KATA_SHA256 pin so the AMI and the installer DaemonSet lay down the same payload. Bumping kata_version requires updating this pin."
 }
 
 variable "build_instance_type" {
   type        = string
-  default     = "m7g.xlarge"
-  description = "arm64 instance type used for the bake. Baking only writes files, so no KVM/metal is required here."
+  default     = "m7i.xlarge"
+  description = "x86_64 instance type used for the bake. Baking only writes files, so no KVM/metal is required here."
 }
 
 variable "ami_name_prefix" {
@@ -81,9 +82,9 @@ variable "root_volume_size_gb" {
   description = "Root EBS volume size in GiB. Container images pulled via the default (overlayfs) snapshotter and kata guest images live here; the devmapper pool lives on instance-store NVMe."
 }
 
-# Current EKS-optimized AL2023 arm64 AMI for the pinned Kubernetes version.
-data "amazon-parameterstore" "eks_al2023_arm64" {
-  name   = "/aws/service/eks/optimized-ami/${var.k8s_version}/amazon-linux-2023/arm64/standard/recommended/image_id"
+# Current EKS-optimized AL2023 x86_64 AMI for the pinned Kubernetes version.
+data "amazon-parameterstore" "eks_al2023_x86_64" {
+  name   = "/aws/service/eks/optimized-ami/${var.k8s_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
   region = var.region
 }
 
@@ -95,11 +96,11 @@ locals {
 source "amazon-ebs" "eks_kata_fc" {
   region        = var.region
   instance_type = var.build_instance_type
-  source_ami    = data.amazon-parameterstore.eks_al2023_arm64.value
+  source_ami    = data.amazon-parameterstore.eks_al2023_x86_64.value
   ssh_username  = "ec2-user"
 
   ami_name        = local.ami_name
-  ami_description = "EKS AL2023 arm64 node AMI with baked kata-containers ${var.kata_version} + Firecracker (kata-fc), static containerd config, and NVMe devmapper thin-pool boot unit. Built by zeroroot-ai/setec packer/eks-kata-fc-ami."
+  ami_description = "EKS AL2023 x86_64 node AMI with baked kata-containers ${var.kata_version} + Firecracker (kata-fc), static containerd config, and NVMe devmapper thin-pool boot unit. Built by zeroroot-ai/setec packer/eks-kata-fc-ami."
 
   # IMDSv2 only, matching the EKS-optimized base.
   metadata_options {
@@ -132,14 +133,20 @@ build {
   sources = ["source.amazon-ebs.eks_kata_fc"]
 
   # Boot-time units, containerd systemd drop-in, and the static
-  # RuntimeClass manifest.
+  # RuntimeClass manifest. The destination directory must exist BEFORE the
+  # file provisioner runs — uploading "files/" onto a non-existent path
+  # creates a plain file, not a directory.
+  provisioner "shell" {
+    inline = ["mkdir -p /tmp/setec-files"]
+  }
+
   provisioner "file" {
     source      = "files/"
     destination = "/tmp/setec-files"
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
       "KATA_VERSION=${var.kata_version}",
       "KATA_SHA256=${var.kata_sha256}",
@@ -148,17 +155,17 @@ build {
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     script          = "scripts/configure-containerd.sh"
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     script          = "scripts/setup-boot-units.sh"
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
       "KATA_VERSION=${var.kata_version}",
     ]
