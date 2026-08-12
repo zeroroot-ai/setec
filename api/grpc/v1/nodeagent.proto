@@ -310,6 +310,18 @@ message ClaimPoolEntryResponse {
   // through the per-entry sealed-DEK path, so a successful claim
   // implies true.
   bool encrypted_at_rest = 8;
+
+  // clean_base_verified reports that the claimed entry carried a
+  // recorded secret-scan verdict — produced at bake time over the
+  // exact plaintext state/memory pair, cryptographically bound into
+  // the entry's sealed DEK alongside the provenance record — that is
+  // clean, and that the digests it names match the artifacts this
+  // restore decrypted. It is the independent per-restore evidence for
+  // ADR-0005 invariant 1 (setec#206), decoupled from the provenance
+  // record that carries invariant 4: the operator-side invariant gate
+  // consumes this signal directly and fails closed when it is absent,
+  // so entries baked without a verdict are refused and rebuilt.
+  bool clean_base_verified = 9;
 }
 
 // DeleteSnapshotRequest / DeleteSnapshotResponse wrap a

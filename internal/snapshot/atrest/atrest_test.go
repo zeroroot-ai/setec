@@ -19,7 +19,9 @@ package atrest
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -236,9 +238,11 @@ func TestEncryptFile_ReplacesPlaintextInPlace(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected exactly 1 file in dir, got %d", len(entries))
 	}
-	// Roundtrip through DecryptFile.
+	// Roundtrip through DecryptFile, which also reports the plaintext
+	// digest for verdict checks (ADR-0005 invariant 1).
 	out := filepath.Join(dir, "plain.bin")
-	if err := DecryptFile(path, out, dek); err != nil {
+	digest, err := DecryptFile(path, out, dek)
+	if err != nil {
 		t.Fatalf("DecryptFile: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -247,6 +251,10 @@ func TestEncryptFile_ReplacesPlaintextInPlace(t *testing.T) {
 	}
 	if !bytes.Equal(got, marker) {
 		t.Fatal("DecryptFile roundtrip mismatch")
+	}
+	want := sha256.Sum256(marker)
+	if digest != hex.EncodeToString(want[:]) {
+		t.Fatalf("DecryptFile digest = %s, want SHA-256 of the plaintext", digest)
 	}
 }
 

@@ -554,14 +554,18 @@ func (c *Coordinator) WarmStartFromPool(
 
 	// ADR-0005 invariant gate — the single decision point between "the
 	// node restored state into this Pod" and "the Sandbox is served".
-	// Evidence: invariants 1/4/5 from the node's provenance/encryption
-	// attestations; invariant 2 from the reseed + uniquification
-	// confirmations; invariant 3 holds structurally on this path (the
-	// entry was consumed by this one claim — a pool entry is never
-	// restored twice — and the controller attempts warm-start at most
-	// once per Sandbox, stamped in status.warmStart).
+	// Evidence: invariant 1 from the node's clean-base attestation
+	// (the entry's recorded secret-scan verdict, digest-matched
+	// against this restore's decrypted artifacts — independent of
+	// invariant 4's provenance evidence, setec#206); invariants 4/5
+	// from the provenance/encryption attestations; invariant 2 from
+	// the reseed + uniquification confirmations; invariant 3 holds
+	// structurally on this path (the entry was consumed by this one
+	// claim — a pool entry is never restored twice — and the
+	// controller attempts warm-start at most once per Sandbox,
+	// stamped in status.warmStart).
 	ev := gate.Evidence{
-		CleanBase:          resp.GetProvenanceVerified(),
+		CleanBase:          resp.GetCleanBaseVerified(),
 		EntropyReseeded:    resp.GetEntropyReseeded(),
 		IdentityUniquified: resp.GetUniquified(),
 		SingleSession:      true,

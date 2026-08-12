@@ -84,6 +84,7 @@ func TestWarmStart_PoolRestoredStampedOnce(t *testing.T) {
 		Claimed: true, Success: true, EntryId: "pool-entry-7",
 		EntropyReseeded: true, Uniquified: true,
 		ProvenanceVerified: true, EncryptedAtRest: true,
+		CleanBaseVerified: true,
 	}
 	t.Cleanup(func() { testDialer.client.ClaimRes = nil })
 

@@ -52,8 +52,14 @@ five ADR-0005 invariants carry a positive verification for that specific
 restore:
 
 1. **Clean base** — the restored template is the class image booted to
-   guest-agent-ready (attested per claim via the verified provenance record;
-   see "No secrets in a Snapshot" and "Template provenance").
+   guest-agent-ready. Attested per claim via the entry's recorded
+   secret-scan verdict: the bake path scans the exact plaintext
+   state/memory pair, records the verdict (scanner version + artifact
+   digests) cryptographically bound into the entry's sealed encryption
+   key, and the claim path re-derives the digests from the decrypted
+   artifacts. This signal is independent of invariant 4's provenance
+   evidence; an entry without a verdict is refused and the pool
+   rebuilds (see "No secrets in a Snapshot").
 2. **Per-restore uniquification** — the guest verifiably received a fresh
    CSPRNG reseed AND adopted a fresh machine-id/boot-id/hostname, its
    CNI-assigned Pod IP, and a node-unique vsock CID (see "Entropy reseed on
@@ -110,6 +116,18 @@ plane, never present at snapshot time.**
   keys, provider key prefixes, JWTs, secret-shaped env assignments). The gate
   self-tests that it rejects a known-leaky fixture, so it cannot silently
   pass.
+- The same scanner runs **in-line at pool-bake time**: the pool builder
+  scans the freshly written plaintext state/memory pair before it is
+  encrypted at rest. Any finding aborts the bake and destroys the partial
+  entry — a dirty pair is never persisted. On a clean scan the **verdict is
+  recorded in the entry artifact** (scanner version + the pair's SHA-256
+  digests) and bound into the sealed per-entry encryption key exactly like
+  the provenance record, so it cannot be swapped or forged after the fact.
+  Every claim re-checks the verdict and matches the digests against the
+  artifacts it decrypts, then reports the outcome to the invariant gate as
+  the per-restore clean-base signal (invariant 1) — independent of the
+  provenance record (invariant 4). Absence of the verdict fails closed:
+  entries baked without one are refused and their pools rebuild.
 
 ### Snapshots encrypted at rest, destroyed with their owner
 

@@ -55,6 +55,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 )
 
 const (
@@ -320,13 +321,25 @@ func runLauncher(
 		return fmt.Errorf("verify snapshot: %w", err)
 	}
 
+	// Secret-scan the freshly written plaintext pair (ADR-0005
+	// invariant 1): a pool entry that carries secret-shaped material
+	// is never persisted — the launch fails and the cleanup path
+	// removes every artifact. On a clean scan the verdict (scanner
+	// version + the pair's plaintext digests) becomes part of the
+	// entry artifact, giving every future claim an independent
+	// clean-base signal.
+	verdict, err := scanEntryClean(statePath, memPath)
+	if err != nil {
+		return fmt.Errorf("secret scan: %w", err)
+	}
+
 	// Encrypt the entry at rest (ADR-0005 invariant 5): a fresh
 	// per-entry DEK encrypts both files in place (the plaintext is
 	// zero-overwritten before unlink), and the DEK is sealed with the
-	// node KEK under an AAD binding the entry's identity AND its
-	// class-image-boot provenance. Unencrypted pool state never
-	// survives this function.
-	if err := sealEntryAtRest(o, entryDir, statePath, memPath); err != nil {
+	// node KEK under an AAD binding the entry's identity, its
+	// class-image-boot provenance AND its secret-scan verdict.
+	// Unencrypted pool state never survives this function.
+	if err := sealEntryAtRest(o, entryDir, statePath, memPath, verdict); err != nil {
 		return fmt.Errorf("seal entry at rest: %w", err)
 	}
 
@@ -462,11 +475,42 @@ func socketAlive(path string) bool {
 	return true
 }
 
+// scanEntryClean runs the secret scanner over the plaintext
+// state/memory pair and returns the clean verdict to record in the
+// entry artifact (ADR-0005 invariant 1). Any finding fails the bake:
+// findings are logged redacted, and the returned error wraps
+// secretscan.ErrSecretsFound so the caller's cleanup path destroys
+// the entry. A dirty verdict is therefore never persisted.
+func scanEntryClean(statePath, memPath string) (poolentry.ScanVerdict, error) {
+	stateFindings, stateDigest, err := secretscan.ScanArtifactSHA256(statePath)
+	if err != nil && !errors.Is(err, secretscan.ErrSecretsFound) {
+		return poolentry.ScanVerdict{}, err
+	}
+	memFindings, memDigest, err := secretscan.ScanArtifactSHA256(memPath)
+	if err != nil && !errors.Is(err, secretscan.ErrSecretsFound) {
+		return poolentry.ScanVerdict{}, err
+	}
+	if findings := append(stateFindings, memFindings...); len(findings) > 0 {
+		for _, f := range findings {
+			log.Printf("setec-pool-vm: secret scan: %s: %s", f.Path, f.Finding)
+		}
+		return poolentry.ScanVerdict{}, fmt.Errorf("%d finding(s) in the snapshot pair; refusing to persist the entry: %w",
+			len(findings), secretscan.ErrSecretsFound)
+	}
+	return poolentry.ScanVerdict{
+		ScannerVersion: secretscan.Version(),
+		Clean:          true,
+		StateSHA256:    stateDigest,
+		MemorySHA256:   memDigest,
+	}, nil
+}
+
 // sealEntryAtRest encrypts the entry's state/memory pair with a fresh
 // per-entry DEK, seals the DEK with the node KEK (AAD = entry identity
-// + provenance), and writes the provenance record. Called only after
-// verifySnapshotFiles, so both plaintext files exist and are non-empty.
-func sealEntryAtRest(o Options, entryDir, statePath, memPath string) error {
+// + provenance + scan verdict), and writes the provenance and scan
+// records. Called only after verifySnapshotFiles and scanEntryClean,
+// so both plaintext files exist, are non-empty, and scanned clean.
+func sealEntryAtRest(o Options, entryDir, statePath, memPath string, verdict poolentry.ScanVerdict) error {
 	kek, err := atrest.LoadOrCreateKEK(o.KeyFile)
 	if err != nil {
 		return err
@@ -487,14 +531,17 @@ func sealEntryAtRest(o Options, entryDir, statePath, memPath string) error {
 		KernelPath: o.KernelPath,
 		RootfsPath: o.RootfsPath,
 	}
-	sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(o.PoolEntryID, prov))
+	sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(o.PoolEntryID, prov, verdict))
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(entryDir, poolentry.DEKFile), sealed, 0o600); err != nil {
 		return fmt.Errorf("write sealed DEK: %w", err)
 	}
-	return poolentry.WriteProvenance(entryDir, prov)
+	if err := poolentry.WriteProvenance(entryDir, prov); err != nil {
+		return err
+	}
+	return poolentry.WriteScan(entryDir, verdict)
 }
 
 // verifySnapshotFiles asserts both files exist and are non-empty.

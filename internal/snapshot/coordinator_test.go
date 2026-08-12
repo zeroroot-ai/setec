@@ -64,6 +64,7 @@ func verifiedClaimRes(entryID string) *setecgrpcv1.ClaimPoolEntryResponse {
 		Uniquified:         true,
 		ProvenanceVerified: true,
 		EncryptedAtRest:    true,
+		CleanBaseVerified:  true,
 	}
 }
 

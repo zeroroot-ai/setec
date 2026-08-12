@@ -19,14 +19,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 )
 
 // secretSnapshotWriter emulates Firecracker writing a guest image that
@@ -69,7 +74,7 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 		}
 	}
 
-	// Sealed DEK + provenance record present.
+	// Sealed DEK + provenance record + scan verdict present.
 	sealed, err := os.ReadFile(filepath.Join(entryDir, poolentry.DEKFile))
 	if err != nil {
 		t.Fatalf("sealed DEK missing: %v", err)
@@ -81,19 +86,31 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 	if prov.Source != poolentry.SourceClassImageBoot || prov.ImageRef != opts.ImageRef {
 		t.Fatalf("unexpected provenance: %+v", prov)
 	}
+	verdict, err := poolentry.VerifyScan(entryDir)
+	if err != nil {
+		t.Fatalf("scan verdict missing or not clean: %v", err)
+	}
+	if verdict.ScannerVersion != secretscan.Version() {
+		t.Fatalf("verdict scanner version = %q, want %q", verdict.ScannerVersion, secretscan.Version())
+	}
+	wantDigest := sha256.Sum256(secretMarker)
+	if verdict.StateSHA256 != hex.EncodeToString(wantDigest[:]) || verdict.MemorySHA256 != hex.EncodeToString(wantDigest[:]) {
+		t.Fatalf("verdict digests %q/%q do not match the scanned plaintext pair", verdict.StateSHA256, verdict.MemorySHA256)
+	}
 
-	// The node KEK unseals the DEK under the identity+provenance AAD,
-	// and the DEK recovers the original guest image.
+	// The node KEK unseals the DEK under the identity+provenance+scan
+	// AAD, and the DEK recovers the original guest image.
 	kek, err := atrest.LoadOrCreateKEK(opts.KeyFile)
 	if err != nil {
 		t.Fatalf("load KEK: %v", err)
 	}
-	dek, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(opts.PoolEntryID, prov))
+	dek, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(opts.PoolEntryID, prov, verdict))
 	if err != nil {
 		t.Fatalf("unseal DEK: %v", err)
 	}
 	out := filepath.Join(t.TempDir(), "plain")
-	if err := atrest.DecryptFile(filepath.Join(entryDir, stateFileName), out, dek); err != nil {
+	digest, err := atrest.DecryptFile(filepath.Join(entryDir, stateFileName), out, dek)
+	if err != nil {
 		t.Fatalf("decrypt state: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -103,13 +120,57 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 	if !bytes.Equal(got, secretMarker) {
 		t.Fatal("decrypted state does not match original guest image")
 	}
+	if digest != verdict.StateSHA256 {
+		t.Fatalf("decrypted state digest %q does not match the recorded verdict %q", digest, verdict.StateSHA256)
+	}
 
 	// A forged provenance record must not unseal the DEK (the AAD
 	// binds source+image into the key wrap).
 	forged := prov
 	forged.Source = "used-sandbox"
-	if _, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(opts.PoolEntryID, forged)); err == nil {
+	if _, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(opts.PoolEntryID, forged, verdict)); err == nil {
 		t.Fatal("sealed DEK must be bound to its provenance record")
+	}
+
+	// A forged scan verdict must not unseal the DEK either (ADR-0005
+	// invariant 1, setec#206): the verdict is AAD-bound exactly like
+	// the provenance record.
+	forgedScan := verdict
+	forgedScan.StateSHA256 = strings.Repeat("0", 64)
+	if _, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(opts.PoolEntryID, prov, forgedScan)); err == nil {
+		t.Fatal("sealed DEK must be bound to its scan verdict")
+	}
+}
+
+// TestRunLauncher_RefusesSecretInSnapshot is the bake half of ADR-0005
+// invariant 1 (setec#206): a guest image that contains secret-shaped
+// material must never be persisted as a pool entry — the launch fails
+// and every artifact (including any scan record) is removed.
+func TestRunLauncher_RefusesSecretInSnapshot(t *testing.T) {
+	opts := tempOpts(t)
+	spawner := newSpawnerWithSocket(opts)
+	defer spawner.closeListener()
+	leaky := append([]byte("config dump: aws_secret= "), []byte("AKIAABCDEFGHIJKLMNOP is the access key id\n")...)
+	fc := &fakeFC{snapshotWriter: func(state, mem string) error {
+		if err := os.WriteFile(state, secretMarker, 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(mem, leaky, 0o644)
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runLauncher(ctx, opts, spawner, factoryReturning(fc))
+	if !errors.Is(err, secretscan.ErrSecretsFound) {
+		t.Fatalf("runLauncher error = %v, want secretscan.ErrSecretsFound", err)
+	}
+	// The redacted finding report must never re-leak the secret body.
+	if err != nil && strings.Contains(err.Error(), "AKIAABCDEFGHIJKLMNOP") {
+		t.Fatal("error message re-leaks the detected secret")
+	}
+	entryDir := filepath.Join(opts.StorageRoot, opts.PoolEntryID)
+	if _, statErr := os.Stat(entryDir); !os.IsNotExist(statErr) {
+		t.Fatalf("entry dir %q must be removed after a dirty scan (stat err: %v)", entryDir, statErr)
 	}
 }
 

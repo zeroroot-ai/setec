@@ -665,15 +665,20 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 		EntryId:         entry.ID,
 		EntropyReseeded: reseeded,
 		Uniquified:      uniquified,
-		// Both attestations are earned by the only code path that can
+		// These attestations are earned by the only code path that can
 		// reach this return: Claim verified the template-provenance
-		// record (pool.Manager → poolentry.Verify) and decryptPoolEntry
-		// unsealed the per-entry DEK under AAD that binds that record
-		// (a foreign or tampered record makes the DEK unopenable), then
-		// decrypted the always-encrypted state pair. ADR-0005
-		// invariants 1/4 (provenance ⇒ clean class-image base) and 5.
+		// record AND the recorded scan verdict (pool.Manager →
+		// poolentry.Verify / VerifyScan), and decryptPoolEntry
+		// unsealed the per-entry DEK under AAD that binds both records
+		// (a foreign or tampered record makes the DEK unopenable),
+		// decrypted the always-encrypted state pair, and matched the
+		// plaintext digests against the verdict — so the clean-base
+		// signal (invariant 1) is independent evidence, not an
+		// inference from provenance (invariant 4). ADR-0005
+		// invariants 1, 4 and 5.
 		ProvenanceVerified: true,
 		EncryptedAtRest:    true,
+		CleanBaseVerified:  true,
 	}, nil
 }
 
@@ -701,7 +706,17 @@ func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath 
 	if err != nil {
 		return "", "", nil, fmt.Errorf("read provenance: %w", err)
 	}
-	dek, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(entryID, prov))
+	// The clean-base scan verdict (ADR-0005 invariant 1, setec#206) is
+	// as load-bearing as the provenance record: it must exist and be
+	// clean (fail closed on absence), it is AAD-bound into the sealed
+	// DEK so a swapped or tampered record makes the DEK unopenable,
+	// and the digests it names must match the plaintext this claim
+	// decrypts — "this exact artifact was scanned clean", per restore.
+	verdict, err := poolentry.VerifyScan(entryDir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	dek, err := atrest.OpenDEK(kek, sealed, poolentry.DEKAAD(entryID, prov, verdict))
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -713,13 +728,19 @@ func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath 
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	statePath = filepath.Join(dir, poolentry.StateFile)
 	memPath = filepath.Join(dir, poolentry.MemFile)
-	if err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.StateFile), statePath, dek); err != nil {
+	stateDigest, err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.StateFile), statePath, dek)
+	if err != nil {
 		cleanup()
 		return "", "", nil, err
 	}
-	if err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.MemFile), memPath, dek); err != nil {
+	memDigest, err := atrest.DecryptFile(filepath.Join(entryDir, poolentry.MemFile), memPath, dek)
+	if err != nil {
 		cleanup()
 		return "", "", nil, err
+	}
+	if stateDigest != verdict.StateSHA256 || memDigest != verdict.MemorySHA256 {
+		cleanup()
+		return "", "", nil, fmt.Errorf("%w: decrypted artifact digests do not match the recorded scan verdict", poolentry.ErrScanVerdict)
 	}
 	return statePath, memPath, cleanup, nil
 }
