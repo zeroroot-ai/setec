@@ -1,0 +1,79 @@
+{{- /*
+Leader-election RBAC (setec#217).
+
+WHY THIS FILE EXISTS. `leaderElect` defaults to true — the chart ships two
+replicas and needs exactly one reconciler — and it renders
+`--leader-elect=true` onto the manager. controller-runtime then acquires a
+Lease named `setec.zeroroot.ai` in the operator's own namespace. Nothing in
+this chart granted `coordination.k8s.io/leases`, so the manager could not
+retrieve the lock, logged
+
+    leases.coordination.k8s.io "setec.zeroroot.ai" is forbidden:
+    User "system:serviceaccount:setec-system:setec" cannot get resource
+    "leases" in API group "coordination.k8s.io" in the namespace "setec-system"
+
+and shut itself down — CrashLoopBackOff on every install using the chart's
+own defaults, i.e. no sandbox execution plane at all. The asymmetry that hid
+it: the BINARY defaults `--leader-elect` to false (cmd/main.go), so running
+the operator outside this chart, or with `leaderElect: false`, worked fine.
+
+Namespaced Role, not extra rules on the -manager ClusterRole: the Lease is a
+single object in one namespace, so cluster-wide lease access would be strictly
+more privilege than leader election needs.
+
+Rendering is gated on the same value that renders the flag, so the permission
+and the flag cannot drift apart; hack/verify-chart-security.sh asserts both
+directions (granted when on, absent when off).
+*/ -}}
+{{- if .Values.leaderElect }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "setec.fullname" . }}-leader-election
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      # get/list/watch to read the current holder, create to take an unheld
+      # lock, update/patch to renew it, delete for
+      # LeaderElectionReleaseOnCancel (cmd/main.go) to hand it back on
+      # graceful shutdown instead of making the peer wait out the duration.
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      # controller-runtime records LeaderElection events on acquire/renew
+      # failure. The -manager ClusterRole already grants this cluster-wide;
+      # repeated here so this Role stands alone if that rule is ever narrowed.
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-leader-election
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "setec.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+{{- end }}
