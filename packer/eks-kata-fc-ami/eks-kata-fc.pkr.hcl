@@ -133,7 +133,13 @@ build {
   sources = ["source.amazon-ebs.eks_kata_fc"]
 
   # Boot-time units, containerd systemd drop-in, and the static
-  # RuntimeClass manifest.
+  # RuntimeClass manifest. The destination directory must exist BEFORE the
+  # file provisioner runs — uploading "files/" onto a non-existent path
+  # creates a plain file, not a directory.
+  provisioner "shell" {
+    inline = ["mkdir -p /tmp/setec-files"]
+  }
+
   provisioner "file" {
     source      = "files/"
     destination = "/tmp/setec-files"
