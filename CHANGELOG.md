@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.109.3](https://github.com/zeroroot-ai/setec/compare/v0.109.2...v0.109.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **installer:** verify the installed tree, not the machine running the tests ([#220](https://github.com/zeroroot-ai/setec/issues/220)) ([#227](https://github.com/zeroroot-ai/setec/issues/227)) ([195bba1](https://github.com/zeroroot-ai/setec/commit/195bba17c641a7814da37f8aefadf3624a058d97))
+* **lint:** clear the 41 golangci-lint findings blocking the gate ([#228](https://github.com/zeroroot-ai/setec/issues/228)) ([6c7bfa8](https://github.com/zeroroot-ai/setec/commit/6c7bfa8cf52710501580e92f69132f77ed4aabdd))
+* **operator:** serve health probes without waiting for leadership ([#225](https://github.com/zeroroot-ai/setec/issues/225)) ([#226](https://github.com/zeroroot-ai/setec/issues/226)) ([257133a](https://github.com/zeroroot-ai/setec/commit/257133a07d37a3f3a0c025efdd32269c53f0b75e))
+
 ## [0.109.2](https://github.com/zeroroot-ai/setec/compare/v0.109.1...v0.109.2) (2026-08-12)
 
 
