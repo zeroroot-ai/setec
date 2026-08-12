@@ -121,8 +121,14 @@ paused state; snapshot first if you need durability across
 evictions.
 
 `SandboxClass.spec.maxPauseDuration` bounds how long a Sandbox may
-remain Paused before the operator transitions it to Failed with
-`reason=PauseTimeoutExceeded`.
+remain Paused — a paused microVM keeps its full memory reservation.
+Past the cap the operator transitions the Sandbox to Failed with
+`reason=PauseTimeoutExceeded` and deletes its VM Pod. Sessions in a
+class with `sessionCheckpoint` enabled suspend instead of failing:
+checkpoint retained, microVM released, `phase=Suspended` with
+`reason=SuspendedPauseTimeout`, resumed when `spec.desiredState`
+returns to `Running` (ADR-0006). Unset means pauses are unbounded;
+the webhook rejects zero or negative values.
 
 ## Pre-warmed pool
 

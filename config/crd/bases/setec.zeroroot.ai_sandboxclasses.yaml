@@ -208,9 +208,21 @@ spec:
               maxPauseDuration:
                 description: |-
                   MaxPauseDuration bounds how long a Sandbox may remain in
-                  phase=Paused. Beyond this the reconciler transitions the
-                  Sandbox to Failed with reason=PauseTimeoutExceeded. When unset
-                  pauses are unbounded.
+                  phase=Paused — a paused microVM keeps its full memory
+                  reservation, and this cap bounds that residency. Beyond it the
+                  reconciler transitions the Sandbox to Failed with
+                  reason=PauseTimeoutExceeded and deletes its VM Pod.
+
+                  Sessions in a class with spec.sessionCheckpoint enabled are the
+                  exception (setec#202, ADR-0006): past the cap they suspend
+                  instead — checkpoint retained, microVM released, phase=Suspended
+                  with reason=SuspendedPauseTimeout — and resume when
+                  spec.desiredState returns to Running. The Suspended phase itself
+                  is not bounded by this cap: a suspended session holds no microVM.
+
+                  When unset pauses are unbounded. Must be positive when set (the
+                  webhook rejects zero or negative values; the reconciler treats a
+                  non-positive value as unbounded).
                 type: string
               maxResources:
                 description: |-

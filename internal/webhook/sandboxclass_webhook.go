@@ -169,6 +169,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	// or less would recycle entries in a hot loop.
 	allErrs = append(allErrs, validatePreWarm(class)...)
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
+	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
@@ -349,6 +350,24 @@ func (w *SandboxClassWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		WithDefaulter(w).
 		WithValidator(w).
 		Complete()
+}
+
+// validateMaxPauseDuration enforces that spec.maxPauseDuration, when
+// set, is a positive duration (setec#202). Zero or negative would
+// read as "fail every pause instantly", which is never what an
+// administrator means — omitting the field is how pauses are left
+// unbounded. The reconciler additionally treats a non-positive value
+// as unbounded, so a class admitted before this rule existed fails
+// open rather than instantly.
+func validateMaxPauseDuration(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	if d := class.Spec.MaxPauseDuration; d != nil && d.Duration <= 0 {
+		errs = append(errs, field.Invalid(
+			field.NewPath("spec", "maxPauseDuration"),
+			d.Duration.String(),
+			"must be a positive duration; omit maxPauseDuration to leave pauses unbounded"))
+	}
+	return errs
 }
 
 // validateSessionCheckpoint enforces the coherence rules of the

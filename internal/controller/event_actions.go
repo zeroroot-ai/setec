@@ -36,6 +36,7 @@ const (
 	actionRunRuntimeFallback   = "RunRuntimeFallback"
 	actionEnforceTimeout       = "EnforceTimeout"
 	actionEnforceIdleTimeout   = "EnforceIdleTimeout"
+	actionEnforcePauseTimeout  = "EnforcePauseTimeout"
 	actionEnforceInvariantGate = "EnforceInvariantGate"
 	actionFinalizeSandbox      = "FinalizeSandbox"
 	actionManageWorkspace      = "ManageWorkspace"
