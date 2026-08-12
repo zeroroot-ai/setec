@@ -142,7 +142,7 @@ func TestPauseTimeout_CheckpointSessionSuspends(t *testing.T) {
 	ns := newNamespace(t, "pt-susp")
 
 	cls := newSandboxClass("pt-susp-class",
-		withSessionCheckpoint(0),
+		withSessionCheckpoint(),
 		withMaxPauseDuration(pauseTimeoutTestCap))
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })

@@ -188,7 +188,7 @@ func TestVerify_FailsClosedOnEveryMismatch(t *testing.T) {
 }
 
 func TestVerify_EmptyPodIPSkipsAddressCheck(t *testing.T) {
-	spec, raw, report := makeVerified(t)
+	spec, _, report := makeVerified(t)
 	spec.PodIP = ""
 	report.ObservedIPs = nil
 	// Digest covers the original raw bytes; rebuild them for the

@@ -28,6 +28,11 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
+// Repeated fixture identifier.
+const (
+	sessCkpt3 = "t-a-sess-ckpt-3"
+)
+
 func sessionSandbox() *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "sess"},
@@ -48,7 +53,7 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	sb := sessionSandbox()
 	pod := newPodForSandbox(sb, "node-a")
 	na := &fakeNodeAgentClient{
-		createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: "t-a-sess-ckpt-3", SizeBytes: 42},
+		createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: sessCkpt3, SizeBytes: 42},
 	}
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
@@ -57,10 +62,10 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckpointSession: %v", err)
 	}
-	if ref != "t-a-sess-ckpt-3" || size != 42 {
+	if ref != sessCkpt3 || size != 42 {
 		t.Fatalf("got (%q,%d)", ref, size)
 	}
-	if na.lastCreate.GetSnapshotId() != "t-a-sess-ckpt-3" {
+	if na.lastCreate.GetSnapshotId() != sessCkpt3 {
 		t.Fatalf("snapshot id = %q", na.lastCreate.GetSnapshotId())
 	}
 	if na.lastCreate.GetStorageBackend() != "s3" {
@@ -87,10 +92,10 @@ func TestRestoreSessionCheckpointNoNodePinning(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{6}, 32)
-	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-3", "s3", kek); err != nil {
+	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3", kek); err != nil {
 		t.Fatalf("RestoreSessionCheckpoint: %v", err)
 	}
-	if na.lastRestore.GetStorageRef() != "t-a-sess-ckpt-3" ||
+	if na.lastRestore.GetStorageRef() != sessCkpt3 ||
 		na.lastRestore.GetStorageBackend() != "s3" ||
 		!bytes.Equal(na.lastRestore.GetSessionKek(), kek) {
 		t.Fatalf("restore request = %+v", na.lastRestore)
@@ -130,7 +135,7 @@ func TestDeleteSessionCheckpointFallsBackToAnyNode(t *testing.T) {
 	na := &fakeNodeAgentClient{deleteRes: &setecgrpcv1.DeleteSnapshotResponse{Success: true}}
 	coord := newCoord(newFakeClient(t, sb, node), &fakeDialer{client: na})
 
-	if err := coord.DeleteSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-3", "s3"); err != nil {
+	if err := coord.DeleteSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3"); err != nil {
 		t.Fatalf("DeleteSessionCheckpoint: %v", err)
 	}
 }

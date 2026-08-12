@@ -114,7 +114,7 @@ func TestSessionCheckpoint_GateRefusalDestroysVM(t *testing.T) {
 	g := gomega.NewWithT(t)
 	ns := newNamespace(t, "sck-gate")
 
-	cls := newSandboxClass("sck-gate-class", withSessionCheckpoint(0))
+	cls := newSandboxClass("sck-gate-class", withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(gomega.Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 

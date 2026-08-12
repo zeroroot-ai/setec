@@ -37,7 +37,7 @@ func pauseClass(max *time.Duration) *setecv1alpha1.SandboxClass {
 	return cls
 }
 
-func durPtr(d time.Duration) *time.Duration { return &d }
+func durPtr(d time.Duration) *time.Duration { return new(d) }
 
 func TestPauseDeadline(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)

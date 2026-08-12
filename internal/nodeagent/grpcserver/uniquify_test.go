@@ -39,6 +39,11 @@ type recordingUniquifier struct {
 	err   error
 }
 
+// Repeated failure reason under test.
+const (
+	reasonRestoreFailed = "restore_failed"
+)
+
 func (r *recordingUniquifier) Uniquify(_ context.Context, _ string, spec uniquify.Spec) (uniquify.Report, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -223,7 +228,7 @@ func TestClaimPoolEntry_UniquifyFailureConsumesEntryAndFallsBack(t *testing.T) {
 	if pauses == 0 {
 		t.Fatal("the un-uniquified VM must be paused")
 	}
-	if len(claims) != 1 || claims[0] != "restore_failed" {
+	if len(claims) != 1 || claims[0] != reasonRestoreFailed {
 		t.Fatalf("claim outcomes = %v, want [restore_failed]", claims)
 	}
 }

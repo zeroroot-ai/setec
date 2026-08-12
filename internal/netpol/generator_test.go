@@ -366,7 +366,7 @@ func TestGenerate_AllowListDoesNotOpenInClusterCIDRs(t *testing.T) {
 	}
 
 	// And it must actually name the resolved addresses.
-	var seen []string
+	seen := make([]string, 0, len(got.Spec.Egress[1].To))
 	for _, peer := range got.Spec.Egress[1].To {
 		seen = append(seen, peer.IPBlock.CIDR)
 	}

@@ -29,6 +29,12 @@ const (
 	testAffinityLinux = "linux"
 )
 
+// Node arch selector bits, repeated across the cases.
+const (
+	archLabelKey = "kubernetes.io/arch"
+	archAMD64    = "amd64"
+)
+
 func TestGVisorDispatcher_Name(t *testing.T) {
 	t.Parallel()
 	d := NewGVisorDispatcher(BackendConfig{RuntimeClassName: "runsc"})
@@ -83,10 +89,10 @@ func TestGVisorDispatcher_NodeAffinity(t *testing.T) {
 
 	// Third expression: architecture constraint. The sandbox substrate is
 	// x86 only (ADR-0001), so every backend pins kubernetes.io/arch=amd64.
-	if exprs[2].Key != "kubernetes.io/arch" {
+	if exprs[2].Key != archLabelKey {
 		t.Errorf("MatchExpressions[2].Key = %q, want kubernetes.io/arch", exprs[2].Key)
 	}
-	if len(exprs[2].Values) != 1 || exprs[2].Values[0] != "amd64" {
+	if len(exprs[2].Values) != 1 || exprs[2].Values[0] != archAMD64 {
 		t.Errorf("MatchExpressions[2].Values = %v, want [amd64]", exprs[2].Values)
 	}
 }

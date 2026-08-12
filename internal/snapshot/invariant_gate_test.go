@@ -63,7 +63,7 @@ var gateBreakage = []struct {
 func TestWarmStartFromPool_GateRejectsUnverifiedRestore(t *testing.T) {
 	for _, tc := range gateBreakage {
 		t.Run(tc.name, func(t *testing.T) {
-			res := verifiedClaimRes("entry-1")
+			res := verifiedClaimRes()
 			tc.mutate(res)
 			na := &fakeNodeAgentClient{
 				claimRes: res,
@@ -97,7 +97,7 @@ func TestWarmStartFromPool_GateRejectsUnverifiedRestore(t *testing.T) {
 // unverified restore but emits the loud UnverifiedRestoreAllowed
 // warning.
 func TestWarmStartFromPool_DevOptOutServesLoudly(t *testing.T) {
-	res := verifiedClaimRes("entry-1")
+	res := verifiedClaimRes()
 	res.EntropyReseeded = false // one broken verification
 
 	rec := testutil.NewFakeEventsRecorder(32)
@@ -133,7 +133,7 @@ func TestWarmStartFromPool_DevOptOutServesLoudly(t *testing.T) {
 // class annotation without the cluster-level dev label changes
 // nothing.
 func TestWarmStartFromPool_AnnotationAloneStillRejected(t *testing.T) {
-	res := verifiedClaimRes("entry-1")
+	res := verifiedClaimRes()
 	res.Uniquified = false
 
 	rec := testutil.NewFakeEventsRecorder(32)

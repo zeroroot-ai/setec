@@ -129,7 +129,7 @@ var kataFCRuntimeTableRe = regexp.MustCompile(`containerd\.runtimes\.("kata-fc"|
 //   - our drop-in / managed template block present -> ownerSelf
 //   - otherwise kata-fc registered in the effective config -> ownerForeign
 //   - otherwise -> ownerNone
-func kataFCOwnership(cfg Config, flavor runtimeFlavor) (ownership, error) {
+func kataFCOwnership(cfg Config, flavor runtimeFlavor) ownership {
 	switch flavor.name {
 	case "k3s":
 		for _, tmpl := range k3sTemplateCandidates() {
@@ -138,12 +138,12 @@ func kataFCOwnership(cfg Config, flavor runtimeFlavor) (ownership, error) {
 				continue
 			}
 			if strings.Contains(string(content), beginMarker) {
-				return ownerSelf, nil
+				return ownerSelf
 			}
 		}
 	default:
 		if _, err := os.Stat(cfg.HostRoot + stockDropinPath); err == nil {
-			return ownerSelf, nil
+			return ownerSelf
 		}
 	}
 	// Not ours — is it anyone's? Check the rendered/main config plus any
@@ -170,11 +170,11 @@ func kataFCOwnership(cfg Config, flavor runtimeFlavor) (ownership, error) {
 				continue
 			}
 			if kataFCRuntimeTableRe.Match(content) {
-				return ownerForeign, nil
+				return ownerForeign
 			}
 		}
 	}
-	return ownerNone, nil
+	return ownerNone
 }
 
 // k3sTemplateCandidates lists the template filenames k3s may render the

@@ -32,7 +32,9 @@ import (
 
 // newPreWarmSandboxClass creates a cluster-scoped SandboxClass with an
 // active pre-warm pool and registers cleanup.
-func newPreWarmSandboxClass(t *testing.T, name, image string) *setecv1alpha1.SandboxClass {
+// The created class is asserted through the API server, never through a
+// return value, so this creates and returns nothing.
+func newPreWarmSandboxClass(t *testing.T, name, image string) {
 	t.Helper()
 	cls := &setecv1alpha1.SandboxClass{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -47,7 +49,6 @@ func newPreWarmSandboxClass(t *testing.T, name, image string) *setecv1alpha1.San
 		t.Fatalf("create SandboxClass: %v", err)
 	}
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
-	return cls
 }
 
 // driveSandboxPodRunning waits for the Sandbox's Pod, binds it to a
@@ -61,7 +62,7 @@ func driveSandboxPodRunning(t *testing.T, g *gomega.WithT, ns, sbName string) {
 
 	pod, err := getPod(testCtx, ns, sbName+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
-	bindPodToNode(t, pod, "kata-node-1")
+	bindPodToNode(t, pod)
 	pod, err = getPod(testCtx, ns, sbName+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	pod.Status.Phase = corev1.PodRunning

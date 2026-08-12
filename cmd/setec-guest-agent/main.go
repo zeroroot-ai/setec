@@ -80,7 +80,8 @@ func parseFlags(args []string) (Options, error) {
 		return Options{}, fmt.Errorf("--vsock-port must be in 1..2^32-1, got %d", port)
 	}
 	if uniquifyPort == 0 || uniquifyPort > 0xFFFFFFFF || uniquifyPort == port {
-		return Options{}, fmt.Errorf("--uniquify-vsock-port must be in 1..2^32-1 and differ from --vsock-port, got %d", uniquifyPort)
+		return Options{}, fmt.Errorf(
+			"--uniquify-vsock-port must be in 1..2^32-1 and differ from --vsock-port, got %d", uniquifyPort)
 	}
 	return Options{Port: uint32(port), UniquifyPort: uint32(uniquifyPort), RandomDevice: dev}, nil
 }

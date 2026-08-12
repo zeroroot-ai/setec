@@ -107,6 +107,10 @@ const (
 // sessionCheckpointPolicy returns the class's checkpoint spec when the
 // Sandbox is a session and the class enables checkpoints; nil
 // otherwise.
+// annotationValueTrue is the canonical truthy annotation value; Kubernetes
+// annotations are strings, so this is written literally in several places.
+const annotationValueTrue = "true"
+
 func sessionCheckpointPolicy(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) *setecv1alpha1.SessionCheckpointSpec {
 	if sb == nil || cls == nil || !sb.Spec.IsSession() {
 		return nil
@@ -281,10 +285,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 		}
 		// Not due yet — make sure a quiet session still gets its next
 		// checkpoint on time.
-		next := time.Until(nextCheckpointDue(sb, policy))
-		if next < time.Second {
-			next = time.Second
-		}
+		next := max(time.Until(nextCheckpointDue(sb, policy)), time.Second)
 		return ctrl.Result{RequeueAfter: next}, false, nil
 	}
 
@@ -396,7 +397,7 @@ func (r *SandboxReconciler) suspendSession(
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		pod.Annotations[annotationSuspendedPod] = "true"
+		pod.Annotations[annotationSuspendedPod] = annotationValueTrue
 		if err := r.Patch(ctx, pod, client.MergeFrom(original)); err != nil && !apierrors.IsNotFound(err) {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("mark Pod for suspend: %w", err))
 		}
