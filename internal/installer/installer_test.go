@@ -38,12 +38,6 @@ type fakeResponse struct {
 	err error
 }
 
-// Fixture flavour names, repeated across the table-driven cases.
-const (
-	flavorContainerd = "containerd"
-	flavorK3s        = "k3s"
-)
-
 func newFakeRunner(t *testing.T) *fakeRunner {
 	return &fakeRunner{t: t, respond: map[string]fakeResponse{}, failures: map[string]error{}}
 }

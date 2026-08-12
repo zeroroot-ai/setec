@@ -39,6 +39,13 @@ type runtimeFlavor struct {
 	configDir string
 }
 
+// Runtime flavour names. Defined here rather than in the tests that first
+// needed them: the production switches below are what repeat the literals.
+const (
+	flavorContainerd = "containerd"
+	flavorK3s        = "k3s"
+)
+
 // Stock containerd paths (also used to build the k3s equivalents).
 const (
 	stockConfigDir  = "/etc/containerd"
@@ -65,7 +72,7 @@ func detectFlavor(cfg Config) (runtimeFlavor, error) {
 			unit = "k3s-agent.service"
 		}
 		return runtimeFlavor{
-			name:       "k3s",
+			name:       flavorK3s,
 			unit:       unit,
 			configPath: k3sConfigPath,
 			configDir:  k3sConfigDir,
@@ -73,7 +80,7 @@ func detectFlavor(cfg Config) (runtimeFlavor, error) {
 	}
 	if _, err := os.Stat(cfg.HostRoot + stockConfigDir); err == nil {
 		return runtimeFlavor{
-			name:       "containerd",
+			name:       flavorContainerd,
 			unit:       "containerd.service",
 			configPath: stockConfigPath,
 			configDir:  stockConfigDir,
@@ -83,7 +90,7 @@ func detectFlavor(cfg Config) (runtimeFlavor, error) {
 	// (containerd runs on pure defaults) as long as the unit exists.
 	if unitPresent(cfg.HostRoot, "containerd.service") {
 		return runtimeFlavor{
-			name:       "containerd",
+			name:       flavorContainerd,
 			unit:       "containerd.service",
 			configPath: stockConfigPath,
 			configDir:  stockConfigDir,
@@ -131,7 +138,7 @@ var kataFCRuntimeTableRe = regexp.MustCompile(`containerd\.runtimes\.("kata-fc"|
 //   - otherwise -> ownerNone
 func kataFCOwnership(cfg Config, flavor runtimeFlavor) ownership {
 	switch flavor.name {
-	case "k3s":
+	case flavorK3s:
 		for _, tmpl := range k3sTemplateCandidates() {
 			content, err := os.ReadFile(cfg.HostRoot + tmpl)
 			if err != nil {
@@ -149,7 +156,7 @@ func kataFCOwnership(cfg Config, flavor runtimeFlavor) ownership {
 	// Not ours — is it anyone's? Check the rendered/main config plus any
 	// sibling files in the config dir (imports, drop-ins, templates).
 	dirs := []string{flavor.configDir, stockDropinDir}
-	if flavor.name == "k3s" {
+	if flavor.name == flavorK3s {
 		dirs = []string{flavor.configDir, flavor.configDir + "/config.toml.d"}
 	}
 	for _, dir := range dirs {
@@ -254,7 +261,7 @@ func (in *Installer) registrationTOML(version int) string {
 func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeFlavor) (bool, error) {
 	version := in.detectConfigVersion(ctx, flavor)
 	switch flavor.name {
-	case "k3s":
+	case flavorK3s:
 		return in.ensureK3sTemplate(version)
 	default:
 		return in.ensureStockDropin(version)
