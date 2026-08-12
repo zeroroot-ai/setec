@@ -3,38 +3,36 @@
 # bundles the Firecracker VMM, guest kernel, and rootfs/initrd images) into
 # /opt/kata, kata-deploy-style, with NO kata-deploy DaemonSet.
 #
+# kata >= 3.28.0 publishes zstd-compressed release tarballs
+# (kata-static-<version>-<arch>.tar.zst) and NO .sha256sum sidecar files
+# (setec#198), so the sha256 pin is mandatory — the same
+# fetch/verify/extract approach as Dockerfile.installer, which pins the
+# identical digest so the AMI and the installer DaemonSet lay down the
+# SAME payload.
+#
 # Runs as root inside the Packer build instance.
 set -euo pipefail
 
 : "${KATA_VERSION:?KATA_VERSION must be set (e.g. 3.28.0)}"
-KATA_SHA256="${KATA_SHA256:-}"
+: "${KATA_SHA256:?KATA_SHA256 must be set — kata >= 3.28.0 releases carry no .sha256sum sidecars, so an unpinned bake cannot be verified. Pin the sha256 of kata-static-${KATA_VERSION}-amd64.tar.zst (keep in lockstep with Dockerfile.installer).}"
 
-ARCH=arm64
-TARBALL="kata-static-${KATA_VERSION}-${ARCH}.tar.xz"
+# x86 only (ADR-0001).
+ARCH=amd64
+TARBALL="kata-static-${KATA_VERSION}-${ARCH}.tar.zst"
 URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${TARBALL}"
+
+echo ">>> installing zstd"
+dnf install -y zstd
 
 echo ">>> downloading ${URL}"
 curl -fsSL --retry 3 -o "/tmp/${TARBALL}" "${URL}"
 
-if [[ -n "${KATA_SHA256}" ]]; then
-    echo ">>> verifying pinned sha256"
-    echo "${KATA_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
-else
-    # No pin supplied: try the release's sha256 sidecar. This protects
-    # against transport corruption only — pin kata_sha256 in the Packer
-    # build for a fully reproducible, tamper-evident bake.
-    echo ">>> no kata_sha256 pin supplied; trying release sidecar ${TARBALL}.sha256sum"
-    if curl -fsSL --retry 3 -o "/tmp/${TARBALL}.sha256sum" "${URL}.sha256sum"; then
-        (cd /tmp && sed "s|  .*|  ${TARBALL}|" "${TARBALL}.sha256sum" | sha256sum -c -)
-    else
-        echo "WARNING: no sha256 pin and no release sidecar found — proceeding on TLS integrity alone." >&2
-        echo "WARNING: set -var 'kata_sha256=<digest>' to pin the artifact." >&2
-    fi
-fi
+echo ">>> verifying pinned sha256"
+echo "${KATA_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
 
 echo ">>> extracting to / (tarball is rooted at ./opt/kata)"
-tar -C / -xJf "/tmp/${TARBALL}"
-rm -f "/tmp/${TARBALL}" "/tmp/${TARBALL}.sha256sum"
+tar --zstd -C / -xf "/tmp/${TARBALL}"
+rm -f "/tmp/${TARBALL}"
 
 # kata-deploy parity: the containerd runtime_type io.containerd.kata-fc.v2
 # resolves to a containerd-shim-kata-fc-v2 binary on PATH. Symlink it to the

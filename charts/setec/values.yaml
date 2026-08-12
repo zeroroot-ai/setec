@@ -266,8 +266,8 @@ runtimeAgent:
 # This is the DEFAULT node-prep path and references nothing
 # cloud-specific. The EKS baked-AMI + Karpenter profile (see the
 # karpenter block below and packer/eks-kata-fc-ami) is an optional
-# optimisation, never a requirement; its Graviton (arm64) nodes are
-# outside this DaemonSet's amd64 node selector by construction.
+# optimisation, never a requirement; on nodes booted from the baked AMI
+# the installer detects the existing registration and stands down.
 #
 # The installer is idempotent and ownership-aware: on a node where
 # kata-fc is already registered by something else (kata-deploy, a baked

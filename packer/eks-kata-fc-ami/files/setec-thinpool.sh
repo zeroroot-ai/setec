@@ -11,7 +11,7 @@
 #                                              snapshotter state that
 #                                              references the vanished pool
 #
-# Target instance types (c6gd.metal / m6gd.metal) expose one or more
+# Target instance types (c6id.metal / m6id.metal) expose one or more
 # ephemeral "Amazon EC2 NVMe Instance Storage" devices. EBS volumes are
 # never touched: selection is strictly by NVMe model string.
 set -euo pipefail
@@ -61,7 +61,7 @@ done
 if [[ ${#DEVICES[@]} -eq 0 ]]; then
     log "FATAL: no unused NVMe instance-store device found." >&2
     log "       kata-fc needs local NVMe for the devmapper thin-pool —" >&2
-    log "       launch this AMI on a 'd'-suffixed metal type (c6gd.metal / m6gd.metal)." >&2
+    log "       launch this AMI on a 'd'-suffixed metal type (c6id.metal / m6id.metal)." >&2
     exit 1
 fi
 log "building thin-pool from: ${DEVICES[*]}"
