@@ -17,8 +17,11 @@ limitations under the License.
 package secretscan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,6 +62,35 @@ func ScanArtifact(path string) ([]PathFinding, error) {
 		out = append(out, PathFinding{Path: path, Finding: fnd})
 	}
 	return out, ErrSecretsFound
+}
+
+// ScanArtifactSHA256 scans a single artifact like ScanArtifact and
+// additionally returns the lowercase-hex SHA-256 of the bytes EXACTLY
+// as scanned, computed in the same pass. Callers that record a scan
+// verdict (the pool bake path, ADR-0005 invariant 1) use the digest to
+// bind the verdict to the artifact: a later consumer re-deriving the
+// digest proves the scanned bytes are the restored bytes.
+func ScanArtifactSHA256(path string) ([]PathFinding, string, error) {
+	f, err := os.Open(path) //nolint:gosec // path is builder/CI supplied, not attacker input
+	if err != nil {
+		return nil, "", fmt.Errorf("secretscan: open %q: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha256.New()
+	findings, err := New().Scan(io.TeeReader(f, h))
+	if err != nil {
+		return nil, "", err
+	}
+	digest := hex.EncodeToString(h.Sum(nil))
+	if len(findings) == 0 {
+		return nil, digest, nil
+	}
+	out := make([]PathFinding, 0, len(findings))
+	for _, fnd := range findings {
+		out = append(out, PathFinding{Path: path, Finding: fnd})
+	}
+	return out, digest, ErrSecretsFound
 }
 
 // ScanPath scans a file or, recursively, every regular file under a

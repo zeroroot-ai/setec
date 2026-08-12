@@ -47,6 +47,11 @@ var gateBreakage = []struct {
 	{"identity-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.Uniquified = false }},
 	{"provenance-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.ProvenanceVerified = false }},
 	{"atrest-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.EncryptedAtRest = false }},
+	// Invariant 1 has its own signal (the recorded secret-scan
+	// verdict, setec#206): losing it must reject the restore even
+	// when the provenance attestation (invariant 4) still holds —
+	// the gate never infers clean-base from provenance.
+	{"clean-base-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.CleanBaseVerified = false }},
 }
 
 // TestWarmStartFromPool_GateRejectsUnverifiedRestore asserts that a

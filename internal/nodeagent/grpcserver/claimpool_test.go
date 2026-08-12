@@ -18,6 +18,8 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,14 +36,23 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
+
+// digestOf returns the lowercase-hex SHA-256 of s, matching the
+// digests the bake path records in the scan verdict.
+func digestOf(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
 
 // seedPool returns a Manager holding exactly one entry for class
 // "std" / image "img:v1", with the full artifact layer written under
 // the entry directory the way setec-pool-vm does: encrypted
-// state/memory (when writeStateFiles), a sealed per-entry DEK, and a
-// class-image-boot provenance record. The returned kekPath must be
+// state/memory (when writeStateFiles), a sealed per-entry DEK, a
+// class-image-boot provenance record, and a clean secret-scan verdict
+// whose digests name the plaintext pair. The returned kekPath must be
 // wired into the Server (PoolKEKPath) so ClaimPoolEntry can unseal.
 func seedPool(t *testing.T, writeStateFiles bool) (*pool.Manager, string) {
 	t.Helper()
@@ -91,7 +102,13 @@ func seedPool(t *testing.T, writeStateFiles bool) (*pool.Manager, string) {
 			}
 		}
 		prov := poolentry.Provenance{Source: poolentry.SourceClassImageBoot, ImageRef: "img:v1"}
-		sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(e.ID, prov))
+		verdict := poolentry.ScanVerdict{
+			ScannerVersion: secretscan.Version(),
+			Clean:          true,
+			StateSHA256:    digestOf("STATE"),
+			MemorySHA256:   digestOf("MEMORY"),
+		}
+		sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(e.ID, prov, verdict))
 		if err != nil {
 			t.Fatalf("seal DEK: %v", err)
 		}
@@ -100,6 +117,9 @@ func seedPool(t *testing.T, writeStateFiles bool) (*pool.Manager, string) {
 		}
 		if err := poolentry.WriteProvenance(e.StorageRef, prov); err != nil {
 			t.Fatalf("write provenance: %v", err)
+		}
+		if err := poolentry.WriteScan(e.StorageRef, verdict); err != nil {
+			t.Fatalf("write scan verdict: %v", err)
 		}
 	}
 	return pm, kekPath
@@ -144,6 +164,13 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 	}
 	if !resp.GetEncryptedAtRest() {
 		t.Fatal("encrypted_at_rest must be true on a successful claim")
+	}
+	// Invariant 1 (setec#206): the claim path verified the recorded
+	// scan verdict (AAD-bound) and matched the decrypted plaintext
+	// digests against it, so the independent clean-base signal must
+	// be reported affirmatively.
+	if !resp.GetCleanBaseVerified() {
+		t.Fatal("clean_base_verified must be true on a successful claim")
 	}
 
 	// The restore drove LoadSnapshot with the entry's raw state files.
@@ -257,6 +284,133 @@ func TestClaimPoolEntry_MissingStateFilesConsumesEntry(t *testing.T) {
 	}
 	if n := pm.CountClass("std"); n != 0 {
 		t.Fatalf("pool entries = %d, want 0 after consuming the broken entry", n)
+	}
+}
+
+// TestClaimPoolEntry_MissingScanVerdictRefused: an entry without a
+// recorded scan verdict (e.g. baked before setec#206) is refused at
+// the pool hand-over boundary and destroyed — absence of evidence is
+// a violation, and the pool rebuilds clean on the next reconcile.
+func TestClaimPoolEntry_MissingScanVerdictRefused(t *testing.T) {
+	pm, kekPath := seedPool(t, true)
+	entries := pm.QueryAvailable("std", "")
+	if len(entries) != 1 {
+		t.Fatalf("seeded entries = %d, want 1", len(entries))
+	}
+	entryDir := entries[0].StorageRef
+	if err := os.Remove(filepath.Join(entryDir, poolentry.ScanFile)); err != nil {
+		t.Fatalf("remove scan verdict: %v", err)
+	}
+
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, pm)
+	srv.PoolKEKPath = kekPath
+	cli := newBufconnClient(t, srv)
+
+	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
+		SandboxClass:     "std",
+		KataSocketTarget: "/tmp/x.socket",
+	})
+	if err != nil {
+		t.Fatalf("ClaimPoolEntry: %v", err)
+	}
+	if resp.GetClaimed() {
+		t.Fatal("an entry without a scan verdict must never be handed out")
+	}
+	if len(fc.loadCalls) != 0 {
+		t.Fatalf("no state may be restored from an unverified entry, got %d LoadSnapshot calls", len(fc.loadCalls))
+	}
+	// The refused entry is destroyed, not returned to the pool.
+	if n := pm.CountClass("std"); n != 0 {
+		t.Fatalf("pool entries = %d after refusal, want 0", n)
+	}
+	if _, statErr := os.Stat(entryDir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused entry dir %q still present (stat err: %v)", entryDir, statErr)
+	}
+}
+
+// TestClaimPoolEntry_VerdictDigestMismatchFailsClosed: a verdict whose
+// digests do not name the decrypted artifacts means the scanned bytes
+// are not the restored bytes — the claim fails closed and the entry is
+// consumed. The forged verdict is re-sealed into the DEK's AAD so the
+// mismatch is caught by the digest comparison itself, not by the seal.
+func TestClaimPoolEntry_VerdictDigestMismatchFailsClosed(t *testing.T) {
+	pm, kekPath := seedPool(t, true)
+	entries := pm.QueryAvailable("std", "")
+	if len(entries) != 1 {
+		t.Fatalf("seeded entries = %d, want 1", len(entries))
+	}
+	entryDir := entries[0].StorageRef
+
+	// Rewrite verdict + sealed DEK the way a compromised bake host
+	// could: consistent with each other, inconsistent with the state.
+	kek, err := atrest.LoadOrCreateKEK(kekPath)
+	if err != nil {
+		t.Fatalf("load KEK: %v", err)
+	}
+	prov, err := poolentry.ReadProvenance(entryDir)
+	if err != nil {
+		t.Fatalf("read provenance: %v", err)
+	}
+	verdict, err := poolentry.ReadScan(entryDir)
+	if err != nil {
+		t.Fatalf("read verdict: %v", err)
+	}
+	verdict.StateSHA256 = digestOf("SOMETHING-ELSE")
+	if err := poolentry.WriteScan(entryDir, verdict); err != nil {
+		t.Fatalf("write forged verdict: %v", err)
+	}
+	// Re-seal the same DEK under the forged verdict's AAD. We cannot
+	// recover the original DEK here, so re-encrypt fresh state instead:
+	// simplest is a fresh DEK + fresh ciphertext for both files.
+	dek, err := atrest.NewDEK()
+	if err != nil {
+		t.Fatalf("new DEK: %v", err)
+	}
+	for name, payload := range map[string]string{
+		poolentry.StateFile: "STATE",
+		poolentry.MemFile:   "MEMORY",
+	} {
+		p := filepath.Join(entryDir, name)
+		if err := os.WriteFile(p, []byte(payload), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		if err := atrest.EncryptFile(p, dek); err != nil {
+			t.Fatalf("encrypt %s: %v", name, err)
+		}
+	}
+	sealed, err := atrest.SealDEK(kek, dek, poolentry.DEKAAD(entries[0].ID, prov, verdict))
+	if err != nil {
+		t.Fatalf("seal DEK: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entryDir, poolentry.DEKFile), sealed, 0o600); err != nil {
+		t.Fatalf("write sealed DEK: %v", err)
+	}
+
+	srv := newServer(t, &fakeFirecracker{}, pm)
+	srv.PoolKEKPath = kekPath
+	var outcomes []string
+	srv.ClaimObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
+	cli := newBufconnClient(t, srv)
+
+	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
+		SandboxClass:     "std",
+		KataSocketTarget: "/tmp/x.socket",
+	})
+	if err != nil {
+		t.Fatalf("ClaimPoolEntry: %v", err)
+	}
+	if !resp.GetClaimed() || resp.GetSuccess() {
+		t.Fatalf("claimed=%v success=%v, want claimed=true success=false on digest mismatch", resp.GetClaimed(), resp.GetSuccess())
+	}
+	if resp.GetCleanBaseVerified() {
+		t.Fatal("clean_base_verified must never be reported for a digest mismatch")
+	}
+	if n := pm.CountClass("std"); n != 0 {
+		t.Fatalf("pool entries = %d, want 0 after consuming the refused entry", n)
+	}
+	if len(outcomes) != 1 || outcomes[0] != "restore_failed" {
+		t.Fatalf("claim outcomes = %v, want [restore_failed]", outcomes)
 	}
 }
 

@@ -392,18 +392,25 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 // returns it. Returns ok=false when no compatible entry exists; the
 // caller must fall back to cold boot.
 //
-// Template provenance (ADR-0005 invariant 4) is enforced here, at the
-// hand-over boundary: an entry whose on-disk provenance record is
-// missing, unreadable, or claims any source other than the class-image
-// boot path is never handed out — it is torn down instead, and the
-// scan continues to the next candidate.
+// Template provenance (ADR-0005 invariant 4) and the clean-base scan
+// verdict (invariant 1) are enforced here, at the hand-over boundary:
+// an entry whose on-disk provenance record is missing, unreadable, or
+// claims any source other than the class-image boot path — or whose
+// secret-scan verdict is missing, incomplete, or not clean — is never
+// handed out. It is torn down instead, and the scan continues to the
+// next candidate. Entries baked before the scan verdict existed
+// therefore drain out of the pool and are rebuilt clean.
 func (m *Manager) Claim(ctx context.Context, className, imageRef string) (Entry, bool, error) {
 	for {
 		e, found := m.popMatching(className, imageRef)
 		if !found {
 			return Entry{}, false, nil
 		}
-		if err := poolentry.Verify(e.StorageRef, e.ImageRef); err != nil {
+		err := poolentry.Verify(e.StorageRef, e.ImageRef)
+		if err == nil {
+			_, err = poolentry.VerifyScan(e.StorageRef)
+		}
+		if err != nil {
 			// Refused entry: destroy it (state, key, socket, CID)
 			// rather than returning it to the pool, and keep scanning.
 			if relErr := m.releaseEntry(ctx, e, true); relErr != nil {

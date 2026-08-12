@@ -150,3 +150,20 @@ func TestScan_DeduplicatesIdenticalFindings(t *testing.T) {
 		t.Fatalf("expected de-duplicated findings (1..5), got %d for 50 identical lines", count)
 	}
 }
+
+// TestVersion_IsDerivedFromTheRules pins the verdict-versioning
+// contract (ADR-0005 invariant 1, setec#206): the version is stable
+// across calls, non-empty, and derived from the detector set so any
+// rule change re-versions recorded verdicts automatically.
+func TestVersion_IsDerivedFromTheRules(t *testing.T) {
+	v := Version()
+	if v == "" {
+		t.Fatal("Version() must not be empty")
+	}
+	if v != Version() {
+		t.Fatal("Version() must be deterministic")
+	}
+	if !strings.HasPrefix(v, "v1-") {
+		t.Fatalf("Version() = %q, want a v1- prefixed detector-set digest", v)
+	}
+}

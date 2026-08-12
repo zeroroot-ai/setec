@@ -57,7 +57,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -400,31 +402,35 @@ func EncryptFile(path string, dek []byte) error {
 }
 
 // DecryptFile streams the encrypted file at src into a plaintext file
-// at dst (0600). Used by restore paths that must hand Firecracker a
-// plaintext state file.
-func DecryptFile(src, dst string, dek []byte) error {
+// at dst (0600) and returns the lowercase-hex SHA-256 of the plaintext,
+// computed in the same pass. Used by restore paths that must hand
+// Firecracker a plaintext state file; the digest lets them check the
+// recovered bytes against a recorded verdict (e.g. the pool entry's
+// secret-scan record, ADR-0005 invariant 1) without a second read.
+func DecryptFile(src, dst string, dek []byte) (string, error) {
 	in, err := os.Open(src) //nolint:gosec // node-agent controlled path
 	if err != nil {
-		return fmt.Errorf("atrest: open %q: %w", src, err)
+		return "", fmt.Errorf("atrest: open %q: %w", src, err)
 	}
 	defer func() { _ = in.Close() }()
 	dr, err := NewDecryptingReader(in, dek)
 	if err != nil {
-		return err
+		return "", err
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // node-agent controlled path
 	if err != nil {
-		return fmt.Errorf("atrest: create %q: %w", dst, err)
+		return "", fmt.Errorf("atrest: create %q: %w", dst, err)
 	}
-	_, cpErr := io.Copy(out, dr)
+	h := sha256.New()
+	_, cpErr := io.Copy(io.MultiWriter(out, h), dr)
 	if cerr := out.Close(); cpErr == nil {
 		cpErr = cerr
 	}
 	if cpErr != nil {
 		_ = os.Remove(dst)
-		return fmt.Errorf("atrest: decrypt %q: %w", src, cpErr)
+		return "", fmt.Errorf("atrest: decrypt %q: %w", src, cpErr)
 	}
-	return nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Shred zero-overwrites the file at path (single pass), fsyncs, and

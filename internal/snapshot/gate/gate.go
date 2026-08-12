@@ -61,10 +61,12 @@ type Invariant string
 const (
 	// InvariantCleanBase (ADR-0005 #1): the restored state is the
 	// class image booted to guest-agent-ready — no tenant data, no
-	// secrets, no prior input. Per-restore evidence: the verified
-	// template-provenance record (a class-image boot carries no tenant
-	// data by construction) or, for an intra-session resume, the
-	// artifact's binding to the very sandbox that produced it.
+	// secrets, no prior input. Per-restore evidence: for a pool
+	// warm-start, the entry's recorded secret-scan verdict (produced
+	// at bake time, AAD-bound into the sealed DEK, digest-matched
+	// against the decrypted artifacts — independent of invariant 4's
+	// provenance evidence, setec#206); for an intra-session resume,
+	// the artifact's binding to the very sandbox that produced it.
 	InvariantCleanBase Invariant = "clean-base"
 
 	// InvariantUniquified (ADR-0005 #2): the restored guest verifiably

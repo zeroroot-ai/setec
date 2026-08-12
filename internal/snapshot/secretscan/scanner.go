@@ -38,6 +38,8 @@ package secretscan
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"regexp"
@@ -155,6 +157,22 @@ type Scanner struct {
 // New returns a Scanner using the builtin detector set.
 func New() *Scanner {
 	return &Scanner{rules: builtinRules, maxExcerpt: 80}
+}
+
+// Version identifies the exact builtin detector set. It is derived from
+// the rule names and patterns rather than hand-bumped, so any change to
+// the detectors changes the version automatically — a recorded verdict
+// therefore names precisely which rules cleared the artifact. Recorded
+// in pool-entry scan verdicts (ADR-0005 invariant 1).
+func Version() string {
+	h := sha256.New()
+	for _, rl := range builtinRules {
+		h.Write([]byte(rl.name))
+		h.Write([]byte{0})
+		h.Write([]byte(rl.re.String()))
+		h.Write([]byte{0})
+	}
+	return "v1-" + hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // maxLineBytes bounds the per-line buffer the scanner is willing to hold.

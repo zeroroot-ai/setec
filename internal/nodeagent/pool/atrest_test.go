@@ -127,6 +127,84 @@ func TestClaim_RefusesForeignSourceProvenance(t *testing.T) {
 	}
 }
 
+// TestClaim_RefusesEntryWithoutScanVerdict codifies ADR-0005
+// invariant 1 (setec#206) at the hand-over boundary: a pool entry
+// without a recorded secret-scan verdict — e.g. one baked before the
+// verdict existed — is never handed out. It is torn down and the pool
+// rebuilds clean on the next reconcile (the wholesale flip).
+func TestClaim_RefusesEntryWithoutScanVerdict(t *testing.T) {
+	s := newFakeStorage()
+	pre := &countingPrefetcher{}
+	fc := &fakeFirecracker{}
+	m := newTestManager(s, pre, fc, 4)
+
+	cls := newClass("img:v1", 1, 0)
+	if err := m.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
+		t.Fatalf("ReconcilePools: %v", err)
+	}
+	entries := m.QueryAvailable("std", "")
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	dir := entries[0].StorageRef
+	if err := os.Remove(filepath.Join(dir, poolentry.ScanFile)); err != nil {
+		t.Fatalf("remove scan verdict: %v", err)
+	}
+
+	_, ok, err := m.Claim(context.Background(), "std", "img:v1")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if ok {
+		t.Fatal("Claim must refuse an entry without a scan verdict (fail closed on absence)")
+	}
+	if m.CountClass("std") != 0 {
+		t.Fatalf("refused entry left in pool: count=%d", m.CountClass("std"))
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused entry dir should be removed: %v", statErr)
+	}
+}
+
+// TestClaim_RefusesDirtyScanVerdict: a recorded verdict that is not
+// clean can only mean a forged or corrupted record — the bake path
+// never persists a dirty pair — so the entry is refused and destroyed.
+func TestClaim_RefusesDirtyScanVerdict(t *testing.T) {
+	s := newFakeStorage()
+	pre := &countingPrefetcher{}
+	fc := &fakeFirecracker{}
+	m := newTestManager(s, pre, fc, 4)
+
+	cls := newClass("img:v1", 1, 0)
+	if err := m.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
+		t.Fatalf("ReconcilePools: %v", err)
+	}
+	entries := m.QueryAvailable("std", "")
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	dir := entries[0].StorageRef
+	v, err := poolentry.ReadScan(dir)
+	if err != nil {
+		t.Fatalf("read scan verdict: %v", err)
+	}
+	v.Clean = false
+	if err := poolentry.WriteScan(dir, v); err != nil {
+		t.Fatalf("write dirty verdict: %v", err)
+	}
+
+	_, ok, err := m.Claim(context.Background(), "std", "img:v1")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if ok {
+		t.Fatal("Claim must refuse an entry whose scan verdict is not clean")
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused entry dir should be removed: %v", statErr)
+	}
+}
+
 // TestRelease_DestroysSealedDEK asserts the crypto-erase side of
 // invariant 5: releasing an entry removes its sealed DEK together with
 // the state files.

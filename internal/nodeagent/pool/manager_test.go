@@ -18,6 +18,8 @@ package pool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -33,6 +35,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -170,8 +173,9 @@ func (l *fakeLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	_ = os.WriteFile(memPath, []byte("mem"), 0o644)
 	// Mirror the production launcher's artifact layer: a sealed-DEK
 	// sidecar (junk bytes are fine for the manager's purposes — it
-	// only ever shreds it) and a class-image-boot provenance record,
-	// without which Claim refuses the entry (ADR-0005 invariant 4).
+	// only ever shreds it), a class-image-boot provenance record, and
+	// a clean secret-scan verdict, without which Claim refuses the
+	// entry (ADR-0005 invariants 4 and 1).
 	_ = os.WriteFile(entryDir+"/"+poolentry.DEKFile, []byte("sealed-dek"), 0o600)
 	if err := poolentry.WriteProvenance(entryDir, poolentry.Provenance{
 		Source:   poolentry.SourceClassImageBoot,
@@ -179,7 +183,14 @@ func (l *fakeLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	}); err != nil {
 		return err
 	}
-	return nil
+	stateSum := sha256.Sum256([]byte("state"))
+	memSum := sha256.Sum256([]byte("mem"))
+	return poolentry.WriteScan(entryDir, poolentry.ScanVerdict{
+		ScannerVersion: secretscan.Version(),
+		Clean:          true,
+		StateSHA256:    hex.EncodeToString(stateSum[:]),
+		MemorySHA256:   hex.EncodeToString(memSum[:]),
+	})
 }
 
 // newTestManager assembles a Manager wired to the provided fakes.

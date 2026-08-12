@@ -18,8 +18,12 @@ A snapshot-restored (or resumed) Sandbox MUST satisfy:
 1. **Clean base.** The pool snapshot is the class image booted to
    guest-agent-ready — no tenant data, no secrets, no prior input.
    (`internal/snapshot/secretscan` scans snapshots so none carries secrets at
-   rest ✅; template *provenance* — built only from the class image, never a used
-   sandbox — is invariant 4.)
+   rest ✅; the pool builder additionally scans every entry's plaintext pair at
+   bake time and records the verdict — scanner version + artifact digests —
+   bound into the entry's sealed encryption key, giving the invariant gate an
+   independent per-restore clean-base signal ✅ setec#206; template
+   *provenance* — built only from the class image, never a used sandbox — is
+   invariant 4.)
 2. **Per-restore uniquification.** Each restore/resume gets: a **fresh CSPRNG
    reseed** verified before hand-over (`RNDADDENTROPY` in the guest-agent + the
    coordinator's `EntropyReseeded` event, setec#72 ✅ — closes the Firecracker
