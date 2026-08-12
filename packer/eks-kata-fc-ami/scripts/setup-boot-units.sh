@@ -8,10 +8,11 @@ set -euo pipefail
 
 SRC=/tmp/setec-files
 
-# LVM tooling for the thin-pool (thin-provisioning-tools ships thin_check,
-# which lvm's thin-pool activation requires).
-echo ">>> installing lvm2 + thin-provisioning-tools"
-dnf install -y lvm2 thin-provisioning-tools
+# LVM tooling for the thin-pool (device-mapper-persistent-data ships
+# thin_check, which lvm's thin-pool activation requires — that is the
+# AL2023/Fedora package name; thin-provisioning-tools is the Debian one).
+echo ">>> installing lvm2 + device-mapper-persistent-data"
+dnf install -y lvm2 device-mapper-persistent-data
 
 echo ">>> installing boot-time thin-pool provisioner"
 install -m 0755 "${SRC}/setec-thinpool.sh" /usr/local/sbin/setec-thinpool.sh
