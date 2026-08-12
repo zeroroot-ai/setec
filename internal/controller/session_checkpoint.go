@@ -86,6 +86,14 @@ const (
 	reasonSuspendedIdle     = "SuspendedIdle"
 	reasonUserSuspended     = "UserSuspended"
 	reasonCheckpointOnDrain = "CheckpointOnDrain"
+	// reasonSuspendedPauseTimeout marks a session suspended because it
+	// sat Paused past the class maxPauseDuration (setec#202): the cap
+	// bounds paused microVM residency, and with checkpoints enabled the
+	// bound suspends — checkpoint retained, VM released — instead of
+	// hard-failing. The session resumes when desiredState returns to
+	// Running; while desiredState stays Paused it holds Suspended, so
+	// the cap cannot ping-pong it through pause/suspend cycles.
+	reasonSuspendedPauseTimeout = "SuspendedPauseTimeout"
 
 	// Event reasons.
 	eventReasonSuspended              = "SessionSuspended"
@@ -228,6 +236,19 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || desired.Phase == setecv1alpha1.SandboxPhasePaused) {
 		res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonUserSuspended)
 		return res, true, err
+	}
+
+	// (d2) Pause-timeout suspend (setec#202): a session sitting Paused
+	// past the class maxPauseDuration has held a paused microVM's full
+	// memory reservation for the whole cap. With checkpoints enabled
+	// the cap suspends instead of hard-failing: checkpoint, release the
+	// microVM, keep the session recoverable (ADR-0006 L2). The suspend
+	// holds until desiredState returns to Running.
+	if desired.Phase == setecv1alpha1.SandboxPhasePaused {
+		if deadline, ok := status.PauseDeadline(desired, cls); ok && !time.Now().Before(deadline) {
+			res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonSuspendedPauseTimeout)
+			return res, true, err
+		}
 	}
 
 	// (e) Suspend-on-idle: consume setec#193's idle signal — the
@@ -391,6 +412,10 @@ func (r *SandboxReconciler) suspendSession(
 	sb.Status.Checkpoint.PendingRestore = sb.Status.Checkpoint.Ref != "" && ckErr == nil
 	sb.Status.Phase = setecv1alpha1.SandboxPhaseSuspended
 	sb.Status.Reason = reason
+	// A Suspended session holds no microVM, so it is outside the
+	// maxPauseDuration bound: clear the pause stamp a suspend-from-
+	// Paused would otherwise carry along (a later re-pause restamps it).
+	sb.Status.PausedAt = nil
 	now := metav1.Now()
 	sb.Status.LastTransitionTime = &now
 	if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
@@ -489,6 +514,9 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 //   - reason UserSuspended → resume once desiredState is Running;
 //   - reason CheckpointOnDrain → resume immediately (the suspend was
 //     never a caller intent — the node went away);
+//   - reason SuspendedPauseTimeout → resume only once desiredState is
+//     Running: while it stays Paused, resuming would just re-pause and
+//     re-suspend in a loop at the maxPauseDuration cadence (setec#202);
 //   - reason SuspendedIdle → resume when fresh activity arrived
 //     (setec#193's last-activity clock moved past the suspend time):
 //     a reattach or new call transparently wakes the session.
@@ -499,6 +527,9 @@ func suspendedSandboxAction(sb *setecv1alpha1.Sandbox) (resume bool) {
 	switch sb.Status.Reason {
 	case reasonCheckpointOnDrain, reasonUserSuspended:
 		return true
+	case reasonSuspendedPauseTimeout:
+		return sb.Spec.DesiredState == "" ||
+			sb.Spec.DesiredState == setecv1alpha1.SandboxDesiredStateRunning
 	case reasonSuspendedIdle:
 		// Fresh activity at or after the suspend instant wakes the
 		// session. The comparison is >= because both clocks serialize

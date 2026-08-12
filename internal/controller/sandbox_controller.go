@@ -83,6 +83,7 @@ const (
 	eventReasonPodCreated            = "PodCreated"
 	eventReasonTimeout               = "TimeoutExceeded"
 	eventReasonIdleTimeout           = "IdleTimeoutExceeded"
+	eventReasonPauseTimeout          = "PauseTimeoutExceeded"
 	eventReasonReconcileError        = "ReconcileError"
 	eventReasonClassNotFound         = "ClassNotFound"
 	eventReasonConstraintViolated    = "ConstraintViolated"
@@ -643,6 +644,14 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// sessions keep their last-activity annotation fresh, so they are
 	// never idle-reaped.
 	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
+
+	// (10c) Pause-duration cap (setec#202), same layering: a Paused
+	// Sandbox past the class maxPauseDuration fails with reason
+	// PauseTimeoutExceeded — a paused microVM holds its full memory
+	// reservation, and the class cap bounds that residency. When the
+	// class enables sessionCheckpoint the suspend machinery (11c) owns
+	// the deadline for sessions instead, so the policy passes through.
+	desired = status.ApplyPausePolicy(sb, cls, desired, now)
 	if !statusEqual(sb.Status, desired) {
 		original := sb.DeepCopy()
 		sb.Status = desired
@@ -732,6 +741,12 @@ func (r *SandboxReconciler) reconcileExistingPod(
 			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after idle eviction: %w", err))
 			}
+		case status.ReasonPauseTimeout:
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonPauseTimeout, actionEnforcePauseTimeout,
+				"Sandbox paused beyond the class maxPauseDuration; deleting Pod %q", pod.Name)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after pause timeout: %w", err))
+			}
 		case status.ReasonInvariantGateViolation:
 			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
 				"ADR-0005 invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
@@ -780,28 +795,37 @@ func (r *SandboxReconciler) reconcileExistingPod(
 }
 
 // nextLifecycleDeadline returns how long until the earliest wall-clock
-// deadline of a Running Sandbox — the lifecycle timeout or, for
-// sessions, the class idle-eviction deadline — and whether any deadline
-// is pending at all. The result is floored at one second so a deadline
-// that passed while the status patch was in flight cannot produce a hot
-// requeue loop.
+// deadline of a Running or Paused Sandbox — the lifecycle timeout and,
+// for sessions, the class idle-eviction deadline while Running; the
+// class maxPauseDuration deadline while Paused — and whether any
+// deadline is pending at all. The result is floored at one second so a
+// deadline that passed while the status patch was in flight cannot
+// produce a hot requeue loop.
 func nextLifecycleDeadline(
 	sb *setecv1alpha1.Sandbox,
 	cls *setecv1alpha1.SandboxClass,
 	st setecv1alpha1.SandboxStatus,
 	now time.Time,
 ) (time.Duration, bool) {
-	if st.Phase != setecv1alpha1.SandboxPhaseRunning {
-		return 0, false
-	}
 	var earliest time.Time
-	if st.StartedAt != nil && sb.Spec.Lifecycle != nil &&
-		sb.Spec.Lifecycle.Timeout != nil && sb.Spec.Lifecycle.Timeout.Duration > 0 {
-		earliest = st.StartedAt.Add(sb.Spec.Lifecycle.Timeout.Duration)
-	}
-	if d, ok := status.SessionIdleDeadline(sb, cls); ok &&
-		(earliest.IsZero() || d.Before(earliest)) {
-		earliest = d
+	switch st.Phase {
+	case setecv1alpha1.SandboxPhaseRunning:
+		if st.StartedAt != nil && sb.Spec.Lifecycle != nil &&
+			sb.Spec.Lifecycle.Timeout != nil && sb.Spec.Lifecycle.Timeout.Duration > 0 {
+			earliest = st.StartedAt.Add(sb.Spec.Lifecycle.Timeout.Duration)
+		}
+		if d, ok := status.SessionIdleDeadline(sb, cls); ok &&
+			(earliest.IsZero() || d.Before(earliest)) {
+			earliest = d
+		}
+	case setecv1alpha1.SandboxPhasePaused:
+		// A paused microVM emits no events either; only this requeue
+		// delivers the reconcile that enforces maxPauseDuration —
+		// whether that reconcile hard-fails the Sandbox (10c) or
+		// suspends a checkpoint-enabled session (11c).
+		if d, ok := status.PauseDeadline(st, cls); ok {
+			earliest = d
+		}
 	}
 	if earliest.IsZero() {
 		return 0, false

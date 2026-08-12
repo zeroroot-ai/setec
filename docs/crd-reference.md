@@ -464,4 +464,14 @@ Four additive fields on `SandboxClassSpec`:
 - `preWarmPoolSize` (int; default 0)
 - `preWarmImage` (string; required when pool size is non-zero)
 - `preWarmTTL` (Go duration; default 24h at runtime)
-- `maxPauseDuration` (Go duration; optional)
+- `maxPauseDuration` (Go duration; optional, must be positive when set —
+  the webhook rejects zero or negative values). Bounds how long a
+  Sandbox may hold a paused microVM (`phase=Paused`). Past the cap the
+  reconciler transitions the Sandbox to Failed with
+  `reason=PauseTimeoutExceeded`, emits a `PauseTimeoutExceeded` Warning
+  Event, and deletes the VM Pod. Sessions in a class with
+  `sessionCheckpoint` enabled suspend instead (`phase=Suspended`,
+  `reason=SuspendedPauseTimeout`): checkpoint retained, microVM
+  released, resumed when `spec.desiredState` returns to `Running`. The
+  `Suspended` phase itself is not bounded by this cap — a suspended
+  session holds no microVM. Unset means pauses are unbounded.
