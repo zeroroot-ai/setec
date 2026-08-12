@@ -830,10 +830,7 @@ func nextLifecycleDeadline(
 	if earliest.IsZero() {
 		return 0, false
 	}
-	after := earliest.Sub(now)
-	if after < time.Second {
-		after = time.Second
-	}
+	after := max(earliest.Sub(now), time.Second)
 	return after, true
 }
 

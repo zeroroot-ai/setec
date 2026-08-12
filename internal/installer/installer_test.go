@@ -83,10 +83,10 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	}
 
 	switch flavor {
-	case "containerd":
+	case flavorContainerd:
 		mustMkdir(t, filepath.Join(root, "etc/containerd"))
 		mustWrite(t, filepath.Join(root, "etc/systemd/system/containerd.service"), "[Unit]\n")
-	case "k3s":
+	case flavorK3s:
 		mustMkdir(t, filepath.Join(root, "var/lib/rancher/k3s/agent/etc/containerd"))
 		mustWrite(t, filepath.Join(root, "etc/systemd/system/k3s.service"), "[Unit]\n")
 	case "none":
@@ -151,7 +151,7 @@ func newTestInstaller(t *testing.T, fx hostFixture, runner Runner) *Installer {
 }
 
 func TestConvergeFreshStockContainerdNode(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
@@ -167,7 +167,7 @@ func TestConvergeFreshStockContainerdNode(t *testing.T) {
 	if !res.Changed || !res.RuntimeRestarted {
 		t.Fatalf("fresh node: Changed=%t RuntimeRestarted=%t, want both true", res.Changed, res.RuntimeRestarted)
 	}
-	if res.Flavor != "containerd" {
+	if res.Flavor != flavorContainerd {
 		t.Fatalf("flavor = %q, want containerd", res.Flavor)
 	}
 
@@ -223,7 +223,7 @@ func TestConvergeFreshStockContainerdNode(t *testing.T) {
 }
 
 func TestConvergeIsIdempotent(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
@@ -253,7 +253,7 @@ func TestConvergeIsIdempotent(t *testing.T) {
 }
 
 func TestConvergeNoKVMIdles(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	if err := os.Remove(filepath.Join(fx.root, "dev/kvm")); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestConvergeNoKVMIdles(t *testing.T) {
 }
 
 func TestConvergeForeignKataFCStandsDown(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	// kata-deploy-style registration in the admin's own config.
 	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
 		"version = 2\n[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.kata-fc]\n  runtime_type = \"io.containerd.kata-fc.v2\"\n")
@@ -302,7 +302,7 @@ func TestConvergeForeignKataFCStandsDown(t *testing.T) {
 }
 
 func TestConvergeK3sFreshNode(t *testing.T) {
-	fx := newHostFixture(t, "k3s")
+	fx := newHostFixture(t, flavorK3s)
 	// k3s renders a version-3 config (containerd 2.x).
 	mustWrite(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config.toml"),
 		"version = 3\n")
@@ -314,7 +314,7 @@ func TestConvergeK3sFreshNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Converge: %v", err)
 	}
-	if res.Outcome != OutcomeConverged || res.Flavor != "k3s" {
+	if res.Outcome != OutcomeConverged || res.Flavor != flavorK3s {
 		t.Fatalf("outcome=%s flavor=%s, want converged/k3s", res.Outcome, res.Flavor)
 	}
 
@@ -348,7 +348,7 @@ func TestConvergeK3sFreshNode(t *testing.T) {
 }
 
 func TestConvergeK3sPreservesExistingTemplate(t *testing.T) {
-	fx := newHostFixture(t, "k3s")
+	fx := newHostFixture(t, flavorK3s)
 	mustWrite(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config.toml"), "version = 3\n")
 	adminContent := "# admin-owned template\n{{ template \"base\" . }}\n# custom registry tweak\n"
 	mustWrite(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl"), adminContent)
@@ -374,7 +374,7 @@ func TestConvergeK3sPreservesExistingTemplate(t *testing.T) {
 }
 
 func TestConvergePreservesExistingImports(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
 		"version = 2\nimports = [\"/etc/containerd/extra.toml\"]\n[metrics]\n  address = \"127.0.0.1:1338\"\n")
 	runner := newFakeRunner(t)
@@ -399,7 +399,7 @@ func TestConvergePreservesExistingImports(t *testing.T) {
 }
 
 func TestConvergeMissingHostToolsFailsLoudly(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	if err := os.Remove(filepath.Join(fx.root, "usr/bin/dmsetup")); err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestConvergeNoSupportedRuntime(t *testing.T) {
 }
 
 func TestConvergeRepairsDamagedPayload(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
@@ -535,7 +535,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestEnvChangeRestartsThinpoolUnit(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
@@ -581,7 +581,7 @@ func TestLookPathIn(t *testing.T) {
 }
 
 func TestRestartFailureSurfacesUnitName(t *testing.T) {
-	fx := newHostFixture(t, "containerd")
+	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "activating\n"}

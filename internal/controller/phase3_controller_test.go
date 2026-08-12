@@ -35,7 +35,9 @@ import (
 // a Pod — K8s forbids direct Pod.Spec.NodeName updates but a Binding
 // object is the canonical way to schedule a Pod. The fake scheduler
 // this emulates is otherwise absent in envtest.
-func bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
+// nodeName is fixed: every caller binds to the same fixture node.
+func bindPodToNode(t *testing.T, pod *corev1.Pod) {
+	const nodeName = "kata-node-1"
 	t.Helper()
 	binding := &corev1.Binding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -122,7 +124,7 @@ func TestPhase3_PauseResume(t *testing.T) {
 
 	pod, err := getPod(testCtx, ns, sb.Name+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
-	bindPodToNode(t, pod, "kata-node-1")
+	bindPodToNode(t, pod)
 	pod, err = getPod(testCtx, ns, sb.Name+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	pod.Status.Phase = corev1.PodRunning
@@ -211,7 +213,7 @@ func TestPhase3_SnapshotCreateHappyPath(t *testing.T) {
 
 	pod, err := getPod(testCtx, ns, sb.Name+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
-	bindPodToNode(t, pod, "kata-node-1")
+	bindPodToNode(t, pod)
 	pod, err = getPod(testCtx, ns, sb.Name+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	pod.Status.Phase = corev1.PodRunning

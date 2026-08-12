@@ -268,7 +268,9 @@ func runLauncher(
 	// requested socket would mean snapshotting a pre-existing —
 	// possibly used — VM, so refuse outright rather than adopting it.
 	if socketAlive(o.SocketPath) {
-		return fmt.Errorf("socket %q has a live listener; refusing to snapshot a pre-existing VM (template provenance, ADR-0005 invariant 4)", o.SocketPath)
+		return fmt.Errorf(
+			"socket %q has a live listener; refusing to snapshot a pre-existing VM "+
+				"(template provenance, ADR-0005 invariant 4)", o.SocketPath)
 	}
 	// Clean any stale (dead) socket file so Firecracker can bind.
 	if rmErr := os.Remove(o.SocketPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {

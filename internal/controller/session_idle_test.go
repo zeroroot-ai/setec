@@ -54,7 +54,9 @@ import (
 const sessionIdleTestTimeout = 4 * time.Second
 
 // withSessionIdleTimeout gives a SandboxClass the idle-eviction knob.
-func withSessionIdleTimeout(d time.Duration) func(*setecv1alpha1.SandboxClass) {
+// d is fixed: every caller uses the package test timeout.
+func withSessionIdleTimeout() func(*setecv1alpha1.SandboxClass) {
+	const d = sessionIdleTestTimeout
 	return func(c *setecv1alpha1.SandboxClass) {
 		c.Spec.SessionIdleTimeout = &metav1.Duration{Duration: d}
 	}
@@ -104,7 +106,7 @@ func TestSessionIdle_IdleSessionIsEvicted(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sid-evict")
 
-	cls := newSandboxClass("sid-evict-class", withSessionIdleTimeout(sessionIdleTestTimeout))
+	cls := newSandboxClass("sid-evict-class", withSessionIdleTimeout())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -141,7 +143,7 @@ func TestSessionIdle_ActiveSessionIsExempt(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sid-active")
 
-	cls := newSandboxClass("sid-active-class", withSessionIdleTimeout(sessionIdleTestTimeout))
+	cls := newSandboxClass("sid-active-class", withSessionIdleTimeout())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -178,7 +180,7 @@ func TestSessionIdle_EphemeralIsUntouched(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sid-eph")
 
-	cls := newSandboxClass("sid-eph-class", withSessionIdleTimeout(sessionIdleTestTimeout))
+	cls := newSandboxClass("sid-eph-class", withSessionIdleTimeout())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 

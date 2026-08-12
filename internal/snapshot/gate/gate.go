@@ -43,7 +43,7 @@ package gate
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -157,7 +157,7 @@ func Evaluate(ev Evidence) []Invariant {
 	if !ev.EncryptedAtRest {
 		out = append(out, InvariantEncryptedAtRest)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 

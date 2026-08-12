@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,14 +97,7 @@ func Verify(spec Spec, rawSpec []byte, report Report) error {
 		return fmt.Errorf("uniquify: guest hostname %q does not match the directed value %q", report.Hostname, spec.Hostname)
 	}
 	if spec.PodIP != "" {
-		found := false
-		for _, ip := range report.ObservedIPs {
-			if ip == spec.PodIP {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(report.ObservedIPs, spec.PodIP) {
 			return fmt.Errorf("uniquify: guest does not observe its Pod IP %s (observed %v)", spec.PodIP, report.ObservedIPs)
 		}
 	}

@@ -94,7 +94,8 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 		t.Fatalf("verdict scanner version = %q, want %q", verdict.ScannerVersion, secretscan.Version())
 	}
 	wantDigest := sha256.Sum256(secretMarker)
-	if verdict.StateSHA256 != hex.EncodeToString(wantDigest[:]) || verdict.MemorySHA256 != hex.EncodeToString(wantDigest[:]) {
+	want := hex.EncodeToString(wantDigest[:])
+	if verdict.StateSHA256 != want || verdict.MemorySHA256 != want {
 		t.Fatalf("verdict digests %q/%q do not match the scanned plaintext pair", verdict.StateSHA256, verdict.MemorySHA256)
 	}
 

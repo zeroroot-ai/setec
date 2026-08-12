@@ -40,7 +40,9 @@ import (
 )
 
 // withSessionCheckpoint enables the checkpoint policy on a class.
-func withSessionCheckpoint(interval time.Duration) func(*setecv1alpha1.SandboxClass) {
+// interval is fixed at 0 (the "use the default" value) by every caller.
+func withSessionCheckpoint() func(*setecv1alpha1.SandboxClass) {
+	const interval = time.Duration(0)
 	return func(c *setecv1alpha1.SandboxClass) {
 		sc := &setecv1alpha1.SessionCheckpointSpec{Backend: "s3"}
 		if interval > 0 {
@@ -50,11 +52,11 @@ func withSessionCheckpoint(interval time.Duration) func(*setecv1alpha1.SandboxCl
 	}
 }
 
-// getKEKSecret fetches the per-session KEK Secret.
-func getKEKSecret(ns, sbName string) (*corev1.Secret, error) {
-	s := &corev1.Secret{}
-	err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: sbName + sessionKEKSuffix}, s)
-	return s, err
+// getKEKSecret reports whether the per-session KEK Secret can be fetched.
+// Callers assert on presence/absence only, never on the contents.
+func getKEKSecret(ns, sbName string) error {
+	return testClient.Get(testCtx,
+		types.NamespacedName{Namespace: ns, Name: sbName + sessionKEKSuffix}, &corev1.Secret{})
 }
 
 // patchDesiredState flips spec.desiredState.
@@ -100,7 +102,7 @@ func finalizeTerminatingPod(g Gomega, ns, sbName string, oldUID types.UID) {
 // node, and marks it Running.
 func runSessionVM(g Gomega, t *testing.T, ns, sbName string) *corev1.Pod {
 	pod := waitForPod(g, ns, sbName)
-	bindPodToNode(t, pod, "kata-node-1")
+	bindPodToNode(t, pod)
 	markPodRunning(g, ns, sbName)
 	return pod
 }
@@ -114,7 +116,7 @@ func TestSessionCheckpoint_SuspendAndResume(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sck-sr")
 
-	cls := newSandboxClass("sck-sr-class", withSessionCheckpoint(0))
+	cls := newSandboxClass("sck-sr-class", withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -124,7 +126,7 @@ func TestSessionCheckpoint_SuspendAndResume(t *testing.T) {
 
 	// The per-session KEK Secret exists before any checkpoint could.
 	g.Eventually(func() error {
-		_, err := getKEKSecret(ns, sb.Name)
+		err := getKEKSecret(ns, sb.Name)
 		return err
 	}, convergeTimeout, convergeInterval).Should(Succeed(), "session KEK Secret should be created")
 
@@ -188,8 +190,8 @@ func TestSessionCheckpoint_IdleSuspendsInsteadOfEvicting(t *testing.T) {
 	ns := newNamespace(t, "sck-idle")
 
 	cls := newSandboxClass("sck-idle-class",
-		withSessionIdleTimeout(sessionIdleTestTimeout),
-		withSessionCheckpoint(0))
+		withSessionIdleTimeout(),
+		withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -221,7 +223,7 @@ func TestSessionCheckpoint_CheckpointOnDrain(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sck-drain")
 
-	cls := newSandboxClass("sck-drain-class", withSessionCheckpoint(0))
+	cls := newSandboxClass("sck-drain-class", withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -285,7 +287,7 @@ func TestSessionCheckpoint_VMLossWithoutCheckpointIsDistinct(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sck-loss")
 
-	cls := newSandboxClass("sck-loss-class", withSessionCheckpoint(0))
+	cls := newSandboxClass("sck-loss-class", withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -321,7 +323,7 @@ func TestSessionCheckpoint_TeardownDeletesKEK(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "sck-td")
 
-	cls := newSandboxClass("sck-td-class", withSessionCheckpoint(0))
+	cls := newSandboxClass("sck-td-class", withSessionCheckpoint())
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
@@ -329,13 +331,13 @@ func TestSessionCheckpoint_TeardownDeletesKEK(t *testing.T) {
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
 	runSessionVM(g, t, ns, sb.Name)
 	g.Eventually(func() error {
-		_, err := getKEKSecret(ns, sb.Name)
+		err := getKEKSecret(ns, sb.Name)
 		return err
 	}, convergeTimeout, convergeInterval).Should(Succeed())
 
 	g.Expect(testClient.Delete(testCtx, sb)).To(Succeed())
 	g.Eventually(func() bool {
-		_, err := getKEKSecret(ns, sb.Name)
+		err := getKEKSecret(ns, sb.Name)
 		return apierrors.IsNotFound(err)
 	}, convergeTimeout, convergeInterval).Should(BeTrue(),
 		"teardown must delete the session KEK Secret (crypto-erase of all checkpoints)")

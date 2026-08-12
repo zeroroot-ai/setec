@@ -45,16 +45,20 @@ import (
 
 func main() {
 	var (
-		hostRoot       = flag.String("host-root", "/host", "mount point of the node's root filesystem inside this container")
-		payloadDir     = flag.String("payload-dir", "/opt/kata", "kata static release payload bundled in this image")
-		poolName       = flag.String("pool-name", "setec-thinpool", "devmapper thin-pool name")
-		thinpoolMode   = flag.String("thinpool-mode", installer.ThinpoolModeLoop, "thin-pool backing: loop (sparse files, portable default) or device (dedicated block devices)")
-		loopDir        = flag.String("loop-dir", "/var/lib/setec/thinpool", "host directory for sparse backing files (loop mode)")
-		loopDataGB     = flag.Int("loop-data-gb", 50, "sparse data file size in GiB (loop mode)")
-		loopMetaGB     = flag.Int("loop-meta-gb", 2, "sparse metadata file size in GiB (loop mode)")
-		dataDevice     = flag.String("data-device", "", "dedicated data block device (device mode)")
-		metaDevice     = flag.String("metadata-device", "", "dedicated metadata block device (device mode)")
-		devmapperRoot  = flag.String("devmapper-root", "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper", "containerd devmapper snapshotter root_path")
+		hostRoot     = flag.String("host-root", "/host", "mount point of the node's root filesystem inside this container")
+		payloadDir   = flag.String("payload-dir", "/opt/kata", "kata static release payload bundled in this image")
+		poolName     = flag.String("pool-name", "setec-thinpool", "devmapper thin-pool name")
+		thinpoolMode = flag.String("thinpool-mode", installer.ThinpoolModeLoop,
+			"thin-pool backing: loop (sparse files, portable default) or device (dedicated block devices)")
+		loopDir = flag.String("loop-dir", "/var/lib/setec/thinpool",
+			"host directory for sparse backing files (loop mode)")
+		loopDataGB    = flag.Int("loop-data-gb", 50, "sparse data file size in GiB (loop mode)")
+		loopMetaGB    = flag.Int("loop-meta-gb", 2, "sparse metadata file size in GiB (loop mode)")
+		dataDevice    = flag.String("data-device", "", "dedicated data block device (device mode)")
+		metaDevice    = flag.String("metadata-device", "", "dedicated metadata block device (device mode)")
+		devmapperRoot = flag.String("devmapper-root",
+			"/var/lib/containerd/io.containerd.snapshotter.v1.devmapper",
+			"containerd devmapper snapshotter root_path")
 		baseImageSize  = flag.String("base-image-size", "8589934592", "devmapper snapshotter base_image_size in bytes")
 		verifyInterval = flag.Duration("verify-interval", 10*time.Minute, "how often to re-verify convergence")
 		healthAddr     = flag.String("health-addr", ":8080", "listen address for the /healthz readiness endpoint")
@@ -100,7 +104,7 @@ func main() {
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		fmt.Fprintln(w, state)
+		_, _ = fmt.Fprintln(w, state)
 	})
 	srv := &http.Server{Addr: *healthAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

@@ -241,10 +241,7 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("detecting container runtime flavor: %w", err)
 	}
 	res.Flavor = flavor.name
-	owner, err := kataFCOwnership(in.cfg, flavor)
-	if err != nil {
-		return res, fmt.Errorf("checking kata-fc ownership: %w", err)
-	}
+	owner := kataFCOwnership(in.cfg, flavor)
 	if owner == ownerForeign {
 		in.log("kata-fc already registered with %s by an external owner — standing down", flavor.name)
 		res.Outcome = OutcomeIdleForeignOwner

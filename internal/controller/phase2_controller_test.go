@@ -223,7 +223,7 @@ func TestPhase2_NetworkPolicyEgressAllowList(t *testing.T) {
 	// Each allow rule names the addresses its declared host resolves to,
 	// not 0.0.0.0/0 on the declared port (setec#130). Asserting the peers
 	// is what distinguishes an allow-list from a port filter.
-	var peers []string
+	peers := make([]string, 0, len(np.Spec.Egress[1:]))
 	for _, rule := range np.Spec.Egress[1:] {
 		for _, peer := range rule.To {
 			g.Expect(peer.IPBlock).ToNot(BeNil())

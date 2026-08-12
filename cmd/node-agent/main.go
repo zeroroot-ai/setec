@@ -61,6 +61,9 @@ import (
 	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
+// requireMode is the strict value of the node-identity mode flag.
+const requireMode = "require"
+
 const (
 	// sampleInterval controls how often the agent polls thin-pool
 	// status. 30s matches the cadence documented in the Helm chart
@@ -180,24 +183,25 @@ func main() {
 	flag.BoolVar(&s3PathStyle, "s3-path-style", true,
 		"Use path-style S3 addressing (required by MinIO and most self-hosted stores; "+
 			"set false for real S3 virtual-hosted addressing).")
-	flag.StringVar(&entropyReseedMode, "entropy-reseed", "require",
+	flag.StringVar(&entropyReseedMode, "entropy-reseed", requireMode,
 		"Active entropy reseed on snapshot restore (setec#72). 'require' (default) fails a "+
 			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
 			"over vsock; 'off' is an explicit opt-out that leaves only the passive virtio-rng "+
 			"mechanism (guest images without setec-guest-agent need this).")
-	flag.StringVar(&restoreUniquifyMode, "restore-uniquify", "require",
+	flag.StringVar(&restoreUniquifyMode, "restore-uniquify", requireMode,
 		"Per-restore identity uniquification (ADR-0005 invariant 2, setec#189). 'require' (default) "+
 			"fails a restore closed unless the in-guest setec-guest-agent confirms a fresh "+
 			"machine-id/boot-id/hostname, the CNI-assigned Pod IP, and a node-unique vsock CID. "+
 			"'off' is an explicit opt-out.")
 	flag.Parse()
 
-	if entropyReseedMode != "require" && entropyReseedMode != "off" {
+	if entropyReseedMode != requireMode && entropyReseedMode != "off" {
 		fmt.Fprintf(os.Stderr, "node-agent: invalid --entropy-reseed %q (want \"require\" or \"off\")\n", entropyReseedMode)
 		os.Exit(1)
 	}
-	if restoreUniquifyMode != "require" && restoreUniquifyMode != "off" {
-		fmt.Fprintf(os.Stderr, "node-agent: invalid --restore-uniquify %q (want \"require\" or \"off\")\n", restoreUniquifyMode)
+	if restoreUniquifyMode != requireMode && restoreUniquifyMode != "off" {
+		fmt.Fprintf(os.Stderr,
+			"node-agent: invalid --restore-uniquify %q (want \"require\" or \"off\")\n", restoreUniquifyMode)
 		os.Exit(1)
 	}
 
@@ -260,7 +264,10 @@ func main() {
 		Name: "setec_prewarm_pool_claims_total",
 		Help: "Pool claim attempts by outcome (restored, miss, restore_failed).",
 	}, []string{"outcome"})
-	reg.MustRegister(usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped, orphanReapErrors, entropyReseeds, restoreUniquifies, poolFill, poolClaims)
+	reg.MustRegister(
+		usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped,
+		orphanReapErrors, entropyReseeds, restoreUniquifies, poolFill, poolClaims,
+	)
 	// Presence of /dev/kvm is our local ready signal; deeper health
 	// checks require the controller-side runtime class and are out
 	// of scope for the node agent.
@@ -421,7 +428,7 @@ func main() {
 		// entropy over vsock. --entropy-reseed=off is the explicit,
 		// auditable opt-out for guest images that do not bundle the
 		// agent; it leaves only the passive virtio-rng mechanism.
-		if entropyReseedMode == "require" {
+		if entropyReseedMode == requireMode {
 			srv.Reseeder = entropy.NewVsockReseeder()
 			fmt.Fprintln(os.Stderr, "node-agent: entropy reseed on restore ENFORCED (--entropy-reseed=require)")
 		} else {
@@ -435,7 +442,7 @@ func main() {
 		// confirmed a fresh machine-id/boot-id/hostname, its
 		// CNI-assigned Pod IP, and a node-unique vsock CID.
 		// --restore-uniquify=off is the explicit, auditable opt-out.
-		if restoreUniquifyMode == "require" {
+		if restoreUniquifyMode == requireMode {
 			srv.Uniquifier = uniquify.NewVsockUniquifier()
 			fmt.Fprintln(os.Stderr, "node-agent: restore uniquification ENFORCED (--restore-uniquify=require)")
 		} else {

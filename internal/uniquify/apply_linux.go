@@ -271,7 +271,7 @@ func ioctlSetAddr(iface string, ip net.IP, mask net.IPMask) error {
 	if err != nil {
 		return fmt.Errorf("socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	ifr, err := unix.NewIfreq(iface)
 	if err != nil {

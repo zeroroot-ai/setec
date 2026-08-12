@@ -55,7 +55,9 @@ func verifiedRestoreRes() *setecgrpcv1.RestoreSandboxResponse {
 
 // verifiedClaimRes is the pool-claim counterpart of
 // verifiedRestoreRes.
-func verifiedClaimRes(entryID string) *setecgrpcv1.ClaimPoolEntryResponse {
+// entryID is fixed: every caller claims the same fixture entry.
+func verifiedClaimRes() *setecgrpcv1.ClaimPoolEntryResponse {
+	const entryID = "entry-1"
 	return &setecgrpcv1.ClaimPoolEntryResponse{
 		Claimed:            true,
 		Success:            true,

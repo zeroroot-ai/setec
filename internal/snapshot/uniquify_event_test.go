@@ -130,7 +130,7 @@ func TestWarmStart_PassesIdentityFieldsToClaim(t *testing.T) {
 	}
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{
-		claimRes: verifiedClaimRes("entry-1"),
+		claimRes: verifiedClaimRes(),
 	}
 	rec := testutil.NewFakeEventsRecorder(32)
 	coord := &Coordinator{

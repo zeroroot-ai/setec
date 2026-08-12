@@ -91,7 +91,9 @@ func addrs(ss ...string) []netip.Addr {
 
 // newTestResolver wires a CachingResolver to a fake clock and a scripted
 // lookup.
-func newTestResolver(t *testing.T, ttl, grace time.Duration) (*CachingResolver, *scriptedLookup, *fakeClock) {
+// ttl is fixed: every caller uses a one-minute TTL.
+func newTestResolver(t *testing.T, grace time.Duration) (*CachingResolver, *scriptedLookup, *fakeClock) {
+	const ttl = time.Minute
 	t.Helper()
 	lk := &scriptedLookup{}
 	clk := newFakeClock()
@@ -111,7 +113,7 @@ func newTestResolver(t *testing.T, ttl, grace time.Duration) (*CachingResolver, 
 func TestResolve_ReturnsSortedHostPrefixes(t *testing.T) {
 	t.Parallel()
 
-	r, lk, _ := newTestResolver(t, time.Minute, time.Hour)
+	r, lk, _ := newTestResolver(t, time.Hour)
 	lk.set(addrs("203.0.113.20", "203.0.113.10", "203.0.113.20"), nil)
 
 	got, err := r.Resolve(context.Background(), "api.example.com")
@@ -129,7 +131,7 @@ func TestResolve_ReturnsSortedHostPrefixes(t *testing.T) {
 func TestResolve_CachesWithinTTL(t *testing.T) {
 	t.Parallel()
 
-	r, lk, clk := newTestResolver(t, time.Minute, time.Hour)
+	r, lk, clk := newTestResolver(t, time.Hour)
 	lk.set(addrs("203.0.113.10"), nil)
 
 	for range 5 {
@@ -149,7 +151,7 @@ func TestResolve_CachesWithinTTL(t *testing.T) {
 func TestResolve_RefreshesAfterTTL(t *testing.T) {
 	t.Parallel()
 
-	r, lk, clk := newTestResolver(t, time.Minute, time.Hour)
+	r, lk, clk := newTestResolver(t, time.Hour)
 	lk.set(addrs("203.0.113.10"), nil)
 
 	if _, err := r.Resolve(context.Background(), "api.example.com"); err != nil {
@@ -177,7 +179,7 @@ func TestResolve_RefreshesAfterTTL(t *testing.T) {
 func TestResolve_ServesStaleInsideGrace(t *testing.T) {
 	t.Parallel()
 
-	r, lk, clk := newTestResolver(t, time.Minute, 10*time.Minute)
+	r, lk, clk := newTestResolver(t, 10*time.Minute)
 	lk.set(addrs("203.0.113.10"), nil)
 
 	if _, err := r.Resolve(context.Background(), "api.example.com"); err != nil {
@@ -203,7 +205,7 @@ func TestResolve_ServesStaleInsideGrace(t *testing.T) {
 func TestResolve_FailsPastGrace(t *testing.T) {
 	t.Parallel()
 
-	r, lk, clk := newTestResolver(t, time.Minute, 10*time.Minute)
+	r, lk, clk := newTestResolver(t, 10*time.Minute)
 	lk.set(addrs("203.0.113.10"), nil)
 
 	if _, err := r.Resolve(context.Background(), "api.example.com"); err != nil {
@@ -224,7 +226,7 @@ func TestResolve_FailsPastGrace(t *testing.T) {
 func TestResolve_FirstLookupFailureHasNoFallback(t *testing.T) {
 	t.Parallel()
 
-	r, lk, _ := newTestResolver(t, time.Minute, 10*time.Minute)
+	r, lk, _ := newTestResolver(t, 10*time.Minute)
 	lk.set(nil, errors.New("no such host"))
 
 	if _, err := r.Resolve(context.Background(), "nope.example.com"); !errors.Is(err, ErrResolveFailed) {
@@ -238,7 +240,7 @@ func TestResolve_FirstLookupFailureHasNoFallback(t *testing.T) {
 func TestResolve_EmptyAnswerIsNotAnError(t *testing.T) {
 	t.Parallel()
 
-	r, lk, _ := newTestResolver(t, time.Minute, time.Hour)
+	r, lk, _ := newTestResolver(t, time.Hour)
 	lk.set(nil, nil)
 
 	got, err := r.Resolve(context.Background(), "empty.example.com")
