@@ -75,6 +75,18 @@ render() {
 		"$@" >"$out"
 }
 
+# strip_comments <in> <out> — drop whole-line YAML comments.
+#
+# A template's own rationale is rendered into the output, so a fixed-string
+# assertion can be satisfied by the comment that EXPLAINS a rule rather than
+# the rule itself. That is not hypothetical: asserting "leases" against the
+# leader-election Role passed even with the rule changed to `configmaps`,
+# because the template comment quotes "leases.coordination.k8s.io is
+# forbidden". Assert structural facts against the stripped copy.
+strip_comments() {
+	sed 's/[[:space:]]*#.*$//' "$1" >"$2"
+}
+
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
@@ -213,6 +225,43 @@ assert_absent "$workdir/default.yaml" "no RBAC object exists for the installer" 
 render "$workdir/installer-off.yaml" --set installer.enabled=false
 assert_absent "$workdir/installer-off.yaml" "installer is omitted when disabled" \
 	"app.kubernetes.io/component: installer"
+
+# ---------------------------------------------------------------------------
+# Leader-election RBAC (setec#217, granted by #219).
+#
+# `leaderElect` defaults to true and renders --leader-elect=true, but the
+# chart granted no coordination.k8s.io/leases, so controller-runtime could
+# not retrieve the lock and the manager shut down: CrashLoopBackOff on a
+# default install, and no sandbox execution plane. It installed cleanly and
+# ran nothing, which is the failure class this script exists for.
+#
+# Asserted in BOTH directions so the flag and the permission cannot drift.
+# ---------------------------------------------------------------------------
+note "leader-election RBAC (setec#217)"
+render "$workdir/le.yaml" --show-only templates/leader-election-rbac.yaml
+# Comment-stripped: the template quotes the forbidden-leases error in its own
+# rationale, so an assertion against the raw render passes even when the rule
+# itself has been changed to another resource.
+strip_comments "$workdir/le.yaml" "$workdir/le-rules.yaml"
+assert_contains "$workdir/le-rules.yaml" "leader election can hold its Lease when enabled" \
+	"kind: Role" \
+	"- coordination.k8s.io" \
+	"- leases" \
+	"- create" \
+	"- update"
+assert_contains "$workdir/le-rules.yaml" "the Lease Role is bound to the operator ServiceAccount" \
+	"kind: RoleBinding" \
+	"kind: ServiceAccount"
+assert_contains "$workdir/default.yaml" "the flag that needs the Lease is actually set" \
+	"--leader-elect=true"
+
+# Disabled: no flag, so no lease grant either. `helm template --show-only` on a
+# template that renders nothing exits non-zero, so assert over the full render.
+render "$workdir/le-off.yaml" --set leaderElect=false
+assert_absent "$workdir/le-off.yaml" "no Lease grant when leader election is off" \
+	"-leader-election"
+assert_absent "$workdir/le-off.yaml" "no leader-elect flag when disabled" \
+	"--leader-elect=true"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
