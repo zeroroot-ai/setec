@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.109.1](https://github.com/zeroroot-ai/setec/compare/v0.109.0...v0.109.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **chart:** grant leader-election leases RBAC so the operator can start ([#219](https://github.com/zeroroot-ai/setec/issues/219)) ([0bac442](https://github.com/zeroroot-ai/setec/commit/0bac442e0494588815843ccfa3c2f2fb68ccbc82))
+* **ci:** install kubectl and helm on the ephemeral e2e runner ([#215](https://github.com/zeroroot-ai/setec/issues/215)) ([93606be](https://github.com/zeroroot-ai/setec/commit/93606be2d912bc41ec5d99f16c091c9408f605f7))
+
 ## [0.109.0](https://github.com/zeroroot-ai/setec/compare/v0.108.0...v0.109.0) (2026-08-12)
 
 
