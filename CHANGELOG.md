@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.109.0](https://github.com/zeroroot-ai/setec/compare/v0.108.0...v0.109.0) (2026-08-12)
+
+
+### Features
+
+* **api:** sandbox lifecycle ephemeral|session with durable per-session CSI workspace ([#197](https://github.com/zeroroot-ai/setec/issues/197)) ([6f16b5f](https://github.com/zeroroot-ai/setec/commit/6f16b5fce4b575e1a7d824e030bc4241b80d7299)), closes [#192](https://github.com/zeroroot-ai/setec/issues/192)
+* **chart:** portable installer DaemonSet for Kata+FC+devmapper node prep ([#199](https://github.com/zeroroot-ai/setec/issues/199)) ([f883e0c](https://github.com/zeroroot-ai/setec/commit/f883e0c68206ea40b8a8faf4f901bd769628bed0)), closes [#187](https://github.com/zeroroot-ai/setec/issues/187)
+* **ci:** publish amd64-only images and gate sandbox components to x86 nodes ([#196](https://github.com/zeroroot-ai/setec/issues/196)) ([6d2876e](https://github.com/zeroroot-ai/setec/commit/6d2876e53d770e7c4b263b0d4c48fb6a54e9b2de))
+* **class:** declarative pre-warm snapshot pool (PreWarmPoolSize/PreWarmImage/PreWarmTTL) ([#200](https://github.com/zeroroot-ai/setec/issues/200)) ([8e62f60](https://github.com/zeroroot-ai/setec/commit/8e62f60dd5db597c18233ab423348ca016b2cb4a))
+* **credentials:** add SPIFFE mode to the frontend, with peer authorization ([#182](https://github.com/zeroroot-ai/setec/issues/182)) ([50c282c](https://github.com/zeroroot-ai/setec/commit/50c282c9a9108bc2f349f7cf62ef9a951939dd38)), closes [#172](https://github.com/zeroroot-ai/setec/issues/172)
+* **credentials:** own mTLS credential acquisition in one module ([#176](https://github.com/zeroroot-ai/setec/issues/176)) ([e29929c](https://github.com/zeroroot-ai/setec/commit/e29929ce1666c37fecd3b2af63181a1b02cd1f7f)), closes [#170](https://github.com/zeroroot-ai/setec/issues/170)
+* **credentials:** route the client dialers through the credential module and authorize the server SPIFFE ID ([#179](https://github.com/zeroroot-ai/setec/issues/179)) ([808570e](https://github.com/zeroroot-ai/setec/commit/808570e0de98c99758cd2d385af3681b5f542e40))
+* **credguard:** fail the build on an mTLS credential built outside the module ([#184](https://github.com/zeroroot-ai/setec/issues/184)) ([6318bb1](https://github.com/zeroroot-ai/setec/commit/6318bb118f742768ae600b52e053f106bcf1ed89)), closes [#175](https://github.com/zeroroot-ai/setec/issues/175)
+* **frontend:** session reattach by handle and active-session eviction exemption ([#203](https://github.com/zeroroot-ai/setec/issues/203)) ([73a0bf5](https://github.com/zeroroot-ai/setec/commit/73a0bf5dfb83aa04c1e402d7f5841345d0a10bfc)), closes [#193](https://github.com/zeroroot-ai/setec/issues/193)
+* **node-agent:** route server mTLS through the credential module and add SPIFFE mode ([#178](https://github.com/zeroroot-ai/setec/issues/178)) ([e142f64](https://github.com/zeroroot-ai/setec/commit/e142f647afaebffee9534bb21ac491dfc164e769))
+* **session:** memory checkpoints on S3-compatible storage with suspend-idle and resume-on-drain ([#205](https://github.com/zeroroot-ai/setec/issues/205)) ([2fbddbb](https://github.com/zeroroot-ai/setec/commit/2fbddbb2a9319104c8b0ec502700b3114ec65a07)), closes [#194](https://github.com/zeroroot-ai/setec/issues/194)
+* **snapshot:** encrypt snapshots at rest with per-pool keys and enforce template provenance ([#201](https://github.com/zeroroot-ai/setec/issues/201)) ([77cd5ff](https://github.com/zeroroot-ai/setec/commit/77cd5ff1e112a865a33476d578a4895a0fbfa23e)), closes [#190](https://github.com/zeroroot-ai/setec/issues/190)
+* **snapshot:** fail-closed invariant gate for warm-start and resume outside dev ([#207](https://github.com/zeroroot-ai/setec/issues/207)) ([1fecc2f](https://github.com/zeroroot-ai/setec/commit/1fecc2f873c7ce3b81d90c8bbe43e8867f35bcec)), closes [#191](https://github.com/zeroroot-ai/setec/issues/191)
+* **snapshot:** per-restore uniquification — vsock CID, network identity, machine/boot-id, fail-closed verify ([#204](https://github.com/zeroroot-ai/setec/issues/204)) ([877e0d5](https://github.com/zeroroot-ai/setec/commit/877e0d5f953544a7a2429279e5cb8e4885f7e94d)), closes [#189](https://github.com/zeroroot-ai/setec/issues/189)
+* **snapshot:** record the secret-scan verdict in pool entries as the clean-base attestation ([#212](https://github.com/zeroroot-ai/setec/issues/212)) ([b80117c](https://github.com/zeroroot-ai/setec/commit/b80117cf829cd98c1f905173edd5bb64c8c3550f)), closes [#206](https://github.com/zeroroot-ai/setec/issues/206)
+
+
+### Bug Fixes
+
+* **build:** tidy go.mod after aws-sdk-go-v2 became a direct dependency ([#208](https://github.com/zeroroot-ai/setec/issues/208)) ([6828836](https://github.com/zeroroot-ai/setec/commit/6828836d89ea34f9eedc87acd94380755f84e600))
+* **operator:** enforce SandboxClass maxPauseDuration on suspended sandboxes ([#214](https://github.com/zeroroot-ai/setec/issues/214)) ([8bbbe16](https://github.com/zeroroot-ai/setec/commit/8bbbe1625b6fef5bdd3ebe9640851f74d9354ef4)), closes [#202](https://github.com/zeroroot-ai/setec/issues/202)
+* **packer:** rebake eks-kata-fc AMI on x86 and fetch kata .tar.zst payloads ([#213](https://github.com/zeroroot-ai/setec/issues/213)) ([c479eb0](https://github.com/zeroroot-ai/setec/commit/c479eb0bc4e4508710ef6e746310dadd0a6ca8d2))
+
 ## [0.108.0](https://github.com/zeroroot-ai/setec/compare/v0.107.0...v0.108.0) (2026-08-08)
 
 
