@@ -41,3 +41,8 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Local agent worktrees — an unignored embedded git repo gets staged by a
+# routine `git add -A` and commits as a gitlink clones cannot resolve.
+# deploy and dashboard already ignore this path (zeroroot-ai/gitops#455).
+.worktrees/
