@@ -167,6 +167,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The ephemeral ARC runner image (ghcr.io/actions/actions-runner) ships
+      # neither kubectl nor helm — the retired workstation runner had both
+      # preinstalled, so the migration to ARC (setec#161) dropped them. Install
+      # both before any cluster call; without this every kubectl/helm step below
+      # fails "command not found" (exit 127).
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+
       - name: Verify kubectl + helm and install-grade RBAC
         run: |
           kubectl version --client=true
