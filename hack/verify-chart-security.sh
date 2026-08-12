@@ -255,6 +255,30 @@ assert_contains "$workdir/le-rules.yaml" "the Lease Role is bound to the operato
 assert_contains "$workdir/default.yaml" "the flag that needs the Lease is actually set" \
 	"--leader-elect=true"
 
+# THE NAMESPACE, NOT JUST THE RULE (setec#217 reopened).
+#
+# The grant must land in the namespace the operator RUNS in. The first cut of
+# this template used .Release.Namespace while every other template uses
+# .Values.namespace; those coincide in a standalone `helm template
+# --namespace setec-system` and DIVERGE in the deployed shape, where gibson
+# vendors this chart as a subchart of an Argo Application whose destination is
+# its own namespace. The Role went to `gibson`, the operator stayed in
+# `setec-system`, and the lease was still forbidden — the fix rendered and did
+# nothing. So render with a release namespace that deliberately differs, and
+# require the RBAC to follow the Deployment rather than the release.
+render "$workdir/ns-skew.yaml" --namespace release-ns-not-operator-ns
+operator_ns="$(awk '/^kind: Deployment$/{d=1} d&&/^  namespace: /{print $2; exit}' \
+	<(sed -n '/# Source: setec\/templates\/deployment.yaml/,$p' "$workdir/ns-skew.yaml"))"
+le_ns="$(awk '/^kind: Role$/{d=1} d&&/^  namespace: /{print $2; exit}' \
+	<(sed -n '/# Source: setec\/templates\/leader-election-rbac.yaml/,$p' "$workdir/ns-skew.yaml"))"
+if [ -z "$operator_ns" ] || [ -z "$le_ns" ]; then
+	fail "leader-election namespace check could not read both namespaces (operator='$operator_ns' role='$le_ns')"
+elif [ "$operator_ns" != "$le_ns" ]; then
+	fail "the Lease grant lands in '$le_ns' but the operator runs in '$operator_ns' — a lease grant in the wrong namespace is not a grant"
+else
+	pass "the Lease grant follows the operator's namespace, not the release's"
+fi
+
 # Disabled: no flag, so no lease grant either. `helm template --show-only` on a
 # template that renders nothing exits non-zero, so assert over the full render.
 render "$workdir/le-off.yaml" --set leaderElect=false
