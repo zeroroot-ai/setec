@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.109.2](https://github.com/zeroroot-ai/setec/compare/v0.109.1...v0.109.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **chart:** put the leader-election grant in the operator's namespace ([#217](https://github.com/zeroroot-ai/setec/issues/217)) ([#223](https://github.com/zeroroot-ai/setec/issues/223)) ([3e320b3](https://github.com/zeroroot-ai/setec/commit/3e320b3e8e80ca1ccb51c7216f4c40f0dddd3b39))
+
 ## [0.109.1](https://github.com/zeroroot-ai/setec/compare/v0.109.0...v0.109.1) (2026-08-12)
 
 
