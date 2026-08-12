@@ -140,7 +140,7 @@ build {
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
       "KATA_VERSION=${var.kata_version}",
       "KATA_SHA256=${var.kata_sha256}",
@@ -149,17 +149,17 @@ build {
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     script          = "scripts/configure-containerd.sh"
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     script          = "scripts/setup-boot-units.sh"
   }
 
   provisioner "shell" {
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
       "KATA_VERSION=${var.kata_version}",
     ]
