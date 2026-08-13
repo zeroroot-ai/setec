@@ -566,6 +566,54 @@ webhook:
       kind: ClusterIssuer
       name: selfsigned
 
+# -- credentials selects how every mTLS surface the chart renders obtains
+# and verifies TLS identities: the frontend server, the node-agent server,
+# and the operator's node-agent dialer. One install-wide switch by design
+# (setec#183) — a values file cannot produce a frontend on SPIFFE with a
+# node-agent still on files, because that mixed posture is exactly what
+# the per-binary mode validation exists to prevent.
+credentials:
+  # mode is "file" (default) or "spiffe".
+  #
+  #   file   — Secret-mounted certificates. Renders exactly what the chart
+  #            rendered before this switch existed: --tls-* flags fed from
+  #            frontend.tlsCertSecretName / frontend.tlsClientCASecretName
+  #            and snapshots.mTLS.*.
+  #   spiffe — the SPIFFE Workload API (a SPIRE agent socket on each
+  #            node). Renders --spiffe-socket / --spiffe-authorized-id on
+  #            the frontend and node-agent and the --nodeagent-spiffe-*
+  #            dialer flags on the operator, plus a read-only hostPath
+  #            mount of the socket directory. There is NO fallback between
+  #            modes: a SPIFFE component that cannot reach its Workload
+  #            API fails to boot rather than quietly reverting to files.
+  mode: file
+  spiffe:
+    # socketPath is the SPIFFE Workload API socket on the host, as a bare
+    # absolute filesystem path (the binaries read it as unix://<path>).
+    # The directory containing it is hostPath-mounted read-only into each
+    # component at the same path.
+    socketPath: /run/spire/agent-sockets/api.sock
+    # authorizedIDs are full SPIFFE IDs (trust domain matched as well as
+    # path), one list per trust relationship — the sets are distinct on
+    # purpose: an ID authorized to call the frontend must not thereby be
+    # trusted as a node-agent, or vice versa. Each list that is in use is
+    # REQUIRED in spiffe mode: an empty one fails the render, so "accept
+    # everyone" cannot be reached by omitting configuration (mirrors the
+    # binaries' own refusal to start with an empty allow-list).
+    authorizedIDs:
+      # frontendClients — IDs allowed to call the frontend SandboxService,
+      # e.g. spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon.
+      # Required when frontend.enabled=true.
+      frontendClients: []
+      # nodeAgentClients — IDs allowed to call the node-agent snapshot
+      # gRPC service (normally the operator's own ID). Required when
+      # nodeAgent.enabled=true and snapshots.enabled=true.
+      nodeAgentClients: []
+      # nodeAgentServers — node-agent server IDs the operator accepts
+      # when dialing, e.g. spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent.
+      # Required when snapshots.enabled=true.
+      nodeAgentServers: []
+
 # -- nodeAgent installs the DaemonSet that manages the devicemapper
 # thin-pool, samples fill state, and exposes node-level Prometheus
 # metrics.

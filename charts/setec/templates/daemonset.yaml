@@ -68,9 +68,16 @@ spec:
             - --s3-prefix={{ .Values.snapshots.s3.prefix }}
             - --s3-path-style={{ .Values.snapshots.s3.pathStyle }}
             {{- end }}
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentClients }}
+            - --spiffe-authorized-id={{ . }}
+            {{- end }}
+            {{- else }}
             - --tls-cert=/etc/setec/nodeagent-tls/tls.crt
             - --tls-key=/etc/setec/nodeagent-tls/tls.key
             - --tls-client-ca=/etc/setec/nodeagent-ca/ca.crt
+            {{- end }}
             {{- else }}
             - --grpc-listen-addr=
             {{- end }}
@@ -117,12 +124,21 @@ spec:
               mountPath: {{ .Values.snapshots.localDisk.root }}
             - name: snapshot-keys
               mountPath: {{ .Values.snapshots.keysDir }}
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            {{- /* Explicit even though /run is already mounted: the socket
+            directory is not guaranteed to live under /run, and the
+            dedicated mount is read-only where /run is not. */}}
+            - name: spiffe-workload-api
+              mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
+              readOnly: true
+            {{- else }}
             - name: nodeagent-tls
               mountPath: /etc/setec/nodeagent-tls
               readOnly: true
             - name: nodeagent-ca
               mountPath: /etc/setec/nodeagent-ca
               readOnly: true
+            {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.nodeAgent.resources | nindent 12 }}
@@ -151,12 +167,19 @@ spec:
           hostPath:
             path: {{ .Values.snapshots.keysDir }}
             type: DirectoryOrCreate
+        {{- if eq .Values.credentials.mode "spiffe" }}
+        - name: spiffe-workload-api
+          hostPath:
+            path: {{ dir .Values.credentials.spiffe.socketPath }}
+            type: Directory
+        {{- else }}
         - name: nodeagent-tls
           secret:
             secretName: {{ .Values.snapshots.mTLS.nodeAgentCertSecret }}
         - name: nodeagent-ca
           secret:
             secretName: {{ .Values.snapshots.mTLS.caSecret }}
+        {{- end }}
         {{- end }}
       tolerations:
         - operator: Exists
