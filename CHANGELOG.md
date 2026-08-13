@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.110.0](https://github.com/zeroroot-ai/setec/compare/v0.109.3...v0.110.0) (2026-08-13)
+
+
+### Features
+
+* **abi:** report the resolved SandboxClass and runtime backend on setec.v1 ([#235](https://github.com/zeroroot-ai/setec/issues/235)) ([fc292c5](https://github.com/zeroroot-ai/setec/commit/fc292c5aefe71e2ce390c1247fc503dcaba9d12c))
+* **chart:** install-wide credential-mode switch for frontend, node-agent, and operator dialer ([#236](https://github.com/zeroroot-ai/setec/issues/236)) ([d51e061](https://github.com/zeroroot-ai/setec/commit/d51e0619fd609df92bf1661c06f38ab57d8bd527)), closes [#183](https://github.com/zeroroot-ai/setec/issues/183)
+
+
+### Bug Fixes
+
+* **ci:** disable the installer DaemonSet in the e2e shadow install ([#234](https://github.com/zeroroot-ai/setec/issues/234)) ([091f7ae](https://github.com/zeroroot-ai/setec/commit/091f7ae83d847c40e5a6a089797e5f60bb04cff2))
+* **ci:** gate the pre-warm on kata-deploy's own completion label ([#244](https://github.com/zeroroot-ai/setec/issues/244)) ([3ced456](https://github.com/zeroroot-ai/setec/commit/3ced456f2f05e7360325eaa2ecd1c61916a77fee))
+* **ci:** pre-warm a sandbox-host metal node before the roundtrip Sandbox ([#231](https://github.com/zeroroot-ai/setec/issues/231)) ([04ef875](https://github.com/zeroroot-ai/setec/commit/04ef875d07c9dbe2c67ed4b19f82ee0c1b33da90))
+* **ci:** tolerate the sandbox-host taint on the roundtrip SandboxClass ([#233](https://github.com/zeroroot-ai/setec/issues/233)) ([6ff72bb](https://github.com/zeroroot-ai/setec/commit/6ff72bb90165af0a535e6605ce69cd59b2b93f43))
+* **frontend:** configurable tenant-namespace routing - label key override and fixed sandbox namespace ([#237](https://github.com/zeroroot-ai/setec/issues/237)) ([928cc0c](https://github.com/zeroroot-ai/setec/commit/928cc0ccecc090db43216d033f07d0c0612d4f75)), closes [#158](https://github.com/zeroroot-ai/setec/issues/158)
+* **lint:** clear the two findings the merge queue let onto main ([#241](https://github.com/zeroroot-ai/setec/issues/241)) ([76159ab](https://github.com/zeroroot-ai/setec/commit/76159ab04983f27aaeb3f9f25bfc0a0ce95ccbc6))
+
 ## [0.109.3](https://github.com/zeroroot-ai/setec/compare/v0.109.2...v0.109.3) (2026-08-12)
 
 
