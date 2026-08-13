@@ -340,7 +340,14 @@ jobs:
           EOF
           echo "waiting for a node with the kata-qemu capability label (metal boot + kata-deploy, up to ~18 min)..."
           for i in $(seq 1 72); do
-            n="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-qemu=true -o name 2>/dev/null | head -1)"
+            # Require BOTH labels: the runtime-agent's capability label can
+            # fire before kata is actually installed (setec#243) — a node
+            # that passed it alone still fails RunPodSandbox with `no
+            # runtime for "kata-qemu" is configured` (run 31719841337).
+            # katacontainers.io/kata-runtime=true is written by kata-deploy
+            # itself only after the runtime is installed and containerd is
+            # configured, so it is the truthful gate.
+            n="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-qemu=true,katacontainers.io/kata-runtime=true -o name 2>/dev/null | head -1)"
             if [ -n "$n" ]; then
               echo "eligible node ready after ${i} polls: ${n}"
               exit 0
