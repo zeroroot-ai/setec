@@ -80,8 +80,14 @@ loudly at boot:
 
 Chart settings when running on baked nodes: keep
 `runtimes.kata-fc.enabled=true` and set `runtimes.kata-fc.install=false`,
-then `kubectl apply -f` the baked RuntimeClass manifest once per cluster (it
-carries the `overhead.podFixed` block the chart-rendered variant omits).
+then `kubectl apply -f` the baked RuntimeClass manifest once per cluster.
+The reason is ownership, not content: with `install=false` the chart
+renders no RuntimeClass and the operator stamps no overhead (setec#78),
+so the class must come from the node image's static manifest. (The
+chart-rendered variant no longer omits `overhead.podFixed` — since
+v0.109.0 an `install=true` RuntimeClass publishes the backend's
+`defaultOverhead`, see setec#169 — but on baked nodes the chart is not
+the owner, so that variant is not in play.)
 Build instructions and the on-node verification checklist (including the
 `ctr plugins ls` devmapper check and a guest-kernel smoke pod) live in the
 [packer README](../../packer/eks-kata-fc-ami/README.md).

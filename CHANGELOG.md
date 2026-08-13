@@ -31,6 +31,22 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [0.109.0](https://github.com/zeroroot-ai/setec/compare/v0.108.0...v0.109.0) (2026-08-12)
 
+> **Behavior change (chart):** since this release, a chart-managed
+> RuntimeClass (`runtimes.<backend>.install: true`) publishes
+> `overhead.podFixed` from the backend's `defaultOverhead` (landed in
+> [#199](https://github.com/zeroroot-ai/setec/issues/199); previously the
+> rendered RuntimeClass carried no `overhead` at all). Kubernetes'
+> RuntimeClass admission plugin compares a declared overhead against every
+> Pod that names the class: a Pod carrying a *different* overhead is now
+> **rejected** (`Pod's Overhead doesn't match RuntimeClass's defined
+> Overhead`) where it was previously admitted. Operator-created Sandbox
+> Pods already stamp the same value, so they match; audit any Pod created
+> against the class by another route before upgrading across this
+> release, or set `install: false` and manage the RuntimeClass
+> externally (the operator then stamps no overhead, per
+> [#78](https://github.com/zeroroot-ai/setec/issues/78)). Noted
+> retroactively via [#169](https://github.com/zeroroot-ai/setec/issues/169).
+
 
 ### Features
 
