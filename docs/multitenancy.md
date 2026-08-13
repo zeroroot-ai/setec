@@ -300,3 +300,18 @@ certificate. When the chart installs the frontend with
 the client cert SAN and resolves it to the correct namespace via the
 tenant label mapping. Tenants cannot reach other tenants' Sandboxes
 through the frontend — every RPC applies the same namespace check.
+
+The label the frontend matches on defaults to
+`setec.zeroroot.ai/tenant` and is overridable per install with
+`frontend.tenantNamespaceLabel` (the `--tenant-namespace-label` flag),
+for clusters where another system owns the tenant-namespace labels.
+Note this is the frontend's *resolution* key; the operator's
+`multiTenancy.tenantLabelKey` is the admission-time *enforcement*
+check — override both when the label scheme changes.
+
+Installs that place every tenant's Sandboxes in one shared, dedicated
+namespace instead of one namespace per tenant set
+`frontend.sandboxNamespace` (the `--sandbox-namespace` flag), which
+replaces label resolution entirely; the two are mutually exclusive.
+See `docs/frontend-api.md` "Tenant resolution" for what the shared
+namespace means for the per-namespace ownership check.

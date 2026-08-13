@@ -680,6 +680,26 @@ frontend:
   # verification. REQUIRED when frontend.enabled=true — mTLS is the
   # only supported authentication mechanism.
   tlsClientCASecretName: ""
+  # sandboxNamespace places every tenant's Sandboxes in one fixed, shared
+  # namespace (renders --sandbox-namespace) instead of resolving a
+  # per-tenant namespace by label. Use it where the frontend's authorized
+  # caller set is a single trusted platform: every caller resolves to the
+  # same namespace, so the per-namespace ownership check no longer
+  # separates callers from each other. It must be listed in
+  # sandboxNamespaces (or rbac.allowClusterWideSandboxWrite must be true)
+  # so the operator can actually run Pods there. Mutually exclusive with
+  # tenantNamespaceLabel — setting both fails the render (setec#158).
+  sandboxNamespace: ""
+  # tenantNamespaceLabel overrides the label key the frontend matches
+  # namespaces on (renders --tenant-namespace-label; the binary defaults
+  # to setec.zeroroot.ai/tenant when unset). Set it where another system
+  # owns the tenant-namespace labels, e.g. gibson.zeroroot.ai/tenant.
+  # This is the frontend's tenant → namespace RESOLUTION key; the
+  # operator's multiTenancy.tenantLabelKey is the namespace-label
+  # ENFORCEMENT check, a different flag on a different binary — override
+  # both when the label scheme changes. Mutually exclusive with
+  # sandboxNamespace.
+  tenantNamespaceLabel: ""
   replicas: 1
   resources:
     requests:

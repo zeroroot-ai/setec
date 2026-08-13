@@ -165,11 +165,33 @@ tenant a call is for, not whether the caller may make it.
 
 ## Tenant resolution
 
-The frontend reads namespaces carrying the configured tenant label
-(default `setec.zeroroot.ai/tenant=<tenant>`) and picks the first match as the
-tenant's namespace. Every RPC verifies the requested sandbox id's
-namespace matches the caller's resolved namespace; cross-tenant access
-returns gRPC `PERMISSION_DENIED`.
+The frontend maps the caller's tenant identity to the namespace it
+operates against with exactly one of two strategies. Configuring both
+is a startup error naming the cause; the chart also refuses to render
+both (`frontend.sandboxNamespace` vs `frontend.tenantNamespaceLabel`).
+
+**Label resolution (default).** The frontend reads namespaces carrying
+the configured tenant label (default `setec.zeroroot.ai/tenant=<tenant>`,
+overridable with `--tenant-namespace-label` — e.g.
+`gibson.zeroroot.ai/tenant` where another system owns the namespace
+labels) and picks the first match as the tenant's namespace. Every RPC
+verifies the requested sandbox id's namespace matches the caller's
+resolved namespace; cross-tenant access returns gRPC
+`PERMISSION_DENIED`.
+
+**Fixed namespace (`--sandbox-namespace`).** Every tenant's Sandboxes
+are placed in one shared, configured namespace, for installs whose
+placement scheme is a single dedicated Sandbox namespace rather than
+one namespace per tenant. Tenant identity still comes from the verified
+mTLS peer — placement is not the tenancy boundary — but every
+authorized caller resolves to the same namespace, so the per-namespace
+ownership check no longer separates callers from each other. Use it
+where the authorized caller set is a single trusted platform; keep
+label resolution where mutually untrusting clients call the frontend
+directly. The chart requires the fixed namespace to be listed in
+`sandboxNamespaces` (or `rbac.allowClusterWideSandboxWrite=true`) so
+the operator holds Pod-write RBAC there and the namespace carries the
+default-deny NetworkPolicy.
 
 ## Example client
 

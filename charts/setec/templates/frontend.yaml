@@ -7,6 +7,12 @@
 {{- fail "frontend.tlsClientCASecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS (client-cert verification)." -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.frontend.sandboxNamespace .Values.frontend.tenantNamespaceLabel -}}
+{{- fail "frontend.sandboxNamespace and frontend.tenantNamespaceLabel are mutually exclusive: Sandboxes either all share one fixed namespace or are routed to a per-tenant namespace by label, never both (setec#158)." -}}
+{{- end -}}
+{{- if and .Values.frontend.sandboxNamespace (not .Values.rbac.allowClusterWideSandboxWrite) (not (has .Values.frontend.sandboxNamespace .Values.sandboxNamespaces)) -}}
+{{- fail (printf "frontend.sandboxNamespace %q must be listed in sandboxNamespaces: that list is where the operator's Pod-write RBAC is bound and where the default-deny NetworkPolicy is installed, so a namespace outside it can hold Sandbox CRs but never run one." .Values.frontend.sandboxNamespace) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +43,12 @@ spec:
           args:
             - --listen-addr={{ .Values.frontend.listenAddr }}
             - --metrics-addr=:{{ .Values.frontend.metricsPort }}
+            {{- with .Values.frontend.sandboxNamespace }}
+            - --sandbox-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.frontend.tenantNamespaceLabel }}
+            - --tenant-namespace-label={{ . }}
+            {{- end }}
             {{- if eq .Values.credentials.mode "spiffe" }}
             - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
             {{- range .Values.credentials.spiffe.authorizedIDs.frontendClients }}
