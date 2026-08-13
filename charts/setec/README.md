@@ -279,10 +279,12 @@ verify the expected new manifests appear via `helm template`.
   node. The agent exposes Prometheus metrics on port 9090. It runs privileged
   (SYS_ADMIN only) because device-mapper control requires it.
 - `frontend.enabled=true` installs the `setec-frontend` Deployment + ClusterIP
-  Service. **Both `tlsCertSecretName` and `tlsClientCASecretName` are
-  required** — mTLS is mandatory for the frontend and the chart refuses to
-  render without them. The frontend does NOT bypass Kubernetes admission;
-  every call still flows through the webhook.
+  Service. In the default file credential mode, **both `tlsCertSecretName`
+  and `tlsClientCASecretName` are required** — mTLS is mandatory for the
+  frontend and the chart refuses to render without them (in SPIFFE mode the
+  identities come from the Workload API instead; see "Credential modes"
+  below). The frontend does NOT bypass Kubernetes admission; every call
+  still flows through the webhook.
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and
@@ -370,6 +372,50 @@ arrived by some other route.
 None of this enforces anything unless the cluster's CNI implements
 `networking.k8s.io/v1` NetworkPolicy. Verify that against the running
 cluster; the chart cannot detect it.
+
+### Credential modes (`credentials.mode`)
+
+The chart renders three mTLS surfaces: the frontend gRPC server, the
+node-agent snapshot gRPC server, and the operator's node-agent dialer.
+`credentials.mode` selects how all three obtain and verify identities —
+one install-wide switch, so a values file cannot produce a frontend on
+SPIFFE with a node-agent still on files (setec#183).
+
+**`file` (default).** Secret-mounted certificates. A chart install that
+specifies nothing renders exactly what it rendered before the switch
+existed: `frontend.tlsCertSecretName` / `frontend.tlsClientCASecretName`
+feed the frontend, `snapshots.mTLS.*` feeds the operator↔node-agent
+channel, and both are required where the component is enabled.
+
+**`spiffe`.** Identities come from the SPIFFE Workload API — a SPIRE
+agent socket on each node, given as a bare absolute path in
+`credentials.spiffe.socketPath` (default
+`/run/spire/agent-sockets/api.sock`). The chart mounts the socket's
+directory read-only via `hostPath` into each component and renders
+`--spiffe-socket` plus one `--spiffe-authorized-id` per entry in the
+matching `credentials.spiffe.authorizedIDs` list:
+
+| List | Authorizes | Required when |
+|---|---|---|
+| `frontendClients` | callers of the frontend SandboxService | `frontend.enabled=true` |
+| `nodeAgentClients` | callers of the node-agent (the operator) | `nodeAgent.enabled=true` + `snapshots.enabled=true` |
+| `nodeAgentServers` | node-agent server IDs the operator accepts | `snapshots.enabled=true` |
+
+The lists are per trust relationship on purpose: an ID authorized to
+call the frontend is not thereby trusted as a node-agent, or vice
+versa. An empty list that is in use **fails the render** — "accept
+everyone" cannot be reached by omitting configuration, matching the
+binaries' own refusal to start with an empty allow-list.
+
+There is no fallback between the modes: a SPIFFE component that cannot
+reach its Workload API fails to boot rather than quietly reverting to
+files, and the socket `hostPath` uses `type: Directory` so a node
+without a SPIRE agent fails Pod creation loudly. `snapshots.mTLS.certManager`
+is a file-mode mechanism; enabling it in spiffe mode fails the render
+rather than rendering unused Certificate objects.
+
+`hack/verify-chart-credentials.sh` (CI: "Helm credential-mode
+assertions") asserts both modes render what this section claims.
 
 ### Phase 1 to Phase 2 migration
 

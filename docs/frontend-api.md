@@ -76,7 +76,7 @@ SPIFFE mode is for.
 
 The Helm chart refuses to render the frontend Deployment when either
 `frontend.tlsCertSecretName` or `frontend.tlsClientCASecretName` is
-unset. There is no insecure fallback.
+unset in file mode. There is no insecure fallback.
 
 ### SPIFFE mode
 
@@ -98,6 +98,19 @@ the same path under a foreign trust domain is refused.
 
 Losing the Workload API is reported immediately rather than becoming
 visible when the last SVID expires.
+
+From the Helm chart, SPIFFE mode is selected install-wide with
+`credentials.mode=spiffe` — the switch covers the frontend, the
+node-agent server, and the operator's node-agent dialer together, so a
+mixed file/SPIFFE posture is not reachable from a values file. The
+chart renders `--spiffe-socket` from `credentials.spiffe.socketPath`
+(default `/run/spire/agent-sockets/api.sock`, hostPath-mounted
+read-only by directory) and one `--spiffe-authorized-id` per entry in
+`credentials.spiffe.authorizedIDs.frontendClients`; an empty list fails
+the render rather than deferring to the startup error, and a node
+without a Workload API socket directory fails Pod creation rather than
+booting a frontend that can never fetch an SVID. See the chart README
+"Credential modes".
 
 SPIFFE mode is server-side only today. The snapshot dialer and tracing
 exporter still use file credentials, and asking for client credentials

@@ -91,6 +91,15 @@ The selected mode is stated on stderr at startup
 (`node-agent: credential mode: file`), so a pod's logs answer the
 question without a manifest diff.
 
+From the Helm chart the mode is `credentials.mode` — install-wide, so
+the node-agent, the frontend and the operator's node-agent dialer flip
+together. In spiffe mode the chart renders `--spiffe-socket` from
+`credentials.spiffe.socketPath` and the allow-list from
+`credentials.spiffe.authorizedIDs.nodeAgentClients` (empty fails the
+render); the operator's dialer takes its accepted server IDs from
+`credentials.spiffe.authorizedIDs.nodeAgentServers`. See the chart
+README "Credential modes".
+
 ## Troubleshooting
 
 - Agent exits immediately → check `/dev/kvm` exists on the node.

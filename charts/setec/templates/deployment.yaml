@@ -70,9 +70,16 @@ spec:
             - --snapshots-enabled
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
             - --nodeagent-endpoint-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - --nodeagent-spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentServers }}
+            - --nodeagent-spiffe-authorized-id={{ . }}
+            {{- end }}
+            {{- else }}
             - --nodeagent-tls-cert=/etc/setec/nodeagent-tls/tls.crt
             - --nodeagent-tls-key=/etc/setec/nodeagent-tls/tls.key
             - --nodeagent-ca=/etc/setec/nodeagent-ca/ca.crt
+            {{- end }}
             {{- end }}
           ports:
             - name: metrics
@@ -107,12 +114,18 @@ spec:
               subPath: runtimes.yaml
               readOnly: true
             {{- if .Values.snapshots.enabled }}
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - name: spiffe-workload-api
+              mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
+              readOnly: true
+            {{- else }}
             - name: nodeagent-tls
               mountPath: /etc/setec/nodeagent-tls
               readOnly: true
             - name: nodeagent-ca
               mountPath: /etc/setec/nodeagent-ca
               readOnly: true
+            {{- end }}
             {{- end }}
             {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
             - name: otel-ca
@@ -136,12 +149,19 @@ spec:
               - key: runtimes.yaml
                 path: runtimes.yaml
         {{- if .Values.snapshots.enabled }}
+        {{- if eq .Values.credentials.mode "spiffe" }}
+        - name: spiffe-workload-api
+          hostPath:
+            path: {{ dir .Values.credentials.spiffe.socketPath }}
+            type: Directory
+        {{- else }}
         - name: nodeagent-tls
           secret:
             secretName: {{ .Values.snapshots.mTLS.operatorCertSecret }}
         - name: nodeagent-ca
           secret:
             secretName: {{ .Values.snapshots.mTLS.caSecret }}
+        {{- end }}
         {{- end }}
         {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
         - name: otel-ca

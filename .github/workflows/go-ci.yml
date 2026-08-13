@@ -280,6 +280,15 @@ jobs:
         # parses.
         run: ./hack/verify-chart-security.sh charts/setec
 
+      - name: Helm credential-mode assertions (setec#183)
+        # Renders both credential modes and asserts the install-wide
+        # switch holds: file mode (default) keeps the Secret-mounted
+        # posture with no SPIFFE leakage, spiffe mode flips the frontend,
+        # the node-agent AND the operator's node-agent dialer together,
+        # and an empty authorized-ID list fails the render instead of
+        # becoming a startup error.
+        run: ./hack/verify-chart-credentials.sh charts/setec
+
       - name: x86-substrate assertions (ADR-0001)
         # The sandbox substrate is x86 only (setec#186): image publishing
         # must stay single-arch linux/amd64 and the node-facing DaemonSets
