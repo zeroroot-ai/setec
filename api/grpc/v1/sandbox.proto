@@ -99,6 +99,15 @@ message LaunchResponse {
   string sandbox_id = 1;
   string name = 2;
   string namespace = 3;
+
+  // sandbox_class is the SandboxClass the created Sandbox was bound
+  // to, read back from the created object after admission (so any
+  // admission-time defaulting is reflected, not the request value).
+  // Empty means the class is not yet resolved: the request named no
+  // class and the cluster-default resolution happens when the operator
+  // schedules the Sandbox. The authoritative post-resolution values
+  // are reported on WaitResponse and AttachResponse.
+  string sandbox_class = 4;
 }
 
 // Resources mirrors Sandbox.spec.resources.
@@ -174,6 +183,16 @@ message WaitResponse {
   string phase = 1;
   int32 exit_code = 2;
   string reason = 3;
+
+  // runtime is the backend actually selected for the Sandbox after
+  // evaluating its SandboxClass's primary backend and any fallback
+  // chain (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor,
+  // runc. Wait returns after the Sandbox is terminal, so this value is
+  // authoritative. Empty means no backend was ever resolved — the
+  // Sandbox reached a terminal phase before selection (for example
+  // ClassNotFound or RuntimeUnavailable) — never "resolved but
+  // unreported".
+  string runtime = 4;
 }
 
 // KillRequest deletes a Sandbox.
@@ -207,6 +226,19 @@ message AttachResponse {
   // a crash reports Pending with the VM restart under way; the caller
   // may attach and stream as soon as the fresh VM is up.
   string phase = 4;
+
+  // sandbox_class is the SandboxClass the Sandbox is bound to
+  // (spec.sandboxClassName). Reported here so a reattaching caller —
+  // which never saw the LaunchResponse — can confirm what it is
+  // attached to. Empty means the Sandbox named no class and defers to
+  // the cluster default.
+  string sandbox_class = 5;
+
+  // runtime is the backend selected for the Sandbox
+  // (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor, runc.
+  // Empty means the operator has not yet resolved a backend (the
+  // Sandbox is still Pending), not "resolved but unreported".
+  string runtime = 6;
 }
 
 // AttachFailure is attached to the gRPC status details of a failed
