@@ -113,12 +113,19 @@ func (s *Service) Attach(ctx context.Context, req *setecv1grpc.AttachRequest) (*
 		return nil, status.Errorf(grpcCodeFor(err), "record session activity: %v", err)
 	}
 
-	return &setecv1grpc.AttachResponse{
+	resp := &setecv1grpc.AttachResponse{
 		SandboxId: req.GetSandboxId(),
 		Name:      sb.Name,
 		Namespace: sb.Namespace,
 		Phase:     string(sb.Status.Phase),
-	}, nil
+		// A reattaching caller never saw the LaunchResponse, so the
+		// class and the selected backend are reported here too.
+		SandboxClass: sb.Spec.SandboxClassName,
+	}
+	if rt := sb.Status.Runtime; rt != nil {
+		resp.Runtime = rt.Chosen
+	}
+	return resp, nil
 }
 
 // parseSessionHandle splits a session handle of the form

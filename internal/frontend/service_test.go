@@ -34,6 +34,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -87,6 +88,43 @@ func TestLaunch_AuthDisabledCreatesSandbox(t *testing.T) {
 	}
 	if resp.Namespace != "team-a" {
 		t.Fatalf("namespace = %q, want team-a", resp.Namespace)
+	}
+	if resp.SandboxClass != "standard" {
+		t.Fatalf("sandbox_class = %q, want standard", resp.SandboxClass)
+	}
+}
+
+// TestLaunch_ReportsBoundSandboxClass asserts the response reports the
+// class read back off the created object, not the request value. The
+// create interceptor stands in for admission-time defaulting: the
+// request names no class and the "cluster" binds one at create.
+func TestLaunch_ReportsBoundSandboxClass(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if sb, ok := obj.(*setecv1alpha1.Sandbox); ok && sb.Spec.SandboxClassName == "" {
+					sb.Spec.SandboxClassName = "cluster-default"
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Launch(context.Background(), &setecv1grpc.LaunchRequest{
+		Image:   "alpine:3.19",
+		Command: []string{"sh", "-c", "true"},
+	})
+	if err != nil {
+		t.Fatalf("Launch(): %v", err)
+	}
+	if resp.SandboxClass != "cluster-default" {
+		t.Fatalf("sandbox_class = %q, want the bound class %q (not the request's empty value)",
+			resp.SandboxClass, "cluster-default")
 	}
 }
 
@@ -224,6 +262,59 @@ func TestWait_TerminalReturnsImmediately(t *testing.T) {
 	}
 	if resp.ExitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", resp.ExitCode)
+	}
+}
+
+// TestWait_ReportsChosenRuntime asserts Wait reports the backend the
+// operator actually selected (status.runtime.chosen), not anything
+// derived from the request.
+func TestWait_ReportsChosenRuntime(t *testing.T) {
+	t.Parallel()
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Spec:       setecv1alpha1.SandboxSpec{SandboxClassName: "standard"},
+		Status: setecv1alpha1.SandboxStatus{
+			Phase:   setecv1alpha1.SandboxPhaseCompleted,
+			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-qemu"},
+		},
+	}
+	c := newClient(t, sb)
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Wait(context.Background(), &setecv1grpc.WaitRequest{
+		SandboxId: "team-a/sb/u-1",
+	})
+	if err != nil {
+		t.Fatalf("Wait(): %v", err)
+	}
+	if resp.Runtime != "kata-qemu" {
+		t.Fatalf("runtime = %q, want kata-qemu", resp.Runtime)
+	}
+}
+
+// TestWait_RuntimeEmptyWhenNeverResolved asserts a Sandbox that
+// terminated before backend selection reports an empty runtime — the
+// documented "not resolved" shape — rather than an invented value.
+func TestWait_RuntimeEmptyWhenNeverResolved(t *testing.T) {
+	t.Parallel()
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Status: setecv1alpha1.SandboxStatus{
+			Phase:  setecv1alpha1.SandboxPhaseFailed,
+			Reason: "RuntimeUnavailable",
+		},
+	}
+	c := newClient(t, sb)
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Wait(context.Background(), &setecv1grpc.WaitRequest{
+		SandboxId: "team-a/sb/u-1",
+	})
+	if err != nil {
+		t.Fatalf("Wait(): %v", err)
+	}
+	if resp.Runtime != "" {
+		t.Fatalf("runtime = %q, want empty for a Sandbox that never resolved a backend", resp.Runtime)
 	}
 }
 

@@ -106,6 +106,47 @@ func TestAttach_RunningSessionResolvesAndStampsActivity(t *testing.T) {
 	}
 }
 
+// TestAttach_ReportsClassAndRuntime asserts a reattaching caller sees
+// the class the Sandbox is bound to and the backend the operator
+// selected, since it never saw the LaunchResponse.
+func TestAttach_ReportsClassAndRuntime(t *testing.T) {
+	t.Parallel()
+	sb := sessionCR("team-a", "sess-rt", "uid-rt", setecv1alpha1.SandboxPhaseRunning)
+	sb.Spec.SandboxClassName = "standard"
+	sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-fc"}
+	c := newClient(t, sb)
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Attach(context.Background(), &setecv1grpc.AttachRequest{SandboxId: handleOf(sb)})
+	if err != nil {
+		t.Fatalf("Attach(): %v", err)
+	}
+	if resp.GetSandboxClass() != "standard" {
+		t.Fatalf("sandbox_class = %q, want standard", resp.GetSandboxClass())
+	}
+	if resp.GetRuntime() != "kata-fc" {
+		t.Fatalf("runtime = %q, want kata-fc", resp.GetRuntime())
+	}
+}
+
+// TestAttach_RuntimeEmptyWhilePending asserts an attach to a session
+// whose backend is not yet selected reports an empty runtime — the
+// documented "not yet resolved" shape.
+func TestAttach_RuntimeEmptyWhilePending(t *testing.T) {
+	t.Parallel()
+	sb := sessionCR("team-a", "sess-pending", "uid-p", setecv1alpha1.SandboxPhasePending)
+	c := newClient(t, sb)
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Attach(context.Background(), &setecv1grpc.AttachRequest{SandboxId: handleOf(sb)})
+	if err != nil {
+		t.Fatalf("Attach(): %v", err)
+	}
+	if resp.GetRuntime() != "" {
+		t.Fatalf("runtime = %q, want empty while no backend is selected", resp.GetRuntime())
+	}
+}
+
 // TestAttach_StatelessAcrossFrontendRestart drives the reattach through
 // a brand-new Service instance sharing nothing but cluster state with
 // the one that served the first attach — exactly a frontend restart.

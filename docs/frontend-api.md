@@ -22,6 +22,36 @@ service SandboxService {
 
 See `api/grpc/v1/sandbox.proto` for the full message schema.
 
+## Resolved class and runtime reporting
+
+A caller that names `LaunchRequest.sandbox_class` selects a class for
+its isolation properties, and the responses report what the Sandbox
+actually got so the caller can verify rather than trust — without
+holding any Kubernetes credentials:
+
+- `LaunchResponse.sandbox_class` — the SandboxClass the created
+  Sandbox was bound to, read back from the created object after
+  admission (so admission-time defaulting is reflected, not the
+  request value).
+- `WaitResponse.runtime` — the backend actually selected after
+  evaluating the class's primary backend and any `fallback` chain
+  (`status.runtime.chosen`): one of `kata-fc`, `kata-qemu`, `gvisor`,
+  `runc`. `Wait` returns only after the Sandbox is terminal, so this
+  value is authoritative.
+- `AttachResponse.sandbox_class` / `AttachResponse.runtime` — the same
+  two values for a reattaching caller, which never saw the
+  `LaunchResponse`.
+
+**An empty value means "not yet resolved", never "resolved but
+unreported".** `LaunchResponse.sandbox_class` is empty only when the
+request named no class and cluster-default resolution happens at
+schedule time; `AttachResponse.runtime` is empty while the Sandbox is
+still Pending; `WaitResponse.runtime` is empty only when the Sandbox
+reached a terminal phase before a backend was ever selected (for
+example `ClassNotFound` or `RuntimeUnavailable`). A client can
+therefore distinguish "the frontend did not report" from "the operator
+reported X" and decide for itself how to treat an unresolved value.
+
 ## Session reattach (`Attach`)
 
 A **session** Sandbox (`lifecycle.mode: session`, ADR-0006) outlives any

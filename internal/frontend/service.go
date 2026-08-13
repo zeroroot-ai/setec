@@ -208,6 +208,9 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
 		Name:      sb.Name,
 		Namespace: sb.Namespace,
+		// Read back from the created object, not the request, so any
+		// admission-time defaulting of the class is what gets reported.
+		SandboxClass: sb.Spec.SandboxClassName,
 	}, nil
 }
 
@@ -292,6 +295,12 @@ func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*sete
 			}
 			if sb.Status.ExitCode != nil {
 				resp.ExitCode = *sb.Status.ExitCode
+			}
+			// Report the backend the operator actually selected
+			// (status.runtime.chosen). Left empty when the Sandbox
+			// terminated before a backend was ever resolved.
+			if rt := sb.Status.Runtime; rt != nil {
+				resp.Runtime = rt.Chosen
 			}
 			return resp, nil
 		}
