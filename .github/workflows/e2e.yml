@@ -287,6 +287,61 @@ jobs:
               memory: 1Gi
           EOF
 
+      - name: Pre-warm a sandbox-host metal node (scale-from-zero)
+        # The setec-metal Karpenter NodePool is scale-to-zero, and the
+        # operator hard-fails a Sandbox with NoEligibleNode when no node
+        # carries the backend capability label (setec#230) — so with zero
+        # metal nodes the Sandbox dies before any Pod could trigger
+        # Karpenter. Chicken-and-egg. Until the operator treats
+        # no-eligible-node as Pending+requeue, pre-warm the node here: a
+        # placeholder pod targeting the NodePool's own label+taint makes
+        # Karpenter provision a metal node; kata-deploy + the runtime-agent
+        # then lay down kata and write the capability label the operator
+        # keys on. Metal instances boot slowly (10-15 min) — the wait is
+        # sized for that. The placeholder lives in the throwaway namespace,
+        # so the existing cleanup reaps it and the node scales back to zero
+        # after its emptiness TTL.
+        run: |
+          set -euo pipefail
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: setec-e2e-warm-${{ github.run_id }}
+            namespace: ${E2E_NAMESPACE}
+          spec:
+            nodeSelector:
+              setec.zeroroot.ai/sandbox-host: "true"
+            tolerations:
+              - key: setec.zeroroot.ai/sandbox-host
+                operator: Equal
+                value: "true"
+                effect: NoSchedule
+            containers:
+              - name: warm
+                image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
+                command: ["sleep", "1800"]
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 32Mi
+            restartPolicy: Never
+          EOF
+          echo "waiting for a node with the kata-qemu capability label (metal boot + kata-deploy, up to ~18 min)..."
+          for i in $(seq 1 72); do
+            n="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-qemu=true -o name 2>/dev/null | head -1)"
+            if [ -n "$n" ]; then
+              echo "eligible node ready after ${i} polls: ${n}"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::no node gained setec.zeroroot.ai/runtime.kata-qemu=true within the wait window"
+          kubectl get nodes -o wide || true
+          kubectl -n "${E2E_NAMESPACE}" describe pod "setec-e2e-warm-${{ github.run_id }}" || true
+          kubectl get nodeclaims -o wide 2>/dev/null || true
+          exit 1
+
       - name: Create throwaway Sandbox + assert boot / execute / result
         # The Sandbox lives in the shadow namespace, so it is reconciled by
         # the shadow operator running THIS PR's manager image — that is the
