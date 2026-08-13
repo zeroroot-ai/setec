@@ -284,7 +284,13 @@ verify the expected new manifests appear via `helm template`.
   frontend and the chart refuses to render without them (in SPIFFE mode the
   identities come from the Workload API instead; see "Credential modes"
   below). The frontend does NOT bypass Kubernetes admission; every call
-  still flows through the webhook.
+  still flows through the webhook. Tenant → namespace routing is
+  configurable: `frontend.tenantNamespaceLabel` overrides the label key the
+  frontend resolves tenant namespaces by (binary default
+  `setec.zeroroot.ai/tenant`), and `frontend.sandboxNamespace` instead places
+  every tenant's Sandboxes in one fixed shared namespace, which must be
+  listed in `sandboxNamespaces`. The two are mutually exclusive; setting
+  both fails the render (setec#158).
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and

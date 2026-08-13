@@ -55,6 +55,7 @@ func main() {
 		listenAddr        string
 		creds             credentialFlags
 		tenantLabelKey    string
+		sandboxNamespace  string
 		metricsAddr       string
 		shutdownGraceTime time.Duration
 	)
@@ -72,7 +73,11 @@ func main() {
 		"Full SPIFFE ID allowed to call this frontend, e.g. spiffe://zeroroot.ai/ns/gibson/sa/gibson. "+
 			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
 	flag.StringVar(&tenantLabelKey, "tenant-namespace-label", "setec.zeroroot.ai/tenant",
-		"Label key used to map tenant → namespace.")
+		"Label key used to map tenant → namespace. Mutually exclusive with --sandbox-namespace.")
+	flag.StringVar(&sandboxNamespace, "sandbox-namespace", "",
+		"Fixed namespace every tenant's Sandboxes are placed in, for installs "+
+			"that use one shared Sandbox namespace instead of one namespace per "+
+			"tenant. Mutually exclusive with --tenant-namespace-label.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
 	flag.DurationVar(&shutdownGraceTime, "shutdown-grace", 30*time.Second,
 		"Maximum time to wait for in-flight RPCs during graceful shutdown.")
@@ -98,7 +103,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	resolver := &labelTenantResolver{client: k8sClient, labelKey: tenantLabelKey}
+	// The namespace strategy is explicit, mirroring the credential-mode
+	// selection above: exactly one applies, and asking for both is a
+	// misconfiguration the Deployment should restart out of, not paper
+	// over.
+	labelKeySet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "tenant-namespace-label" {
+			labelKeySet = true
+		}
+	})
+	resolver, resolverDesc, err := selectResolver(k8sClient, sandboxNamespace, tenantLabelKey, labelKeySet)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "frontend: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "frontend: tenant resolution: %s\n", resolverDesc)
 	srv := &frontend.Service{
 		Client:         k8sClient,
 		Clientset:      clientset,
@@ -238,6 +258,39 @@ func (r *repeatedString) String() string { return strings.Join(*r, ",") }
 func (r *repeatedString) Set(v string) error {
 	*r = append(*r, v)
 	return nil
+}
+
+// selectResolver picks the tenant → namespace strategy from the flags.
+// Exactly one applies: a fixed shared namespace (--sandbox-namespace) or
+// the label lookup (--tenant-namespace-label, the default). Passing both
+// is refused with a message naming the cause rather than silently
+// preferring one.
+func selectResolver(c client.Client, sandboxNamespace, tenantLabelKey string, labelKeySet bool) (frontend.TenantResolver, string, error) {
+	if sandboxNamespace != "" {
+		if labelKeySet {
+			return nil, "", fmt.Errorf("--sandbox-namespace and --tenant-namespace-label are mutually exclusive: " +
+				"Sandboxes either all share one fixed namespace or are routed to a per-tenant namespace by label, never both")
+		}
+		return fixedNamespaceResolver(sandboxNamespace), fmt.Sprintf("fixed namespace %q", sandboxNamespace), nil
+	}
+	return &labelTenantResolver{client: c, labelKey: tenantLabelKey},
+		fmt.Sprintf("namespace label %q", tenantLabelKey), nil
+}
+
+// fixedNamespaceResolver places every tenant's Sandboxes in one shared,
+// configured namespace. Tenant scoping still comes from the verified
+// mTLS peer identity — placement is not the tenancy boundary — but note
+// what the shared namespace means: every authorized caller resolves to
+// the same namespace, so the per-namespace ownership check no longer
+// separates callers from each other. Use it where the authorized caller
+// set is a single trusted platform, not where mutually untrusting
+// clients call the frontend directly; the label resolver remains the
+// strategy for per-tenant namespaces.
+type fixedNamespaceResolver string
+
+// NamespaceFor returns the configured namespace for every tenant.
+func (r fixedNamespaceResolver) NamespaceFor(_ context.Context, _ tenancy.TenantID) (string, error) {
+	return string(r), nil
 }
 
 // labelTenantResolver maps a TenantID to a namespace by listing

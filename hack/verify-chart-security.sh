@@ -287,6 +287,70 @@ assert_absent "$workdir/le-off.yaml" "no Lease grant when leader election is off
 assert_absent "$workdir/le-off.yaml" "no leader-elect flag when disabled" \
 	"--leader-elect=true"
 
+# ---------------------------------------------------------------------------
+# Frontend tenant → namespace routing (setec#158).
+#
+# The frontend has two mutually exclusive strategies: a per-tenant
+# namespace resolved by label, or one fixed shared Sandbox namespace.
+# The chart must be able to render either (the flag existing on the
+# binary is worthless if no value reaches it), must refuse both at
+# once, and must refuse a fixed namespace the operator holds no
+# Pod-write RBAC in — that last one renders cleanly and then no Sandbox
+# ever starts, which is exactly the silent failure shape this script
+# exists to catch.
+# ---------------------------------------------------------------------------
+note "frontend tenant routing (setec#158)"
+FE_TLS=(--set frontend.enabled=true
+	--set frontend.tlsCertSecretName=fe-tls
+	--set frontend.tlsClientCASecretName=fe-ca)
+
+render "$workdir/fe-default.yaml" "${FE_TLS[@]}" \
+	--show-only templates/frontend.yaml
+strip_comments "$workdir/fe-default.yaml" "$workdir/fe-default.stripped.yaml"
+assert_absent "$workdir/fe-default.stripped.yaml" "default render adds no routing flag (binary default applies)" \
+	"--tenant-namespace-label"
+assert_absent "$workdir/fe-default.stripped.yaml" "default render selects no fixed namespace" \
+	"--sandbox-namespace"
+
+render "$workdir/fe-label.yaml" "${FE_TLS[@]}" \
+	--set frontend.tenantNamespaceLabel=gibson.zeroroot.ai/tenant \
+	--show-only templates/frontend.yaml
+strip_comments "$workdir/fe-label.yaml" "$workdir/fe-label.stripped.yaml"
+assert_contains "$workdir/fe-label.stripped.yaml" "label key override reaches the frontend" \
+	"--tenant-namespace-label=gibson.zeroroot.ai/tenant"
+
+render "$workdir/fe-fixed.yaml" "${FE_TLS[@]}" \
+	--set frontend.sandboxNamespace="$NS_A" \
+	--show-only templates/frontend.yaml
+strip_comments "$workdir/fe-fixed.yaml" "$workdir/fe-fixed.stripped.yaml"
+assert_contains "$workdir/fe-fixed.stripped.yaml" "fixed Sandbox namespace reaches the frontend" \
+	"--sandbox-namespace=$NS_A"
+assert_absent "$workdir/fe-fixed.stripped.yaml" "fixed mode renders no label flag" \
+	"--tenant-namespace-label"
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	"${FE_TLS[@]}" \
+	--set frontend.sandboxNamespace="$NS_A" \
+	--set frontend.tenantNamespaceLabel=gibson.zeroroot.ai/tenant \
+	>/dev/null 2>&1; then
+	fail "both routing strategies at once must fail the render"
+else
+	pass "both routing strategies at once fail the render"
+fi
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	"${FE_TLS[@]}" \
+	--set frontend.sandboxNamespace=not-in-the-rbac-list \
+	>/dev/null 2>&1; then
+	fail "a fixed namespace outside sandboxNamespaces must fail the render (no Pod-write RBAC there)"
+else
+	pass "a fixed namespace outside sandboxNamespaces fails the render"
+fi
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

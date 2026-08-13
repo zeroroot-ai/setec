@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/zeroroot-ai/setec/internal/credentials"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
 const daemonID = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
@@ -124,5 +125,72 @@ func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 	if got := ids.String(); !strings.Contains(got, "gibson-daemon") ||
 		!strings.Contains(got, "gibson-executor") {
 		t.Fatalf("String() = %q, want both IDs", got)
+	}
+}
+
+// TestSelectResolver_ExactlyOneStrategy pins the tenant → namespace
+// strategy selection (setec#158). A fixed shared namespace and the
+// label lookup are mutually exclusive; asking for both is refused with
+// a message naming the cause rather than silently preferring one, and
+// the label strategy stays the default so an install that configures
+// nothing keeps today's behaviour.
+func TestSelectResolver_ExactlyOneStrategy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default is the label resolver", func(t *testing.T) {
+		t.Parallel()
+		r, desc, err := selectResolver(nil, "", "setec.zeroroot.ai/tenant", false)
+		if err != nil {
+			t.Fatalf("selectResolver: %v", err)
+		}
+		if _, ok := r.(*labelTenantResolver); !ok {
+			t.Fatalf("resolver = %T, want *labelTenantResolver", r)
+		}
+		if !strings.Contains(desc, "setec.zeroroot.ai/tenant") {
+			t.Fatalf("desc = %q, want it to name the label key", desc)
+		}
+	})
+
+	t.Run("sandbox-namespace selects the fixed resolver", func(t *testing.T) {
+		t.Parallel()
+		r, desc, err := selectResolver(nil, "setec-sandboxes", "setec.zeroroot.ai/tenant", false)
+		if err != nil {
+			t.Fatalf("selectResolver: %v", err)
+		}
+		if _, ok := r.(fixedNamespaceResolver); !ok {
+			t.Fatalf("resolver = %T, want fixedNamespaceResolver", r)
+		}
+		if !strings.Contains(desc, "setec-sandboxes") {
+			t.Fatalf("desc = %q, want it to name the namespace", desc)
+		}
+	})
+
+	t.Run("both strategies are refused", func(t *testing.T) {
+		t.Parallel()
+		_, _, err := selectResolver(nil, "setec-sandboxes", "gibson.zeroroot.ai/tenant", true)
+		if err == nil {
+			t.Fatal("selectResolver: want an error, got nil")
+		}
+		if !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("error = %q, want it to say the flags are mutually exclusive", err)
+		}
+	})
+}
+
+// TestFixedNamespaceResolver_SameNamespaceForEveryTenant pins the fixed
+// resolver returning the configured namespace regardless of tenant, so
+// the per-namespace ownership check resolves consistently for every
+// authorized caller.
+func TestFixedNamespaceResolver_SameNamespaceForEveryTenant(t *testing.T) {
+	t.Parallel()
+	r := fixedNamespaceResolver("setec-sandboxes")
+	for _, tenant := range []string{"team-a", "team-b", ""} {
+		ns, err := r.NamespaceFor(t.Context(), tenancy.TenantID(tenant))
+		if err != nil {
+			t.Fatalf("NamespaceFor(%q): %v", tenant, err)
+		}
+		if ns != "setec-sandboxes" {
+			t.Fatalf("NamespaceFor(%q) = %q, want %q", tenant, ns, "setec-sandboxes")
+		}
 	}
 }
