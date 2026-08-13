@@ -285,6 +285,16 @@ jobs:
             maxResources:
               vcpu: 2
               memory: 1Gi
+            # The staging setec-metal NodePool taints its nodes
+            # setec.zeroroot.ai/sandbox-host=true:NoSchedule; without this
+            # toleration the sandbox pod sits Pending with "untolerated
+            # taint" (run 31716143181; the field exists for exactly this,
+            # setec#115).
+            tolerations:
+              - key: setec.zeroroot.ai/sandbox-host
+                operator: Equal
+                value: "true"
+                effect: NoSchedule
           EOF
 
       - name: Pre-warm a sandbox-host metal node (scale-from-zero)
