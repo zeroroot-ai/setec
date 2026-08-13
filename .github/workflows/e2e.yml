@@ -237,6 +237,7 @@ jobs:
             --set runtimes.kata-qemu.install=false \
             --set webhook.enabled=false \
             --set rbac.allowClusterWideSandboxWrite=true \
+            --set installer.enabled=false \
             "${overhead_args[@]}" \
             --wait --timeout 5m
           # Notes on the values above:
