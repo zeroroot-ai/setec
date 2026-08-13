@@ -44,6 +44,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// testSandboxClass is the SandboxClass name the class-reporting tests
+// bind Sandboxes to.
+const testSandboxClass = "standard"
+
 // stubResolver returns the configured namespace regardless of tenant;
 // cross-tenant tests construct instances with different values.
 type stubResolver struct {
@@ -77,7 +81,7 @@ func TestLaunch_AuthDisabledCreatesSandbox(t *testing.T) {
 	}
 
 	req := &setecv1grpc.LaunchRequest{
-		SandboxClass: "standard",
+		SandboxClass: testSandboxClass,
 		Image:        "alpine:3.19",
 		Command:      []string{"sh", "-c", "true"},
 		Resources:    &setecv1grpc.Resources{Vcpu: 1, Memory: "256Mi"},
@@ -89,7 +93,7 @@ func TestLaunch_AuthDisabledCreatesSandbox(t *testing.T) {
 	if resp.Namespace != "team-a" {
 		t.Fatalf("namespace = %q, want team-a", resp.Namespace)
 	}
-	if resp.SandboxClass != "standard" {
+	if resp.SandboxClass != testSandboxClass {
 		t.Fatalf("sandbox_class = %q, want standard", resp.SandboxClass)
 	}
 }
@@ -272,7 +276,7 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
-		Spec:       setecv1alpha1.SandboxSpec{SandboxClassName: "standard"},
+		Spec:       setecv1alpha1.SandboxSpec{SandboxClassName: testSandboxClass},
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:   setecv1alpha1.SandboxPhaseCompleted,
 			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-qemu"},

@@ -112,7 +112,7 @@ func TestAttach_RunningSessionResolvesAndStampsActivity(t *testing.T) {
 func TestAttach_ReportsClassAndRuntime(t *testing.T) {
 	t.Parallel()
 	sb := sessionCR("team-a", "sess-rt", "uid-rt", setecv1alpha1.SandboxPhaseRunning)
-	sb.Spec.SandboxClassName = "standard"
+	sb.Spec.SandboxClassName = testSandboxClass
 	sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-fc"}
 	c := newClient(t, sb)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
@@ -121,7 +121,7 @@ func TestAttach_ReportsClassAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Attach(): %v", err)
 	}
-	if resp.GetSandboxClass() != "standard" {
+	if resp.GetSandboxClass() != testSandboxClass {
 		t.Fatalf("sandbox_class = %q, want standard", resp.GetSandboxClass())
 	}
 	if resp.GetRuntime() != "kata-fc" {

@@ -265,7 +265,9 @@ func (r *repeatedString) Set(v string) error {
 // the label lookup (--tenant-namespace-label, the default). Passing both
 // is refused with a message naming the cause rather than silently
 // preferring one.
-func selectResolver(c client.Client, sandboxNamespace, tenantLabelKey string, labelKeySet bool) (frontend.TenantResolver, string, error) {
+func selectResolver(
+	c client.Client, sandboxNamespace, tenantLabelKey string, labelKeySet bool,
+) (frontend.TenantResolver, string, error) {
 	if sandboxNamespace != "" {
 		if labelKeySet {
 			return nil, "", fmt.Errorf("--sandbox-namespace and --tenant-namespace-label are mutually exclusive: " +
