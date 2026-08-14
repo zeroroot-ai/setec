@@ -1,6 +1,6 @@
 module github.com/zeroroot-ai/setec/examples/ci-sandbox
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/zeroroot-ai/setec v0.105.0
