@@ -22,7 +22,7 @@
 # so multi-arch builds (linux/amd64,linux/arm64 — setec#132) never emulate
 # the Go toolchain. The distroless runtime stage below is a multi-arch
 # index, and it has no RUN steps, so no QEMU is needed anywhere.
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.4@sha256:792443b89f65105abba56b9bd5e97f680a80074ac62fc844a584212f8c8102c3 AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG CMD=manager
