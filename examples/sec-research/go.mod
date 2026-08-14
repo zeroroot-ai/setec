@@ -1,6 +1,6 @@
 module github.com/zeroroot-ai/setec/examples/sec-research
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/zeroroot-ai/setec v0.105.0
