@@ -71,7 +71,6 @@ on:
 
 permissions:
   contents: read
-  packages: write   # build-images pushes to ghcr
 
 jobs:
   # ----------------------------------------------------------------------
@@ -85,11 +84,14 @@ jobs:
   build-images:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write   # pushes sha-tagged images to ghcr
     outputs:
       manager_image: ${{ steps.tags.outputs.manager_image }}
       runtime_agent_image: ${{ steps.tags.outputs.runtime_agent_image }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Compute image tags
         id: tags
@@ -99,16 +101,16 @@ jobs:
           echo "runtime_agent_image=ghcr.io/zeroroot-ai/setec-runtime-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build + push manager (CMD=manager)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           build-args: CMD=manager
@@ -118,7 +120,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build + push runtime-agent (CMD=runtime-agent)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           build-args: CMD=runtime-agent
@@ -165,7 +167,7 @@ jobs:
       MANAGER_IMAGE: ${{ needs.build-images.outputs.manager_image }}
       RUNTIME_AGENT_IMAGE: ${{ needs.build-images.outputs.runtime_agent_image }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The ephemeral ARC runner image (ghcr.io/actions/actions-runner) ships
       # neither kubectl nor helm — the retired workstation runner had both
@@ -173,10 +175,10 @@ jobs:
       # both before any cluster call; without this every kubectl/helm step below
       # fails "command not found" (exit 127).
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
 
       - name: Install helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Verify kubectl + helm and install-grade RBAC
         run: |
@@ -531,7 +533,7 @@ jobs:
 
       - name: Upload diagnostics
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-diagnostics-${{ github.run_id }}
           path: e2e-artifacts/
@@ -565,10 +567,10 @@ jobs:
       E2E_RELEASE: setec-e2e-${{ github.run_id }}
     steps:
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
 
       - name: Install helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Delete the run's namespace and cluster-scoped leftovers
         run: |
