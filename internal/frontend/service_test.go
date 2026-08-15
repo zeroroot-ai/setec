@@ -641,7 +641,7 @@ func TestRelayLogStream_SendError(t *testing.T) {
 	t.Parallel()
 	src := strings.NewReader("one\ntwo\n")
 	stream := &errorSendStream{ctx: context.Background(), err: errForTesting("broken transport")}
-	err := relayLogStream(context.Background(), src, stream)
+	_, err := relayLogStream(context.Background(), src, stream, 0)
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %s, want Internal (err=%v)", status.Code(err), err)
 	}
