@@ -18,26 +18,29 @@ package probe
 
 import (
 	"context"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 )
+
+// gvisorHandler is the CRI runtime handler name gVisor registers under. It is
+// NOT the probe's own name ("gvisor"), which is the setec backend label — the
+// containerd table is `containerd.runtimes.runsc`.
+const gvisorHandler = "runsc"
 
 // gvisorProbe checks whether the gVisor (runsc) container runtime is
 // available on the host node.
 //
 // Detection strategy (no subprocess execution):
-//  1. LookPath("runsc") must succeed — the runtime binary must be in PATH.
-//  2. The probe attempts to verify that a containerd runtime entry for runsc
-//     exists by reading containerd configuration files. This is best-effort:
-//     if the config files are not accessible (e.g. not volume-mounted into
-//     the DaemonSet), a warning is logged and the probe passes on binary
-//     presence alone.
+//  1. LookPath("runsc") must succeed — the runtime binary must be on the node.
+//  2. containerd must register the `runsc` CRI runtime handler, verified with
+//     the same scanner the Kata probes use (checkContainerdHandler).
 //
-// The containerd config paths checked (in order):
-//   - <FSRoot>/etc/containerd/config.toml
-//   - Files under <FSRoot>/etc/containerd/conf.d/ (glob *.toml)
+// IT FAILS CLOSED, AND THAT IS A CHANGE (setec#268). This probe used to log a
+// warning and return Available:true on binary presence alone whenever it could
+// not read a containerd config, and it matched the bare substring "runsc"
+// anywhere in a file — a comment mentioning runsc was enough. Both made the
+// node advertise setec.zeroroot.ai/runtime.gvisor=true while containerd would
+// reject every RunPodSandbox with `no runtime for "runsc" is configured`, which
+// is the exact capability lie setec#243 removed from the Kata probes. A
+// capability that cannot be verified is not one that can be scheduled onto.
 type gvisorProbe struct {
 	cfg Config
 }
@@ -61,70 +64,22 @@ func (p *gvisorProbe) Check(_ context.Context) CapabilityResult {
 		}
 	}
 
-	// Best-effort containerd config verification.
-	containerdOK, containerdNote := p.checkContainerdConfig()
-	if !containerdOK {
-		// Log a warning but do not fail: the binary is present and the
-		// DaemonSet may not mount /etc/containerd.
-		slog.Warn("gvisor probe: containerd config not accessible; passing on binary presence alone",
-			"note", containerdNote,
-			"runsc", binPath,
-		)
+	if hc := checkContainerdHandler(p.cfg.FSRoot, gvisorHandler); !hc.Configured {
 		return CapabilityResult{
-			Available: true,
-			Reason:    "runsc found; containerd config not accessible (best-effort): " + containerdNote,
-			Details:   map[string]string{"runsc": binPath, "containerd_check": "skipped"},
+			Available: false,
+			Reason:    "gvisor is not runnable on this node: " + hc.Reason,
+			Details: map[string]string{
+				"runsc":              binPath,
+				"containerd_handler": hc.State,
+			},
 		}
 	}
 
 	return CapabilityResult{
 		Available: true,
-		Details:   map[string]string{"runsc": binPath, "containerd_check": "ok"},
+		Details: map[string]string{
+			"runsc":              binPath,
+			"containerd_handler": handlerConfigured,
+		},
 	}
-}
-
-// checkContainerdConfig attempts to verify that at least one containerd
-// configuration file references runsc. Returns (true, "") when a matching
-// entry is found, (false, reason) when the config is readable but has no
-// runsc entry, or (false, reason) when the config files are not accessible
-// (the caller treats this as a best-effort skip rather than a hard failure).
-func (p *gvisorProbe) checkContainerdConfig() (bool, string) {
-	root := p.cfg.FSRoot
-
-	// Candidate paths to search.
-	candidates := []string{
-		filepath.Join(root, "etc", "containerd", "config.toml"),
-	}
-
-	// Also check drop-in directory if it exists.
-	dropinDir := filepath.Join(root, "etc", "containerd", "conf.d")
-	entries, err := os.ReadDir(dropinDir)
-	if err == nil {
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".toml") {
-				candidates = append(candidates, filepath.Join(dropinDir, e.Name()))
-			}
-		}
-	}
-
-	anyAccessible := false
-	for _, path := range candidates {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			// File may not exist or may not be mounted; continue.
-			continue
-		}
-		anyAccessible = true
-		// A containerd config that registers gVisor will contain a
-		// runtime handler block referencing "runsc". A simple substring
-		// search is sufficient — we are not parsing TOML.
-		if strings.Contains(string(data), "runsc") {
-			return true, ""
-		}
-	}
-
-	if !anyAccessible {
-		return false, "no containerd config files found under /etc/containerd/ (not mounted?)"
-	}
-	return false, "containerd config found but no runsc runtime handler entry detected"
 }

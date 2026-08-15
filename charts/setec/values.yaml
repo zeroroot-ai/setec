@@ -262,6 +262,31 @@ runtimeAgent:
   # find its handlers. Off by default because the hostPath would otherwise
   # be created on every stock-containerd node that has no k3s.
   mountK3sContainerdConfig: false
+  # -- extraContainerdConfigDirs mounts further host directories read-only so
+  # the probes can follow containerd's `imports` into them (setec#281).
+  #
+  # WHY THIS EXISTS. containerd's config is a graph, not a directory: a
+  # config.toml may name any path in its `imports` array and containerd
+  # resolves it. The probe follows those entries, but it can only READ what
+  # the DaemonSet has mounted, so a config that imports an unmounted path
+  # leaves the probe unable to verify the handler. It says exactly that — it
+  # names the path and points here — rather than reporting a confidently
+  # wrong "handler absent", which is what shipped in v0.110.1 and made every
+  # kata-deploy node advertise no kata capability at all.
+  #
+  # WHY /opt/kata IS THE DEFAULT. kata-deploy 3.28+ writes
+  # /opt/kata/containerd/config.d/kata-deploy.toml and adds it to `imports`
+  # in /etc/containerd/config.toml. kata-deploy is how the Kata runtime gets
+  # onto a node that the Setec installer does not own (every AWS/EKS overlay
+  # here), so out of the box is where this has to work.
+  #
+  # It is a LIST rather than another boolean because the lesson of setec#281
+  # is that no fixed set of paths stays correct — the next installer picks
+  # its own. Add whatever the probe reports as unreadable; each entry is
+  # mounted read-only at /host/<path> with type DirectoryOrCreate, so an
+  # entry that does not exist on a given node is inert rather than fatal.
+  extraContainerdConfigDirs:
+    - /opt/kata/containerd
 
 # -- installer configures the portable node installer DaemonSet (ADR-0003,
 # issue #187): given any x86 KVM-capable node it lays down the stock
