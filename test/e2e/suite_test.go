@@ -519,6 +519,43 @@ func installChart() error {
 		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
 		// with the locally-built installer image.
 		"--set", "installer.enabled=false",
+		// WITHOUT THIS THE CHART DOES NOT RENDER AT ALL. setec#157 made
+		// `sandboxNamespaces` mandatory unless this is set, and the suite
+		// cannot supply that list: it creates its tenant namespaces from the
+		// test bodies at run time (createTenantNamespace — p3-roundtrip,
+		// p2-quota-a, …), so there is nothing to name at install time. This
+		// is the chart's documented deliberate opt-out and the same one the
+		// roundtrip job takes, scoped to a throwaway release that is
+		// uninstalled at the end of the run.
+		//
+		// The suite has not rendered since setec#157 landed; nothing caught
+		// it because nothing ran the suite (setec#298).
+		"--set", "rbac.allowClusterWideSandboxWrite=true",
+		// The chart ships two SandboxClasses, `tool` and `connector`, and
+		// SandboxClass is CLUSTER-scoped and NOT release-prefixed. Both
+		// already exist on the shared staging cluster carrying no helm
+		// ownership metadata at all, so a throwaway release rendering them
+		// is refused ("exists and cannot be imported into the current
+		// release"). Nothing is lost: every scenario in this suite builds
+		// its own SandboxClass (e2e-tight, runc-dev-cls, fallback-test-cls,
+		// e2e-session-checkpoint-*, …) and none references the chart's.
+		// Same opt-out the roundtrip job takes, for the same reason.
+		"--set", "sandboxClasses.enabled=false",
+		// WITHOUT THIS THE SUITE IS A GREEN ALL-SKIP. phase3Enabled() greps
+		// the operator Deployment for `--snapshots-enabled`, which the chart
+		// only renders under snapshots.enabled. Left off, every Phase 3
+		// scenario calls t.Skip — including BOTH ADR-0005 invariants
+		// (TestPhase3_RestoredClonesDivergeInRNG,
+		// TestPhase3_RestoredClonesHaveUniqueIdentity) and
+		// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS
+		// having verified none of them. That is precisely the failure mode
+		// TestEnv_KVMPresent exists to prevent, arriving through a different
+		// door.
+		//
+		// This is local snapshot storage only. The S3 checkpoint backend is
+		// a separate axis and stays behind SETEC_E2E_S3 (setec#194/#296),
+		// which sets this same flag among others.
+		"--set", "snapshots.enabled=true",
 		"--wait",
 		"--timeout", "5m",
 	}
@@ -581,6 +618,8 @@ func installChart() error {
 		}
 	}
 
+	args = append(args, crdInstallArgs()...)
+
 	cmd := exec.Command("helm", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -599,6 +638,85 @@ func installChart() error {
 		}
 	}
 	return nil
+}
+
+// crdInstallArgs decides whether this install may touch the setec CRDs, and
+// returns the helm flags that express the decision.
+//
+// # Why this exists (setec#298)
+//
+// Helm 4 applies chart CRDs SERVER-SIDE by default (`--server-side` defaults
+// to true; `helm install --help` still claims CRDs are only installed "if not
+// already present", but the apply happens regardless). The setec CRDs are
+// CLUSTER-scoped and, on the shared staging cluster, are owned by
+// `argocd-controller` — the live release is GitOps-managed. A throwaway
+// shadow install therefore tries to take ownership of `.spec.versions` from
+// Argo and the API server refuses:
+//
+//	INSTALLATION FAILED: failed to install CRD
+//	setec.zeroroot.ai_sandboxclasses.yaml: conflict occurred while applying
+//	object ... Apply failed with 1 conflict: conflict with "argocd-controller":
+//	.spec.versions
+//
+// This is not recoverable from inside the suite and must not be forced:
+// `--force-conflicts` would overwrite the LIVE staging CRD schema with
+// whatever this PR happens to carry, on a cluster the suite does not own.
+//
+// So: if the CRDs are already on the cluster, leave them alone. If they are
+// not (a throwaway kind cluster, `make e2e` on a fresh box), install them —
+// that path has no other owner to conflict with, and skipping there would
+// leave the suite with no CRDs at all.
+//
+// The cost of skipping is stated out loud rather than left implicit: a run
+// that skips CRDs exercises the CLUSTER's CRD schema, not this PR's. A PR
+// that changes an API type is not covered by such a run. That caveat was
+// already true and already documented in .github/workflows/e2e.yml; what was
+// missing is anything that says so at the point it applies.
+func crdInstallArgs() []string {
+	out, err := exec.Command("kubectl", "get", "crd",
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`).Output()
+	if err != nil {
+		// Cannot tell. Let helm try: on a cluster with no setec CRDs that is
+		// the correct behaviour anyway, and on one that has them the helm
+		// error above is more legible than a guess made here.
+		fmt.Fprintf(os.Stderr, "e2e: could not list CRDs to determine ownership (%v); letting helm install them\n", err)
+		return nil
+	}
+
+	var present []string
+	for _, name := range strings.Split(string(out), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(name), ".setec.zeroroot.ai") {
+			present = append(present, strings.TrimSpace(name))
+		}
+	}
+	if len(present) == 0 {
+		fmt.Fprintln(os.Stderr, "e2e: no setec CRDs on this cluster — installing the chart's own")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr,
+		"e2e: WARNING — %d setec CRD(s) already exist on this cluster and are owned by another "+
+			"manager (%s). Installing with --skip-crds so this throwaway release does not fight "+
+			"the owner for .spec.versions.\n"+
+			"e2e: WARNING — this run therefore exercises the CLUSTER's CRD schema, NOT the chart's. "+
+			"If this change touches an API type, that part of it is NOT covered by this run.\n",
+		len(present), crdFieldManagers(present[0]))
+	return []string{"--skip-crds"}
+}
+
+// crdFieldManagers reports the server-side-apply field managers on a CRD, so
+// the skip-CRDs warning can name who actually owns the object rather than
+// asserting "Argo" and being wrong on some other cluster.
+func crdFieldManagers(name string) string {
+	out, err := exec.Command("kubectl", "get", "crd", name,
+		"-o", `jsonpath={range .metadata.managedFields[*]}{.manager}{" "}{end}`).Output()
+	if err != nil {
+		return "unknown"
+	}
+	if m := strings.TrimSpace(string(out)); m != "" {
+		return m
+	}
+	return "unknown"
 }
 
 // waitForWebhookReady polls until the admission webhook is serving by issuing a
