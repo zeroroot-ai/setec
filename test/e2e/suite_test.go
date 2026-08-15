@@ -83,13 +83,42 @@ var (
 	// cluster's container runtime. Every component (operator, runtime-agent)
 	// shares this tag. Defaults to "dev", matching development/k3s. The chart
 	// repositories are left at their defaults; only the tag is overridden,
-	// and pullPolicy is forced to Never so a missed import fails loud
+	// and pullPolicy defaults to Never so a missed import fails loud
 	// (ErrImageNeverPull) instead of silently pulling a stale/absent image.
 	imageTag string
+
+	// imagePullPolicy overrides the chart's pullPolicy for every setec
+	// component. Never is right for a runner that side-loads images into
+	// the node's runtime; it is WRONG on a shared cluster like staging
+	// EKS, where the runner is an ordinary pod with no access to any
+	// node's image store and the images have to come from ghcr. Set
+	// SETEC_E2E_IMAGE_PULL_POLICY=IfNotPresent there.
+	imagePullPolicy string
+
+	// imageRepo / runtimeAgentImageRepo override the chart's image
+	// repositories. Needed whenever the images under test are not the
+	// chart defaults — e.g. a PR build pushed to a sha-tagged ghcr repo.
+	imageRepo             string
+	runtimeAgentImageRepo string
+
+	// webhookEnabled controls whether the throwaway release installs the
+	// admission webhook. The ValidatingWebhookConfiguration is
+	// CLUSTER-scoped with failurePolicy=Fail, so on a SHARED cluster a run
+	// that dies before cleanup fails every Sandbox/SandboxClass write in
+	// the whole cluster closed until someone deletes it by hand. Default
+	// stays true (the isolated-cluster case, and the webhook scenarios
+	// need it); the staging job sets SETEC_E2E_WEBHOOK=0.
+	webhookEnabled bool
 
 	// k8sClient is a typed controller-runtime client bound to the real
 	// cluster. Tests use it for all in-cluster assertions.
 	k8sClient client.Client
+
+	// sessionS3 carries the session-checkpoint object-store settings
+	// (setec#194, ADR-0007). The checkpoint scenarios are the only ones
+	// that need a node-agent at all, so the whole DaemonSet stays out of
+	// the base install until SETEC_E2E_S3 turns it on.
+	sessionS3 sessionS3Config
 
 	// scheme is shared by the k8sClient and by tests that need to decode
 	// YAML into typed objects.
@@ -114,6 +143,16 @@ func TestMain(m *testing.M) {
 	chartPath = envOr("SETEC_E2E_CHART", resolveChartPath())
 	kataRuntimeClass = envOr("SETEC_E2E_RUNTIMECLASS", "kata-fc")
 	imageTag = envOr("SETEC_E2E_IMAGE_TAG", "dev")
+	imagePullPolicy = envOr("SETEC_E2E_IMAGE_PULL_POLICY", "Never")
+	imageRepo = os.Getenv("SETEC_E2E_IMAGE_REPO")
+	runtimeAgentImageRepo = os.Getenv("SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO")
+	webhookEnabled = envOr("SETEC_E2E_WEBHOOK", "1") != "0"
+
+	var err error
+	if sessionS3, err = loadSessionS3Config(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: session-checkpoint S3 configuration is incomplete: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := buildClient(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: failed to build Kubernetes client: %v\n", err)
@@ -139,6 +178,116 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+// sessionS3Config is the resolved session-checkpoint object-store
+// configuration (setec#194, ADR-0007). Zero value = disabled, which is
+// what every environment without a checkpoint bucket gets.
+type sessionS3Config struct {
+	// enabled mirrors SETEC_E2E_S3. When false the base install keeps
+	// nodeAgent.enabled=false and the checkpoint scenarios skip loudly.
+	enabled bool
+	// bucket is the checkpoint bucket. Required when enabled.
+	bucket string
+	// region is the bucket's region (signing region for the AWS SDK).
+	region string
+	// prefix scopes every object key. The staging IAM policy is written
+	// against this prefix, so a mismatch reads as AccessDenied.
+	prefix string
+	// endpoint is empty for real S3 and set for MinIO / other
+	// self-hosted S3-compatibles.
+	endpoint string
+	// roleARN annotates the node-agent ServiceAccount for IRSA. Empty
+	// on non-EKS environments, where credentialsSecret or the ambient
+	// credential chain applies instead.
+	roleARN string
+	// credentialsSecret names a pre-existing Secret of AWS_ACCESS_KEY_ID
+	// / AWS_SECRET_ACCESS_KEY, for environments with no IRSA (MinIO).
+	credentialsSecret string
+	// nodeAgentImageTag / nodeAgentImageRepo pin the node-agent image.
+	// The checkpoint scenarios are the only ones that run a node-agent,
+	// so this is the one component the base install never references —
+	// which also means nothing else would catch a missing image.
+	nodeAgentImageTag  string
+	nodeAgentImageRepo string
+}
+
+// loadSessionS3Config reads the SETEC_E2E_S3* environment and refuses
+// a half-configured setup. Failing here rather than at install time
+// keeps the failure legible: "you set SETEC_E2E_S3=1 but no bucket" is
+// a configuration mistake, not a checkpoint defect, and the two must
+// never be confusable in a first-execution run.
+func loadSessionS3Config() (sessionS3Config, error) {
+	if os.Getenv("SETEC_E2E_S3") == "" {
+		return sessionS3Config{}, nil
+	}
+	cfg := sessionS3Config{
+		enabled:           true,
+		bucket:            os.Getenv("SETEC_E2E_S3_BUCKET"),
+		region:            envOr("SETEC_E2E_S3_REGION", "us-east-1"),
+		prefix:            os.Getenv("SETEC_E2E_S3_PREFIX"),
+		endpoint:          os.Getenv("SETEC_E2E_S3_ENDPOINT"),
+		roleARN:           os.Getenv("SETEC_E2E_S3_ROLE_ARN"),
+		credentialsSecret: os.Getenv("SETEC_E2E_S3_CREDENTIALS_SECRET"),
+		nodeAgentImageTag:  envOr("SETEC_E2E_NODE_AGENT_IMAGE_TAG", imageTag),
+		nodeAgentImageRepo: os.Getenv("SETEC_E2E_NODE_AGENT_IMAGE_REPO"),
+	}
+	if cfg.bucket == "" {
+		return sessionS3Config{}, fmt.Errorf(
+			"SETEC_E2E_S3=1 requires SETEC_E2E_S3_BUCKET (the checkpoint bucket); " +
+				"refusing to install a node-agent whose checkpoint backend would fail closed at the first suspend")
+	}
+	if cfg.endpoint == "" && cfg.roleARN == "" && cfg.credentialsSecret == "" {
+		return sessionS3Config{}, fmt.Errorf(
+			"SETEC_E2E_S3=1 against real AWS S3 requires SETEC_E2E_S3_ROLE_ARN (IRSA) " +
+				"or SETEC_E2E_S3_CREDENTIALS_SECRET; the node-agent would otherwise fall back to the node " +
+				"instance profile, which has no access to the checkpoint prefix and reports AccessDenied " +
+				"as an opaque checkpoint failure")
+	}
+	return cfg, nil
+}
+
+// helmArgs renders the chart overrides that turn the node-agent's S3
+// session-checkpoint backend on.
+func (c sessionS3Config) helmArgs() []string {
+	if !c.enabled {
+		return nil
+	}
+	args := []string{
+		// The checkpoint backend lives in the node-agent, and the whole
+		// snapshots subtree (including the operator's node-agent dialer
+		// and its mTLS) is gated behind snapshots.enabled.
+		"--set", "nodeAgent.enabled=true",
+		"--set", fmt.Sprintf("nodeAgent.image.tag=%s", c.nodeAgentImageTag),
+		"--set", fmt.Sprintf("nodeAgent.image.pullPolicy=%s", imagePullPolicy),
+		"--set", "snapshots.enabled=true",
+		"--set", "snapshots.s3.enabled=true",
+		"--set-string", fmt.Sprintf("snapshots.s3.bucket=%s", c.bucket),
+		"--set-string", fmt.Sprintf("snapshots.s3.region=%s", c.region),
+		"--set-string", fmt.Sprintf("snapshots.s3.prefix=%s", c.prefix),
+		"--set-string", fmt.Sprintf("snapshots.s3.endpoint=%s", c.endpoint),
+		// Real S3 rejects path-style addressing; MinIO requires it.
+		"--set", fmt.Sprintf("snapshots.s3.pathStyle=%t", c.endpoint != ""),
+		// The operator<->node-agent channel is mTLS; on a throwaway
+		// namespace cert-manager issues the pair rather than the
+		// operator mounting hand-made Secrets.
+		"--set", "snapshots.mTLS.certManager.enabled=true",
+		"--set", "snapshots.mTLS.certManager.issuerRef.kind=ClusterIssuer",
+		"--set", "snapshots.mTLS.certManager.issuerRef.name=selfsigned-bootstrap",
+	}
+	if c.nodeAgentImageRepo != "" {
+		args = append(args, "--set-string",
+			fmt.Sprintf("nodeAgent.image.repository=%s", c.nodeAgentImageRepo))
+	}
+	if c.roleARN != "" {
+		args = append(args, "--set-string",
+			fmt.Sprintf("nodeAgent.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=%s", c.roleARN))
+	}
+	if c.credentialsSecret != "" {
+		args = append(args, "--set-string",
+			fmt.Sprintf("snapshots.s3.credentialsSecret=%s", c.credentialsSecret))
+	}
+	return args
 }
 
 // buildClient constructs a controller-runtime client against the active
@@ -240,11 +389,15 @@ func installChart() error {
 	// the Service is <release>-webhook and the cert Secret is
 	// <release>-webhook-cert). caBundle is fed to the
 	// ValidatingWebhookConfiguration so the API server trusts the webhook.
-	webhookSvc := helmReleaseName + "-webhook"
-	webhookCertSecret := helmReleaseName + "-webhook-cert"
-	caBundle, err := createWebhookCertSecret(ctx, webhookCertSecret, webhookSvc, testNamespace)
-	if err != nil {
-		return err
+	var webhookCertSecret, caBundle string
+	if webhookEnabled {
+		var err error
+		webhookSvc := helmReleaseName + "-webhook"
+		webhookCertSecret = helmReleaseName + "-webhook-cert"
+		caBundle, err = createWebhookCertSecret(ctx, webhookCertSecret, webhookSvc, testNamespace)
+		if err != nil {
+			return err
+		}
 	}
 
 	args := []string{
@@ -269,26 +422,40 @@ func installChart() error {
 		// registry. node-agent is disabled by default, so only the operator
 		// (image.*) and runtime-agent (runtimeAgent.image.*) need overriding.
 		"--set", fmt.Sprintf("image.tag=%s", imageTag),
-		"--set", "image.pullPolicy=Never",
+		"--set", fmt.Sprintf("image.pullPolicy=%s", imagePullPolicy),
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
-		"--set", "runtimeAgent.image.pullPolicy=Never",
+		"--set", fmt.Sprintf("runtimeAgent.image.pullPolicy=%s", imagePullPolicy),
 		// Node prep on the E2E host is kata-deploy-owned (preflight above
 		// requires the kata-fc RuntimeClass to pre-exist), so the portable
 		// installer DaemonSet (ADR-0003) stays out of the base install.
 		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
 		// with the locally-built installer image.
 		"--set", "installer.enabled=false",
-		// Enable the SandboxClass/Sandbox admission webhook with the
-		// self-signed serving cert created above, so TestPhase2_WebhookRejects
-		// exercises real admission. failurePolicy stays Fail (the chart
-		// default) — the cert + caBundle must be correct or Sandbox creation
-		// fails closed.
-		"--set", "webhook.enabled=true",
-		"--set", fmt.Sprintf("webhook.certSecret=%s", webhookCertSecret),
-		"--set-string", fmt.Sprintf("webhook.caBundle=%s", caBundle),
 		"--wait",
 		"--timeout", "5m",
 	}
+
+	// Enable the SandboxClass/Sandbox admission webhook with the
+	// self-signed serving cert created above, so TestPhase2_WebhookRejects
+	// exercises real admission. failurePolicy stays Fail (the chart
+	// default) — the cert + caBundle must be correct or Sandbox creation
+	// fails closed.
+	if webhookEnabled {
+		args = append(args,
+			"--set", "webhook.enabled=true",
+			"--set", fmt.Sprintf("webhook.certSecret=%s", webhookCertSecret),
+			"--set-string", fmt.Sprintf("webhook.caBundle=%s", caBundle),
+		)
+	} else {
+		args = append(args, "--set", "webhook.enabled=false")
+	}
+	if imageRepo != "" {
+		args = append(args, "--set-string", fmt.Sprintf("image.repository=%s", imageRepo))
+	}
+	if runtimeAgentImageRepo != "" {
+		args = append(args, "--set-string", fmt.Sprintf("runtimeAgent.image.repository=%s", runtimeAgentImageRepo))
+	}
+	args = append(args, sessionS3.helmArgs()...)
 
 	// Enable every backend TestRuntimeBackends_Smoke exercises (kata-fc is
 	// already enabled by default). With the webhook on, the vsandboxclass
@@ -338,8 +505,10 @@ func installChart() error {
 	// Fail, a Sandbox/SandboxClass create issued before the server is up gets
 	// a 502 "failed calling webhook". Block until the webhook actually admits
 	// a request so test bodies don't race it.
-	if err := waitForWebhookReady(ctx); err != nil {
-		return fmt.Errorf("webhook did not become ready: %w", err)
+	if webhookEnabled {
+		if err := waitForWebhookReady(ctx); err != nil {
+			return fmt.Errorf("webhook did not become ready: %w", err)
+		}
 	}
 	return nil
 }
