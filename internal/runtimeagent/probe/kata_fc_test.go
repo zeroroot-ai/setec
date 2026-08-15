@@ -25,13 +25,16 @@ import (
 )
 
 // TestKataFCProbe exercises the kata-fc probe against fake filesystem layouts
-// covering every combination of KVM device and CPU module presence.
+// covering every combination of KVM device, CPU module, and containerd
+// runtime-handler registration.
 func TestKataFCProbe(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name          string
 		paths         []string // files/dirs to create under a temp FS root
+		handlers      []string // containerd handlers to register; nil means {"kata-fc"}
+		noContainerd  bool     // write no containerd config at all
 		wantAvailable bool
 		wantReason    string // required substring in Reason when !wantAvailable
 		wantModule    string // expected Details["kvm_module"] when available
@@ -91,6 +94,28 @@ func TestKataFCProbe(t *testing.T) {
 			wantAvailable: false,
 			wantReason:    "KVM device /dev/kvm not found",
 		},
+		{
+			// setec#243: KVM alone said "kata-capable" on a node where
+			// kata was never installed, and every RunPodSandbox failed.
+			name: "kvm + module but containerd registers no kata-fc handler",
+			paths: []string{
+				"dev/kvm",
+				"sys/module/kvm_intel/",
+			},
+			handlers:      []string{"runc"},
+			wantAvailable: false,
+			wantReason:    `no runtime handler "kata-fc" configured`,
+		},
+		{
+			name: "kvm + module but no containerd config is readable",
+			paths: []string{
+				"dev/kvm",
+				"sys/module/kvm_intel/",
+			},
+			noContainerd:  true,
+			wantAvailable: false,
+			wantReason:    "no containerd configuration is readable",
+		},
 	}
 
 	for _, tc := range tests {
@@ -98,6 +123,13 @@ func TestKataFCProbe(t *testing.T) {
 			t.Parallel()
 
 			root := mkFakeFS(t, tc.paths...)
+			if !tc.noContainerd {
+				handlers := tc.handlers
+				if handlers == nil {
+					handlers = []string{"kata-fc"}
+				}
+				writeStockContainerdConfig(t, root, handlers...)
+			}
 			p := newKataFCProbe(Config{FSRoot: root})
 
 			got := p.Check(context.Background())

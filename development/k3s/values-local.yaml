@@ -77,6 +77,12 @@ runtimeAgent:
   image:
     tag: "dev"
     pullPolicy: Never
+  # This cluster is k3s, so the containerd runtime-handler registrations the
+  # kata probes verify live under /var/lib/rancher/k3s/agent/etc/containerd
+  # (written by 20-install-kata.sh), not /etc/containerd. Without this mount
+  # the agent cannot see them and publishes no kata capability labels
+  # (setec#243).
+  mountK3sContainerdConfig: true
 
 # The portable installer DaemonSet (ADR-0003) is the chart's DEFAULT
 # node-prep path, but this dev cluster's node prep is kata-deploy-owned

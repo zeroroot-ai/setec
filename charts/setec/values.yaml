@@ -246,11 +246,22 @@ runtimeAgent:
   # on. Probes target this port.
   metricsPort: 8080
   # -- mountContainerdConfig toggles the read-only hostPath mount of
-  # /etc/containerd into the agent. The gvisor/runc probes peek at the
-  # containerd runtime config to confirm a handler is registered. Disable
-  # on nodes where /etc/containerd is locked down and false-negatives are
-  # acceptable.
+  # /etc/containerd into the agent. The kata probes REQUIRE it: a node is
+  # only labelled kata-capable when containerd registers the matching CRI
+  # runtime handler, and without the mount the agent cannot see the
+  # registration (setec#243). Turning this off on a stock-containerd node
+  # therefore stops that node advertising kata-fc / kata-qemu at all —
+  # which is the intended fail-closed answer, because an unverifiable
+  # handler produced `no runtime for "kata-qemu" is configured` on every
+  # pod sandbox. The mount is read-only and carries no secrets.
   mountContainerdConfig: true
+  # -- mountK3sContainerdConfig additionally mounts
+  # /var/lib/rancher/k3s/agent/etc/containerd read-only. k3s and RKE2 keep
+  # their containerd config there — /etc/containerd is not where the
+  # registrations live — so a k3s node needs this on for the kata probes to
+  # find its handlers. Off by default because the hostPath would otherwise
+  # be created on every stock-containerd node that has no k3s.
+  mountK3sContainerdConfig: false
 
 # -- installer configures the portable node installer DaemonSet (ADR-0003,
 # issue #187): given any x86 KVM-capable node it lays down the stock
