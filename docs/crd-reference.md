@@ -249,9 +249,14 @@ Administrators author classes; tenants reference them by name in
   Required unless the deprecated `spec.vmm` is present (in which case
   Setec's defaulting webhook translates it to `runtime.backend`).
 - `spec.runtime.fallback` — optional ordered list of backends to try
-  when `spec.runtime.backend` has no eligible Node. Example:
-  `[gvisor, runc]` under `backend: kata-fc` means "prefer microVM,
-  fall back to gvisor, then to runc on dev clusters".
+  when `spec.runtime.backend` has no eligible Node **but another
+  candidate does**. Example: `[gvisor, runc]` under `backend: kata-fc`
+  means "prefer microVM, fall back to gvisor, then to runc on dev
+  clusters". When *no* candidate has an eligible Node the requested
+  backend is kept and the Pod is created anyway — see
+  [`status.runtime.chosen`](#sandboxstatusruntimechosen) — because a
+  fallback with no capable Node is exactly as unschedulable as the
+  primary with no capable Node.
 - `spec.runtime.params` — optional backend-specific tuning (e.g.
   `kata-fc.snapshotEnabled: true`, `gvisor.platform: ptrace|kvm`).
   Schema validated by the `SandboxClass` webhook; empty keys default
