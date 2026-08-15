@@ -34,11 +34,14 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   policy-guards:
     name: policy-guards
-    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
   no-monorepo-shortcuts:
-    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
   runs-on-lint:
-    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main

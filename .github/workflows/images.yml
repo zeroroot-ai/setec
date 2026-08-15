@@ -45,13 +45,16 @@ on:
         default: ""
         description: Explicit version tag (e.g. v0.106.0) to add to every image.
 
+permissions:
+  contents: read
+
 concurrency:
   group: images-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write
@@ -71,7 +74,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write
@@ -91,7 +94,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write
@@ -111,7 +114,7 @@ jobs:
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write
@@ -131,7 +134,7 @@ jobs:
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write
@@ -151,7 +154,7 @@ jobs:
         CMD=setec-guest-agent
 
   setec-installer:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
     permissions:
       contents: write
       packages: write

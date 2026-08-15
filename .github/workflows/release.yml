@@ -14,8 +14,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   # Pre-build gate: for exact v0.1.0 tags only, refuse the release until
@@ -30,7 +29,7 @@ jobs:
     if: github.ref == 'refs/tags/v0.1.0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Verify smoke-test result file exists
         run: |
@@ -56,14 +55,16 @@ jobs:
     timeout-minutes: 10
     needs: [smoke-test-result-gate]
     if: always() && (needs.smoke-test-result-gate.result == 'success' || needs.smoke-test-result-gate.result == 'skipped')
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Create or update draft GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
