@@ -762,6 +762,11 @@ jobs:
 
       - name: Run the session lifecycle scenarios
         env:
+          # This job runs on an in-cluster ARC runner and the suite is
+          # destructive (helm install + namespace create before test one), so
+          # it states its intent explicitly. Without this the suite refuses to
+          # touch the cluster (setec#298).
+          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
           # Suite identity — see the E2E_NAMESPACE comment above.
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
@@ -851,6 +856,149 @@ jobs:
           kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
+              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
+            done
+          done
+
+  # ----------------------------------------------------------------------
+  # suites: the Go e2e scenarios that had no runner at all (setec#298).
+  #
+  # Before this job, `.github/workflows/e2e.yml` never invoked `go test`:
+  # it was a kubectl/helm shell round-trip, and `-tags=e2e` appeared only in
+  # the Makefile. The session-checkpoint job (#294) was the first Go e2e with
+  # a runner; everything else — phase2/phase3, runtime backends, egress
+  # confinement, the ADR-0005 invariants, the installer, the invariant gate,
+  # and the TestEnv_KVMPresent guard itself — ran only when a human remembered
+  # `make e2e` on a KVM box, and no such box exists any more (#161).
+  #
+  # Sizing (the issue asks for this to be deliberate rather than bolted on):
+  #
+  #   - ONE install, ONE runner pod, ONE metal node. The scenarios below all
+  #     run against a single throwaway release rather than a job each, because
+  #     the metal ceiling is one m5zn.metal (~$4/hr) by design.
+  #   - SHARES the session-checkpoint concurrency group. The two jobs would
+  #     otherwise contend for that single metal node and flake each other.
+  #     Serialising them costs wall-clock, not money, and money is the scarce
+  #     resource here.
+  #   - Scenarios needing a SECOND node or a cordon (the session drain case)
+  #     stay out; they are gated behind their own capacity variable.
+  #
+  # TestEnv_KVMPresent runs FIRST and deliberately: it is the guard that stops
+  # an incapable environment turning the rest of the suite into a green
+  # all-skip. It now asks the cluster (does any node carry the kata-fc
+  # capability label?) rather than stat'ing /dev/kvm on the runner, because
+  # under ARC the test binary and the microVM host are different machines.
+  # ----------------------------------------------------------------------
+  suites:
+    if: vars.STAGING_E2E_SUITES_READY == 'true'
+    needs: build-images
+    runs-on: staging-ephemeral
+    timeout-minutes: 60
+    concurrency:
+      # Deliberately the SAME group as session-checkpoint: one metal node.
+      group: setec-session-checkpoint-e2e
+      cancel-in-progress: false
+    env:
+      E2E_NAMESPACE: setec-e2e-suites
+      E2E_RELEASE: setec-e2e-suites
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+
+      - name: Install helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      - name: Preflight — a kata-fc-capable node exists
+        run: |
+          set -uo pipefail
+          if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
+            echo "::error::RuntimeClass kata-fc is absent; kata-deploy has not run on this cluster"
+            exit 1
+          fi
+          capable="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-fc=true \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
+          echo "kata-fc-capable nodes: ${capable}"
+          if [ "${capable}" -lt 1 ]; then
+            kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu || true
+            echo "::error::no node carries setec.zeroroot.ai/runtime.kata-fc=true — the suite would skip into a green run"
+            exit 1
+          fi
+
+      # Same reasoning as the session job: a previous run that died between
+      # install and cleanup leaves a release in the way.
+      - name: Reap a previous run's leftovers
+        run: |
+          set -uo pipefail
+          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
+          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
+          for kind in clusterrole clusterrolebinding; do
+            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
+              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
+            done
+          done
+
+      - name: Run the previously-unwired scenarios
+        env:
+          # In-cluster ARC runner + destructive suite: state the intent
+          # explicitly or the suite refuses to touch the cluster (setec#298).
+          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
+          SETEC_E2E_RUNTIMECLASS: kata-fc
+          SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
+          SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
+          SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
+          SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
+          SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+          # The chart's ValidatingWebhookConfiguration is CLUSTER-scoped with
+          # failurePolicy=Fail. On this SHARED cluster a run that dies before
+          # cleanup fails every Sandbox write cluster-wide until a human
+          # removes it. TestPhase2_WebhookRejects is therefore NOT in the
+          # -run set below; it needs an isolated cluster.
+          SETEC_E2E_WEBHOOK: "0"
+        run: |
+          # TestEnv_KVMPresent first: it is the guard that keeps an incapable
+          # environment from turning everything after it into a green all-skip.
+          go test -tags=e2e ./test/e2e/... -v -timeout 55m \
+            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|UpgradeFromPhase2|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSession_WorkspaceSurvivesPodKill)$' \
+            2>&1 | tee suites-e2e.log
+          status="${PIPESTATUS[0]}"
+          # A skipped scenario is not a verified scenario — the whole point of
+          # this issue. Surface every one so a green check is never mistaken
+          # for coverage it does not have.
+          {
+            echo "### e2e suites"
+            echo ''
+            grep -E '^(=== RUN|--- (PASS|FAIL|SKIP))' suites-e2e.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q -- '--- SKIP' suites-e2e.log; then
+            echo "::warning::one or more scenarios SKIPPED — see the job summary; this run did not verify them"
+          fi
+          exit "$status"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          set -uo pipefail
+          kubectl get sandboxes,sandboxclasses,pods -n "${E2E_NAMESPACE}" -o wide || true
+          kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp | tail -50 || true
+          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=200 --all-containers || true
+
+      - name: Cleanup (always)
+        if: always()
+        run: |
+          set -uo pipefail
+          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false || true
+          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          for kind in clusterrole clusterrolebinding; do
+            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done

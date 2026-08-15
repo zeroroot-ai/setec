@@ -33,6 +33,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -159,6 +160,20 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// Refuse to install into a cluster nobody asked for (setec#298).
+	//
+	// This TestMain does `helm install` + namespace create BEFORE any test
+	// runs, against whatever kubeconfig context happens to be current. Running
+	// `go test -tags=e2e ./test/e2e` on a laptop with a staging context loaded
+	// therefore installs a full setec release into staging — no flag, no
+	// prompt, no mention in the command. The suite is destructive by
+	// construction, so consent has to be explicit rather than implied by a
+	// context that was current for some unrelated reason.
+	if err := requireClusterConsent(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: %v\n", err)
+		os.Exit(1)
+	}
+
 	if err := preflight(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: preflight failed: %v\n", err)
 		os.Exit(1)
@@ -222,13 +237,13 @@ func loadSessionS3Config() (sessionS3Config, error) {
 		return sessionS3Config{}, nil
 	}
 	cfg := sessionS3Config{
-		enabled:           true,
-		bucket:            os.Getenv("SETEC_E2E_S3_BUCKET"),
-		region:            envOr("SETEC_E2E_S3_REGION", "us-east-1"),
-		prefix:            os.Getenv("SETEC_E2E_S3_PREFIX"),
-		endpoint:          os.Getenv("SETEC_E2E_S3_ENDPOINT"),
-		roleARN:           os.Getenv("SETEC_E2E_S3_ROLE_ARN"),
-		credentialsSecret: os.Getenv("SETEC_E2E_S3_CREDENTIALS_SECRET"),
+		enabled:            true,
+		bucket:             os.Getenv("SETEC_E2E_S3_BUCKET"),
+		region:             envOr("SETEC_E2E_S3_REGION", "us-east-1"),
+		prefix:             os.Getenv("SETEC_E2E_S3_PREFIX"),
+		endpoint:           os.Getenv("SETEC_E2E_S3_ENDPOINT"),
+		roleARN:            os.Getenv("SETEC_E2E_S3_ROLE_ARN"),
+		credentialsSecret:  os.Getenv("SETEC_E2E_S3_CREDENTIALS_SECRET"),
 		nodeAgentImageTag:  envOr("SETEC_E2E_NODE_AGENT_IMAGE_TAG", imageTag),
 		nodeAgentImageRepo: os.Getenv("SETEC_E2E_NODE_AGENT_IMAGE_REPO"),
 	}
@@ -307,6 +322,79 @@ func buildClient() error {
 	}
 	k8sClient = c
 	return nil
+}
+
+// requireClusterConsent refuses to run the destructive suite unless the caller
+// has named the cluster they intend to install into (setec#298).
+//
+// The suite installs a helm release and creates a namespace before the first
+// test executes. Consent is therefore required up front, and "the context was
+// already current" is not consent — that is how a routine `go test` run against
+// a laptop with staging loaded becomes an install into staging.
+//
+// Two ways to consent:
+//
+//   - SETEC_E2E_CONTEXT=<name> — the current kubeconfig context must match
+//     exactly. This is the form CI uses, and the form that makes a mistake
+//     impossible rather than merely unlikely.
+//   - SETEC_E2E_ALLOW_ANY_CLUSTER=1 — deliberate escape hatch for throwaway
+//     kind clusters, where pinning a generated context name is pointless.
+//
+// A run with neither set is refused with the current context named, so the
+// operator can see what they were about to install into.
+func requireClusterConsent() error {
+	// The explicit escape hatch, checked first because it is the only form
+	// available to an in-cluster caller (see below).
+	allowAny := os.Getenv("SETEC_E2E_ALLOW_ANY_CLUSTER") == "1"
+
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).RawConfig()
+	if err != nil {
+		return fmt.Errorf("read kubeconfig to verify the target cluster: %w", err)
+	}
+	current := raw.CurrentContext
+
+	// In-cluster (an ARC runner pod): there is no kubeconfig and therefore no
+	// context name to match, so SETEC_E2E_CONTEXT cannot express consent here.
+	// The pod's own ServiceAccount is the credential, and the pod was
+	// deliberately scheduled into this cluster by the workflow — but "the
+	// workflow scheduled me" is not the same as "the workflow intends a
+	// destructive install", so consent still has to be explicit.
+	if current == "" && os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		if allowAny {
+			fmt.Fprintln(os.Stderr, "e2e: in-cluster credentials, SETEC_E2E_ALLOW_ANY_CLUSTER=1 — proceeding")
+			return nil
+		}
+		return errors.New(
+			"refusing to run: using in-cluster credentials (no kubeconfig context to name), and this " +
+				"suite helm-installs a setec release and creates a namespace BEFORE the first test runs.\n" +
+				"A CI job that means to do that must say so:\n" +
+				"    SETEC_E2E_ALLOW_ANY_CLUSTER: \"1\"")
+	}
+
+	if want := os.Getenv("SETEC_E2E_CONTEXT"); want != "" {
+		if current != want {
+			return fmt.Errorf(
+				"refusing to run: SETEC_E2E_CONTEXT=%q but the current kubeconfig context is %q.\n"+
+					"This suite helm-installs and creates a namespace before any test runs; "+
+					"it will not do that to a cluster you did not name.", want, current)
+		}
+		return nil
+	}
+
+	if allowAny {
+		fmt.Fprintf(os.Stderr, "e2e: SETEC_E2E_ALLOW_ANY_CLUSTER=1 — installing into context %q\n", current)
+		return nil
+	}
+
+	return fmt.Errorf(
+		"refusing to run against context %q: this suite is destructive — it helm-installs a "+
+			"setec release and creates a namespace BEFORE the first test runs.\n"+
+			"Name the cluster you mean:\n"+
+			"    SETEC_E2E_CONTEXT=%s go test -tags=e2e ./test/e2e/...\n"+
+			"or, for a throwaway kind cluster:\n"+
+			"    SETEC_E2E_ALLOW_ANY_CLUSTER=1 go test -tags=e2e ./test/e2e/...",
+		current, current)
 }
 
 // preflight verifies the environment has the tools and cluster features the
