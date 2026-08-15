@@ -1100,12 +1100,24 @@ jobs:
           # cleanup fails every Sandbox write cluster-wide until a human
           # removes it. TestPhase2_WebhookRejects is therefore NOT in the
           # -run set below; it needs an isolated cluster.
+          #
+          # TestSandbox_ZZ_NoRuntimeClass is out for the same class of reason
+          # and is worth naming separately: it DELETES the cluster-scoped
+          # kata-fc RuntimeClass and restores it in t.Cleanup. On a shared
+          # cluster that breaks the live setec release and every other kata
+          # workload for the duration — and permanently if the run dies before
+          # its cleanup. Isolated cluster only.
           SETEC_E2E_WEBHOOK: "0"
         run: |
+          # TestPhase3_UpgradeFromPhase2 is NOT in the -run set below: its body
+          # is empty apart from the cluster guard, so it asserts nothing and
+          # would contribute a PASS line that means nothing. Listing it would
+          # be faking coverage, which is the thing setec#298 is about. Tracked
+          # separately (setec#318).
           # TestEnv_KVMPresent first: it is the guard that keeps an incapable
           # environment from turning everything after it into a green all-skip.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|UpgradeFromPhase2|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSession_WorkspaceSurvivesPodKill)$' \
+            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_WorkspaceSurvivesPodKill)$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of
