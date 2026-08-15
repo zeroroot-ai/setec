@@ -330,10 +330,10 @@ func (s *LeaseService) streamExec(ctx context.Context, ns, name string, stream s
 	if s.Clientset != nil {
 		podName := name + "-vm"
 		if waitErr := s.waitLoggable(ctx, ns, podName); waitErr == nil {
-			logStream, err := s.Clientset.CoreV1().
-				Pods(ns).
-				GetLogs(podName, &corev1.PodLogOptions{Follow: true, Container: workloadContainerName}).
-				Stream(ctx)
+			// Same fallback as StreamLogs (setec#263): a short exec
+			// often exits before the attach lands, and a refused
+			// follow attach must not cost the caller its output.
+			logStream, err := openWorkloadLogs(ctx, clientsetLogOpener(s.Clientset), ns, podName, true)
 			if err == nil {
 				_ = relayExecLogs(ctx, logStream, stream)
 				_ = logStream.Close()

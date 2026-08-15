@@ -280,6 +280,15 @@ Semantics:
   exits or the client cancels. When the Pod has not yet reached a
   loggable phase, the server polls for up to 30 seconds before
   returning `FAILED_PRECONDITION`.
+- A finished workload still yields its output. A Sandbox that runs to
+  completion faster than the caller can attach has nothing left to
+  follow, so `follow=true` is served as a completed-log read of the
+  terminated container. If the container exits between the status read
+  and the attach — the attach is then refused — the server falls back
+  to the same completed-log read instead of failing the RPC. A follow
+  stream that breaks mid-flight is resumed from the terminated
+  container's log at the line the caller last received, so partial
+  output is neither lost nor duplicated.
 - Tenant scope is enforced: a caller whose resolved namespace does not
   match the sandbox's namespace gets `PERMISSION_DENIED`.
 - A missing Sandbox returns `NOT_FOUND`; a Sandbox whose Pod has not
