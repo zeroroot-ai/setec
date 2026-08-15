@@ -558,3 +558,156 @@ jobs:
       - name: run govulncheck on examples/${{ matrix.example }}
         working-directory: examples/${{ matrix.example }}
         run: govulncheck ./...
+
+  # ---------------------------------------------------------------------------
+  # Gates moved in from their own workflow files so `ci-required` can cover them.
+  # ---------------------------------------------------------------------------
+  # `needs:` cannot cross workflow files, so every gate that the single required
+  # context must cover has to be defined here. Moving a job between files does
+  # NOT rename its check run: a check-run's context is the JOB name (or
+  # `<caller-job> / <reusable-job>` for a reusable call) and the workflow file
+  # name is not part of it. So `policy-guards / vault-auth-method-deny-list` --
+  # the context named in setec-required-checks, and the one empirically verified
+  # to report correctly under merge_group org-wide -- still reports under
+  # exactly that name. Do not rename these job ids.
+
+  # ---- from policy-guards.yml ----
+  # Behaviour change, deliberate: the old file carried
+  # `types: [opened, edited, synchronize, reopened, ready_for_review]`, copied
+  # from the pr-title-lint template. These guards read SOURCE, not PR metadata,
+  # so re-running them when a description is edited was waste, and
+  # `ready_for_review` is moot under a no-drafts policy (AGENTS.md ss4).
+  policy-guards:
+    name: policy-guards
+    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+  no-monorepo-shortcuts:
+    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+  runs-on-lint:
+    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+
+  # ---- from no-secrets-in-snapshot.yml ----
+  # Gains the merge_group lane by moving here, which is the point: it was
+  # `pull_request` + `push:main`, and a push-to-main run has nothing left to
+  # block. Pre-merge is where a scan gate has to be able to say no. The job is
+  # self-contained (unit tests + two self-tests + an optional artifact scan),
+  # so it needs no e2e snapshot to be present and behaves identically in the
+  # queue.
+  scan-gate:
+    name: no-secrets-in-snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit-test the secret detector
+        run: go test ./internal/snapshot/secretscan/... ./cmd/setec-snapshot-scan/...
+
+      - name: Build the snapshot scan gate
+        run: go build -o bin/setec-snapshot-scan ./cmd/setec-snapshot-scan
+
+      - name: Self-test — a leaky artifact MUST be rejected
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          printf 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIabc1234567890abcdEXAMPLEKEY12\n' > "$tmp/memory.bin"
+          if bin/setec-snapshot-scan "$tmp"; then
+            echo "::error::scan gate PASSED a known-leaky artifact — the gate is broken"
+            exit 1
+          fi
+          echo "scan gate correctly rejected the leaky fixture"
+
+      - name: Self-test — a clean artifact MUST pass
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          printf 'PORT=8080\nLOG_LEVEL=info\nbenign state\n' > "$tmp/state.bin"
+          bin/setec-snapshot-scan "$tmp"
+          echo "scan gate correctly accepted the clean fixture"
+
+      - name: Scan produced snapshot artifacts (if any)
+        run: |
+          set -euo pipefail
+          dir="${SETEC_SNAPSHOT_ARTIFACTS:-./.snapshot-artifacts}"
+          if [ -d "$dir" ]; then
+            echo "scanning snapshot artifacts under $dir"
+            bin/setec-snapshot-scan "$dir"
+          else
+            echo "no snapshot-artifact directory at $dir; nothing further to scan"
+          fi
+
+  # ---- the aggregator's own regression suite ----
+  # ci-required is the one thing standing between a red gate and main, so its
+  # logic is mutation-tested rather than asserted, and the suite is itself one
+  # of ci-required's dependencies.
+  ci-required-selftest:
+    name: ci-required-selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Mutation-test the aggregation logic
+        run: bash scripts/__tests__/ci-required-gate.test.sh
+
+      - name: Every gate job is covered by ci-required's needs
+        run: bash scripts/check-ci-required-coverage.sh .github/workflows/go-ci.yml
+
+  # ---- THE required status check ----
+  # setec-required-checks gated on two contexts while twenty jobs ran, so
+  # `Unit + envtest`, `Proto WIRE-breaking gate`, `Manifests up-to-date`,
+  # `Helm lint` and the rest could each report red without stopping a merge.
+  # Widening that list is not the fix: it lives in zeroroot-ai/.github
+  # (`rulesets/repo/setec.json`), a different repo from the workflows it names,
+  # so it falls behind on the first gate anyone adds. One context that `needs:`
+  # everything keeps both halves in this file.
+  #
+  # `if: always()` is mandatory, not stylistic: GitHub skips a `needs:` job
+  # whenever ANY dependency is skipped, and these gates are lane-split by design
+  # (most are pull_request-only, `heavy`/`test`/`examples-govulncheck` are
+  # merge_group-only), so without it this job would vanish on every run. An
+  # ABSENT required context does not fail the PR — it freezes merge-queue entry,
+  # which is strictly worse than a red check (.github#202).
+  #
+  # `${{ toJSON(needs) }}` rather than a hand-written job list: the script then
+  # cannot skip a dependency that IS listed here. The opposite risk — a gate job
+  # never listed here at all — is what ci-required-selftest's coverage check is
+  # for. See scripts/ci-required-gate.sh for the rest of the reasoning.
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - fast
+      - heavy
+      - lint
+      - proto-breaking
+      - test
+      - manifests-up-to-date
+      - proto-up-to-date
+      - helm-lint
+      - docker-build
+      - flag-smoke-test
+      - link-check
+      - no-marker-in-source
+      - no-insecure-flag-in-chart
+      - no-unimplemented-in-frontend
+      - examples-build
+      - examples-govulncheck
+      - policy-guards
+      - no-monorepo-shortcuts
+      - runs-on-lint
+      - scan-gate
+      - ci-required-selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Evaluate every gate result
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        run: bash scripts/ci-required-gate.sh
