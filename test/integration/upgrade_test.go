@@ -96,9 +96,13 @@ func TestMain(m *testing.M) {
 		// KUBEBUILDER_ASSETS was empty, relative, or stale.
 		//
 		// SETEC_SKIP_ENVTEST=1 is the deliberate opt-out; CI sets nothing.
-		if os.Getenv("SETEC_SKIP_ENVTEST") == "1" {
+		// Same lane detection as internal/controller (setec#302): an unset
+		// KUBEBUILDER_ASSETS means this is the generic unit tier, not the
+		// envtest lane. Set-but-broken is fatal.
+		if os.Getenv("SETEC_SKIP_ENVTEST") == "1" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
 			fmt.Fprintf(os.Stderr,
-				"integration: envtest start failed (%v); SETEC_SKIP_ENVTEST=1 is set, skipping this package.\n",
+				"integration: envtest start failed (%v); not the envtest lane (KUBEBUILDER_ASSETS unset) "+
+					"or SETEC_SKIP_ENVTEST=1 — skipping this package.\n",
 				startErr)
 			os.Exit(0)
 		}

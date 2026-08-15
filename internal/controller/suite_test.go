@@ -239,13 +239,24 @@ func TestMain(m *testing.M) {
 		// is indistinguishable from a pass to a human scanning output and to
 		// anything keying on the exit code, so the gate could not fail.
 		//
-		// SETEC_SKIP_ENVTEST=1 is the deliberate opt-out for running the
-		// non-envtest packages on a machine without the binaries. CI sets
-		// nothing, so CI can only be green if these tests actually ran.
-		if os.Getenv("SETEC_SKIP_ENVTEST") == "1" {
+		// Two ways to legitimately not run here, and neither can hide a
+		// broken envtest lane:
+		//
+		//  1. SETEC_SKIP_ENVTEST=1 — explicit opt-out.
+		//  2. KUBEBUILDER_ASSETS unset — this is not the envtest lane at all.
+		//     The org-wide `fast` tier (reusable-go-ci.yml) runs a generic
+		//     `go test ./...` and never installs envtest binaries; failing it
+		//     would block every PR on a lane that was never meant to run
+		//     these tests.
+		//
+		// The lane that IS meant to run them is `make test`, which resolves
+		// KUBEBUILDER_ASSETS to an absolute path and asserts an executable
+		// etcd is there BEFORE invoking go test. So "assets absent" cannot
+		// occur in that lane, and "assets present but envtest won't start" —
+		// the setec#302 case, a relative or stale path — is fatal below.
+		if skip, why := envtestOptOut(); skip {
 			fmt.Fprintf(os.Stderr,
-				"controller: envtest start failed (%v); SETEC_SKIP_ENVTEST=1 is set, skipping this package.\n",
-				err)
+				"controller: envtest start failed (%v); %s — skipping this package.\n", err, why)
 			os.Exit(0)
 		}
 		fmt.Fprintf(os.Stderr,
