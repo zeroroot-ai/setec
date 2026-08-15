@@ -19,6 +19,7 @@ package installer
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,14 +60,7 @@ func TestFirecrackerPathMatchesLauncherDefault(t *testing.T) {
 
 	// It must also be one of the artifacts the installer verifies on-host,
 	// otherwise a missing binary would not be caught at install time.
-	found := false
-	for _, a := range requiredKataArtifacts {
-		if a == firecracker.HostBinaryPath {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.Contains(requiredKataArtifacts, firecracker.HostBinaryPath) {
 		t.Fatalf("firecracker path %q is not in requiredKataArtifacts, so the "+
 			"installer would not notice it missing on the host",
 			firecracker.HostBinaryPath)
