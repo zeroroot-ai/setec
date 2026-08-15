@@ -126,10 +126,35 @@ setec.zeroroot.ai/runtime.gvisor=true
 setec.zeroroot.ai/runtime.runc=true
 ```
 
-Absent a backend's prerequisites, the corresponding label is NOT written
-(not set to `false`). The scheduler uses these labels to pick the
-highest-isolation backend each `Sandbox` can run on, per the
-`SandboxClass` fallback chain. Check node capabilities:
+Absent a backend's prerequisites the label reads `false`, and a backend the
+agent no longer probes has its label removed. Only `true` counts as capable.
+The scheduler uses these labels to pick the highest-isolation backend each
+`Sandbox` can run on, per the `SandboxClass` fallback chain.
+
+For the two Kata backends, host hardware is a necessary condition, not a
+sufficient one. The agent also verifies that containerd on the node
+registers the matching CRI runtime handler — a
+`[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-qemu]` table
+in `/etc/containerd/config.toml`, one of its drop-in directories, or the
+k3s equivalent under `/var/lib/rancher/k3s/agent/etc/containerd`. A node
+with KVM but no handler cannot run a single `Sandbox`: every pod sandbox
+fails with `no runtime for "kata-qemu" is configured`. Such a node reports
+`false`, so the operator holds the `Sandbox` in `Pending` instead of
+scheduling it onto a node that will reject it.
+
+The agent reads those files through the read-only host mounts the chart
+gives it: `runtimeAgent.mountContainerdConfig` (on by default) and, on k3s
+or RKE2, `runtimeAgent.mountK3sContainerdConfig`. With neither mounted the
+handler cannot be verified and the Kata labels stay `false`. The full probe
+outcome, including which config files were scanned, is published on the
+Node as the `setec.zeroroot.ai/runtime-probe` annotation:
+
+```bash
+kubectl get node <name> \
+  -o jsonpath='{.metadata.annotations.setec\.zeroroot\.ai/runtime-probe}'
+```
+
+Check node capabilities:
 
 ```bash
 kubectl get nodes \

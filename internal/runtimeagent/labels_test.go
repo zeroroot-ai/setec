@@ -315,3 +315,64 @@ func TestBuildResultJSON_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestApply_PrunesStaleCapabilityLabels is the setec#243 regression test for
+// the other half of an optimistic label: one the agent stops writing.
+//
+// A backend disabled in the RuntimeConfig drops out of the probe list, so
+// nothing overwrites its label — the Node would keep advertising the last
+// value it ever had, and the operator would keep steering Sandboxes at a
+// capability no probe has confirmed since. Apply must delete it.
+func TestApply_PrunesStaleCapabilityLabels(t *testing.T) {
+	t.Parallel()
+
+	node := newNode(map[string]string{
+		labelPrefix + "kata-fc":   testLabelTrue,
+		labelPrefix + "kata-qemu": testLabelTrue,
+		"example.com/foo":         "bar",
+	})
+	c := newFakeClient(t, node)
+
+	// This cycle probes only kata-qemu (kata-fc has been disabled).
+	results := []probe.CapabilityResult{{Backend: "kata-qemu", Available: true}}
+	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	got := getNode(t, c)
+	if _, ok := got.Labels[labelPrefix+"kata-fc"]; ok {
+		t.Errorf("stale label %q survived; labels = %v", labelPrefix+"kata-fc", got.Labels)
+	}
+	if got.Labels[labelPrefix+"kata-qemu"] != testLabelTrue {
+		t.Errorf("probed label %q = %q, want %q",
+			labelPrefix+"kata-qemu", got.Labels[labelPrefix+"kata-qemu"], testLabelTrue)
+	}
+	if got.Labels["example.com/foo"] != "bar" {
+		t.Errorf("Apply removed a label outside its prefix; labels = %v", got.Labels)
+	}
+}
+
+// TestApply_UnavailableBackendLabelIsFalse pins the value the operator's node
+// affinity keys on: selectRuntime counts a node as capable only when the label
+// reads exactly "true", so an unavailable backend must publish "false" rather
+// than any other value.
+func TestApply_UnavailableBackendLabelIsFalse(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeClient(t, newNode(map[string]string{labelPrefix + "kata-qemu": testLabelTrue}))
+
+	results := []probe.CapabilityResult{{
+		Backend:   "kata-qemu",
+		Available: false,
+		Reason:    `containerd has no runtime handler "kata-qemu" configured`,
+	}}
+	if err := Apply(context.Background(), c, testNodeName, results); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	got := getNode(t, c)
+	if got.Labels[labelPrefix+"kata-qemu"] != testLabelFalse {
+		t.Errorf("label %q = %q, want %q",
+			labelPrefix+"kata-qemu", got.Labels[labelPrefix+"kata-qemu"], testLabelFalse)
+	}
+}

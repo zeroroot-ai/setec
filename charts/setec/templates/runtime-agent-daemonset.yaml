@@ -130,6 +130,11 @@ spec:
               mountPath: /host/etc/containerd
               readOnly: true
             {{- end }}
+            {{- if .Values.runtimeAgent.mountK3sContainerdConfig }}
+            - name: host-k3s-containerd
+              mountPath: /host/var/lib/rancher/k3s/agent/etc/containerd
+              readOnly: true
+            {{- end }}
       volumes:
         - name: runtimes-config
           configMap:
@@ -154,6 +159,19 @@ spec:
         - name: host-etc-containerd
           hostPath:
             path: /etc/containerd
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- /* k3s/RKE2 keep the containerd config outside /etc/containerd.
+        The kata probes read the runtime-handler registrations from it, so a
+        k3s node that does not mount this advertises no kata capability at
+        all (setec#243). DirectoryOrCreate rather than Directory: the value
+        is only turned on for k3s clusters, and a node mid-install may not
+        have rendered the directory yet — a missing path with type Directory
+        would leave the DaemonSet Pod stuck instead of probing. */}}
+        {{- if .Values.runtimeAgent.mountK3sContainerdConfig }}
+        - name: host-k3s-containerd
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/etc/containerd
             type: DirectoryOrCreate
         {{- end }}
       terminationGracePeriodSeconds: 10

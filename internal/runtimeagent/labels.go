@@ -85,7 +85,10 @@ const labelPrefix = LabelPrefix
 //
 // Apply only touches labels whose keys begin with labelPrefix plus the
 // single ResultAnnotation key — it never removes or modifies other labels
-// or annotations already present on the Node. That restraint is mirrored
+// or annotations already present on the Node. Within its own prefix it
+// reconciles rather than merges: a capability label for a backend this
+// cycle did not probe is deleted, not left behind (see pruneStaleLabels).
+// That restraint is mirrored
 // by the admission policy the chart installs, so a build of this agent
 // that stopped honouring it would be rejected by the API server rather
 // than trusted.
@@ -121,6 +124,7 @@ func Apply(
 	for _, r := range results {
 		node.Labels[labelPrefix+r.Backend] = boolLabel(r.Available)
 	}
+	pruneStaleLabels(node.Labels, results)
 	node.Annotations[ResultAnnotation] = detail
 
 	// Nothing to say: skip the write entirely rather than emit a patch the
@@ -135,6 +139,34 @@ func Apply(
 		return fmt.Errorf("runtimeagent: patch Node metadata %q: %w", nodeName, err)
 	}
 	return nil
+}
+
+// pruneStaleLabels deletes every Setec runtime capability label whose backend
+// this probe cycle did not report on.
+//
+// A label the agent stops writing is not neutral — it keeps advertising its
+// last value forever, and the operator has no way to tell a stale "true" from
+// a fresh one. That happens whenever the set of probed backends shrinks: an
+// operator disables a backend in the RuntimeConfig (the agent filters its
+// probe list from it), or an upgrade drops one. The node then keeps steering
+// Sandboxes onto a capability nothing has confirmed since (setec#243).
+//
+// Only keys under labelPrefix are touched, which is exactly the set the
+// chart's ValidatingAdmissionPolicy permits the agent to add, change or
+// remove.
+func pruneStaleLabels(labels map[string]string, results []probe.CapabilityResult) {
+	reported := make(map[string]struct{}, len(results))
+	for _, r := range results {
+		reported[r.Backend] = struct{}{}
+	}
+	for key := range labels {
+		if !strings.HasPrefix(key, labelPrefix) {
+			continue
+		}
+		if _, ok := reported[strings.TrimPrefix(key, labelPrefix)]; !ok {
+			delete(labels, key)
+		}
+	}
 }
 
 // boolLabel renders a capability result as the label value the operator's
