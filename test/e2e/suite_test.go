@@ -519,6 +519,33 @@ func installChart() error {
 		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
 		// with the locally-built installer image.
 		"--set", "installer.enabled=false",
+		// WITHOUT THIS THE CHART DOES NOT RENDER AT ALL. setec#157 made
+		// `sandboxNamespaces` mandatory unless this is set, and the suite
+		// cannot supply that list: it creates its tenant namespaces from the
+		// test bodies at run time (createTenantNamespace — p3-roundtrip,
+		// p2-quota-a, …), so there is nothing to name at install time. This
+		// is the chart's documented deliberate opt-out and the same one the
+		// roundtrip job takes, scoped to a throwaway release that is
+		// uninstalled at the end of the run.
+		//
+		// The suite has not rendered since setec#157 landed; nothing caught
+		// it because nothing ran the suite (setec#298).
+		"--set", "rbac.allowClusterWideSandboxWrite=true",
+		// WITHOUT THIS THE SUITE IS A GREEN ALL-SKIP. phase3Enabled() greps
+		// the operator Deployment for `--snapshots-enabled`, which the chart
+		// only renders under snapshots.enabled. Left off, every Phase 3
+		// scenario calls t.Skip — including BOTH ADR-0005 invariants
+		// (TestPhase3_RestoredClonesDivergeInRNG,
+		// TestPhase3_RestoredClonesHaveUniqueIdentity) and
+		// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS
+		// having verified none of them. That is precisely the failure mode
+		// TestEnv_KVMPresent exists to prevent, arriving through a different
+		// door.
+		//
+		// This is local snapshot storage only. The S3 checkpoint backend is
+		// a separate axis and stays behind SETEC_E2E_S3 (setec#194/#296),
+		// which sets this same flag among others.
+		"--set", "snapshots.enabled=true",
 		"--wait",
 		"--timeout", "5m",
 	}
