@@ -63,7 +63,17 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+# KUBEBUILDER_ASSETS is resolved at RECIPE time, not with $(shell ...) at parse
+# time: the parse-time form ran before the setup-envtest prerequisite and
+# silently produced an empty (or relative) path, which made envtest fail to exec
+# etcd. The suites now fail loudly on that (setec#302), and this resolves it
+# correctly in the first place. `abspath` because a relative KUBEBUILDER_ASSETS
+# breaks the moment a test binary runs from its own package directory.
+	@set -eu; \
+	assets="$$("$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)"; \
+	case "$$assets" in /*) ;; *) assets="$(CURDIR)/$$assets" ;; esac; \
+	[ -x "$$assets/etcd" ] || { echo "KUBEBUILDER_ASSETS=$$assets has no executable etcd; run 'make setup-envtest'" >&2; exit 1; }; \
+	KUBEBUILDER_ASSETS="$$assets" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # End-to-end test suite. Gated behind the `e2e` build tag so the tests are
 # skipped from `make test` and `go test ./...` on GitHub-hosted runners (which
