@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
@@ -74,7 +74,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
@@ -94,7 +94,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
@@ -114,7 +114,7 @@ jobs:
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
@@ -134,7 +134,7 @@ jobs:
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
@@ -154,7 +154,7 @@ jobs:
         CMD=setec-guest-agent
 
   setec-installer:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
       contents: write
       packages: write
