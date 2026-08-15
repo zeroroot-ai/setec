@@ -107,8 +107,20 @@ guard-credentials: ## Fail if an mTLS credential is built outside internal/crede
 
 .PHONY: e2e
 e2e: ## Run the hardware-gated e2e suite (requires KVM + Kata on the host).
+# This suite is DESTRUCTIVE: it helm-installs a setec release and creates a
+# namespace before the first test runs, against whatever kubeconfig context is
+# current. It therefore refuses to run unless you name the cluster you mean
+# (setec#298):
+#
+#     SETEC_E2E_CONTEXT=<kubectl context> make e2e     # named cluster
+#     SETEC_E2E_ALLOW_ANY_CLUSTER=1 make e2e           # throwaway kind cluster
+#
+# Both are passed through below; setting neither makes the suite exit with the
+# current context named, rather than installing into it.
 	SETEC_E2E_CHART="$(SETEC_E2E_CHART)" \
 	SETEC_E2E_RUNTIMECLASS="$(SETEC_E2E_RUNTIMECLASS)" \
+	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
+	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
 	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT)
 
 .PHONY: lint
