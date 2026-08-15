@@ -185,7 +185,7 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` \| `Paused` \| `Snapshotting` \| `Restoring` \| `Suspended` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. `Suspended` (session + class `sessionCheckpoint` only, setec#194) means the microVM was checkpointed to the portable store and released; no Pod exists while suspended, and the workspace PVC plus the checkpoint survive. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, ADR-0006), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`; on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, ADR-0006), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
@@ -221,6 +221,26 @@ deletes the backing Pod; status converges to `Failed` with
 
 Terminal phases are absorbing — once `Completed` or `Failed`, the Sandbox
 stays there until deleted.
+
+### Orphaned Sandboxes (`ClassNotFound`)
+
+A Sandbox whose `spec.sandboxClassName` does not resolve follows a bounded
+three-stage ramp instead of waiting forever (setec#299):
+
+| Age | State | Why |
+| --- | --- | --- |
+| < 5m | `Pending` / `ClassNotFound` | The only transient case: the Sandbox and its class were created together and the operator's cache has not observed the class yet. |
+| ≥ 5m | `Failed` / `ClassNotFound` (terminal) | The class was never created, or it was deleted. No amount of waiting brings it back, and no Pod is ever built, so nothing is unschedulable and no autoscaler reacts. |
+| ≥ 1h 5m | deleted | An orphan holds no result and never ran. Nothing else can collect it — Kubernetes garbage collection needs an in-cluster owner, and an orphan has none. |
+
+Deletion is deliberately aimed only at that population: terminal, reason
+`ClassNotFound`, and the class still unresolvable on the reconcile that
+collects it. A Sandbox that reached `Completed`, or `Failed` for any other
+reason, is never touched by this path — it carries a result its creator owns,
+and its class being cleaned up afterwards says nothing about it.
+
+Each stage records a Warning Event, so `kubectl describe sandbox` explains a
+genuine misconfiguration for the whole hour before the object is collected.
 
 ## kubectl usage
 
