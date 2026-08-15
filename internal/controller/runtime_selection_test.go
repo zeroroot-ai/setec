@@ -23,7 +23,8 @@ limitations under the License.
 //  2. Fallback: class wants kata-qemu (no capable node), fallback to gvisor
 //     (node has gvisor label) → Selection.Backend=gvisor, FellBack=true.
 //  3. Exhaustion: class wants runc, no capable node → Sandbox patched to
-//     Failed with Reason=NoEligibleNode, ErrNoEligibleRuntime returned.
+//     Pending with Reason=NoEligibleNode, ErrNoEligibleRuntime returned,
+//     and the same Sandbox selects successfully once a capable node joins.
 package controller
 
 import (
@@ -240,9 +241,13 @@ func TestSelectRuntime_Fallback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSelectRuntime_Exhaustion verifies that when no capable node exists for
-// the requested backend (runc) and there is no fallback, selectRuntime
-// transitions the Sandbox to Failed with Reason=NoEligibleNode and returns
+// the requested backend (runc) and there is no fallback, selectRuntime holds
+// the Sandbox in Pending with Reason=NoEligibleNode and returns
 // ErrNoEligibleRuntime.
+//
+// Pending, not Failed: on a scale-to-zero node pool this is the normal
+// starting state, and Failing here made scale-from-zero impossible — the
+// Sandbox died before any Pod existed to trigger the scale-up (setec#230).
 func TestSelectRuntime_Exhaustion(t *testing.T) {
 	g := NewWithT(t)
 
@@ -273,11 +278,60 @@ func TestSelectRuntime_Exhaustion(t *testing.T) {
 	g.Expect(errors.Is(err, runtimepkg.ErrNoEligibleRuntime)).To(BeTrue(),
 		"expected ErrNoEligibleRuntime, got: %v", err)
 
-	// Sandbox should have been transitioned to Failed with NoEligibleNode.
+	// Sandbox waits in Pending with NoEligibleNode — never terminal.
 	var updated setecv1alpha1.Sandbox
 	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &updated)).To(Succeed())
-	g.Expect(updated.Status.Phase).To(Equal(setecv1alpha1.SandboxPhaseFailed))
-	g.Expect(updated.Status.Reason).To(Equal("NoEligibleNode"))
+	g.Expect(updated.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
+	g.Expect(updated.Status.Reason).To(Equal(eventReasonNoEligibleNode))
+}
+
+// TestSelectRuntime_ExhaustionRecoversWhenANodeAppears is the scale-from-zero
+// case end to end: the Sandbox that could not be placed is still selectable
+// once a capable node joins, with no user action and no new Sandbox.
+//
+// A terminal Failed phase could not express this — the object was done. The
+// same reconciler call now succeeds against the same Sandbox object and
+// writes status.runtime.chosen.
+func TestSelectRuntime_ExhaustionRecoversWhenANodeAppears(t *testing.T) {
+	g := NewWithT(t)
+
+	cfg := &runtimepkg.RuntimeConfig{
+		Runtimes: map[string]runtimepkg.BackendConfig{
+			runtimepkg.BackendRunc: emptyOverheadConfig("runc"),
+		},
+		Defaults: runtimepkg.DefaultsConfig{
+			Runtime: runtimepkg.RuntimeDefaults{Backend: runtimepkg.BackendRunc},
+		},
+	}
+	reg := runtimepkg.NewRegistry()
+	reg.Register(runtimepkg.NewRuncDispatcher(cfg.Runtimes[runtimepkg.BackendRunc]))
+
+	cls := newSandboxClassForRS("scale-from-zero-class", runtimepkg.BackendRunc, nil)
+	sb := newSandboxForRS(cls.Name)
+
+	// Start with an empty pool: no node carries any capability label.
+	r, c := newRSReconciler(t, reg, cfg, cls, sb)
+
+	sel, err := r.selectRuntime(context.Background(), sb, cls)
+	g.Expect(sel).To(BeNil())
+	g.Expect(errors.Is(err, runtimepkg.ErrNoEligibleRuntime)).To(BeTrue(),
+		"expected ErrNoEligibleRuntime, got: %v", err)
+
+	var pending setecv1alpha1.Sandbox
+	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &pending)).To(Succeed())
+	g.Expect(pending.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
+	g.Expect(pending.Status.Reason).To(Equal(eventReasonNoEligibleNode))
+
+	// The autoscaler provisions a capable node.
+	capable := newNodeWithLabels("runc-node", map[string]string{
+		"setec.zeroroot.ai/runtime.runc": "true",
+	})
+	g.Expect(c.Create(context.Background(), capable)).To(Succeed())
+
+	sel, err = r.selectRuntime(context.Background(), sb, cls)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(sel).ToNot(BeNil())
+	g.Expect(sel.Backend).To(Equal(runtimepkg.BackendRunc))
 }
 
 // ---------------------------------------------------------------------------

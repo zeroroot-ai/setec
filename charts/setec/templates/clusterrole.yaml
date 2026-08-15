@@ -46,6 +46,10 @@ rules:
       - get
       - list
       - watch
+  # watch is not optional alongside list: the manager's cache establishes a
+  # WATCH for every typed object the controller reads, so without it the
+  # RuntimeClass informer retries forever and logs
+  # `Failed to watch *v1.RuntimeClass ... forbidden` on a loop (setec#230).
   - apiGroups:
       - node.k8s.io
     resources:
@@ -53,6 +57,7 @@ rules:
     verbs:
       - get
       - list
+      - watch
   - apiGroups:
       - setec.zeroroot.ai
     resources:
