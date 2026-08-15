@@ -29,10 +29,15 @@ import (
 // unchanged; the shim symlink gives containerd's runtime_type
 // "io.containerd.kata-fc.v2" a containerd-shim-kata-fc-v2 on PATH,
 // exactly as kata-deploy and the packer AMI do.
+//
+// The shim is the ONLY kata binary this step links. kata-deploy also
+// lays down a /usr/local/bin/kata-runtime CLI link, but the kata-fc
+// handler never invokes that binary and setec no longer ships it in the
+// installer payload, so linking it would only leave a dangling symlink
+// on every host (ensureSymlink does not stat the target).
 const (
 	kataHostDir  = "/opt/kata"
 	kataShimLink = "/usr/local/bin/containerd-shim-kata-fc-v2"
-	kataCLILink  = "/usr/local/bin/kata-runtime"
 
 	kataShimBin = "/opt/kata/bin/containerd-shim-kata-v2"
 	kataFCBin   = "/opt/kata/bin/firecracker"
@@ -111,17 +116,12 @@ func (in *Installer) ensureKataPayload() (bool, error) {
 		changed = true
 	}
 
-	// kata-deploy-parity shim + CLI symlinks.
-	for link, target := range map[string]string{
-		kataShimLink: kataShimBin,
-		kataCLILink:  "/opt/kata/bin/kata-runtime",
-	} {
-		linkChanged, err := ensureSymlink(in.hostPath(link), target)
-		if err != nil {
-			return changed, err
-		}
-		changed = changed || linkChanged
+	// kata-deploy-parity shim symlink.
+	linkChanged, err := ensureSymlink(in.hostPath(kataShimLink), kataShimBin)
+	if err != nil {
+		return changed, err
 	}
+	changed = changed || linkChanged
 
 	// Final on-host sanity: everything the handler needs must exist now.
 	for _, artifact := range requiredKataArtifacts {

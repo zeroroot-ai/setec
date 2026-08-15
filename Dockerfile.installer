@@ -36,8 +36,8 @@ FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9
 # Pinned kata release + digest. To bump: download the new
 # kata-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
 # (and the packer AMI pin if you want the profiles to match).
-ARG KATA_VERSION=3.28.0
-ARG KATA_SHA256=99cefb46d70bc27b7bcffd7595be9010c6bed43e1cdfcf8078554c19e7c9b19d
+ARG KATA_VERSION=3.32.0
+ARG KATA_SHA256=1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01
 
 RUN set -eux; \
     apt-get update; \
@@ -52,13 +52,20 @@ RUN set -eux; \
     # Extract only what the kata-fc handler needs. The full tarball also
     # carries QEMU/CLH/TDX/SNP/NVIDIA variants that would quintuple the
     # image for nothing.
+    #
+    # kata-runtime and kata-collect-data.sh are deliberately NOT extracted
+    # (setec#284). containerd resolves runtime_type
+    # "io.containerd.kata-fc.v2" straight to containerd-shim-kata-v2, so
+    # the kata-runtime CLI and the debug collector are never executed by
+    # any setec code path — they were pure payload weight, and being Go
+    # binaries they carried the whole kata build's stdlib/dependency CVE
+    # surface onto every sandbox host for nothing. Anything that needs
+    # kata-runtime is a bake-time AMI concern (packer/), not a node one.
     tar --zstd -xf /tmp/kata.tar.zst -C /payload \
       ./opt/kata/VERSION \
       ./opt/kata/bin/containerd-shim-kata-v2 \
       ./opt/kata/bin/firecracker \
       ./opt/kata/bin/jailer \
-      ./opt/kata/bin/kata-runtime \
-      ./opt/kata/bin/kata-collect-data.sh \
       ./opt/kata/share/defaults \
       ./opt/kata/share/kata-containers; \
     rm /tmp/kata.tar.zst; \
@@ -82,7 +89,11 @@ RUN set -eux; \
     test -x /payload/opt/kata/bin/containerd-shim-kata-v2; \
     test -x /payload/opt/kata/bin/firecracker; \
     test -x /payload/opt/kata/bin/jailer; \
-    test -x /payload/opt/kata/bin/kata-runtime; \
+    # Negative gate (setec#284): the unused kata CLI/debug binaries must
+    # stay out. Re-adding either to the extract list above fails here
+    # rather than silently re-importing their CVE surface.
+    test ! -e /payload/opt/kata/bin/kata-runtime; \
+    test ! -e /payload/opt/kata/bin/kata-collect-data.sh; \
     fc_conf=/payload/opt/kata/share/defaults/kata-containers/configuration-fc.toml; \
     test -f "$fc_conf"; \
     kernel="$(awk -F'"' '$1 ~ /^kernel = $/ {print $2; exit}' "$fc_conf")"; \
