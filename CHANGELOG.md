@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.110.2](https://github.com/zeroroot-ai/setec/compare/v0.110.1...v0.110.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **ci:** bump reusable-image-build.yml pin to pick up main-branch Trivy scanning ([#279](https://github.com/zeroroot-ai/setec/issues/279)) ([109c995](https://github.com/zeroroot-ai/setec/commit/109c9954685eb93290a36aadfc6f8040bef1507d))
+* **runtime-agent:** follow containerd imports so kata-deploy nodes probe truthfully ([#282](https://github.com/zeroroot-ai/setec/issues/282)) ([710e0b5](https://github.com/zeroroot-ai/setec/commit/710e0b5e7c72924b4ad4510c1c3e7d427bec7a16))
+
 ## [0.110.1](https://github.com/zeroroot-ai/setec/compare/v0.110.0...v0.110.1) (2026-08-15)
 
 
