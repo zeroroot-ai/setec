@@ -531,6 +531,16 @@ func installChart() error {
 		// The suite has not rendered since setec#157 landed; nothing caught
 		// it because nothing ran the suite (setec#298).
 		"--set", "rbac.allowClusterWideSandboxWrite=true",
+		// The chart ships two SandboxClasses, `tool` and `connector`, and
+		// SandboxClass is CLUSTER-scoped and NOT release-prefixed. Both
+		// already exist on the shared staging cluster carrying no helm
+		// ownership metadata at all, so a throwaway release rendering them
+		// is refused ("exists and cannot be imported into the current
+		// release"). Nothing is lost: every scenario in this suite builds
+		// its own SandboxClass (e2e-tight, runc-dev-cls, fallback-test-cls,
+		// e2e-session-checkpoint-*, …) and none references the chart's.
+		// Same opt-out the roundtrip job takes, for the same reason.
+		"--set", "sandboxClasses.enabled=false",
 		// WITHOUT THIS THE SUITE IS A GREEN ALL-SKIP. phase3Enabled() greps
 		// the operator Deployment for `--snapshots-enabled`, which the chart
 		// only renders under snapshots.enabled. Left off, every Phase 3
