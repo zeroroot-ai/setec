@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.111.0](https://github.com/zeroroot-ai/setec/compare/v0.110.2...v0.111.0) (2026-08-15)
+
+
+### Features
+
+* **chart:** let RuntimeClasses publish scheduling.tolerations ([#306](https://github.com/zeroroot-ai/setec/issues/306)) ([4d9700a](https://github.com/zeroroot-ai/setec/commit/4d9700a5fa351d75c87d3cf62766bd2e9af2feea))
+* **session:** make the S3 checkpoint path runnable against real infrastructure ([#294](https://github.com/zeroroot-ai/setec/issues/294)) ([1e5fa2e](https://github.com/zeroroot-ai/setec/commit/1e5fa2e34a30551b3274e01b5ecc5ff6dffa9446))
+
+
+### Bug Fixes
+
+* **deps:** bump x/net and x/text in the four satellite Go modules ([#290](https://github.com/zeroroot-ai/setec/issues/290)) ([8a4e167](https://github.com/zeroroot-ai/setec/commit/8a4e16719c7abbc282bb6bfc9c3db78935828978))
+* **installer:** drop the unused kata CLI payload and bump kata to 3.32.0 ([#283](https://github.com/zeroroot-ai/setec/issues/283)) ([3c1384e](https://github.com/zeroroot-ai/setec/commit/3c1384e3cf3da4cbaa7add992ab3fef78893ea50))
+* **operator:** create the Pod when no node is capable yet, so autoscalers can provision ([#301](https://github.com/zeroroot-ai/setec/issues/301)) ([6ba6823](https://github.com/zeroroot-ai/setec/commit/6ba68231bafd437e5df54f2e2a9133130651ca92))
+* **supply-chain:** pin the example base images and the k3s installer by digest ([#291](https://github.com/zeroroot-ai/setec/issues/291)) ([dda2248](https://github.com/zeroroot-ai/setec/commit/dda2248af9e958f213e330e800790f30ef479066))
+
 ## [0.110.2](https://github.com/zeroroot-ai/setec/compare/v0.110.1...v0.110.2) (2026-08-15)
 
 
