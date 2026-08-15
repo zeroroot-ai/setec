@@ -47,7 +47,8 @@ func TestGVisorProbe(t *testing.T) {
 	tests := []struct {
 		name             string
 		lookPathFound    bool
-		containerdConfig string // content of config.toml; empty = don't create it
+		containerdConfig string            // content of config.toml; empty = don't create it
+		extraFiles       map[string]string // additional files, relative to FSRoot
 		wantAvailable    bool
 		wantReason       string // substring required in Reason when set
 		wantDetailKey    string // key expected in Details when available
@@ -66,21 +67,47 @@ func TestGVisorProbe(t *testing.T) {
 			wantDetailKey:    "runsc",
 		},
 		{
+			// setec#268: this used to return Available:true. containerd would
+			// then reject every RunPodSandbox with `no runtime for "runsc" is
+			// configured`, on a node advertising the capability.
 			name:             "runsc found, containerd config present but no runsc entry",
 			lookPathFound:    true,
 			containerdConfig: `[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]`,
-			wantAvailable:    true,
-			// The probe falls back to best-effort and logs a warning.
-			wantReason:    "containerd config not accessible",
-			wantDetailKey: "containerd_check",
+			wantAvailable:    false,
+			wantReason:       `containerd has no runtime handler "runsc" configured`,
 		},
 		{
+			// setec#268: unverifiable is not usable. This used to pass on
+			// binary presence alone.
 			name:          "runsc found, no containerd config mounted",
 			lookPathFound: true,
+			wantAvailable: false,
+			wantReason:    "no containerd configuration is readable on this node",
+		},
+		{
+			// setec#268: the old check was a bare strings.Contains(data,
+			// "runsc"), so a comment was enough to claim the capability.
+			name:          "runsc found, but only a comment mentions runsc",
+			lookPathFound: true,
+			containerdConfig: "version = 2\n" +
+				"# uncomment to enable gVisor:\n" +
+				"# [plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runsc]\n" +
+				"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc]\n",
+			wantAvailable: false,
+			wantReason:    `containerd has no runtime handler "runsc" configured`,
+		},
+		{
+			// The setec#281 shape reaches gvisor too, now that it shares the
+			// scanner: a registration behind an `imports` entry counts.
+			name:          "runsc registered in a drop-in reached through imports",
+			lookPathFound: true,
+			containerdConfig: "version = 2\n" +
+				"imports = [\"/opt/gvisor/containerd/config.d/*.toml\"]\n",
+			extraFiles: map[string]string{
+				"opt/gvisor/containerd/config.d/runsc.toml": `[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]`,
+			},
 			wantAvailable: true,
-			// Best-effort: passes on binary presence, surfaces skipped note.
-			wantReason:    "containerd config not accessible",
-			wantDetailKey: "containerd_check",
+			wantDetailKey: "containerd_handler",
 		},
 	}
 
@@ -101,6 +128,9 @@ func TestGVisorProbe(t *testing.T) {
 				); err != nil {
 					t.Fatalf("write config: %v", err)
 				}
+			}
+			for rel, content := range tc.extraFiles {
+				writeFile(t, root, rel, content)
 			}
 
 			p := newGVisorProbe(Config{

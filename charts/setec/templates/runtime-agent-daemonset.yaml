@@ -135,6 +135,11 @@ spec:
               mountPath: /host/var/lib/rancher/k3s/agent/etc/containerd
               readOnly: true
             {{- end }}
+            {{- range $i, $dir := .Values.runtimeAgent.extraContainerdConfigDirs }}
+            - name: host-extra-containerd-{{ $i }}
+              mountPath: /host{{ $dir }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: runtimes-config
           configMap:
@@ -172,6 +177,20 @@ spec:
         - name: host-k3s-containerd
           hostPath:
             path: /var/lib/rancher/k3s/agent/etc/containerd
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- /* containerd's `imports` may name any path, and the probe can only
+        read what is mounted (setec#281). /opt/kata/containerd is the default
+        because that is where kata-deploy 3.28+ writes its drop-in and then
+        imports it from /etc/containerd/config.toml — without this mount the
+        probe sees a config.toml registering only runc and every kata-deploy
+        node is labelled not kata-capable while running kata perfectly.
+        DirectoryOrCreate for the same reason as the k3s mount above: a node
+        without the path must probe, not hang in ContainerCreating. */}}
+        {{- range $i, $dir := .Values.runtimeAgent.extraContainerdConfigDirs }}
+        - name: host-extra-containerd-{{ $i }}
+          hostPath:
+            path: {{ $dir | quote }}
             type: DirectoryOrCreate
         {{- end }}
       terminationGracePeriodSeconds: 10

@@ -60,17 +60,19 @@ func writeStockContainerdConfig(t *testing.T, root string, handlers ...string) {
 	writeFile(t, root, stockConfigRelPath, containerdConfigWith(handlers...))
 }
 
-// TestConfiguredRuntimeHandlers covers the containerd config schemas the scan
-// has to understand and the files it must decline to read meaning into.
-func TestConfiguredRuntimeHandlers(t *testing.T) {
+// TestScanContainerdConfig covers the containerd config schemas the scan has to
+// understand, the files it must decline to read meaning into, and the `imports`
+// chains it must follow to find a drop-in nobody enumerated (setec#281).
+func TestScanContainerdConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		files       map[string]string // relative path -> content
-		wantHandler []string          // handlers that must be present
-		wantAbsent  []string          // handlers that must NOT be present
-		wantScanned int
+		name           string
+		files          map[string]string // relative path -> content
+		wantHandler    []string          // handlers that must be present
+		wantAbsent     []string          // handlers that must NOT be present
+		wantScanned    int
+		wantUnreadable []string // host paths the scan must report as unreachable
 	}{
 		{
 			name: "stock v2 config with kata handlers",
@@ -141,6 +143,102 @@ func TestConfiguredRuntimeHandlers(t *testing.T) {
 			wantAbsent:  []string{"kata-fc", "kata-qemu", "runc"},
 			wantScanned: 0,
 		},
+		{
+			// THE setec#281 SHAPE. kata-deploy 3.28 writes its drop-in outside
+			// every directory this package used to know about and registers it
+			// through `imports`. Before the fix the scan read config.toml, saw
+			// only runc, and reported kata "absent" on a node running kata.
+			name: "absolute imports glob outside the seed dirs is followed",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\n" +
+					"imports = [\"/opt/kata/containerd/config.d/*.toml\"]\n" +
+					"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc]\n",
+				"opt/kata/containerd/config.d/kata-deploy.toml": containerdConfigWith("kata-fc", "kata-qemu"),
+			},
+			wantHandler: []string{"runc", "kata-fc", "kata-qemu"},
+			wantScanned: 2,
+		},
+		{
+			// containerd resolves a relative entry against the directory of the
+			// file that declared it, NOT the process working directory. A join
+			// against FSRoot instead would silently find nothing.
+			name: "relative imports entry resolves against the declaring file's directory",
+			files: map[string]string{
+				stockConfigRelPath:                    "version = 2\nimports = [\"extra/kata.toml\"]\n",
+				"etc/containerd/extra/kata.toml":      containerdConfigWith("kata-fc"),
+				"opt/kata/containerd/extra/kata.toml": containerdConfigWith("gvisor-decoy"),
+			},
+			wantHandler: []string{"kata-fc"},
+			wantAbsent:  []string{"gvisor-decoy"},
+			wantScanned: 2,
+		},
+		{
+			// Both forms in one array, which is what a node carrying an
+			// installer drop-in AND a kata-deploy drop-in actually looks like.
+			name: "a mixed glob + relative imports array is followed whole",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\n" +
+					"imports = [\n" +
+					"  \"/opt/kata/containerd/config.d/*.toml\",\n" +
+					"  'config.d/99-setec-kata-fc.toml',\n" +
+					"]\n",
+				"opt/kata/containerd/config.d/kata-deploy.toml": containerdConfigWith("kata-qemu"),
+				"etc/containerd/config.d/99-setec-kata-fc.toml": containerdConfigWith("kata-fc"),
+			},
+			wantHandler: []string{"kata-fc", "kata-qemu"},
+			wantScanned: 3,
+		},
+		{
+			// An import chain: config.toml -> a.toml -> b.toml.
+			name: "imports are followed transitively",
+			files: map[string]string{
+				stockConfigRelPath:        "version = 2\nimports = [\"/etc/containerd/a/a.toml\"]\n",
+				"etc/containerd/a/a.toml": "imports = [\"/etc/containerd/b/b.toml\"]\n",
+				"etc/containerd/b/b.toml": containerdConfigWith("kata-fc"),
+			},
+			wantHandler: []string{"kata-fc"},
+			wantScanned: 3,
+		},
+		{
+			// A cycle must terminate and must not double-count.
+			name: "an imports cycle terminates",
+			files: map[string]string{
+				stockConfigRelPath:        "version = 2\nimports = [\"/etc/containerd/a/a.toml\"]\n",
+				"etc/containerd/a/a.toml": "imports = [\"" + "/" + stockConfigRelPath + "\"]\n" + containerdConfigWith("kata-fc"),
+			},
+			wantHandler: []string{"kata-fc"},
+			wantScanned: 2,
+		},
+		{
+			// The diagnostic that would have made setec#281 a five-minute
+			// read: the config names a path, the agent cannot see it, and the
+			// scan says so instead of concluding the handler is absent.
+			name: "an import pointing at an unmounted path is reported, not ignored",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\n" +
+					"imports = [\"/opt/kata/containerd/config.d/*.toml\"]\n" +
+					"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc]\n",
+			},
+			wantHandler:    []string{"runc"},
+			wantAbsent:     []string{"kata-fc"},
+			wantScanned:    1,
+			wantUnreadable: []string{"/opt/kata/containerd/config.d/*.toml"},
+		},
+		{
+			// A mounted-but-empty drop-in directory is a COMPLETE answer, so it
+			// must not be reported as unreadable — otherwise every stock node
+			// with an empty config.d degrades to "unverifiable" forever.
+			name: "a mounted but empty imports directory is not reported as unreadable",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\n" +
+					"imports = [\"/etc/containerd/config.d/*.toml\"]\n" +
+					"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc]\n",
+				"etc/containerd/config.d/.keep": "",
+			},
+			wantHandler: []string{"runc"},
+			wantAbsent:  []string{"kata-fc"},
+			wantScanned: 1,
+		},
 	}
 
 	for _, tc := range tests {
@@ -152,20 +250,23 @@ func TestConfiguredRuntimeHandlers(t *testing.T) {
 				writeFile(t, root, rel, content)
 			}
 
-			handlers, scanned := ConfiguredRuntimeHandlers(root)
+			scan := ScanContainerdConfig(root)
 
-			if len(scanned) != tc.wantScanned {
-				t.Errorf("scanned %d file(s) (%v), want %d", len(scanned), scanned, tc.wantScanned)
+			if len(scan.Scanned) != tc.wantScanned {
+				t.Errorf("scanned %d file(s) (%v), want %d", len(scan.Scanned), scan.Scanned, tc.wantScanned)
 			}
 			for _, h := range tc.wantHandler {
-				if _, ok := handlers[h]; !ok {
-					t.Errorf("handler %q missing; got %v", h, handlers)
+				if _, ok := scan.Handlers[h]; !ok {
+					t.Errorf("handler %q missing; got %v", h, scan.Handlers)
 				}
 			}
 			for _, h := range tc.wantAbsent {
-				if _, ok := handlers[h]; ok {
-					t.Errorf("handler %q unexpectedly present; got %v", h, handlers)
+				if _, ok := scan.Handlers[h]; ok {
+					t.Errorf("handler %q unexpectedly present; got %v", h, scan.Handlers)
 				}
+			}
+			if got, want := strings.Join(scan.Unreadable, ","), strings.Join(tc.wantUnreadable, ","); got != want {
+				t.Errorf("unreadable imports = %q, want %q", got, want)
 			}
 		})
 	}

@@ -131,23 +131,51 @@ agent no longer probes has its label removed. Only `true` counts as capable.
 The scheduler uses these labels to pick the highest-isolation backend each
 `Sandbox` can run on, per the `SandboxClass` fallback chain.
 
-For the two Kata backends, host hardware is a necessary condition, not a
-sufficient one. The agent also verifies that containerd on the node
-registers the matching CRI runtime handler — a
-`[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-qemu]` table
-in `/etc/containerd/config.toml`, one of its drop-in directories, or the
-k3s equivalent under `/var/lib/rancher/k3s/agent/etc/containerd`. A node
-with KVM but no handler cannot run a single `Sandbox`: every pod sandbox
-fails with `no runtime for "kata-qemu" is configured`. Such a node reports
-`false`, so the operator holds the `Sandbox` in `Pending` instead of
-scheduling it onto a node that will reject it.
+For the two Kata backends **and for gvisor**, host hardware (or the `runsc`
+binary) is a necessary condition, not a sufficient one. The agent also
+verifies that containerd on the node registers the matching CRI runtime
+handler — a
+`[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-qemu]` table,
+or `...runtimes.runsc` for gvisor. A node with KVM but no handler cannot run
+a single `Sandbox`: every pod sandbox fails with `no runtime for
+"kata-qemu" is configured`. Such a node reports `false`, so the operator
+holds the `Sandbox` in `Pending` instead of scheduling it onto a node that
+will reject it. All three labels carry the same guarantee; none of them is
+best-effort.
+
+### Where the agent looks for that registration
+
+It starts at `/etc/containerd/config.toml` and the conventional drop-in
+directories beside it, plus the k3s equivalents under
+`/var/lib/rancher/k3s/agent/etc/containerd` — and then it **follows the
+`imports` array** in every file it reads, because a containerd config is a
+graph rather than a directory. Installers rely on that: kata-deploy 3.28+
+writes `/opt/kata/containerd/config.d/kata-deploy.toml` and registers it by
+appending to `imports`, so a node running Kata perfectly has a
+`config.toml` that mentions only `runc`.
 
 The agent reads those files through the read-only host mounts the chart
-gives it: `runtimeAgent.mountContainerdConfig` (on by default) and, on k3s
-or RKE2, `runtimeAgent.mountK3sContainerdConfig`. With neither mounted the
-handler cannot be verified and the Kata labels stay `false`. The full probe
-outcome, including which config files were scanned, is published on the
-Node as the `setec.zeroroot.ai/runtime-probe` annotation:
+gives it:
+
+| value | mounts | default |
+|---|---|---|
+| `runtimeAgent.mountContainerdConfig` | `/etc/containerd` | on |
+| `runtimeAgent.mountK3sContainerdConfig` | `/var/lib/rancher/k3s/agent/etc/containerd` | off (k3s/RKE2 only) |
+| `runtimeAgent.extraContainerdConfigDirs` | each listed path | `[/opt/kata/containerd]` |
+
+With nothing mounted the handler cannot be verified and the labels stay
+`false`. The three states are distinct, and the probe says which one it is:
+
+- **configured** — a scanned file registers the handler. Label `true`.
+- **absent** — the scan was complete and no file registers it. Label `false`.
+- **unverifiable** — no config was readable at all, *or* a config named an
+  `imports` path this agent cannot read. Label `false`, and the reason names
+  the path to add to `extraContainerdConfigDirs`.
+
+That third case is the one to check first when a node you believe is
+Kata-capable reports `false`. The full probe outcome, including which config
+files were scanned, is published on the Node as the
+`setec.zeroroot.ai/runtime-probe` annotation:
 
 ```bash
 kubectl get node <name> \
