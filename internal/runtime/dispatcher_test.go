@@ -91,6 +91,7 @@ func TestRegistry_Select(t *testing.T) {
 		wantBackend      string
 		wantFellBack     bool
 		wantFromBackend  string
+		wantProvisional  bool
 		wantErr          bool
 		wantErrIs        error
 	}{
@@ -142,13 +143,18 @@ func TestRegistry_Select(t *testing.T) {
 			wantFromBackend:  BackendKataFC,
 		},
 		{
-			name:             "fallback chain exhausted — ErrNoEligibleRuntime",
+			// No candidate has a capable node, so falling back would buy
+			// nothing — a fallback with no capable node is exactly as
+			// unschedulable as the primary with no capable node. The
+			// requested primary is kept and the Selection is provisional.
+			name:             "whole chain lacks a capable node — provisional primary, not an error",
 			registeredNames:  []string{BackendKataFC, BackendGVisor},
 			class:            sandboxClassWith(BackendKataFC, BackendGVisor),
 			cfg:              cfgWithDefaults(BackendKataFC),
 			nodeCapabilities: []string{BackendRunc}, // none of the above
-			wantErr:          true,
-			wantErrIs:        ErrNoEligibleRuntime,
+			wantBackend:      BackendKataFC,
+			wantFellBack:     false,
+			wantProvisional:  true,
 		},
 		{
 			name:             "primary registered but node lacks capability — fallback used",
@@ -171,22 +177,58 @@ func TestRegistry_Select(t *testing.T) {
 			wantFromBackend:  BackendKataFC,
 		},
 		{
-			name:             "empty node capabilities — no eligible runtime",
+			// The scale-from-zero starting state (setec#300). An empty
+			// capability set means "no node is up yet", which is not the
+			// same as "this backend does not exist" — the Dispatcher is
+			// registered, so the Selection is usable and the caller creates
+			// the Pod that makes the autoscaler provision a node.
+			name:             "empty node capabilities — provisional selection, not an error",
 			registeredNames:  []string{BackendKataFC},
 			class:            sandboxClassWith(BackendKataFC),
 			cfg:              cfgWithDefaults(BackendKataFC),
 			nodeCapabilities: []string{},
-			wantErr:          true,
-			wantErrIs:        ErrNoEligibleRuntime,
+			wantBackend:      BackendKataFC,
+			wantFellBack:     false,
+			wantProvisional:  true,
 		},
 		{
-			name:             "nil node capabilities — no eligible runtime",
+			// Same contract for a nil slice: an operator that has not
+			// listed any Node yet must not be distinguishable from one that
+			// listed Nodes and found no capabilities.
+			name:             "nil node capabilities — provisional selection, not an error",
 			registeredNames:  []string{BackendKataFC},
 			class:            sandboxClassWith(BackendKataFC),
 			cfg:              cfgWithDefaults(BackendKataFC),
 			nodeCapabilities: nil,
+			wantBackend:      BackendKataFC,
+			wantFellBack:     false,
+			wantProvisional:  true,
+		},
+		{
+			// The terminal case that survives: no candidate has a
+			// Dispatcher, so there is no Pod spec to build and no node
+			// could ever change that.
+			name:             "no candidate is registered — ErrNoEligibleRuntime",
+			registeredNames:  []string{BackendGVisor},
+			class:            sandboxClassWith(BackendKataFC, BackendKataQEMU),
+			cfg:              cfgWithDefaults(BackendKataFC),
+			nodeCapabilities: []string{BackendGVisor},
 			wantErr:          true,
 			wantErrIs:        ErrNoEligibleRuntime,
+		},
+		{
+			// Provisional AND a genuine fallback: the primary has no
+			// Dispatcher (permanent), so the chain moves on, but the
+			// backend it lands on has no capable node yet.
+			name:             "primary unregistered and nothing capable — provisional fallback",
+			registeredNames:  []string{BackendGVisor},
+			class:            sandboxClassWith(BackendKataFC, BackendGVisor),
+			cfg:              cfgWithDefaults(BackendKataFC),
+			nodeCapabilities: nil,
+			wantBackend:      BackendGVisor,
+			wantFellBack:     true,
+			wantFromBackend:  BackendKataFC,
+			wantProvisional:  true,
 		},
 		{
 			name:             "cfg fallback used when class is nil",
@@ -231,6 +273,9 @@ func TestRegistry_Select(t *testing.T) {
 			}
 			if got.FromBackend != tc.wantFromBackend {
 				t.Errorf("FromBackend = %q, want %q", got.FromBackend, tc.wantFromBackend)
+			}
+			if got.Provisional != tc.wantProvisional {
+				t.Errorf("Provisional = %v, want %v", got.Provisional, tc.wantProvisional)
 			}
 			if got.Dispatcher == nil {
 				t.Error("Dispatcher is nil")

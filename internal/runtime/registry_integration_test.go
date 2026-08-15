@@ -62,6 +62,7 @@ func TestRegistry_Select_RealDispatchers(t *testing.T) {
 		wantBackend     string
 		wantFellBack    bool
 		wantFromBackend string
+		wantProvisional bool
 		wantErr         bool
 		wantErrIs       error
 	}{
@@ -114,11 +115,24 @@ func TestRegistry_Select_RealDispatchers(t *testing.T) {
 			wantFromBackend: BackendKataFC,
 		},
 		{
-			// Entire fallback chain missing from node capabilities.
-			name:      "full fallback chain exhausted — ErrNoEligibleRuntime",
-			class:     sandboxClassWith(BackendKataFC, BackendKataQEMU),
+			// Entire fallback chain missing from node capabilities. Every
+			// backend is registered in this registry, so nothing here is
+			// terminal — the requested primary is returned provisionally
+			// and the caller creates the Pod that asks for a node.
+			name:            "full fallback chain lacks capable nodes — provisional primary",
+			class:           sandboxClassWith(BackendKataFC, BackendKataQEMU),
+			cfg:             cfgWithDefaults(BackendKataFC),
+			caps:            []string{BackendRunc}, // neither kata variant present
+			wantBackend:     BackendKataFC,
+			wantProvisional: true,
+		},
+		{
+			// The terminal case, reachable only by asking for a backend
+			// this registry was never given a Dispatcher for.
+			name:      "unknown backend — ErrNoEligibleRuntime",
+			class:     sandboxClassWith("kata-nonexistent"),
 			cfg:       cfgWithDefaults(BackendKataFC),
-			caps:      []string{BackendRunc}, // neither kata variant present
+			caps:      allCaps,
 			wantErr:   true,
 			wantErrIs: ErrNoEligibleRuntime,
 		},
@@ -166,6 +180,9 @@ func TestRegistry_Select_RealDispatchers(t *testing.T) {
 			}
 			if sel.FromBackend != tc.wantFromBackend {
 				t.Errorf("FromBackend = %q, want %q", sel.FromBackend, tc.wantFromBackend)
+			}
+			if sel.Provisional != tc.wantProvisional {
+				t.Errorf("Provisional = %v, want %v", sel.Provisional, tc.wantProvisional)
 			}
 			// Verify the returned Dispatcher is the real implementation.
 			if sel.Dispatcher == nil {

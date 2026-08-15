@@ -129,8 +129,10 @@ You should see a startup log line reporting `enabled_backends: [kata-fc]`
 (or your chosen backends) and a count of capable Nodes — determined by
 the `setec.zeroroot.ai/runtime.<backend>=true` labels the `runtime-agent`
 DaemonSet writes on each Node. If the count is zero, go back to step 2 —
-Setec will start anyway, but any `Sandbox` you apply will stay in
-`Pending` with a `NoEligibleNode` event.
+Setec will start anyway, and any `Sandbox` you apply will sit in `Pending`
+with an `AwaitingCapableNode` event. Its Pod is created all the same, so
+that a cluster autoscaler has something to provision for; without one, the
+Pod waits until you add a capable Node.
 
 Check Node labels directly:
 

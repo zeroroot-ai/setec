@@ -92,7 +92,6 @@ const (
 	eventReasonNetworkPolicyPending  = "NetworkPolicyPending"
 	eventReasonNamespaceBaseline     = "NamespaceBaselineApplied"
 	eventReasonSnapshotUnavailable   = "SnapshotUnavailable"
-	eventReasonNoEligibleNode        = "NoEligibleNode"
 	eventReasonSnapshotIncompatible  = "SnapshotIncompatible"
 	eventReasonPaused                = "Paused"
 	eventReasonResumed               = "Resumed"
@@ -100,6 +99,21 @@ const (
 	eventReasonWorkspaceCreated      = "WorkspaceCreated"
 	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
 	eventReasonSessionVMRestart      = "SessionVMRestart"
+	// The two reasons a Sandbox has not placed yet. They look alike from the
+	// outside and are not alike at all (setec#300).
+	//
+	// eventReasonAwaitingCapableNode: the backend is enabled but no node
+	// advertises its capability label yet. The Pod is created anyway and is
+	// deliberately unschedulable — that is the only signal a cluster
+	// autoscaler acts on, so withholding it is what deadlocks a
+	// scale-to-zero pool.
+	eventReasonAwaitingCapableNode = "AwaitingCapableNode"
+	// eventReasonRuntimeNotEnabled: no backend in the Sandbox's chain is
+	// enabled on this operator, so no Pod spec can be built at all. Unlike
+	// AwaitingCapableNode, no node provisioning can resolve it — only a
+	// change to the operator's runtime config.
+	eventReasonRuntimeNotEnabled = "RuntimeNotEnabled"
+
 	// eventReasonInvariantGateViolation mirrors the coordinator's
 	// typed reason (snapshot.EventReasonInvariantGateViolation): the
 	// ADR-0005 invariant gate refused a restore and the Pod holding
@@ -989,26 +1003,33 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 
 // selectRuntime picks the isolation backend for this Sandbox by gathering a
 // cluster-wide view of node capabilities (via Node labels) and delegating to
-// r.Runtimes.Select. It writes status.runtime.chosen on success and holds the
-// Sandbox in Pending with reason NoEligibleNode when no backend can be
-// satisfied. It also emits a fallback metric when the chosen backend differs
-// from the originally requested one.
+// r.Runtimes.Select. It writes status.runtime.chosen on success and emits a
+// fallback metric when the chosen backend differs from the originally
+// requested one.
 //
-// # Why Pending and not Failed
+// # Two conditions, not one
 //
-// "No node advertises this capability" is a statement about the cluster right
-// now, not about the Sandbox. On a scale-to-zero node pool it is the normal
-// starting state: no node carries setec.zeroroot.ai/runtime.kata-qemu until
-// one is provisioned, and Karpenter (or the cluster autoscaler) only
-// provisions in response to a Pending Pod. Failing here closed that loop
-// before it opened — the Sandbox died in seconds and no Pod ever existed to
-// trigger the scale-up that would have satisfied it (setec#230).
+// "No node advertises this capability" and "this operator has no dispatcher
+// for that backend" used to collapse into the same answer here, and that
+// conflation is what deadlocked scale-from-zero.
 //
-// The reconciler already models a transient unmet precondition this way for
-// an unready Snapshot: patchPendingStatus plus a RequeueAfter from the
-// caller. This takes the same shape and the same backoff, so a Sandbox waits
-// for capacity the way it waits for a snapshot, and recovers on its own the
-// moment the runtime-agent labels a node.
+// The first is a statement about the cluster right now, not about the
+// Sandbox. On a scale-to-zero node pool it is the normal starting state: no
+// node carries setec.zeroroot.ai/runtime.kata-fc until one is provisioned,
+// and Karpenter — like every other autoscaler — provisions in response to an
+// unschedulable POD. setec#230 stopped this from failing the Sandbox, which
+// let it survive the wait, but the reconcile still returned before createPod,
+// so nothing was ever unschedulable and nothing ever asked for a node. The
+// Sandbox waited a minute at a time for a node that could not arrive
+// (setec#300). Select now returns a Provisional Selection instead, and this
+// function carries on to build and create the Pod: the Pod is the request for
+// capacity, and it is the only thing an autoscaler will act on.
+//
+// The second is terminal in a way node provisioning cannot touch — there is
+// no Dispatcher, so there is no Pod spec to build. That, and only that, is
+// ErrNoEligibleRuntime. It stays Pending rather than Failed because an
+// administrator enabling the backend is a live fix the next reconcile picks
+// up, but it is not waiting on a node and does not claim to be.
 //
 // When Runtimes or RuntimeCfg are nil (legacy path) it synthesizes a minimal
 // Selection from the class RuntimeClassName / defaults so existing code paths
@@ -1074,24 +1095,41 @@ func (r *SandboxReconciler) selectRuntime(
 	sel, err := r.Runtimes.Select(effectiveCls, r.RuntimeCfg, nodeCapabilities)
 	if err != nil {
 		if errors.Is(err, runtimepkg.ErrNoEligibleRuntime) {
-			logger.Info("no eligible runtime for Sandbox yet; waiting for a capable node",
+			logger.Info("No dispatcher registered for any backend in the Sandbox's chain",
 				"sandbox", sb.Name,
 				"namespace", sb.Namespace,
-				"nodeCapabilities", nodeCapabilities,
 				"error", err.Error(),
 			)
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonNoEligibleNode, actionResolveRuntime,
-				"No node advertises a capability for this Sandbox's backend chain (node capabilities: %v); waiting",
-				nodeCapabilities)
-			// Pending, not Failed. A missing capability is transient in an
-			// autoscaled cluster, exactly like an unready Snapshot, and the
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeNotEnabled, actionResolveRuntime,
+				"No backend in this Sandbox's chain is enabled on this operator (enabled: %v); enable one to proceed",
+				r.Runtimes.EnabledBackends())
+			// Pending, not Failed: enabling the backend in the operator's
+			// runtime config is a live fix the next reconcile picks up. The
 			// caller requeues on ErrNoEligibleRuntime.
-			if perr := r.patchPendingStatus(ctx, sb, eventReasonNoEligibleNode); perr != nil {
-				return nil, fmt.Errorf("patch Pending(NoEligibleNode) status: %w", perr)
+			if perr := r.patchPendingStatus(ctx, sb, eventReasonRuntimeNotEnabled); perr != nil {
+				return nil, fmt.Errorf("patch Pending(RuntimeNotEnabled) status: %w", perr)
 			}
 			return nil, runtimepkg.ErrNoEligibleRuntime
 		}
 		return nil, err
+	}
+
+	// Provisional: a Dispatcher exists but nothing advertises it yet. Say so,
+	// then carry on and create the Pod. The Pod is what an autoscaler
+	// provisions for; see runtime.Selection.Provisional.
+	if sel.Provisional {
+		logger.Info("No node advertises the selected backend yet; creating the Pod so a cluster autoscaler can provision one",
+			"sandbox", sb.Name,
+			"namespace", sb.Namespace,
+			"backend", sel.Backend,
+			"nodeCapabilities", nodeCapabilities,
+		)
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonAwaitingCapableNode, actionResolveRuntime,
+			"No node advertises backend %q yet (node capabilities: %v); creating the Pod unscheduled so a cluster autoscaler can provision a capable node",
+			sel.Backend, nodeCapabilities)
+		if perr := r.patchPendingStatus(ctx, sb, eventReasonAwaitingCapableNode); perr != nil {
+			return nil, fmt.Errorf("patch Pending(AwaitingCapableNode) status: %w", perr)
+		}
 	}
 
 	// Record fallback metric when the chosen backend differs from requested.

@@ -385,21 +385,42 @@ jobs:
           EOF
 
       - name: Pre-warm a sandbox-host metal node (scale-from-zero)
-        # The setec-metal Karpenter NodePool is scale-to-zero. The operator
-        # no longer hard-fails on NoEligibleNode — it holds the Sandbox in
-        # Pending and retries once a minute (setec#230) — but nothing in
-        # that loop provisions a node either: Karpenter scales on a Pending
-        # POD, and there is no Pod until a capable node exists. The
-        # placeholder is what breaks the tie, and it also overlaps the
-        # 10-15 minute metal boot with the rest of the setup rather than
-        # spending it inside the Sandbox-ready wait. Pre-warm the node: a
-        # placeholder pod targeting the NodePool's own label+taint makes
-        # Karpenter provision a metal node; kata-deploy + the runtime-agent
-        # then lay down kata and write the capability label the operator
-        # keys on. Metal instances boot slowly (10-15 min) — the wait is
-        # sized for that. The placeholder lives in the throwaway namespace,
-        # so the existing cleanup reaps it and the node scales back to zero
-        # after its emptiness TTL.
+        # The setec-metal Karpenter NodePool is scale-to-zero, and this
+        # placeholder is what gets a metal node out of it.
+        #
+        # The operator's half of the deadlock is FIXED (setec#300): it no
+        # longer returns before createPod when no node advertises the
+        # backend — it creates the Pod, which is the only thing Karpenter
+        # provisions for. So why is this step still here?
+        #
+        # Because the Sandbox Pod is not schedulable-by-Karpenter against
+        # THIS cluster's NodePool, for a reason that lives in the deploy
+        # repo, not in setec. Every Sandbox Pod requires
+        # `setec.zeroroot.ai/runtime.<backend>=true` (the backend's node
+        # affinity, plus the nodeSelector RuntimeClass admission injects),
+        # and Karpenter DENIES a pod whose required affinity names a custom
+        # label key its NodePool template does not declare — "label %q does
+        # not have known values", kubernetes-sigs/karpenter
+        # pkg/scheduling/requirements.go, Requirements.Compatible. The
+        # setec-metal NodePool (deploy: eks/gibson/karpenter.tf) declares
+        # only `setec.zeroroot.ai/sandbox-host`, never a `runtime.*` key, so
+        # the Sandbox Pod is rejected by every NodePool in the cluster. The
+        # chart's own NodePool gets this right (charts/setec/values.yaml,
+        # karpenter.nodeLabels); the hand-rolled terraform one does not.
+        #
+        # This placeholder sidesteps that: it requires ONLY the label the
+        # NodePool does declare, so Karpenter provisions the metal node, and
+        # kata-deploy + the runtime-agent then write the capability label
+        # the Sandbox Pod needs. Delete this step once the setec-metal
+        # NodePool stamps the runtime labels itself — and not before, or the
+        # e2e goes red with a Sandbox stuck in AwaitingCapableNode.
+        #
+        # It also usefully overlaps the 10-15 minute metal boot with the
+        # rest of the setup rather than spending it inside the Sandbox-ready
+        # wait. Metal instances boot slowly — the wait is sized for that.
+        # The placeholder lives in the throwaway namespace, so the existing
+        # cleanup reaps it and the node scales back to zero after its
+        # emptiness TTL.
         run: |
           set -euo pipefail
           cat <<EOF | kubectl apply -f -
