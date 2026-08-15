@@ -1130,6 +1130,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if grep -q -- '--- SKIP' suites-e2e.log; then
             echo "::warning::one or more scenarios SKIPPED — see the job summary; this run did not verify them"
+            if grep -q 'snapshots.enabled=false' suites-e2e.log; then
+              echo "::warning::the Phase 3 skips (both ADR-0005 invariants + the warm-start gate) are setec#320: the chart cannot install with snapshots.enabled=true because it mounts a CA secret it never creates. Set SETEC_E2E_SNAPSHOTS=1 here once that lands."
+            fi
           fi
           exit "$status"
 
