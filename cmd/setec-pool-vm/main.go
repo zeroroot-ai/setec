@@ -59,8 +59,16 @@ import (
 )
 
 const (
-	// defaultFirecrackerBinary is the standard path kata-deploy lays down.
-	defaultFirecrackerBinary = "/usr/local/bin/firecracker"
+	// defaultFirecrackerBinary is where setec's own installer DaemonSet leaves
+	// the Firecracker binary — the default node-prep path (ADR-0003), and the
+	// path the stock configuration-fc.toml references.
+	//
+	// Shared with the installer via firecracker.HostBinaryPath so the two
+	// cannot drift again. It previously read /usr/local/bin/firecracker ("the
+	// standard path kata-deploy lays down"), which the setec installer never
+	// creates — it links only the shim — so on an installer-prepared node this
+	// default pointed at a file that does not exist (setec#287).
+	defaultFirecrackerBinary = firecracker.HostBinaryPath
 
 	// defaultKeyFile is the node-local KEK the per-entry DEK is sealed
 	// with (ADR-0005 invariant 5). Matches the node-agent's

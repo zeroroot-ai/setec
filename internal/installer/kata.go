@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/zeroroot-ai/setec/internal/firecracker"
 )
 
 // Host locations managed by the kata payload step. kataHostDir mirrors
@@ -40,9 +42,12 @@ const (
 	kataShimLink = "/usr/local/bin/containerd-shim-kata-fc-v2"
 
 	kataShimBin = "/opt/kata/bin/containerd-shim-kata-v2"
-	kataFCBin   = "/opt/kata/bin/firecracker"
-	kataJailer  = "/opt/kata/bin/jailer"
-	kataFCConf  = "/opt/kata/share/defaults/kata-containers/configuration-fc.toml"
+	// kataFCBin is shared with the pool-VM launcher's --firecracker-binary
+	// default (setec#287): the two carried independent literals and drifted,
+	// leaving the launcher pointing at a path this installer never creates.
+	kataFCBin  = firecracker.HostBinaryPath
+	kataJailer = "/opt/kata/bin/jailer"
+	kataFCConf = "/opt/kata/share/defaults/kata-containers/configuration-fc.toml"
 )
 
 // requiredKataArtifacts lists everything the kata-fc handler needs at
