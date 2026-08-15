@@ -9,8 +9,8 @@ type: application
 # updater; the x-release-please-version annotations mark the lines).
 # appVersion keeps the v prefix: image tags are published as vX.Y.Z
 # (setec#131) and the chart defaults every image tag to .Chart.AppVersion.
-version: 0.110.0 # x-release-please-version
-appVersion: "v0.110.0" # x-release-please-version
+version: 0.110.1 # x-release-please-version
+appVersion: "v0.110.1" # x-release-please-version
 # 1.30 is the floor because the Sandbox-namespace host guard is a
 # ValidatingAdmissionPolicy, which reached admissionregistration.k8s.io/v1
 # in 1.30 (setec#159). The guard is what stops a hostNetwork Pod from

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.110.1](https://github.com/zeroroot-ai/setec/compare/v0.110.0...v0.110.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **build:** re-pin builder base to mirror/golang 1.26.6 — go.mod requires &gt;= 1.26.6 ([#262](https://github.com/zeroroot-ai/setec/issues/262)) ([11e4435](https://github.com/zeroroot-ai/setec/commit/11e4435611131ea13a3653ab0220e8f048a6b850)), closes [#261](https://github.com/zeroroot-ai/setec/issues/261)
+* **ci:** pin actions to SHAs, least-privilege permissions, bump vulnerable deps ([#278](https://github.com/zeroroot-ai/setec/issues/278)) ([3aaf3a5](https://github.com/zeroroot-ai/setec/commit/3aaf3a5cdb87547c18d9db051abd1213df16ac9a))
+* **ci:** verify the lint config against a vendored schema, not the network ([#265](https://github.com/zeroroot-ai/setec/issues/265)) ([3a22b24](https://github.com/zeroroot-ai/setec/commit/3a22b24e8f7739fba831ef2fe5bfdffeb3f5595c))
+* **deps:** bump Go to 1.26.6 — two newer stdlib govulncheck findings ([#259](https://github.com/zeroroot-ai/setec/issues/259)) ([9fa573d](https://github.com/zeroroot-ai/setec/commit/9fa573d703dc69c881c260600d8106adf8ca1a67)), closes [#254](https://github.com/zeroroot-ai/setec/issues/254)
+* **deps:** bump grpc to v1.83.0, x/text to v0.39.0 and Go to 1.26.5 for govulncheck ([#256](https://github.com/zeroroot-ai/setec/issues/256)) ([b7e7a44](https://github.com/zeroroot-ai/setec/commit/b7e7a4471167a98fc8db3757f728fa847b5c1179)), closes [#254](https://github.com/zeroroot-ai/setec/issues/254)
+* **e2e:** teardown that survives cancellation, plus a stale-namespace sweep ([#269](https://github.com/zeroroot-ai/setec/issues/269)) ([807f161](https://github.com/zeroroot-ai/setec/commit/807f161d72c3954c8f03e999ea26c3ae0757050c))
+* **operator:** treat NoEligibleNode as Pending with requeue so scale-from-zero can work ([#267](https://github.com/zeroroot-ai/setec/issues/267)) ([3697265](https://github.com/zeroroot-ai/setec/commit/36972652aaa4feff590c3a258489fb70326692ed)), closes [#230](https://github.com/zeroroot-ai/setec/issues/230)
+* **runtime-agent:** require a configured containerd runtime handler before labeling kata capability ([#266](https://github.com/zeroroot-ai/setec/issues/266)) ([6a17a89](https://github.com/zeroroot-ai/setec/commit/6a17a89825117de345ac1ea48f1cbc647a192253)), closes [#243](https://github.com/zeroroot-ai/setec/issues/243)
+
 ## [0.110.0](https://github.com/zeroroot-ai/setec/compare/v0.109.3...v0.110.0) (2026-08-13)
 
 
