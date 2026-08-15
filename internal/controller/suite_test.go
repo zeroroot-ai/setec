@@ -230,17 +230,34 @@ func TestMain(m *testing.M) {
 
 	cfg, err := testEnv.Start()
 	if err != nil {
-		// Envtest binaries missing (no KUBEBUILDER_ASSETS) or the CRD path is
-		// wrong. Skip gracefully rather than failing so CI environments
-		// without setup-envtest still report a green run on unrelated
-		// packages — same convention as test/integration/upgrade_test.go's
-		// TestMain.
+		// A failed envtest start FAILS the package (setec#302). This package
+		// holds every reconciler behavioural test — Phase 2/3, session
+		// lifecycle, pause timeouts, the invariant gate, runtime selection —
+		// so exiting 0 here reported `ok` with zero tests run and made the
+		// whole suite silently evaporate whenever KUBEBUILDER_ASSETS was
+		// empty, relative, or pointed at a stale cache. `ok` with no `=== RUN`
+		// is indistinguishable from a pass to a human scanning output and to
+		// anything keying on the exit code, so the gate could not fail.
+		//
+		// SETEC_SKIP_ENVTEST=1 is the deliberate opt-out for running the
+		// non-envtest packages on a machine without the binaries. CI sets
+		// nothing, so CI can only be green if these tests actually ran.
+		if os.Getenv("SETEC_SKIP_ENVTEST") == "1" {
+			fmt.Fprintf(os.Stderr,
+				"controller: envtest start failed (%v); SETEC_SKIP_ENVTEST=1 is set, skipping this package.\n",
+				err)
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr,
-			"controller: envtest start failed (%v); skipping all tests in this package.\n"+
-				"Install binaries with: setup-envtest use --bin-dir /usr/local/kubebuilder/bin\n",
+			"controller: envtest start failed: %v\n\n"+
+				"Every reconciler test lives in this package; refusing to report success with zero tests run.\n"+
+				"Install the binaries and export an ABSOLUTE path:\n"+
+				"    make setup-envtest\n"+
+				"    export KUBEBUILDER_ASSETS=$(setup-envtest use --bin-dir \"$PWD/bin\" -p path)\n"+
+				"A relative KUBEBUILDER_ASSETS makes envtest fail to exec etcd from a test's working directory.\n"+
+				"To deliberately skip (unit-testing without envtest binaries): SETEC_SKIP_ENVTEST=1\n",
 			err)
-		// Exit 0 so go test reports SKIP rather than FAIL.
-		os.Exit(0)
+		os.Exit(1)
 	}
 
 	// Register both the core client-go scheme (needed for Pods, Nodes,
