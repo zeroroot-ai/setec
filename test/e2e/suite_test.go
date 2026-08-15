@@ -555,9 +555,32 @@ func installChart() error {
 		// This is local snapshot storage only. The S3 checkpoint backend is
 		// a separate axis and stays behind SETEC_E2E_S3 (setec#194/#296),
 		// which sets this same flag among others.
-		"--set", "snapshots.enabled=true",
+		//
+		// BLOCKED, and opt-in until it is not (setec#320). Turning this on is
+		// still exactly right, but the chart cannot currently install with it:
+		// in credentials.mode=file the operator unconditionally mounts
+		// `setec-nodeagent-ca`, which no values combination makes the chart
+		// create, so the pod never starts and the install dies on the wait —
+		// `Available: 0/2, context deadline exceeded` (run 31914899389, the
+		// suite's first real execution). `snapshots.mTLS.insecure=true` does
+		// not avoid it; that value renders an identical Deployment.
+		//
+		// Defaulting it OFF is not a retreat to the green all-skip the comment
+		// above warns about. The difference is that a skip is now VISIBLE: the
+		// suites job greps for `--- SKIP` and warns on every one, and #320
+		// tracks the blocker. Leaving it on would take down the whole install
+		// and with it the 13 scenarios that have nothing to do with snapshots
+		// and can run today — trading real coverage for none.
+		//
+		// Flip SETEC_E2E_SNAPSHOTS=1 the moment #320 lands; that is the only
+		// change needed here.
 		"--wait",
 		"--timeout", "5m",
+	}
+
+	if os.Getenv("SETEC_E2E_SNAPSHOTS") == "1" {
+		args = append(args, "--set", "snapshots.enabled=true")
+		args = append(args, snapshotMTLSArgs()...)
 	}
 
 	// Enable the SandboxClass/Sandbox admission webhook with the
@@ -638,6 +661,34 @@ func installChart() error {
 		}
 	}
 	return nil
+}
+
+// snapshotMTLSArgs issues the operator's node-agent client certificate, which
+// the chart mounts but does not create on its own.
+//
+// Only half a fix, and deliberately so: it produces `operatorCertSecret`, but
+// the Deployment also mounts `caSecret` (`setec-nodeagent-ca`) and NOTHING in
+// the chart ever creates that — see setec#320, which is why
+// SETEC_E2E_SNAPSHOTS defaults off. When #320 lands the chart will own the CA
+// and these three flags become the whole story.
+//
+// Returns nothing when the S3 path is on: sessionS3.helmArgs() already sets
+// these keys, and setting them twice with different issuers would be a silent
+// last-wins.
+//
+// The issuer is overridable because its name is a property of the cluster, not
+// of the suite — staging carries `selfsigned-bootstrap` (verified 2026-08-15).
+func snapshotMTLSArgs() []string {
+	if sessionS3.enabled {
+		return nil
+	}
+	return []string{
+		"--set", "snapshots.mTLS.certManager.enabled=true",
+		"--set", fmt.Sprintf("snapshots.mTLS.certManager.issuerRef.kind=%s",
+			envOr("SETEC_E2E_MTLS_ISSUER_KIND", "ClusterIssuer")),
+		"--set", fmt.Sprintf("snapshots.mTLS.certManager.issuerRef.name=%s",
+			envOr("SETEC_E2E_MTLS_ISSUER", "selfsigned-bootstrap")),
+	}
 }
 
 // crdInstallArgs decides whether this install may touch the setec CRDs, and
