@@ -27,6 +27,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -294,15 +295,62 @@ func applyYAML(_ context.Context, t *testing.T, manifest string) {
 	}
 }
 
-// cniEnforcesNetworkPolicy is a best-effort probe: the test creates a
-// deny-all policy in a throwaway namespace and verifies a smoke Pod
-// fails to reach an external address. We deliberately use a short
-// timeout and Skip on inconclusive results rather than fail, because
-// Phase 2 E2E must not gate Phase 1 scenarios on CNI choice.
-func cniEnforcesNetworkPolicy(_ *testing.T) bool {
-	// Concrete probe logic is intentionally deferred to the smoke-test
-	// runbook; the E2E suite Skips here to make CNI selection explicit
-	// at the operator level rather than guessed at runtime.
+// cniEnforcesNetworkPolicy reports whether this cluster's CNI actually
+// enforces NetworkPolicy, which decides whether the confinement scenarios
+// can assert anything.
+//
+// # Why this is no longer a constant (setec#298)
+//
+// It used to be `return false`, unconditionally, with a comment saying the
+// probe was "deferred to the smoke-test runbook" so CNI selection would be
+// "explicit at the operator level rather than guessed at runtime". Nothing
+// ever made it explicit, so the constant skipped every caller forever:
+// TestEgress_ModeNoneBlocksEverything, TestEgress_ExternalReachableControlPlaneNot
+// and TestPhase2_NetworkPolicyEnforced could not run on any cluster, however
+// well configured. Giving those scenarios a CI runner while this returned
+// false would have wired up three permanent SKIPs — the confinement claim
+// itself, unverifiable by construction.
+//
+// The cluster already holds the answer, so ask it rather than guess:
+//
+//   - Cilium or Calico present: enforcement is the reason either is installed.
+//   - AWS VPC CNI: enforcement is OFF by default and switched on by the
+//     network-policy agent's --enable-network-policy flag. The aws-eks-nodeagent
+//     container ships either way, so its presence proves nothing and the flag
+//     is what has to be read. (Verified on staging EKS 2026-08-15:
+//     --enable-network-policy=true.)
+//
+// SETEC_E2E_NETPOL=1/0 forces the answer, which preserves the original intent
+// — an operator who wants to state it explicitly still can — without a
+// cluster that plainly does enforce being told it does not.
+func cniEnforcesNetworkPolicy(t *testing.T) bool {
+	t.Helper()
+
+	if v := os.Getenv("SETEC_E2E_NETPOL"); v != "" {
+		t.Logf("NetworkPolicy enforcement forced by SETEC_E2E_NETPOL=%q", v)
+		return v == "1"
+	}
+
+	for _, ds := range [][2]string{
+		{"kube-system", "cilium"},
+		{"kube-system", "calico-node"},
+		{"calico-system", "calico-node"},
+	} {
+		if exec.Command("kubectl", "get", "daemonset", "-n", ds[0], ds[1]).Run() == nil {
+			t.Logf("NetworkPolicy enforced: %s/%s present", ds[0], ds[1])
+			return true
+		}
+	}
+
+	out, err := exec.Command("kubectl", "get", "daemonset", "-n", "kube-system", "aws-node",
+		"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="aws-eks-nodeagent")].args}`).Output()
+	if err == nil && strings.Contains(string(out), "--enable-network-policy=true") {
+		t.Log("NetworkPolicy enforced: aws-node's network-policy agent has --enable-network-policy=true")
+		return true
+	}
+
+	t.Log("no NetworkPolicy-enforcing CNI detected (no cilium/calico, and aws-node has no " +
+		"--enable-network-policy=true); set SETEC_E2E_NETPOL=1 to override")
 	return false
 }
 
