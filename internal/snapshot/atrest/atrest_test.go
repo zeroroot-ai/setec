@@ -68,7 +68,18 @@ func TestStreamRoundtrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		ct := encryptBytes(t, pt, dek)
-		if size > 0 && bytes.Contains(ct, pt[:min(size, 64)]) {
+		// Containment is only evidence of a leak when the needle is long
+		// enough that a chance match is impossible in practice. Ciphertext
+		// is effectively uniform random, so a 1-byte needle appears in a
+		// ~29-byte frame about 11% of the time (1 - (255/256)^29) — this
+		// assertion used to fail roughly one run in ten on size 1 and had
+		// nothing to do with encryption (setec#292). At 32 bytes the
+		// chance match is ~2^-256.
+		//
+		// The roundtrip assertion below still covers EVERY size, including
+		// 0 and 1, which is what actually exercises the short-input edges.
+		const minLeakNeedle = 32
+		if size >= minLeakNeedle && bytes.Contains(ct, pt[:minLeakNeedle]) {
 			t.Fatalf("size %d: ciphertext contains plaintext prefix", size)
 		}
 		got, err := decryptBytes(ct, dek)

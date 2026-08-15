@@ -655,6 +655,16 @@ credentials:
 # metrics.
 nodeAgent:
   enabled: false
+  # serviceAccount carries extra metadata for the node-agent's own
+  # ServiceAccount (the DaemonSet always uses `{fullname}-node-agent`;
+  # only its metadata is configurable). annotations exists for IRSA on
+  # EKS: annotate with
+  # `eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<role>` and
+  # the pod-identity webhook injects a web-identity token the AWS
+  # default credential chain picks up, so snapshots.s3 needs no static
+  # keys and no credentialsSecret.
+  serviceAccount:
+    annotations: {}
   image:
     repository: ghcr.io/zeroroot-ai/setec-node-agent
     # -- tag defaults to .Chart.AppVersion when left empty. Pin explicitly

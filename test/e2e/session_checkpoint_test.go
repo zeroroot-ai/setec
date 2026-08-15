@@ -63,27 +63,123 @@ import (
 var ckptTickerCommand = []string{"/bin/sh", "-c",
 	"i=0; while true; do i=$((i+1)); echo TICK-$i; sleep 2; done"}
 
+// loudSkip skips the test with a banner that survives `go test`'s
+// terse SKIP line and a CI log scroll. A silently skipped verification
+// test is indistinguishable from a passing one, which is exactly how
+// the session path reached staging at zero-percent verified; every
+// skip in this file therefore says what is missing and what it would
+// take to satisfy it.
+func loudSkip(t *testing.T, reason, remedy string) {
+	t.Helper()
+	fmt.Fprintf(os.Stderr, `
+================================================================================
+SKIPPED: %s
+  reason: %s
+  remedy: %s
+  NOTE:   this scenario was NOT verified. A green run that contains this
+          banner has not exercised the session-checkpoint path.
+================================================================================
+`, t.Name(), reason, remedy)
+	t.Skipf("%s (%s)", reason, remedy)
+}
+
 // requireS3Checkpoints skips unless the harness declares the S3
 // checkpoint backend configured on the node-agents.
 func requireS3Checkpoints(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SETEC_E2E_S3") == "" {
-		t.Skip("SETEC_E2E_S3 not set; node-agent S3 checkpoint backend not configured in this environment")
+		loudSkip(t,
+			"SETEC_E2E_S3 is not set, so the suite installed the release without the node-agent S3 checkpoint backend",
+			"run with SETEC_E2E_S3=1 and SETEC_E2E_S3_BUCKET=<bucket> (staging: set the repository variable STAGING_SESSION_S3_READY=1 so the e2e workflow exports them)")
 	}
 }
 
-// checkpointClassName is the SandboxClass fixture these scenarios
-// install (and remove) around themselves.
-const checkpointClassName = "e2e-session-checkpoint"
+// drainCapacityEnv opts the drain scenario in. The drain scenario is
+// the ONLY scenario in the suite that needs a second sandbox-capable
+// metal node, and on staging the setec-metal Karpenter NodePool is
+// deliberately capped at cpu:48 — exactly one m5zn.metal — because the
+// owner's standing instruction is "cheapest possible, no warm nodes".
+// A second m5zn.metal costs roughly $4/hour on-demand in us-east-1, so
+// the ceiling is raised by hand for a run and lowered again, and this
+// variable is how the operator declares they did it.
+const drainCapacityEnv = "SETEC_E2E_SESSION_DRAIN"
+
+// drainRemedy is the exact procedure the skip banner points at.
+const drainRemedy = "raise the setec-metal NodePool ceiling to cpu:96 via a gitops PR " +
+	"(setec.karpenter.nodePools.metal.limits.cpu in the umbrella values), wait for the " +
+	"second m5zn.metal to join (~$4/hr on-demand, us-east-1), then re-run with " +
+	drainCapacityEnv + "=1 — and revert the ceiling PR when the run finishes"
+
+// requireTwoSandboxNodes enforces the drain scenario's two-node
+// precondition as a DELIBERATE, OPT-IN condition rather than a silent
+// capability probe.
+//
+// Without the opt-in it skips loudly. WITH the opt-in it FAILS when the
+// capacity is not actually there: the operator has asserted they paid
+// for a second node, so "quietly skipped anyway" would be the worst of
+// both worlds — cost incurred, nothing verified.
+func requireTwoSandboxNodes(t *testing.T, backend string) {
+	t.Helper()
+	optedIn := os.Getenv(drainCapacityEnv) != ""
+
+	nodes := &corev1.NodeList{}
+	if err := k8sClient.List(context.Background(), nodes); err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	label := "setec.zeroroot.ai/runtime." + backend
+	var capable []string
+	for _, n := range nodes.Items {
+		if n.Labels[label] != "true" {
+			continue
+		}
+		// A cordoned node is not somewhere the replacement Pod can go.
+		if n.Spec.Unschedulable {
+			continue
+		}
+		capable = append(capable, n.Name)
+	}
+
+	if !optedIn {
+		loudSkip(t,
+			fmt.Sprintf("%s is not set; the drain scenario needs a SECOND %s-capable node and staging runs exactly one by design (found %d: %v)",
+				drainCapacityEnv, backend, len(capable), capable),
+			drainRemedy)
+		return
+	}
+	if len(capable) < 2 {
+		t.Fatalf(`%s=1 asserts a second %s-capable node was provisioned for this run, but only %d schedulable node(s) carry %s=true: %v.
+Either the NodePool ceiling was never raised, the second m5zn.metal has not joined yet, or the runtime probe is mislabelling the nodes (setec#281 class — check the label before blaming this test).
+Failing rather than skipping: the opt-in means capacity was paid for, so a silent skip would verify nothing at full cost.`,
+			drainCapacityEnv, backend, len(capable), label, capable)
+	}
+	t.Logf("drain scenario opted in via %s=1; %d schedulable %s-capable nodes: %v",
+		drainCapacityEnv, len(capable), backend, capable)
+}
+
+// checkpointBackend is the runtime backend the checkpoint scenarios
+// require. Memory checkpointing is a Firecracker snapshot operation
+// (the node-agent drives the Firecracker API socket directly), so
+// kata-qemu cannot serve these scenarios — the value is a named
+// constant so the node-capability probe and the SandboxClass can never
+// drift apart, which is how a "have 2 nodes" probe can silently look
+// at the wrong label.
+const checkpointBackend = "kata-fc"
+
+// checkpointClassName names the SandboxClass fixture these scenarios
+// install (and remove) around themselves. SandboxClass is
+// cluster-scoped, so the name is uniquified by the suite's stamped
+// namespace: a fixed name makes two concurrent e2e runs on the same
+// cluster fight over one object and delete each other's fixture.
+func checkpointClassName() string { return "e2e-session-checkpoint-" + testNamespace }
 
 // installCheckpointClass creates a SandboxClass with sessionCheckpoint
 // enabled and the given idle timeout, cleaning it up with the test.
 func installCheckpointClass(t *testing.T, idle time.Duration) {
 	t.Helper()
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: checkpointClassName},
+		ObjectMeta: metav1.ObjectMeta{Name: checkpointClassName()},
 		Spec: setecv1alpha1.SandboxClassSpec{
-			Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
+			Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend},
 			SessionCheckpoint: &setecv1alpha1.SessionCheckpointSpec{
 				Backend: "s3",
 			},
@@ -104,7 +200,7 @@ func installCheckpointClass(t *testing.T, idle time.Duration) {
 // checkpoint class.
 func checkpointSessionSpec() setecv1alpha1.SandboxSpec {
 	spec := minimalSpec(ckptTickerCommand...)
-	spec.SandboxClassName = checkpointClassName
+	spec.SandboxClassName = checkpointClassName()
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
@@ -209,6 +305,10 @@ func TestSessionCheckpoint_SuspendIdleResume(t *testing.T) {
 // (acceptance: drain → resume-on-other-node, setec#194).
 func TestSessionCheckpoint_DrainResumeOnOtherNode(t *testing.T) {
 	requireS3Checkpoints(t)
+	// Checked BEFORE anything is created: provisioning a session VM and
+	// then discovering there is nowhere to drain it to wastes a metal
+	// node's worth of scheduling for nothing.
+	requireTwoSandboxNodes(t, checkpointBackend)
 	installCheckpointClass(t, 0)
 
 	sb := newSandbox("e2e-ckpt-drain", checkpointSessionSpec())
@@ -228,21 +328,6 @@ func TestSessionCheckpoint_DrainResumeOnOtherNode(t *testing.T) {
 	}
 	firstNode := firstPod.Spec.NodeName
 	preSuspend := maxTick(t, podKey.Name)
-
-	// The scenario needs somewhere else to go.
-	nodes := &corev1.NodeList{}
-	if err := k8sClient.List(context.Background(), nodes); err != nil {
-		t.Fatalf("list nodes: %v", err)
-	}
-	capable := 0
-	for _, n := range nodes.Items {
-		if n.Labels["setec.zeroroot.ai/runtime.kata-fc"] == "true" {
-			capable++
-		}
-	}
-	if capable < 2 {
-		t.Skipf("drain scenario needs >=2 kata-fc nodes, have %d", capable)
-	}
 
 	// Drain: cordon the node (the controller's Node watch triggers
 	// checkpoint-on-drain), uncordoning on the way out.

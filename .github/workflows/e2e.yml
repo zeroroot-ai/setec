@@ -90,6 +90,8 @@ jobs:
     outputs:
       manager_image: ${{ steps.tags.outputs.manager_image }}
       runtime_agent_image: ${{ steps.tags.outputs.runtime_agent_image }}
+      node_agent_image: ${{ steps.tags.outputs.node_agent_image }}
+      sha_tag: ${{ steps.tags.outputs.sha_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -97,8 +99,10 @@ jobs:
         id: tags
         run: |
           sha_tag="sha-${GITHUB_SHA::12}"
+          echo "sha_tag=${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "manager_image=ghcr.io/zeroroot-ai/setec:${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "runtime_agent_image=ghcr.io/zeroroot-ai/setec-runtime-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
+          echo "node_agent_image=ghcr.io/zeroroot-ai/setec-node-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -126,6 +130,21 @@ jobs:
           build-args: CMD=runtime-agent
           push: true
           tags: ${{ steps.tags.outputs.runtime_agent_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The node-agent is the ONLY component that talks to the session
+      # checkpoint store (setec#194) — the operator forwards the per-session
+      # KEK but never touches S3 — so the session-checkpoint job below needs
+      # a PR build of it, and nothing else in this workflow would notice if
+      # it stopped compiling.
+      - name: Build + push node-agent (CMD=node-agent)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          build-args: CMD=node-agent
+          push: true
+          tags: ${{ steps.tags.outputs.node_agent_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -595,3 +614,222 @@ jobs:
           else
             echo "${E2E_NAMESPACE} is gone"
           fi
+
+  # ----------------------------------------------------------------------
+  # session-checkpoint — the FIRST execution of the session lifecycle
+  # (setec#192/#193/#194) against real infrastructure. Everything the
+  # roundtrip job covers is the EPHEMERAL path; this job covers the durable
+  # one: reattach-by-handle, suspend-on-idle with a memory checkpoint to a
+  # real S3 bucket, and resume with process state intact.
+  #
+  # Unlike `roundtrip` this job runs the Go suite in test/e2e (which
+  # helm-installs its own release from the checkout and then asserts
+  # against it), because the scenarios are stateful multi-step flows that a
+  # shell script cannot express honestly.
+  #
+  # WHY A SEPARATE READINESS VARIABLE (STAGING_SESSION_S3_READY, not
+  # STAGING_EPHEMERAL_READY): this job needs strictly more infrastructure
+  # than the roundtrip — the checkpoint bucket and the node-agent IRSA role
+  # from deploy `eks/gibson` — and that Terraform is applied by hand. Reusing
+  # the ephemeral flag would turn "ARC runners are up" into a claim about
+  # an S3 bucket nobody created, and the job would fail on AccessDenied
+  # while looking like a setec regression.
+  #
+  # FIXED namespace/release, unlike every other job here, which uses
+  # ${{ github.run_id }}. The node-agent authenticates to S3 with IRSA, and
+  # the trust policy pins an EXACT `system:serviceaccount:<ns>:<sa>`
+  # subject. A per-run namespace would force a StringLike wildcard over
+  # `setec-e2e-*`, which would let anyone who can create a namespace in
+  # staging assume a role with write access to the checkpoint bucket. A
+  # fixed name plus the concurrency group below is the cheaper trade.
+  # ----------------------------------------------------------------------
+  session-checkpoint:
+    if: vars.STAGING_SESSION_S3_READY == 'true'
+    needs: build-images
+    runs-on: staging-ephemeral
+    timeout-minutes: 45
+    # One at a time: the namespace is fixed (see above) and the scenarios
+    # occupy a metal node for minutes at a stretch. Never cancel a run in
+    # progress — a cancelled run skips its cleanup and strands a microVM.
+    concurrency:
+      group: setec-session-checkpoint-e2e
+      cancel-in-progress: false
+    env:
+      # Must match the `extra_subjects` entry on the setec_node_agent IRSA
+      # role in deploy eks/gibson/modules/iam-irsa/main.tf. The node-agent
+      # ServiceAccount the chart renders is <release>-node-agent, so the
+      # release name IS half of the IAM subject — renaming either side here
+      # silently breaks S3 auth with an AssumeRoleWithWebIdentity denial.
+      E2E_NAMESPACE: setec-e2e-session
+      E2E_RELEASE: setec-e2e-session
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+
+      - name: Install helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      # Every input this job needs that is NOT in the repo. Checked before
+      # anything is installed so a misconfigured variable costs a few
+      # seconds instead of a metal node and 40 minutes.
+      - name: Verify the session-checkpoint infrastructure inputs are set
+        run: |
+          set -uo pipefail
+          missing=0
+          for v in STAGING_SESSION_S3_BUCKET STAGING_SESSION_S3_ROLE_ARN; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::repository variable ${v} is empty but STAGING_SESSION_S3_READY is true"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::apply eks/gibson in zeroroot-ai/deploy (module.s3 setec_checkpoints + module.iam_irsa setec_node_agent), then set the variables from its outputs: s3_bucket_names[\"setec_checkpoints\"] and iam_role_arns[\"setec_node_agent\"]"
+            exit 1
+          fi
+        env:
+          STAGING_SESSION_S3_BUCKET: ${{ vars.STAGING_SESSION_S3_BUCKET }}
+          STAGING_SESSION_S3_ROLE_ARN: ${{ vars.STAGING_SESSION_S3_ROLE_ARN }}
+
+      # setec#281 coordination. The runtime-agent labels each node with the
+      # backends it can actually run; when that probe is wrong (as it was in
+      # v0.110.1, which did not follow containerd's `imports` array) every
+      # node reads NOT kata-capable and nothing schedules. That failure looks
+      # exactly like a broken checkpoint path from inside the suite — a
+      # Sandbox that never leaves Pending — so it is diagnosed HERE, once,
+      # with the right issue number attached, instead of being misfiled
+      # against the session code.
+      - name: Preflight — a kata-fc-capable node exists
+        run: |
+          set -uo pipefail
+          if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
+            echo "::error::RuntimeClass kata-fc is absent; kata-deploy has not run on this cluster (deploy#1080)"
+            exit 1
+          fi
+          # Memory checkpointing is a Firecracker snapshot operation, so
+          # kata-qemu cannot serve these scenarios however healthy it looks.
+          capable="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-fc=true \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
+          echo "kata-fc-capable nodes: ${capable}"
+          if [ "${capable}" -lt 1 ]; then
+            echo "--- node runtime labels ---"
+            kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu,katacontainers.io/kata-runtime || true
+            echo "::error::no node carries setec.zeroroot.ai/runtime.kata-fc=true. If a sandbox-host node IS up and kata-deploy has installed the shims, this is the runtime-agent probe bug zeroroot-ai/setec#281 (the probe ignores containerd's \`imports\` array) — NOT a session-checkpoint defect. Confirm setec >= v0.110.2 is the running runtime-agent before filing anything against the session path."
+            exit 1
+          fi
+
+      # The namespace is fixed, so a previous run that died between install
+      # and cleanup leaves a release in the way. Reap it rather than failing
+      # the install with "cannot re-use a name that is still in use".
+      - name: Reap a previous run's leftovers
+        run: |
+          set -uo pipefail
+          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
+          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
+          for kind in clusterrole clusterrolebinding; do
+            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
+              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
+            done
+          done
+          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+
+      - name: Run the session lifecycle scenarios
+        env:
+          # Suite identity — see the E2E_NAMESPACE comment above.
+          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
+          SETEC_E2E_RUNTIMECLASS: kata-fc
+          # PR-built images, pulled from ghcr. pullPolicy=Never (the suite
+          # default, right for a runner that side-loads into a node's image
+          # store) is WRONG here: this runner is an ordinary pod and cannot
+          # reach any node's store.
+          SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
+          SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
+          SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
+          SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
+          SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+          # The chart's ValidatingWebhookConfiguration is CLUSTER-scoped with
+          # failurePolicy=Fail. On this SHARED cluster a run that dies before
+          # cleanup would fail every Sandbox write cluster-wide until a human
+          # deleted it. The session scenarios do not exercise admission.
+          SETEC_E2E_WEBHOOK: "0"
+          # Session-checkpoint store. The prefix must match the one the IAM
+          # policy is scoped to (local.setec_checkpoint_prefix in deploy
+          # eks/gibson/modules/iam-irsa/main.tf); a mismatch reads as
+          # AccessDenied at the first suspend.
+          SETEC_E2E_S3: "1"
+          SETEC_E2E_S3_BUCKET: ${{ vars.STAGING_SESSION_S3_BUCKET }}
+          SETEC_E2E_S3_REGION: ${{ vars.STAGING_SESSION_S3_REGION || 'us-east-1' }}
+          SETEC_E2E_S3_PREFIX: sessions/
+          SETEC_E2E_S3_ROLE_ARN: ${{ vars.STAGING_SESSION_S3_ROLE_ARN }}
+          # The drain scenario needs a SECOND m5zn.metal (~$4/hr on-demand)
+          # and the setec-metal NodePool is capped at one by design. It skips
+          # LOUDLY unless an operator raises the ceiling for a run and sets
+          # this variable; see docs/session-checkpoints.md.
+          SETEC_E2E_SESSION_DRAIN: ${{ vars.STAGING_SESSION_DRAIN_CAPACITY }}
+        run: |
+          go test -tags=e2e ./test/e2e/... -v -timeout 40m \
+            -run '^(TestSession_ReattachByHandle|TestSessionCheckpoint_.*)$' \
+            2>&1 | tee session-e2e.log
+          status="${PIPESTATUS[0]}"
+          # A skipped scenario is not a verified scenario. Surface every one
+          # in the job summary so a green check never gets read as coverage
+          # it does not have.
+          {
+            echo "### session-checkpoint scenarios"
+            echo ''
+            grep -E '^(=== RUN|--- (PASS|FAIL|SKIP))' session-e2e.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q -- '--- SKIP' session-e2e.log; then
+            echo "::warning::one or more session scenarios SKIPPED — see the job summary; this run did not verify them"
+          fi
+          exit "$status"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          set -uo pipefail
+          mkdir -p session-e2e-artifacts
+          kubectl get nodes -o wide -L setec.zeroroot.ai/runtime.kata-fc > session-e2e-artifacts/nodes.txt 2>&1 || true
+          kubectl get sandboxes -n "${E2E_NAMESPACE}" -o yaml > session-e2e-artifacts/sandboxes.yaml 2>&1 || true
+          kubectl get pods -n "${E2E_NAMESPACE}" -o wide > session-e2e-artifacts/pods.txt 2>&1 || true
+          kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp > session-e2e-artifacts/events.txt 2>&1 || true
+          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=500 --all-containers \
+            > session-e2e-artifacts/operator.log 2>&1 || true
+          # The node-agent log is where an S3/KMS AccessDenied actually
+          # appears; the operator only ever sees "checkpoint failed".
+          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent --tail=500 \
+            > session-e2e-artifacts/node-agent.log 2>&1 || true
+          cp session-e2e.log session-e2e-artifacts/ 2>/dev/null || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: session-checkpoint-diagnostics
+          path: session-e2e-artifacts/
+          retention-days: 7
+
+      # The suite's own TestMain uninstalls on the way out, but only if it
+      # reached that point — a timeout or a cancelled job never gets there,
+      # and this namespace is fixed, so the leftovers block the NEXT run
+      # rather than expiring with the run id.
+      - name: Clean up
+        if: always()
+        run: |
+          set -uo pipefail
+          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false 2>/dev/null || true
+          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false \
+            || echo "::warning::could not delete ${E2E_NAMESPACE}; the next run reaps it"
+          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          for kind in clusterrole clusterrolebinding; do
+            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
+              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
+            done
+          done

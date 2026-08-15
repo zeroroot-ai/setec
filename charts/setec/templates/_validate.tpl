@@ -9,6 +9,34 @@ real manifest (runtimes-configmap.yaml) so render failures surface during
 {{- include "setec.validateEntropyReseed" . -}}
 {{- include "setec.validateRestoreUniquify" . -}}
 {{- include "setec.validateCredentials" . -}}
+{{- include "setec.validateSnapshotS3" . -}}
+{{- end -}}
+
+{{/*
+Session-checkpoint S3 validation (setec#194, ADR-0007). Every
+snapshots.s3.* value is consumed by exactly one place — the node-agent
+DaemonSet's argv, inside the snapshots.enabled guard. Turning s3 on
+without those two switches therefore renders NOTHING and the operator
+gets a FailedPrecondition ("s3 session-checkpoint backend is not
+configured on this node") at the first suspend, hours later. Fail the
+render instead.
+*/}}
+{{- define "setec.validateSnapshotS3" -}}
+{{- $s3 := .Values.snapshots.s3 -}}
+{{- if $s3.enabled -}}
+{{- if not .Values.snapshots.enabled -}}
+{{- fail "snapshots.s3.enabled=true requires snapshots.enabled=true: the s3 flags are only rendered inside the snapshots guard, so this combination would silently produce a node-agent with no checkpoint backend" -}}
+{{- end -}}
+{{- if not .Values.nodeAgent.enabled -}}
+{{- fail "snapshots.s3.enabled=true requires nodeAgent.enabled=true: the s3 checkpoint backend lives in the node-agent DaemonSet, which is not rendered at all when nodeAgent.enabled=false" -}}
+{{- end -}}
+{{- if not $s3.bucket -}}
+{{- fail "snapshots.s3.bucket is required when snapshots.s3.enabled=true" -}}
+{{- end -}}
+{{- if and (not $s3.endpoint) $s3.pathStyle -}}
+{{- fail "snapshots.s3.pathStyle=true with an empty snapshots.s3.endpoint targets real AWS S3 with path-style addressing, which AWS has deprecated; set pathStyle=false for real S3 (keep it true only for MinIO and other self-hosted endpoints)" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
