@@ -5,7 +5,7 @@
 # can pin a known Python version rather than pulling from Docker Hub at
 # launch time.
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:876416ecde9aca2bcc90e1fb0c7a9500bbf749f5788b70f82d4c5a5c2357f8b4
 
 # Harden: run as a non-root user inside the VM.
 RUN useradd --create-home --shell /usr/sbin/nologin runner

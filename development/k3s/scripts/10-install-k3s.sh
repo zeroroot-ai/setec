@@ -13,6 +13,17 @@ KUBECONFIG_OUT="${ROOT}/kubeconfig"
 
 K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
 
+# The k3s installer is fetched from the pinned release commit and verified
+# against a recorded digest, never piped straight from the mutable
+# https://get.k3s.io redirect (setec#280). get.k3s.io serves whatever is on
+# k3s master at the moment of the curl, so an unpinned `curl | sh` executes
+# unreviewed root-privileged code that can change under us between two
+# bring-ups of the same K3S_VERSION. To bump: change K3S_INSTALLER_COMMIT to
+# the commit the new K3S_VERSION tag points at, re-download, and record the
+# new sha256 below.
+K3S_INSTALLER_COMMIT="${K3S_INSTALLER_COMMIT:-a562d090b05cf8d55b6a8b57556787c24c8ce21a}"
+K3S_INSTALLER_SHA256="${K3S_INSTALLER_SHA256:-f60c3d8940dfc896f7d83aaf57726c91cf21afc4bca40036472df108d9700b4b}"
+
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[0;33m%s\033[0m\n' "$*"; }
 
@@ -28,10 +39,19 @@ if systemctl is-active --quiet k3s 2>/dev/null; then
     yellow "k3s service is already active — skipping install, re-exporting kubeconfig"
 else
     green "Installing k3s ${K3S_VERSION} (Traefik disabled)"
-    curl -sfL https://get.k3s.io | \
-        INSTALL_K3S_VERSION="${K3S_VERSION}" \
+    installer="$(mktemp -t k3s-install.XXXXXX.sh)"
+    trap 'rm -f "${installer}"' EXIT
+    curl -sfL --retry 3 -o "${installer}" \
+        "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_INSTALLER_COMMIT}/install.sh"
+    echo "${K3S_INSTALLER_SHA256}  ${installer}" | sha256sum -c - >/dev/null || {
+        echo "FAIL: k3s install.sh digest mismatch at commit ${K3S_INSTALLER_COMMIT}." >&2
+        echo "      Expected ${K3S_INSTALLER_SHA256}, got $(sha256sum "${installer}" | cut -d' ' -f1)." >&2
+        echo "      Refusing to run an unverified root-privileged installer." >&2
+        exit 1
+    }
+    INSTALL_K3S_VERSION="${K3S_VERSION}" \
         INSTALL_K3S_EXEC="server --disable=traefik --write-kubeconfig-mode=0644 --node-name=setec-dev" \
-        sh -
+        sh "${installer}"
 fi
 
 # Wait for node Ready. If k3s is already active but the node is stuck
