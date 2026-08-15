@@ -76,6 +76,30 @@ const (
 	// readable. Short, because the Pod is held back until it is.
 	networkPolicyReadBackRequeue = 2 * time.Second
 
+	// classNotFoundGrace bounds how long a Sandbox may sit Pending because
+	// its SandboxClass does not resolve before the reconciler gives up and
+	// fails it terminally (setec#299).
+	//
+	// A missing class is transient in exactly one window: the Sandbox and
+	// its class were created together and the class has not yet been
+	// observed by this controller's cache. Past that, the class was either
+	// never created or has been deleted, and no amount of requeueing brings
+	// it back — the Sandbox was previously requeued forever, accumulating
+	// as Pending/ClassNotFound (10 on staging, oldest 23h) with no Pod, so
+	// nothing was unschedulable, so no autoscaler ever reacted and the
+	// objects simply piled up. A real stuck dispatch then looks exactly
+	// like CI litter.
+	//
+	// Five minutes is far beyond any cache-sync window while still short
+	// enough that an operator watching a launch sees the truth quickly.
+	classNotFoundGrace = 5 * time.Minute
+
+	// classNotFoundRequeue is the poll interval while inside the grace
+	// window. Shorter than runtimeUnavailableRequeue so the terminal
+	// transition lands promptly after the deadline rather than up to a
+	// minute late.
+	classNotFoundRequeue = 30 * time.Second
+
 	// Event reasons. Kept as constants so tests and docs can reference them
 	// by name rather than string-matching fragments of the message.
 	eventReasonRuntimeUnavailable    = "RuntimeUnavailable"
@@ -192,6 +216,12 @@ type SandboxReconciler struct {
 	// TenantLabelKey is the label key consulted when
 	// MultiTenancyEnabled. Default "setec.zeroroot.ai/tenant".
 	TenantLabelKey string
+
+	// ClassNotFoundGrace bounds how long a Sandbox may sit Pending on an
+	// unresolvable SandboxClass before it is failed terminally (setec#299).
+	// Zero means classNotFoundGrace. Overridden in tests so the terminal
+	// transition can be driven through a real reconcile without waiting.
+	ClassNotFoundGrace time.Duration
 
 	// --- Phase 3 optional dependencies ---
 	//
@@ -341,11 +371,29 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	cls, classResolved, classErr := r.resolveClass(ctx, sb)
 	if classErr != nil {
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass, "%s", classErr.Error())
+
+		// An unresolvable class is transient only while this controller's
+		// cache catches up with a class created alongside the Sandbox. Past
+		// classNotFoundGrace it is a permanent condition — the class was
+		// never created, or (the staging case) it was a per-run class that
+		// has since been deleted — so fail terminally instead of requeueing
+		// forever (setec#299).
+		setSpanError(span, classErr.Error())
+		grace := r.classNotFoundGraceOrDefault()
+		if classNotFoundExpired(sb, time.Now(), grace) {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass,
+				"SandboxClass did not resolve within %s; failing terminally", grace)
+			if err := r.patchFailedStatus(ctx, sb, eventReasonClassNotFound); err != nil {
+				return ctrl.Result{}, fmt.Errorf("patch ClassNotFound terminal status: %w", err)
+			}
+			return ctrl.Result{}, nil
+		}
 		if err := r.patchPendingStatus(ctx, sb, eventReasonClassNotFound); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch ClassNotFound status: %w", err)
 		}
-		setSpanError(span, classErr.Error())
-		return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+		// Requeue past the grace deadline so the terminal transition happens
+		// even if nothing else touches this Sandbox again.
+		return ctrl.Result{RequeueAfter: classNotFoundRequeue}, nil
 	}
 
 	// (5) Phase 2: validate the Sandbox against its class. Defense in
@@ -1507,6 +1555,64 @@ func (r *SandboxReconciler) createPod(
 // patchPendingStatus writes a minimal Pending/<reason> status using the
 // status subresource. It is idempotent: no-op if the live status already
 // reflects the desired phase and reason.
+// classNotFoundExpired reports whether a Sandbox has been waiting on an
+// unresolvable SandboxClass for longer than classNotFoundGrace (setec#299).
+//
+// The clock is the Sandbox's own creation timestamp, not the last status
+// transition: patchPendingStatus only writes when the phase/reason actually
+// changes, so LastTransitionTime stays pinned at the first ClassNotFound and
+// would work here too — but creationTimestamp is set by the API server, is
+// immutable, and cannot be reset by a status rewrite, which makes the deadline
+// impossible to extend accidentally.
+//
+// A Sandbox that never recorded a ClassNotFound status (phase is not Pending,
+// or the reason differs) is not counted as waiting: this is only about the
+// stuck-Pending pile-up.
+func classNotFoundExpired(sb *setecv1alpha1.Sandbox, now time.Time, grace time.Duration) bool {
+	if grace <= 0 {
+		grace = classNotFoundGrace
+	}
+	created := sb.CreationTimestamp.Time
+	if created.IsZero() {
+		// No creation stamp (fake client in a unit test, or an object built
+		// by hand): treat as fresh rather than instantly failing it.
+		return false
+	}
+	return now.Sub(created) >= grace
+}
+
+// classNotFoundGraceOrDefault resolves the effective grace period for this
+// reconciler.
+func (r *SandboxReconciler) classNotFoundGraceOrDefault() time.Duration {
+	if r.ClassNotFoundGrace > 0 {
+		return r.ClassNotFoundGrace
+	}
+	return classNotFoundGrace
+}
+
+// patchFailedStatus drives a Sandbox to the terminal Failed phase with a
+// machine-readable reason. Terminal phases are where the reconciler stops
+// recreating Pods (see handleMissingPod), so this is what actually ends a
+// stuck object's lifecycle.
+//
+// SandboxStatus carries no free-text message field; the human-readable detail
+// rides the Warning Event the caller has already recorded.
+func (r *SandboxReconciler) patchFailedStatus(
+	ctx context.Context,
+	sb *setecv1alpha1.Sandbox,
+	reason string,
+) error {
+	if sb.Status.Phase == setecv1alpha1.SandboxPhaseFailed && sb.Status.Reason == reason {
+		return nil
+	}
+	original := sb.DeepCopy()
+	sb.Status.Phase = setecv1alpha1.SandboxPhaseFailed
+	sb.Status.Reason = reason
+	now := metav1.NewTime(time.Now())
+	sb.Status.LastTransitionTime = &now
+	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+}
+
 func (r *SandboxReconciler) patchPendingStatus(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
