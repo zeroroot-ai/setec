@@ -9,5 +9,5 @@ require (
 
 require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
