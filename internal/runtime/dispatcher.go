@@ -28,8 +28,17 @@ import (
 )
 
 // ErrNoEligibleRuntime is returned by Registry.Select when no backend in the
-// candidate list (primary + fallback) has both a registered Dispatcher and
-// at least one capable node.
+// candidate list (primary + fallback) has a registered Dispatcher.
+//
+// This is the terminal half of "no eligible runtime": the operator was never
+// wired with any of the requested backends, there is no Dispatcher to build a
+// Pod spec from, and no amount of node provisioning can change that. Only a
+// configuration change (enabling the backend) can.
+//
+// It is deliberately NOT returned for the transient half — a Dispatcher exists
+// but no node advertises its capability label yet. That case is a successful
+// Selection with Provisional set; see Selection.Provisional for why the
+// difference matters.
 var ErrNoEligibleRuntime = errors.New("no eligible runtime")
 
 // Dispatcher is the backend-agnostic interface every isolation runtime must
@@ -84,6 +93,34 @@ type Selection struct {
 	// only when FellBack is true.  Used by the reconciler to increment
 	// setec_sandbox_fallback_total{from,to}.
 	FromBackend string
+
+	// Provisional is true when the chosen Backend has a registered Dispatcher
+	// but no node in the cluster advertises its capability label yet.  The
+	// Selection is otherwise complete and usable: RuntimeClassName,
+	// NodeAffinity, Overhead and MutatePod are all valid.
+	//
+	// This is the "not yet" case, as distinct from the "never" case that
+	// ErrNoEligibleRuntime reports, and the reconciler must still create the
+	// Pod for it.  A cluster autoscaler — Karpenter, cluster-autoscaler,
+	// anything else — provisions in response to an unschedulable Pod and
+	// nothing else.  Withholding the Pod until a capable node exists is
+	// therefore self-defeating on a pool that scales to zero: no capable node
+	// means no Pod, no Pod means nothing unschedulable, and nothing
+	// unschedulable means no node is ever provisioned.
+	//
+	// Creating the Pod is also the right answer on a cluster with no
+	// autoscaler at all.  It simply stays Pending, carrying the scheduler's
+	// own explanation of which constraint it failed, and schedules by itself
+	// the moment an administrator adds a capable node — no operator
+	// intervention, no stale terminal status to clear.
+	//
+	// Whether an autoscaler can actually act on the Pod is a property of the
+	// Pod's hard scheduling constraints versus the node pool's declared
+	// labels/taints, not of this flag: a Pod whose required node affinity
+	// names a label no node pool declares is unschedulable AND unprovisionable.
+	// See charts/setec/values.yaml (karpenter.nodeLabels) for the invariant
+	// that keeps the two in agreement.
+	Provisional bool
 }
 
 // Registry holds the set of Dispatcher implementations that the operator has
@@ -129,8 +166,7 @@ func (r *Registry) EnabledBackends() []string {
 	return names
 }
 
-// Select picks the first backend from the candidate list whose Dispatcher is
-// registered AND whose name appears in nodeCapabilities.
+// Select picks a backend from the candidate list.
 //
 // The candidate list is built as follows:
 //  1. If class is non-nil and class.Spec.Runtime is non-nil and
@@ -139,11 +175,29 @@ func (r *Registry) EnabledBackends() []string {
 //  2. Otherwise use cfg.Defaults.Runtime.Backend as the primary, with
 //     cfg.Defaults.Runtime.Fallback as the tail.
 //
-// Selection.FellBack is true when the selected backend is not the primary
-// (position 0) candidate.  Select does not mutate class, cfg, or
-// nodeCapabilities.
+// Selection happens in two passes, because "no capable node" and "no such
+// backend" are different conditions with different remedies and only the
+// second one is terminal:
 //
-// Returns ErrNoEligibleRuntime when no candidate satisfies both constraints.
+//	Pass 1 — a backend that is registered AND currently advertised by at least
+//	one node.  This is the only pass that may fall back: the point of a
+//	fallback chain is to move a Sandbox onto a backend the cluster can run
+//	right now, so it is meaningful only while some candidate can run right now.
+//
+//	Pass 2 — no candidate has a capable node.  Falling back here would buy
+//	nothing (a fallback with no capable node is no more schedulable than the
+//	primary with no capable node), so the first REGISTERED candidate wins and
+//	the Selection is marked Provisional.  The caller creates the Pod anyway;
+//	that unschedulable Pod is what makes a scale-to-zero pool provision a node.
+//	See Selection.Provisional.
+//
+// Selection.FellBack is true when the selected backend is not the primary
+// (position 0) candidate — in pass 2 that means the primary has no Dispatcher
+// at all, which is a permanent condition and a real fallback.  Select does not
+// mutate class, cfg, or nodeCapabilities.
+//
+// Returns ErrNoEligibleRuntime only when NO candidate has a registered
+// Dispatcher, which no node provisioning could ever fix.
 func (r *Registry) Select(
 	class *v1alpha1.SandboxClass,
 	cfg *RuntimeConfig,
@@ -157,6 +211,20 @@ func (r *Registry) Select(
 	capSet := toSet(nodeCapabilities)
 	candidates := append([]string{primary}, fallback...)
 
+	newSelection := func(i int, backend string, d Dispatcher, provisional bool) *Selection {
+		sel := &Selection{
+			Backend:     backend,
+			Dispatcher:  d,
+			FellBack:    i > 0,
+			Provisional: provisional,
+		}
+		if i > 0 {
+			sel.FromBackend = primary
+		}
+		return sel
+	}
+
+	// Pass 1: registered and runnable on a node that exists today.
 	for i, backend := range candidates {
 		d, ok := r.dispatchers[backend]
 		if !ok {
@@ -165,19 +233,20 @@ func (r *Registry) Select(
 		if !capSet[backend] {
 			continue
 		}
-		sel := &Selection{
-			Backend:    backend,
-			Dispatcher: d,
-			FellBack:   i > 0,
-		}
-		if i > 0 {
-			sel.FromBackend = primary
-		}
-		return sel, nil
+		return newSelection(i, backend, d, false), nil
 	}
 
-	return nil, fmt.Errorf("%w: requested=%q fallback=%v registered=%v nodeCapabilities=%v",
-		ErrNoEligibleRuntime, primary, fallback, r.enabledBackendsLocked(), nodeCapabilities)
+	// Pass 2: registered, but nothing capable is up yet.
+	for i, backend := range candidates {
+		d, ok := r.dispatchers[backend]
+		if !ok {
+			continue
+		}
+		return newSelection(i, backend, d, true), nil
+	}
+
+	return nil, fmt.Errorf("%w: no candidate backend has a registered dispatcher: requested=%q fallback=%v registered=%v",
+		ErrNoEligibleRuntime, primary, fallback, r.enabledBackendsLocked())
 }
 
 // candidateChain derives the primary backend name and the ordered fallback

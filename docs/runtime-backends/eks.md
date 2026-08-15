@@ -144,6 +144,43 @@ How the pieces line up:
   (default 5m) with no Sandbox pods, `WhenEmpty` consolidation deprovisions
   the node.
 
+### Rolling your own NodePool
+
+If you write the `NodePool` yourself instead of letting the chart render it,
+one requirement is easy to miss and silently fatal to scale-from-zero:
+
+> **The NodePool must declare every `setec.zeroroot.ai/runtime.<backend>`
+> label its Sandboxes select on, in `template.metadata.labels` or
+> `template.spec.requirements`.**
+
+Karpenter simulates scheduling against the NodePool *template*, not against
+what a node will look like after it boots. Labels a DaemonSet writes later —
+including the ones Setec's own `runtime-agent` writes — are invisible to that
+simulation. And Karpenter denies, rather than ignores, a pod requirement on a
+custom label key the template does not define (`pkg/scheduling/requirements.go`,
+`Requirements.Compatible`: *"Custom Labels must intersect, but if not defined
+are denied"*). Only the `kubernetes.io/*`-style well-known labels are exempt.
+
+Every Sandbox pod carries that requirement twice over — as the backend's
+required node affinity, and as the `scheduling.nodeSelector` the RuntimeClass
+admission plugin injects — so a NodePool that omits it can never be selected:
+
+```
+incompatible with nodepool "my-metal", ... incompatible requirements,
+label "setec.zeroroot.ai/runtime.kata-fc" does not have known values
+```
+
+That message in the Karpenter controller logs, next to a Sandbox sitting in
+`Pending`/`AwaitingCapableNode`, is this mistake. The same applies to the
+taint: a NodePool tainted `NoSchedule` is skipped outright unless the pod
+tolerates it, which is what the SandboxClass `spec.tolerations` above is for.
+
+This is safe on the baked-AMI path because the AMI boots kata-capable, so the
+label is true from the node's first heartbeat. On a path where kata is
+installed *after* boot (kata-deploy), the label is briefly a promise rather
+than a fact — the pod may land and retry until containerd is configured, and
+the `runtime-agent` probe is what keeps the claim honest afterwards.
+
 ### Cost model
 
 - **On-demand metal floor**: you pay the `.metal` hourly rate only while a

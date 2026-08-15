@@ -22,9 +22,12 @@ limitations under the License.
 //  1. Legacy path: nil Runtimes/RuntimeCfg → synthesized kata-fc Selection.
 //  2. Fallback: class wants kata-qemu (no capable node), fallback to gvisor
 //     (node has gvisor label) → Selection.Backend=gvisor, FellBack=true.
-//  3. Exhaustion: class wants runc, no capable node → Sandbox patched to
-//     Pending with Reason=NoEligibleNode, ErrNoEligibleRuntime returned,
-//     and the same Sandbox selects successfully once a capable node joins.
+//  3. No capable node: class wants runc, no node advertises it → a
+//     Provisional Selection, Sandbox Pending with Reason=AwaitingCapableNode,
+//     the Pod created anyway, and Provisional clearing on its own once a
+//     capable node joins.
+//  4. Unregistered backend: nothing in the chain has a Dispatcher → the
+//     terminal ErrNoEligibleRuntime with Reason=RuntimeNotEnabled.
 package controller
 
 import (
@@ -32,6 +35,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -240,15 +244,17 @@ func TestSelectRuntime_Fallback(t *testing.T) {
 // Scenario C: Exhaustion — no capable nodes → Sandbox goes to Failed.
 // ---------------------------------------------------------------------------
 
-// TestSelectRuntime_Exhaustion verifies that when no capable node exists for
-// the requested backend (runc) and there is no fallback, selectRuntime holds
-// the Sandbox in Pending with Reason=NoEligibleNode and returns
-// ErrNoEligibleRuntime.
+// TestSelectRuntime_NoCapableNodeIsProvisional verifies that when no capable
+// node exists for the requested backend (runc) and there is no fallback,
+// selectRuntime returns a usable Selection marked Provisional rather than an
+// error, and holds the Sandbox in Pending with Reason=AwaitingCapableNode.
 //
-// Pending, not Failed: on a scale-to-zero node pool this is the normal
-// starting state, and Failing here made scale-from-zero impossible — the
-// Sandbox died before any Pod existed to trigger the scale-up (setec#230).
-func TestSelectRuntime_Exhaustion(t *testing.T) {
+// A usable Selection, not an error, because the caller must go on to create
+// the Pod. setec#230 made this Pending instead of Failed, which let the
+// Sandbox survive the wait; it did not end the wait, because the reconcile
+// still returned before createPod and an autoscaler only ever provisions in
+// response to an unschedulable Pod (setec#300).
+func TestSelectRuntime_NoCapableNodeIsProvisional(t *testing.T) {
 	g := NewWithT(t)
 
 	cfg := &runtimepkg.RuntimeConfig{
@@ -273,26 +279,68 @@ func TestSelectRuntime_Exhaustion(t *testing.T) {
 	r, c := newRSReconciler(t, reg, cfg, cls, sb, unrelatedNode)
 
 	sel, err := r.selectRuntime(context.Background(), sb, cls)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(sel).ToNot(BeNil())
+	g.Expect(sel.Provisional).To(BeTrue())
+	g.Expect(sel.Backend).To(Equal(runtimepkg.BackendRunc))
+	// The Selection must be complete enough to build a Pod from — returning
+	// one that the caller cannot use would defeat the purpose.
+	g.Expect(sel.Dispatcher).ToNot(BeNil())
+
+	// Sandbox waits in Pending with AwaitingCapableNode — never terminal.
+	var updated setecv1alpha1.Sandbox
+	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
+	g.Expect(updated.Status.Reason).To(Equal(eventReasonAwaitingCapableNode))
+}
+
+// TestSelectRuntime_UnregisteredBackendIsTerminal is the other half of the
+// distinction. No candidate in the chain has a registered Dispatcher, so
+// there is no Pod spec to build and no node that could ever change that.
+// Only this case returns ErrNoEligibleRuntime, and only this case stops
+// before Pod creation.
+func TestSelectRuntime_UnregisteredBackendIsTerminal(t *testing.T) {
+	g := NewWithT(t)
+
+	cfg := &runtimepkg.RuntimeConfig{
+		Runtimes: map[string]runtimepkg.BackendConfig{
+			runtimepkg.BackendRunc: emptyOverheadConfig("runc"),
+		},
+		Defaults: runtimepkg.DefaultsConfig{
+			Runtime: runtimepkg.RuntimeDefaults{Backend: runtimepkg.BackendRunc},
+		},
+	}
+	// Registry deliberately left without a gvisor dispatcher.
+	reg := runtimepkg.NewRegistry()
+	reg.Register(runtimepkg.NewRuncDispatcher(cfg.Runtimes[runtimepkg.BackendRunc]))
+
+	// A node advertising gvisor changes nothing: the operator has no
+	// dispatcher for it, so the capability is unusable.
+	gvisorNode := newNodeWithLabels("gvisor-node", map[string]string{
+		"setec.zeroroot.ai/runtime.gvisor": "true",
+	})
+
+	cls := newSandboxClassForRS("unwired-class", runtimepkg.BackendGVisor, nil)
+	sb := newSandboxForRS(cls.Name)
+
+	r, c := newRSReconciler(t, reg, cfg, cls, sb, gvisorNode)
+
+	sel, err := r.selectRuntime(context.Background(), sb, cls)
 	g.Expect(sel).To(BeNil())
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(errors.Is(err, runtimepkg.ErrNoEligibleRuntime)).To(BeTrue(),
 		"expected ErrNoEligibleRuntime, got: %v", err)
 
-	// Sandbox waits in Pending with NoEligibleNode — never terminal.
 	var updated setecv1alpha1.Sandbox
 	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
-	g.Expect(updated.Status.Reason).To(Equal(eventReasonNoEligibleNode))
+	g.Expect(updated.Status.Reason).To(Equal(eventReasonRuntimeNotEnabled))
 }
 
-// TestSelectRuntime_ExhaustionRecoversWhenANodeAppears is the scale-from-zero
-// case end to end: the Sandbox that could not be placed is still selectable
+// TestSelectRuntime_ProvisionalClearsWhenANodeAppears is the scale-from-zero
+// case end to end: the Sandbox placed provisionally stops being provisional
 // once a capable node joins, with no user action and no new Sandbox.
-//
-// A terminal Failed phase could not express this — the object was done. The
-// same reconciler call now succeeds against the same Sandbox object and
-// writes status.runtime.chosen.
-func TestSelectRuntime_ExhaustionRecoversWhenANodeAppears(t *testing.T) {
+func TestSelectRuntime_ProvisionalClearsWhenANodeAppears(t *testing.T) {
 	g := NewWithT(t)
 
 	cfg := &runtimepkg.RuntimeConfig{
@@ -313,16 +361,17 @@ func TestSelectRuntime_ExhaustionRecoversWhenANodeAppears(t *testing.T) {
 	r, c := newRSReconciler(t, reg, cfg, cls, sb)
 
 	sel, err := r.selectRuntime(context.Background(), sb, cls)
-	g.Expect(sel).To(BeNil())
-	g.Expect(errors.Is(err, runtimepkg.ErrNoEligibleRuntime)).To(BeTrue(),
-		"expected ErrNoEligibleRuntime, got: %v", err)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(sel).ToNot(BeNil())
+	g.Expect(sel.Provisional).To(BeTrue())
 
 	var pending setecv1alpha1.Sandbox
 	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &pending)).To(Succeed())
 	g.Expect(pending.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
-	g.Expect(pending.Status.Reason).To(Equal(eventReasonNoEligibleNode))
+	g.Expect(pending.Status.Reason).To(Equal(eventReasonAwaitingCapableNode))
 
-	// The autoscaler provisions a capable node.
+	// The autoscaler provisions a capable node — which is what the Pod
+	// created off the provisional Selection asked it to do.
 	capable := newNodeWithLabels("runc-node", map[string]string{
 		"setec.zeroroot.ai/runtime.runc": "true",
 	})
@@ -332,6 +381,7 @@ func TestSelectRuntime_ExhaustionRecoversWhenANodeAppears(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(sel).ToNot(BeNil())
 	g.Expect(sel.Backend).To(Equal(runtimepkg.BackendRunc))
+	g.Expect(sel.Provisional).To(BeFalse())
 }
 
 // ---------------------------------------------------------------------------
@@ -369,4 +419,100 @@ func TestSelectRuntime_NilRuntimeDefaultsToConfig(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sel.Backend).To(Equal(runtimepkg.BackendKataFC))
 	g.Expect(sel.FellBack).To(BeFalse())
+}
+
+// ---------------------------------------------------------------------------
+// Scenario E: scale-from-zero — the Pod is created with NO capable node.
+// ---------------------------------------------------------------------------
+
+// TestHandleMissingPod_CreatesPodWithNoCapableNode is the behavioural centre
+// of setec#300. With an empty node pool the reconciler must still create the
+// Pod, because an unschedulable Pod is the only thing a cluster autoscaler
+// acts on. Before this fix handleMissingPod returned on ErrNoEligibleRuntime
+// and no Pod was ever written, so Karpenter had nothing to react to and the
+// pool stayed at zero forever.
+//
+// The assertions also enumerate the Pod's HARD scheduling constraints, which
+// is what decides whether an autoscaler can satisfy it. Karpenter denies a
+// pod whose required affinity names a custom label key its NodePool does not
+// declare ("label %q does not have known values",
+// kubernetes-sigs/karpenter pkg/scheduling/requirements.go Compatible), and
+// skips a NodePool whose taint the pod does not tolerate. So the set below is
+// exactly the set a sandbox-host NodePool template has to declare:
+//
+//   - setec.zeroroot.ai/runtime.<backend>=true — from the Dispatcher's
+//     required node affinity (and, in a real cluster, injected again as a
+//     nodeSelector by RuntimeClass admission).
+//   - kubernetes.io/os, kubernetes.io/arch — well-known, always allowed.
+//   - the SandboxClass's own nodeSelector and tolerations — how an operator
+//     steers Sandboxes onto a dedicated, tainted pool.
+func TestHandleMissingPod_CreatesPodWithNoCapableNode(t *testing.T) {
+	g := NewWithT(t)
+
+	cfg := &runtimepkg.RuntimeConfig{
+		Runtimes: map[string]runtimepkg.BackendConfig{
+			runtimepkg.BackendRunc: emptyOverheadConfig("runc"),
+		},
+		Defaults: runtimepkg.DefaultsConfig{
+			Runtime: runtimepkg.RuntimeDefaults{Backend: runtimepkg.BackendRunc},
+		},
+	}
+	reg := runtimepkg.NewRegistry()
+	reg.Register(runtimepkg.NewRuncDispatcher(cfg.Runtimes[runtimepkg.BackendRunc]))
+
+	hostToleration := corev1.Toleration{
+		Key:      "setec.zeroroot.ai/sandbox-host",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "true",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}
+	cls := newSandboxClassForRS("sfz-class", runtimepkg.BackendRunc, nil)
+	cls.Spec.NodeSelector = map[string]string{"setec.zeroroot.ai/sandbox-host": "true"}
+	cls.Spec.Tolerations = []corev1.Toleration{hostToleration}
+
+	sb := newSandboxForRS(cls.Name)
+
+	// Deliberately NO Node objects: the pool is at zero, which is the
+	// starting state this test exists for.
+	r, c := newRSReconciler(t, reg, cfg, cls, sb)
+
+	_, err := r.handleMissingPod(context.Background(), logr.Discard(), sb, cls, "")
+	g.Expect(err).ToNot(HaveOccurred())
+
+	// The Pod exists. This is the assertion the old code could not pass.
+	var pods corev1.PodList
+	g.Expect(c.List(context.Background(), &pods, client.InNamespace(sb.Namespace))).To(Succeed())
+	g.Expect(pods.Items).To(HaveLen(1), "expected the reconciler to create a Pod with no capable node present")
+	pod := pods.Items[0]
+
+	// Class-declared pool steering survived onto the Pod. Without the
+	// toleration Karpenter never even considers a tainted NodePool.
+	g.Expect(pod.Spec.NodeSelector).To(HaveKeyWithValue("setec.zeroroot.ai/sandbox-host", "true"))
+	g.Expect(pod.Spec.Tolerations).To(ContainElement(hostToleration))
+
+	// The backend capability requirement is present and required (not
+	// preferred): a node pool that means to host this Sandbox must declare
+	// this exact key, with this exact value.
+	g.Expect(pod.Spec.Affinity).ToNot(BeNil())
+	g.Expect(pod.Spec.Affinity.NodeAffinity).ToNot(BeNil())
+	required := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	g.Expect(required).ToNot(BeNil())
+	g.Expect(required.NodeSelectorTerms).ToNot(BeEmpty())
+
+	keys := map[string][]string{}
+	for _, term := range required.NodeSelectorTerms {
+		for _, expr := range term.MatchExpressions {
+			g.Expect(expr.Operator).To(Equal(corev1.NodeSelectorOpIn),
+				"a non-In operator changes what a NodePool must declare; revisit the Karpenter note above")
+			keys[expr.Key] = expr.Values
+		}
+	}
+	g.Expect(keys).To(HaveKeyWithValue("setec.zeroroot.ai/runtime.runc", []string{"true"}))
+	g.Expect(keys).To(HaveKeyWithValue("kubernetes.io/os", []string{"linux"}))
+	g.Expect(keys).To(HaveKeyWithValue("kubernetes.io/arch", []string{"amd64"}))
+
+	// And the Sandbox says why it is waiting.
+	var updated setecv1alpha1.Sandbox
+	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(sb), &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal(setecv1alpha1.SandboxPhasePending))
 }

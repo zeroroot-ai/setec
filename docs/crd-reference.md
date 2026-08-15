@@ -249,9 +249,14 @@ Administrators author classes; tenants reference them by name in
   Required unless the deprecated `spec.vmm` is present (in which case
   Setec's defaulting webhook translates it to `runtime.backend`).
 - `spec.runtime.fallback` — optional ordered list of backends to try
-  when `spec.runtime.backend` has no eligible Node. Example:
-  `[gvisor, runc]` under `backend: kata-fc` means "prefer microVM,
-  fall back to gvisor, then to runc on dev clusters".
+  when `spec.runtime.backend` has no eligible Node **but another
+  candidate does**. Example: `[gvisor, runc]` under `backend: kata-fc`
+  means "prefer microVM, fall back to gvisor, then to runc on dev
+  clusters". When *no* candidate has an eligible Node the requested
+  backend is kept and the Pod is created anyway — see
+  [`status.runtime.chosen`](#sandboxstatusruntimechosen) — because a
+  fallback with no capable Node is exactly as unschedulable as the
+  primary with no capable Node.
 - `spec.runtime.params` — optional backend-specific tuning (e.g.
   `kata-fc.snapshotEnabled: true`, `gvisor.platform: ptrace|kvm`).
   Schema validated by the `SandboxClass` webhook; empty keys default
@@ -404,17 +409,33 @@ kubectl get sandboxclasses.setec.zeroroot.ai
 When a Sandbox schedules, the controller writes the actual backend it
 landed on to `status.runtime.chosen`. For fallback chains this lets you
 distinguish "scheduled on kata-fc as requested" from "fell back to
-kata-qemu because no kata-fc-capable Node was Ready". A
-`FallbackExhausted` phase means no backend in the chain had an eligible
-Node; `NoEligibleNode` means the primary `spec.runtime.backend` had
-none and there was no fallback configured.
+kata-qemu because no kata-fc-capable Node was Ready".
 
-`NoEligibleNode` is not terminal. The Sandbox stays `Pending` with that
-reason and the operator retries once a minute, because on an autoscaled
-cluster the capable Node may not exist yet — a scale-to-zero pool has
-none until something asks for one. It becomes `Running` on its own as
-soon as the `runtime-agent` labels a Node with the backend it needs; no
-user action and no new Sandbox are required.
+Two Pending reasons describe a Sandbox that has not placed yet, and they
+are not the same problem:
+
+- **`AwaitingCapableNode`** — the backend is enabled, but no Node
+  advertises `setec.zeroroot.ai/runtime.<backend>=true` yet. **The Pod is
+  created regardless.** That is deliberate: a cluster autoscaler provisions
+  in response to an unschedulable Pod and nothing else, so withholding the
+  Pod until a capable Node appears is what makes a scale-to-zero pool
+  deadlock — no Node means no Pod, and no Pod means nothing ever asks for a
+  Node. On a cluster with no autoscaler the Pod simply waits, carrying the
+  scheduler's own explanation of the constraint it failed, and schedules by
+  itself once an administrator adds a capable Node.
+- **`RuntimeNotEnabled`** — no backend in the chain is enabled on this
+  operator at all, so there is no Pod spec to build. No amount of Node
+  provisioning fixes this; enable the backend in the operator's runtime
+  config. It is still `Pending` rather than `Failed`, because doing so is a
+  live fix the next reconcile picks up.
+
+Neither is terminal, and neither needs a new Sandbox.
+
+If a Sandbox sits in `AwaitingCapableNode` and your autoscaler never
+provisions anything, the Pod is unschedulable in a way the node pool cannot
+satisfy — check the pool declares the `setec.zeroroot.ai/runtime.<backend>`
+label and that the SandboxClass tolerates the pool's taint. See
+[EKS: rolling your own NodePool](runtime-backends/eks.md#rolling-your-own-nodepool).
 
 ## Phase 3 extensions
 

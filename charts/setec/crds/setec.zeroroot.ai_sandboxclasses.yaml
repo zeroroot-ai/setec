@@ -311,9 +311,14 @@ spec:
                       advertises the requested Backend. Each entry must be one of the four
                       supported values. The operator tries each in order; the first backend
                       with a capable node wins. status.runtime.chosen records the final
-                      selection. When the whole chain is exhausted the Sandbox stays
-                      Pending with reason NoEligibleNode and the operator keeps retrying:
-                      on an autoscaled cluster a capable node may not exist yet.
+                      selection.
+
+                      When NO candidate has a capable node the operator keeps the requested
+                      Backend, creates the Pod anyway, and holds the Sandbox Pending with
+                      reason AwaitingCapableNode. The unschedulable Pod is what makes a
+                      scale-to-zero node pool provision a node; falling back would not help,
+                      because a fallback with no capable node is exactly as unschedulable as
+                      the primary with no capable node.
                     items:
                       type: string
                     type: array
