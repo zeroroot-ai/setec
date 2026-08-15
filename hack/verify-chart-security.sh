@@ -351,6 +351,30 @@ else
 	pass "a fixed namespace outside sandboxNamespaces fails the render"
 fi
 
+# --- RuntimeClass scheduling.tolerations ------------------------------------
+# The RuntimeClass admission controller injects scheduling.tolerations into
+# every Pod naming the class, which is the ONLY path that reaches the per-run
+# SandboxClasses an e2e harness creates. Nodes hosting a VMM runtime are
+# normally tainted (KVM metal is expensive), so if this block stops rendering
+# the nodeSelector still steers Sandbox Pods at nodes they are then forbidden
+# to land on — they wait forever, and the chart installs cleanly while
+# dispatch is dead. Assert both directions.
+RC_TOL=$(mktemp)
+trap 'rm -f "$RC_TOL"' EXIT
+
+render "$RC_TOL" \
+	--set 'runtimes.kata-fc.scheduling.tolerations[0].key=example.io/dedicated' \
+	--set 'runtimes.kata-fc.scheduling.tolerations[0].operator=Equal' \
+	--set 'runtimes.kata-fc.scheduling.tolerations[0].value=yes' \
+	--set 'runtimes.kata-fc.scheduling.tolerations[0].effect=NoSchedule'
+assert_contains "$RC_TOL" "RuntimeClass publishes configured scheduling.tolerations" \
+	'key: example.io/dedicated' \
+	'effect: NoSchedule'
+
+render "$RC_TOL"
+assert_absent "$RC_TOL" "RuntimeClass omits tolerations when none are configured" \
+	'example.io/dedicated'
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2
