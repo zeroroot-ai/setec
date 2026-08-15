@@ -16,7 +16,7 @@ set -eo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${ROOT}/kubeconfig"
 
-KATA_VERSION="${KATA_VERSION:-3.28.0}"
+KATA_VERSION="${KATA_VERSION:-3.32.0}"
 KATA_CACHE="${KATA_CACHE:-${ROOT}/.cache/kata-containers-${KATA_VERSION}}"
 CHART_PATH="${KATA_CACHE}/tools/packaging/kata-deploy/helm-chart/kata-deploy"
 

@@ -58,8 +58,8 @@ baking only writes files; KVM is not needed until a node runs microVMs.
 |---|---|---|
 | `region` | `us-east-1` | build region |
 | `k8s_version` | `1.33` | selects the EKS-optimized AL2023 x86_64 base via SSM |
-| `kata_version` | `3.28.0` | pinned kata static release (bundles Firecracker) |
-| `kata_sha256` | sha256 of `kata-static-3.28.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
+| `kata_version` | `3.32.0` | pinned kata static release (bundles Firecracker) |
+| `kata_sha256` | sha256 of `kata-static-3.32.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
 | `build_instance_type` | `m7i.xlarge` | any x86_64 type works |
 | `ami_name_prefix` | `setec-kata-fc` | AMI selectors should match `setec-kata-fc-*` |
 | `root_volume_size_gb` | `100` | EBS root (images via overlayfs, kata guest artifacts) |
