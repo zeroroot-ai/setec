@@ -96,6 +96,18 @@ runtimes:
     defaultOverhead:
       memory: 128Mi
       cpu: 250m
+    # -- scheduling.tolerations are published on the rendered RuntimeClass and
+    # injected by the RuntimeClass admission controller into every Pod naming
+    # it — including per-run SandboxClasses an e2e harness creates, which no
+    # chart value can reach. SET THIS whenever the nodes hosting this runtime
+    # are tainted, which is the norm: KVM-capable metal is expensive, so it is
+    # normally reserved with a NoSchedule taint (see karpenter.taints, which
+    # defaults to kata=true:NoSchedule). Without a matching toleration the
+    # RuntimeClass nodeSelector steers the Pod at a node it is then forbidden
+    # to land on, and the Sandbox waits forever. Empty by default because the
+    # taint key is the cluster operator's choice, not this chart's.
+    scheduling:
+      tolerations: []
   # -- kata-qemu is kata-containers with the QEMU VMM. Slower and heavier
   # than kata-fc but works on nodes without KVM (falls back to TCG
   # emulation — orders of magnitude slower, use only when you must). Useful

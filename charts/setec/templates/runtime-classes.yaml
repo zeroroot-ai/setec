@@ -39,5 +39,23 @@ overhead:
 scheduling:
   nodeSelector:
     setec.zeroroot.ai/runtime.{{ $name }}: "true"
+{{- /* The RuntimeClass admission controller injects scheduling.tolerations
+into every Pod that names this class, exactly as it does nodeSelector above.
+That makes this the right home for them: "to run this runtime you must be able
+to land on the nodes that host it" is a property of the RUNTIME, not of each
+SandboxClass. Setting it here covers every class at once — including the
+per-run classes an e2e harness creates, which no chart value can reach.
+
+Required whenever the runtime's nodes are tainted, which is the norm: KVM-
+capable metal is expensive, so operators reserve it with a NoSchedule taint
+(this chart's own karpenter.taints defaults to kata=true:NoSchedule). Without a
+matching toleration the nodeSelector steers the Pod at a node it is then
+forbidden to land on, and the Sandbox waits forever. */}}
+{{- with $cfg.scheduling }}
+{{- with .tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
