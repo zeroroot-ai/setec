@@ -299,12 +299,14 @@ jobs:
           EOF
 
       - name: Pre-warm a sandbox-host metal node (scale-from-zero)
-        # The setec-metal Karpenter NodePool is scale-to-zero, and the
-        # operator hard-fails a Sandbox with NoEligibleNode when no node
-        # carries the backend capability label (setec#230) — so with zero
-        # metal nodes the Sandbox dies before any Pod could trigger
-        # Karpenter. Chicken-and-egg. Until the operator treats
-        # no-eligible-node as Pending+requeue, pre-warm the node here: a
+        # The setec-metal Karpenter NodePool is scale-to-zero. The operator
+        # no longer hard-fails on NoEligibleNode — it holds the Sandbox in
+        # Pending and retries once a minute (setec#230) — but nothing in
+        # that loop provisions a node either: Karpenter scales on a Pending
+        # POD, and there is no Pod until a capable node exists. The
+        # placeholder is what breaks the tie, and it also overlaps the
+        # 10-15 minute metal boot with the rest of the setup rather than
+        # spending it inside the Sandbox-ready wait. Pre-warm the node: a
         # placeholder pod targeting the NodePool's own label+taint makes
         # Karpenter provision a metal node; kata-deploy + the runtime-agent
         # then lay down kata and write the capability label the operator

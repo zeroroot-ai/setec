@@ -61,8 +61,9 @@ type SandboxClassRuntime struct {
 	// advertises the requested Backend. Each entry must be one of the four
 	// supported values. The operator tries each in order; the first backend
 	// with a capable node wins. status.runtime.chosen records the final
-	// selection. When empty and the primary backend is unavailable, the
-	// Sandbox transitions to Failed with reason NoEligibleNode.
+	// selection. When the whole chain is exhausted the Sandbox stays
+	// Pending with reason NoEligibleNode and the operator keeps retrying:
+	// on an autoscaled cluster a capable node may not exist yet.
 	// +optional
 	Fallback []string `json:"fallback,omitempty"`
 }

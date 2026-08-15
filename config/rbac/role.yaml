@@ -62,6 +62,7 @@ rules:
   verbs:
   - get
   - list
+  - watch
 - apiGroups:
   - setec.zeroroot.ai
   resources:

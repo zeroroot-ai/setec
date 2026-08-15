@@ -409,6 +409,13 @@ kata-qemu because no kata-fc-capable Node was Ready". A
 Node; `NoEligibleNode` means the primary `spec.runtime.backend` had
 none and there was no fallback configured.
 
+`NoEligibleNode` is not terminal. The Sandbox stays `Pending` with that
+reason and the operator retries once a minute, because on an autoscaled
+cluster the capable Node may not exist yet — a scale-to-zero pool has
+none until something asks for one. It becomes `Running` on its own as
+soon as the `runtime-agent` labels a Node with the backend it needs; no
+user action and no new Sandbox are required.
+
 ## Phase 3 extensions
 
 ### Snapshot

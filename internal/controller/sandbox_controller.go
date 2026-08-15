@@ -92,6 +92,7 @@ const (
 	eventReasonNetworkPolicyPending  = "NetworkPolicyPending"
 	eventReasonNamespaceBaseline     = "NamespaceBaselineApplied"
 	eventReasonSnapshotUnavailable   = "SnapshotUnavailable"
+	eventReasonNoEligibleNode        = "NoEligibleNode"
 	eventReasonSnapshotIncompatible  = "SnapshotIncompatible"
 	eventReasonPaused                = "Paused"
 	eventReasonResumed               = "Resumed"
@@ -237,7 +238,11 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=node.k8s.io,resources=runtimeclasses,verbs=get;list
+// The manager's cache establishes a WATCH for every typed object it reads,
+// so list without watch is not a smaller grant — it is a broken one: the
+// RuntimeClass informer retries forever and logs
+// `Failed to watch *v1.RuntimeClass ... forbidden` on a loop (setec#230).
+// +kubebuilder:rbac:groups=node.k8s.io,resources=runtimeclasses,verbs=get;list;watch
 
 // Reconcile drives a single Sandbox toward its desired state. The function is
 // intentionally thin: the three pure packages own every non-trivial decision
@@ -984,10 +989,26 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 
 // selectRuntime picks the isolation backend for this Sandbox by gathering a
 // cluster-wide view of node capabilities (via Node labels) and delegating to
-// r.Runtimes.Select. It writes status.runtime.chosen on success and
-// transitions the Sandbox to Failed with reason NoEligibleNode when no backend
-// can be satisfied. It also emits a fallback metric when the chosen backend
-// differs from the originally requested one.
+// r.Runtimes.Select. It writes status.runtime.chosen on success and holds the
+// Sandbox in Pending with reason NoEligibleNode when no backend can be
+// satisfied. It also emits a fallback metric when the chosen backend differs
+// from the originally requested one.
+//
+// # Why Pending and not Failed
+//
+// "No node advertises this capability" is a statement about the cluster right
+// now, not about the Sandbox. On a scale-to-zero node pool it is the normal
+// starting state: no node carries setec.zeroroot.ai/runtime.kata-qemu until
+// one is provisioned, and Karpenter (or the cluster autoscaler) only
+// provisions in response to a Pending Pod. Failing here closed that loop
+// before it opened — the Sandbox died in seconds and no Pod ever existed to
+// trigger the scale-up that would have satisfied it (setec#230).
+//
+// The reconciler already models a transient unmet precondition this way for
+// an unready Snapshot: patchPendingStatus plus a RequeueAfter from the
+// caller. This takes the same shape and the same backoff, so a Sandbox waits
+// for capacity the way it waits for a snapshot, and recovers on its own the
+// moment the runtime-agent labels a node.
 //
 // When Runtimes or RuntimeCfg are nil (legacy path) it synthesizes a minimal
 // Selection from the class RuntimeClassName / defaults so existing code paths
@@ -1053,21 +1074,20 @@ func (r *SandboxReconciler) selectRuntime(
 	sel, err := r.Runtimes.Select(effectiveCls, r.RuntimeCfg, nodeCapabilities)
 	if err != nil {
 		if errors.Is(err, runtimepkg.ErrNoEligibleRuntime) {
-			logger.Info("no eligible runtime for Sandbox",
+			logger.Info("no eligible runtime for Sandbox yet; waiting for a capable node",
 				"sandbox", sb.Name,
 				"namespace", sb.Namespace,
 				"nodeCapabilities", nodeCapabilities,
 				"error", err.Error(),
 			)
-			// Transition Sandbox to Failed with a clear reason.
-			reason := "NoEligibleNode"
-			original := sb.DeepCopy()
-			sb.Status.Phase = setecv1alpha1.SandboxPhaseFailed
-			sb.Status.Reason = reason
-			now := metav1.NewTime(time.Now())
-			sb.Status.LastTransitionTime = &now
-			if patchErr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); patchErr != nil {
-				return nil, fmt.Errorf("patch NoEligibleNode status: %w", patchErr)
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonNoEligibleNode, actionResolveRuntime,
+				"No node advertises a capability for this Sandbox's backend chain (node capabilities: %v); waiting",
+				nodeCapabilities)
+			// Pending, not Failed. A missing capability is transient in an
+			// autoscaled cluster, exactly like an unready Snapshot, and the
+			// caller requeues on ErrNoEligibleRuntime.
+			if perr := r.patchPendingStatus(ctx, sb, eventReasonNoEligibleNode); perr != nil {
+				return nil, fmt.Errorf("patch Pending(NoEligibleNode) status: %w", perr)
 			}
 			return nil, runtimepkg.ErrNoEligibleRuntime
 		}
