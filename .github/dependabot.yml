@@ -49,6 +49,17 @@ updates:
       - go
       - examples
 
+  - package-ecosystem: gomod
+    directory: /hack/lintconfig
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - go
+      - ci
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
