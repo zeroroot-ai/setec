@@ -109,9 +109,39 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	"$(GOLANGCI_LINT)" run --fix
 
+# lint-config validates .golangci.yml against a VENDORED copy of the
+# golangci-lint JSON schema (hack/lintconfig/), not the one
+# `golangci-lint config verify` downloads from golangci-lint.run on every run.
+# That download failed the required lint gate on a network blip (setec#260).
+# The validator uses the same JSON-schema library golangci-lint does, so the
+# verdict is identical; it additionally pins the config `version`, which the
+# schema does not cover.
+#
+# Bumping GOLANGCI_LINT_VERSION to a new MINOR needs a matching schema:
+# run `make lint-config-schema-refresh` and commit the new file.
+# (recursive `=`: GOLANGCI_LINT_VERSION is defined further down the file)
+GOLANGCI_LINT_SCHEMA_VERSION = $(basename $(GOLANGCI_LINT_VERSION))
+GOLANGCI_LINT_SCHEMA = hack/lintconfig/golangci.$(GOLANGCI_LINT_SCHEMA_VERSION).jsonschema.json
+GOLANGCI_LINT_CONFIG_VERSION = $(patsubst v%,%,$(basename $(GOLANGCI_LINT_SCHEMA_VERSION)))
+
 .PHONY: lint-config
-lint-config: golangci-lint ## Verify golangci-lint linter configuration
-	"$(GOLANGCI_LINT)" config verify
+lint-config: ## Verify golangci-lint linter configuration against the vendored schema (offline)
+	@test -f "$(GOLANGCI_LINT_SCHEMA)" || { \
+		echo "❌ No vendored schema for golangci-lint $(GOLANGCI_LINT_VERSION) at $(GOLANGCI_LINT_SCHEMA)."; \
+		echo "   Run: make lint-config-schema-refresh   (then commit the file)"; \
+		exit 1; \
+	}
+	cd hack/lintconfig && go run . \
+		-schema "golangci.$(GOLANGCI_LINT_SCHEMA_VERSION).jsonschema.json" \
+		-config ../../.golangci.yml \
+		-expect-version "$(GOLANGCI_LINT_CONFIG_VERSION)"
+
+.PHONY: lint-config-schema-refresh
+lint-config-schema-refresh: ## Re-vendor the golangci-lint JSON schema for the pinned GOLANGCI_LINT_VERSION
+	curl -fsSL --retry 3 \
+		"https://golangci-lint.run/jsonschema/golangci.$(GOLANGCI_LINT_SCHEMA_VERSION).jsonschema.json" \
+		-o "$(GOLANGCI_LINT_SCHEMA)"
+	@echo "Vendored $(GOLANGCI_LINT_SCHEMA) — commit it."
 
 ##@ Build
 
