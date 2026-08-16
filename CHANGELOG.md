@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.112.0](https://github.com/zeroroot-ai/setec/compare/v0.111.0...v0.112.0) (2026-08-16)
+
+
+### Features
+
+* **abi:** add SandboxService.Exec for in-session command execution ([#333](https://github.com/zeroroot-ai/setec/issues/333)) ([cc0e3c7](https://github.com/zeroroot-ai/setec/commit/cc0e3c7e7d01884bb84d6c035d8b92026b888944))
+
+
+### Bug Fixes
+
+* **chart:** refuse to render when the node-agent CA Secret is not provided ([#326](https://github.com/zeroroot-ai/setec/issues/326)) ([e55b946](https://github.com/zeroroot-ai/setec/commit/e55b946b9cc6e49a323082822c62b8da09281a4b))
+* **controller:** collect orphaned Sandboxes instead of letting them accumulate ([#314](https://github.com/zeroroot-ai/setec/issues/314)) ([83be68a](https://github.com/zeroroot-ai/setec/commit/83be68a4f78d95f8f1c139fdb46183dcd5ef18af)), closes [#299](https://github.com/zeroroot-ai/setec/issues/299)
+* **controller:** fail a Sandbox terminally when its class never resolves ([#307](https://github.com/zeroroot-ai/setec/issues/307)) ([3fad352](https://github.com/zeroroot-ai/setec/commit/3fad352d52bfb036acdb304c3ff2dbd10cffddb3))
+* **e2e:** give the install room for a cold metal node, and dump state before tearing it down ([#322](https://github.com/zeroroot-ai/setec/issues/322)) ([19065d5](https://github.com/zeroroot-ai/setec/commit/19065d5587f6734d6bc8f66005d9cf2e6ac11a77))
+* **e2e:** unblock the suite install by making snapshots opt-in until the chart can carry them ([#321](https://github.com/zeroroot-ai/setec/issues/321)) ([7592dcc](https://github.com/zeroroot-ai/setec/commit/7592dcc24e8fd0ebfdfd5bed867a7a5ef99dccfb))
+* **frontend:** serve terminated-container logs instead of failing the attach ([#313](https://github.com/zeroroot-ai/setec/issues/313)) ([28c2910](https://github.com/zeroroot-ai/setec/commit/28c29107808a5b020403a2a2d98421e21419f837)), closes [#263](https://github.com/zeroroot-ai/setec/issues/263)
+* **guest-agent:** make Serve wait for in-flight handlers before returning ([#324](https://github.com/zeroroot-ai/setec/issues/324)) ([9b0cd61](https://github.com/zeroroot-ai/setec/commit/9b0cd61d8f013ae7d5070087b0f1053a1a28f548))
+* **pool-vm:** resolve the firecracker binary from one shared path ([#305](https://github.com/zeroroot-ai/setec/issues/305)) ([3f863d7](https://github.com/zeroroot-ai/setec/commit/3f863d72f75d73b68a951df0485dd930bce4442b))
+
 ## [0.111.0](https://github.com/zeroroot-ai/setec/compare/v0.110.2...v0.111.0) (2026-08-15)
 
 
