@@ -921,6 +921,17 @@ jobs:
           # it states its intent explicitly. Without this the suite refuses to
           # touch the cluster (setec#298).
           SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          # The setec-metal NodePool taints its nodes
+          # setec.zeroroot.ai/sandbox-host=true:NoSchedule, and those are the
+          # only nodes the runtime-agent ever labels runtime.<backend>=true —
+          # the nodeSelector every RuntimeClass puts on a Sandbox Pod. Without
+          # this the two contradict and every Sandbox sits Pending forever
+          # (setec#330). The suite injects it into every SandboxClass it
+          # creates; it cannot use the chart's
+          # runtimeClasses.*.scheduling.tolerations because it installs with
+          # runtimes.kata-fc.install=false — kata-deploy owns the RuntimeClass
+          # here, so the chart renders none.
+          SETEC_E2E_SANDBOX_HOST_TAINT: setec.zeroroot.ai/sandbox-host=true:NoSchedule
           # Suite identity — see the E2E_NAMESPACE comment above.
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
@@ -1200,6 +1211,17 @@ jobs:
           # In-cluster ARC runner + destructive suite: state the intent
           # explicitly or the suite refuses to touch the cluster (setec#298).
           SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          # The setec-metal NodePool taints its nodes
+          # setec.zeroroot.ai/sandbox-host=true:NoSchedule, and those are the
+          # only nodes the runtime-agent ever labels runtime.<backend>=true —
+          # the nodeSelector every RuntimeClass puts on a Sandbox Pod. Without
+          # this the two contradict and every Sandbox sits Pending forever
+          # (setec#330). The suite injects it into every SandboxClass it
+          # creates; it cannot use the chart's
+          # runtimeClasses.*.scheduling.tolerations because it installs with
+          # runtimes.kata-fc.install=false — kata-deploy owns the RuntimeClass
+          # here, so the chart renders none.
+          SETEC_E2E_SANDBOX_HOST_TAINT: setec.zeroroot.ai/sandbox-host=true:NoSchedule
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
           SETEC_E2E_RUNTIMECLASS: kata-fc

@@ -113,17 +113,14 @@ func TestRunc_ContainerOnly(t *testing.T) {
 	}
 
 	// Create the SandboxClass with backend=runc (cluster-scoped).
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "runc-dev-cls"},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			// VMM is set to satisfy the +required marker on the field; the
-			// webhook will see Runtime.Backend and use that instead of VMM.
-			VMM: setecv1alpha1.VMMFirecracker,
-			Runtime: &setecv1alpha1.SandboxClassRuntime{
-				Backend: "runc",
-			},
+	cls := newSandboxClass("runc-dev-cls", setecv1alpha1.SandboxClassSpec{
+		// VMM is set to satisfy the +required marker on the field; the
+		// webhook will see Runtime.Backend and use that instead of VMM.
+		VMM: setecv1alpha1.VMMFirecracker,
+		Runtime: &setecv1alpha1.SandboxClassRuntime{
+			Backend: "runc",
 		},
-	}
+	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		t.Fatalf("create runc SandboxClass: %v", err)
 	}
