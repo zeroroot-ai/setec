@@ -4,16 +4,29 @@ How to run the session-lifecycle e2e (setec#192 / #193 / #194) against a
 real cluster and a real object store, and what each scenario costs.
 
 The suite is `test/e2e/session_reattach_test.go` and
-`test/e2e/session_checkpoint_test.go`. CI runs it from the
-`session-checkpoint` job in `.github/workflows/e2e.yml`.
+`test/e2e/session_checkpoint_test.go`. They run from **two different jobs**
+in `.github/workflows/e2e.yml`, because they do not need the same things.
 
-## What the scenarios need
+## What the scenarios need, and which job runs them
 
-| Scenario | Object store | Sandbox-capable nodes |
-|---|---|---|
-| `TestSession_ReattachByHandle` | no | 1 |
-| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 |
-| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** |
+| Scenario | Object store | Sandbox-capable nodes | CI job | Gate |
+|---|---|---|---|---|
+| `TestSession_ReattachByHandle` | no | 1 | `suites` | `vars.STAGING_EPHEMERAL_READY` |
+| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | `session-checkpoint` | `vars.STAGING_SESSION_S3_READY` |
+| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | `session-checkpoint` | + `vars.STAGING_SESSION_DRAIN_CAPACITY` |
+
+`TestSession_ReattachByHandle` sits in `suites` deliberately (setec#296). It
+needs a session-mode Sandbox with a workspace PVC and an in-process
+`frontend.Service` — no bucket, no IRSA role, no node-agent — so gating it
+on `STAGING_SESSION_S3_READY`, a variable that waits on a Terraform apply
+and a checkpoint bucket it never touches, meant it ran nowhere at all. The
+`suites` gate is the only true precondition it has: an ARC runner.
+
+Both jobs share one `concurrency` group and therefore one metal node, and
+both pre-warm that node themselves: the `setec-metal` NodePool is
+scale-to-zero and nothing else in either job provokes Karpenter, so without
+the pre-warm step the kata-fc assertion fails within seconds on a quiet
+cluster — which is the cluster's normal state.
 
 All three need the `kata-fc` backend. Memory checkpointing drives the
 Firecracker API socket directly, so `kata-qemu` cannot serve these
