@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -45,12 +46,84 @@ var sessionProbeCommand = []string{"/bin/sh", "-c",
 // workspace on the cluster-default StorageClass.
 func sessionSpec() setecv1alpha1.SandboxSpec {
 	spec := minimalSpec(sessionProbeCommand...)
+	spec.SandboxClassName = sessionClassName()
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
 		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
 	}
 	return spec
+}
+
+// sandboxHostTolerations is the toleration a Sandbox Pod needs in order to
+// land on a node that can actually run a kata microVM.
+//
+// The staging setec-metal Karpenter NodePool taints its nodes
+// `setec.zeroroot.ai/sandbox-host=true:NoSchedule`, so WITHOUT this a session
+// Sandbox sits Pending forever with "untolerated taint" — the only nodes that
+// can host a microVM are the only nodes it cannot be scheduled onto:
+//
+//	0/5 nodes are available: 2 node(s) had untolerated taint(s),
+//	3 node(s) didn't match Pod's node affinity/selector.
+//
+// (run 31918112679, the suites job's first execution). The `roundtrip` job
+// has carried the same toleration inline on its own SandboxClass since
+// setec#115 and is green on the same cluster in the same run, which is what
+// isolates this to the Go suite.
+//
+// Declaring it on the CLASS rather than the Sandbox is the only option:
+// SandboxSpec has no scheduling fields at all, by design — a tenant is not
+// supposed to know about the cluster's taints (see SandboxClassSpec.Tolerations).
+//
+// A toleration for a taint that does not exist is inert, so this is
+// unconditional rather than gated on an environment variable: it costs a kind
+// cluster nothing and cannot be forgotten on a real one.
+//
+// SCOPE: the session classes only. The suite-wide version of this problem —
+// every scenario built on minimalSpec() resolves the live Argo-managed `tool`
+// class, which the suite must not modify — is setec#330, and picking a shape
+// for that is an owner call rather than something to settle here.
+func sandboxHostTolerations() []corev1.Toleration {
+	return []corev1.Toleration{{
+		Key:      "setec.zeroroot.ai/sandbox-host",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "true",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
+}
+
+// sessionClassName is the suite-owned SandboxClass the session-lifecycle
+// scenarios pin themselves to.
+//
+// SandboxClass is CLUSTER-scoped, so the name carries the suite's namespace:
+// a fixed name would make two concurrent e2e runs on one cluster fight over a
+// single object and delete each other's fixture. Same reasoning, and same
+// shape, as checkpointClassName().
+func sessionClassName() string { return "e2e-session-" + testNamespace }
+
+// installSessionClass creates that class and removes it with the test.
+//
+// It exists because the scenarios cannot use the cluster default. The
+// throwaway release installs with sandboxClasses.enabled=false (the chart's
+// cluster-scoped `tool`/`connector` classes cannot be imported into a second
+// release), so an unpinned Sandbox resolves the LIVE Argo-managed `tool`
+// class — which carries no tolerations and which this suite has no business
+// editing.
+func installSessionClass(t *testing.T) {
+	t.Helper()
+	cls := &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: sessionClassName()},
+		Spec: setecv1alpha1.SandboxClassSpec{
+			Runtime:     &setecv1alpha1.SandboxClassRuntime{Backend: kataRuntimeClass},
+			Tolerations: sandboxHostTolerations(),
+		},
+	}
+	if err := k8sClient.Create(context.Background(), cls); err != nil {
+		t.Fatalf("create session SandboxClass %q: %v", cls.Name, err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), cls)
+	})
 }
 
 // podLogs returns the workload container logs of the named Pod via
@@ -87,6 +160,7 @@ func waitForLogMarker(t *testing.T, podName, marker string, timeout time.Duratio
 //  4. deleting the Sandbox (explicit teardown) deletes the workspace
 //     PVC, so nothing is reusable across sessions (ADR-0005 inv. 3).
 func TestSession_WorkspaceSurvivesPodKill(t *testing.T) {
+	installSessionClass(t)
 	sb := newSandbox("e2e-session", sessionSpec())
 	createAndCleanup(t, sb)
 
