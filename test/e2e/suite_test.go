@@ -582,8 +582,16 @@ func installChart() error {
 		// and with it the 13 scenarios that have nothing to do with snapshots
 		// and can run today — trading real coverage for none.
 		//
-		// Flip SETEC_E2E_SNAPSHOTS=1 the moment #320 lands; that is the only
-		// change needed here.
+		// Flipping SETEC_E2E_SNAPSHOTS=1 now needs one more thing than this
+		// comment used to say. The first half of #320 landed (PR #326): the
+		// chart no longer installs a release whose pods wedge on the missing
+		// CA — it refuses to RENDER, naming the Secret. That converts a 10-
+		// minute opaque `context deadline exceeded` into an immediate error,
+		// but it does not conjure a CA. Turning snapshots on still requires
+		// somebody to create `setec-nodeagent-ca` (signing BOTH leaves — with
+		// a selfsigned issuer each leaf is its own root and the two sides do
+		// not trust each other) and to pass
+		// --set snapshots.mTLS.caProvided=true.
 		"--wait",
 		// 10m, not 5m. The suites job pre-warms a metal node BEFORE installing
 		// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
@@ -710,9 +718,16 @@ func dumpInstallFailureState() {
 //
 // Only half a fix, and deliberately so: it produces `operatorCertSecret`, but
 // the Deployment also mounts `caSecret` (`setec-nodeagent-ca`) and NOTHING in
-// the chart ever creates that — see setec#320, which is why
-// SETEC_E2E_SNAPSHOTS defaults off. When #320 lands the chart will own the CA
-// and these three flags become the whole story.
+// the chart creates that — see setec#320, which is why SETEC_E2E_SNAPSHOTS
+// defaults off.
+//
+// #320's first half landed (PR #326) with a different resolution than this
+// comment originally anticipated: the chart does NOT own the CA. It refuses to
+// render unless snapshots.mTLS.caProvided=true says one exists, so the failure
+// is immediate and named instead of a wedged pod behind a helm --wait timeout.
+// These three flags are therefore still not the whole story: an externally
+// supplied CA that signs both leaves is, and a chart-managed CA Issuer (the
+// better end state) needs an RBAC grant the ARC runner does not have.
 //
 // Returns nothing when the S3 path is on: sessionS3.helmArgs() already sets
 // these keys, and setting them twice with different issuers would be a silent
