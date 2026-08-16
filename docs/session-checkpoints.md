@@ -50,6 +50,69 @@ suite's default per-run stamp — a wildcard subject would let anyone able
 to create a namespace in staging assume a role with write access to the
 bucket.
 
+## Bucket and IAM prerequisites
+
+Three properties of S3 bite this path specifically. All three are settled in
+code now (setec#297), but the deployment side still has to hold up its end.
+
+### `s3:ListBucket` is not optional, and not for listing
+
+`Save` heads the target key before every write, and on the happy path that key
+does not exist. **S3 answers `HeadObject` for a key that does not exist with
+403, not 404, unless the caller holds `s3:ListBucket` on the bucket.** A policy
+scoped only to object actions on a prefix — the obvious way to write a
+least-privilege policy — therefore fails every checkpoint on the first suspend,
+hours after the deploy, on a path nobody is watching.
+
+An `s3:prefix` condition does not rescue it: that condition key is only
+populated for `ListObjects*` requests, so a conditioned `ListBucket` is not
+satisfied by a `HeadObject`. **The grant has to be unconditioned.**
+
+The node-agent now says so in the error rather than surfacing a bare
+`AccessDenied`, but the grant is still required.
+
+### Crypto-erase and bucket versioning
+
+On a versioned bucket — which every platform bucket in `deploy`'s `eks/gibson`
+is — a plain `DeleteObject` writes a delete marker and removes nothing.
+`S3DEKStore.Destroy` now deletes **every version** of the sealed DEK, so the
+erasure ADR-0005 invariant 5 relies on is real rather than nominal.
+
+That is defence in depth, not the primary control: the sealed DEK is useless
+without the per-session KEK, which lives in a Kubernetes Secret and never
+enters the bucket, so deleting that Secret remains a true crypto-erase. The
+version delete matters on any store where the KEK Secret is *not* the only
+copy.
+
+Requires `s3:DeleteObjectVersion` and `s3:ListBucketVersions` in addition to
+`s3:DeleteObject`. A store with no versioning API (some MinIO configurations)
+answers `NotImplemented` and the code treats that as "nothing to chase".
+
+### Orphaned multipart uploads
+
+`Save` streams through the multipart uploader, which aborts its own upload when
+`Upload` returns an error — but cannot when the node-agent is killed
+mid-suspend by an OOM or a node drain, which is precisely what session
+checkpoints exist for. The parts left behind are billed, are **not** returned
+by `ListObjects`, and no expiration rule touches them.
+
+Two mitigations, and you want both:
+
+- The node-agent sweeps its own prefix at startup, aborting uploads older than
+  `--s3-stale-multipart-window` (default 6h). **That window must exceed the
+  longest suspend any agent sharing the prefix will run**, or the sweep aborts
+  a live upload. Needs `s3:ListBucketMultipartUploads` and
+  `s3:AbortMultipartUpload`; without them the sweep logs and continues rather
+  than blocking startup.
+- An `abort_incomplete_multipart_upload` lifecycle rule on the bucket, which
+  catches uploads the agent never comes back to sweep. `deploy#1555` sets this
+  on the staging bucket; **a self-hosted MinIO has no such rule by default**,
+  so an on-prem install has to add one.
+
+Note that omitting `s3:AbortMultipartUpload` from a "Put/Get/Delete"
+least-privilege policy also means an abort failure masks the original upload
+error.
+
 ## The two-node scenario, and what it costs
 
 `TestSessionCheckpoint_DrainResumeOnOtherNode` checkpoints a session on
