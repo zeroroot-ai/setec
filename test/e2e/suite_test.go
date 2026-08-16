@@ -279,11 +279,12 @@ func (c sessionS3Config) helmArgs() []string {
 	args := []string{
 		// The checkpoint backend lives in the node-agent, and the whole
 		// snapshots subtree (including the operator's node-agent dialer
-		// and its mTLS) is gated behind snapshots.enabled.
+		// and its mTLS) is gated behind snapshots.enabled — which
+		// snapshotsEnabled() turns on for this axis, in installChart, so
+		// there is exactly one place that decides it.
 		"--set", "nodeAgent.enabled=true",
 		"--set", fmt.Sprintf("nodeAgent.image.tag=%s", c.nodeAgentImageTag),
 		"--set", fmt.Sprintf("nodeAgent.image.pullPolicy=%s", imagePullPolicy),
-		"--set", "snapshots.enabled=true",
 		"--set", "snapshots.s3.enabled=true",
 		"--set-string", fmt.Sprintf("snapshots.s3.bucket=%s", c.bucket),
 		"--set-string", fmt.Sprintf("snapshots.s3.region=%s", c.region),
@@ -291,12 +292,13 @@ func (c sessionS3Config) helmArgs() []string {
 		"--set-string", fmt.Sprintf("snapshots.s3.endpoint=%s", c.endpoint),
 		// Real S3 rejects path-style addressing; MinIO requires it.
 		"--set", fmt.Sprintf("snapshots.s3.pathStyle=%t", c.endpoint != ""),
-		// The operator<->node-agent channel is mTLS; on a throwaway
-		// namespace cert-manager issues the pair rather than the
-		// operator mounting hand-made Secrets.
-		"--set", "snapshots.mTLS.certManager.enabled=true",
-		"--set", "snapshots.mTLS.certManager.issuerRef.kind=ClusterIssuer",
-		"--set", "snapshots.mTLS.certManager.issuerRef.name=selfsigned-bootstrap",
+		// The operator<->node-agent channel is mTLS, and the chart's
+		// certManager path stays OFF: it issues the two leaves from a
+		// *selfsigned* ClusterIssuer, which makes each leaf its own root
+		// with no shared trust, and it never issues the CA Secret both
+		// workloads mount at all (setec#320). installChart mints all three
+		// from one CA instead — see nodeagentcert_test.go.
+		"--set", "snapshots.mTLS.certManager.enabled=false",
 	}
 	if c.nodeAgentImageRepo != "" {
 		args = append(args, "--set-string",
@@ -498,6 +500,20 @@ func installChart() error {
 		}
 	}
 
+	// Same story one layer down: with snapshots on, the chart mounts three
+	// operator<->node-agent mTLS Secrets it does not fully create, and
+	// `helm --wait` blocks forever on a Pod whose Secret volume never
+	// resolves. Mint them here, from ONE CA, before the install. See
+	// nodeagentcert_test.go for why the suite does this rather than the
+	// chart's cert-manager path (setec#320: the ARC runner cannot create an
+	// Issuer, and issuing both leaves from a selfsigned ClusterIssuer gives
+	// them no shared trust root anyway).
+	if snapshotsEnabled() {
+		if err := createNodeAgentMTLSSecrets(ctx, helmReleaseName, testNamespace); err != nil {
+			return err
+		}
+	}
+
 	args := []string{
 		"install", helmReleaseName, chartPath,
 		"--namespace", testNamespace,
@@ -551,47 +567,6 @@ func installChart() error {
 		// e2e-session-checkpoint-*, …) and none references the chart's.
 		// Same opt-out the roundtrip job takes, for the same reason.
 		"--set", "sandboxClasses.enabled=false",
-		// WITHOUT THIS THE SUITE IS A GREEN ALL-SKIP. phase3Enabled() greps
-		// the operator Deployment for `--snapshots-enabled`, which the chart
-		// only renders under snapshots.enabled. Left off, every Phase 3
-		// scenario calls t.Skip — including BOTH ADR-0005 invariants
-		// (TestPhase3_RestoredClonesDivergeInRNG,
-		// TestPhase3_RestoredClonesHaveUniqueIdentity) and
-		// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS
-		// having verified none of them. That is precisely the failure mode
-		// TestEnv_KVMPresent exists to prevent, arriving through a different
-		// door.
-		//
-		// This is local snapshot storage only. The S3 checkpoint backend is
-		// a separate axis and stays behind SETEC_E2E_S3 (setec#194/#296),
-		// which sets this same flag among others.
-		//
-		// BLOCKED, and opt-in until it is not (setec#320). Turning this on is
-		// still exactly right, but the chart cannot currently install with it:
-		// in credentials.mode=file the operator unconditionally mounts
-		// `setec-nodeagent-ca`, which no values combination makes the chart
-		// create, so the pod never starts and the install dies on the wait —
-		// `Available: 0/2, context deadline exceeded` (run 31914899389, the
-		// suite's first real execution). `snapshots.mTLS.insecure=true` does
-		// not avoid it; that value renders an identical Deployment.
-		//
-		// Defaulting it OFF is not a retreat to the green all-skip the comment
-		// above warns about. The difference is that a skip is now VISIBLE: the
-		// suites job greps for `--- SKIP` and warns on every one, and #320
-		// tracks the blocker. Leaving it on would take down the whole install
-		// and with it the 13 scenarios that have nothing to do with snapshots
-		// and can run today — trading real coverage for none.
-		//
-		// Flipping SETEC_E2E_SNAPSHOTS=1 now needs one more thing than this
-		// comment used to say. The first half of #320 landed (PR #326): the
-		// chart no longer installs a release whose pods wedge on the missing
-		// CA — it refuses to RENDER, naming the Secret. That converts a 10-
-		// minute opaque `context deadline exceeded` into an immediate error,
-		// but it does not conjure a CA. Turning snapshots on still requires
-		// somebody to create `setec-nodeagent-ca` (signing BOTH leaves — with
-		// a selfsigned issuer each leaf is its own root and the two sides do
-		// not trust each other) and to pass
-		// --set snapshots.mTLS.caProvided=true.
 		"--wait",
 		// 10m, not 5m. The suites job pre-warms a metal node BEFORE installing
 		// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
@@ -606,9 +581,35 @@ func installChart() error {
 		"--timeout", "10m",
 	}
 
-	if os.Getenv("SETEC_E2E_SNAPSHOTS") == "1" {
-		args = append(args, "--set", "snapshots.enabled=true")
-		args = append(args, snapshotMTLSArgs()...)
+	// WITHOUT snapshots.enabled THE SUITE IS A GREEN ALL-SKIP on the Phase 3
+	// half. phase3Enabled() greps the operator Deployment for
+	// `--snapshots-enabled`, which the chart only renders under
+	// snapshots.enabled; left off, every Phase 3 scenario calls t.Skip —
+	// including BOTH ADR-0005 invariants (TestPhase3_RestoredClonesDivergeInRNG,
+	// TestPhase3_RestoredClonesHaveUniqueIdentity) and
+	// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS having
+	// verified none of them. That is the failure mode TestEnv_KVMPresent exists
+	// to prevent, arriving through a different door.
+	if snapshotsEnabled() {
+		args = append(args,
+			"--set", "snapshots.enabled=true",
+			// The acknowledgement the chart requires (setec#326): it refuses
+			// to render a release that mounts snapshots.mTLS.caSecret without
+			// someone declaring the Secret exists, because a non-optional
+			// missing Secret wedges the Pods and surfaces as an opaque
+			// "context deadline exceeded" ten minutes into the install.
+			//
+			// setec#331 spelled out what that leaves outstanding: the chart
+			// refuses to render, but it does not conjure a CA, so turning
+			// snapshots on still needs somebody to create setec-nodeagent-ca
+			// signing BOTH leaves — with a selfsigned issuer each leaf is its
+			// own root and the two sides do not trust each other — and to pass
+			// this flag. "Somebody" is now this suite: createNodeAgentMTLSSecrets
+			// a few lines above mints exactly that, one CA and both leaves from
+			// it, which is the part the chart's own cert-manager path cannot do
+			// (setec#320, still open for the chart-managed CA Issuer).
+			"--set", "snapshots.mTLS.caProvided=true",
+		)
 	}
 
 	// Enable the SandboxClass/Sandbox admission webhook with the
@@ -713,39 +714,27 @@ func dumpInstallFailureState() {
 	}
 }
 
-// snapshotMTLSArgs issues the operator's node-agent client certificate, which
-// the chart mounts but does not create on its own.
+// snapshotsEnabled reports whether this install turns the whole snapshots
+// subtree on — the operator's `--snapshots-enabled`, its node-agent dialer,
+// and the three mTLS Secret mounts on both workloads.
 //
-// Only half a fix, and deliberately so: it produces `operatorCertSecret`, but
-// the Deployment also mounts `caSecret` (`setec-nodeagent-ca`) and NOTHING in
-// the chart creates that — see setec#320, which is why SETEC_E2E_SNAPSHOTS
-// defaults off.
+// TWO axes reach it and they must not disagree, which is why this is one
+// function rather than two call sites:
 //
-// #320's first half landed (PR #326) with a different resolution than this
-// comment originally anticipated: the chart does NOT own the CA. It refuses to
-// render unless snapshots.mTLS.caProvided=true says one exists, so the failure
-// is immediate and named instead of a wedged pod behind a helm --wait timeout.
-// These three flags are therefore still not the whole story: an externally
-// supplied CA that signs both leaves is, and a chart-managed CA Issuer (the
-// better end state) needs an RBAC grant the ARC runner does not have.
+//   - SETEC_E2E_SNAPSHOTS=1 — local snapshot storage, what the Phase 3
+//     scenarios and TestGate_UnverifiedWarmStartFailsClosed need in order to
+//     run at all (phase3Enabled() greps the operator Deployment for
+//     `--snapshots-enabled`). Left off, they all t.Skip and the run reports
+//     PASS having verified none of them.
+//   - SETEC_E2E_S3=1 — the session-checkpoint store (setec#194/#296). The
+//     checkpoint backend lives in the node-agent, and the node-agent is
+//     itself gated behind snapshots.enabled, so this axis implies the other.
 //
-// Returns nothing when the S3 path is on: sessionS3.helmArgs() already sets
-// these keys, and setting them twice with different issuers would be a silent
-// last-wins.
-//
-// The issuer is overridable because its name is a property of the cluster, not
-// of the suite — staging carries `selfsigned-bootstrap` (verified 2026-08-15).
-func snapshotMTLSArgs() []string {
-	if sessionS3.enabled {
-		return nil
-	}
-	return []string{
-		"--set", "snapshots.mTLS.certManager.enabled=true",
-		"--set", fmt.Sprintf("snapshots.mTLS.certManager.issuerRef.kind=%s",
-			envOr("SETEC_E2E_MTLS_ISSUER_KIND", "ClusterIssuer")),
-		"--set", fmt.Sprintf("snapshots.mTLS.certManager.issuerRef.name=%s",
-			envOr("SETEC_E2E_MTLS_ISSUER", "selfsigned-bootstrap")),
-	}
+// Whichever axis is on, installChart mints the mTLS trio first
+// (createNodeAgentMTLSSecrets); the two used to configure that differently
+// and the S3 path silently won.
+func snapshotsEnabled() bool {
+	return os.Getenv("SETEC_E2E_SNAPSHOTS") == "1" || sessionS3.enabled
 }
 
 // crdInstallArgs decides whether this install may touch the setec CRDs, and

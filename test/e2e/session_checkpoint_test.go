@@ -180,6 +180,15 @@ func installCheckpointClass(t *testing.T, idle time.Duration) {
 		ObjectMeta: metav1.ObjectMeta{Name: checkpointClassName()},
 		Spec: setecv1alpha1.SandboxClassSpec{
 			Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend},
+			// Without this the checkpoint Sandbox never leaves Pending on
+			// staging: the setec-metal NodePool taints its nodes
+			// setec.zeroroot.ai/sandbox-host=true:NoSchedule and SandboxSpec
+			// has no scheduling fields, so the class is the only place it can
+			// be declared. Observed on run 31918112679; see
+			// sandboxHostTolerations. This scenario is the one a human pays a
+			// Terraform apply and a metal node to reach, so it must not be the
+			// run that discovers the taint.
+			Tolerations: sandboxHostTolerations(),
 			SessionCheckpoint: &setecv1alpha1.SessionCheckpointSpec{
 				Backend: "s3",
 			},
