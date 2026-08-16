@@ -43,7 +43,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -194,7 +198,25 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// The suite-owned default SandboxClass (setec#330). It has to exist
+	// before the first scenario because minimalSpec names it, and it has to
+	// be created here rather than by the chart because the install sets
+	// sandboxClasses.enabled=false — the shared staging cluster already owns
+	// objects of that name under a different release.
+	if err := ensureDefaultSandboxClass(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: default SandboxClass: %v\n", err)
+		_ = uninstallChart()
+		os.Exit(1)
+	}
+
 	code := m.Run()
+
+	// Cluster-scoped and NOT release-prefixed, so helm uninstall will not
+	// reap it. Leaving it behind poisons the next run: a stale class with a
+	// stale toleration is exactly the state this issue was about.
+	if err := deleteDefaultSandboxClass(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: default SandboxClass cleanup warning: %v\n", err)
+	}
 
 	if err := uninstallChart(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: helm uninstall warning: %v\n", err)
@@ -467,6 +489,68 @@ func preflight() error {
 
 // installChart creates the test namespace and helm-installs the chart into
 // it, waiting for the operator Deployment to become Ready before returning.
+// ensureDefaultSandboxClass creates the suite-owned SandboxClass that
+// minimalSpec Sandboxes run under (setec#330).
+//
+// Deliberately NOT `spec.default: true`. SandboxClass is cluster-scoped and
+// the shared staging cluster already carries a default (`tool`, from the
+// gibson umbrella release); a second one makes the pair ambiguous and the
+// resolver refuses to default at all — which would break every OTHER
+// workload on the cluster for the length of the run, not just this suite.
+// minimalSpec names the class explicitly instead.
+//
+// Idempotent: a run that died before its cleanup leaves the object behind,
+// and the toleration may have changed since. Update rather than skip, so a
+// stale class from a previous run cannot silently govern this one.
+func ensureDefaultSandboxClass() error {
+	ctx := context.Background()
+	desired := newSandboxClass(e2eDefaultClassName, setecv1alpha1.SandboxClassSpec{
+		VMM:              setecv1alpha1.VMMFirecracker,
+		RuntimeClassName: kataRuntimeClass,
+		// Generous ceiling: this class exists to carry a toleration, not to
+		// constrain anything. Scenarios that test ceilings build their own.
+		MaxResources: &setecv1alpha1.Resources{
+			VCPU:   8,
+			Memory: resource.MustParse("16Gi"),
+		},
+		DefaultNetworkMode: setecv1alpha1.NetworkModeExternalOnly,
+		AllowedNetworkModes: []setecv1alpha1.NetworkMode{
+			setecv1alpha1.NetworkModeExternalOnly,
+			setecv1alpha1.NetworkModeEgressAllowList,
+			setecv1alpha1.NetworkModeNone,
+		},
+	})
+
+	err := k8sClient.Create(ctx, desired)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create %s: %w", e2eDefaultClassName, err)
+	}
+
+	var existing setecv1alpha1.SandboxClass
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: e2eDefaultClassName}, &existing); err != nil {
+		return fmt.Errorf("get %s after AlreadyExists: %w", e2eDefaultClassName, err)
+	}
+	existing.Spec = desired.Spec
+	if err := k8sClient.Update(ctx, &existing); err != nil {
+		return fmt.Errorf("update stale %s: %w", e2eDefaultClassName, err)
+	}
+	return nil
+}
+
+// deleteDefaultSandboxClass removes the suite-owned class. Absent is success.
+func deleteDefaultSandboxClass() error {
+	err := k8sClient.Delete(context.Background(), &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: e2eDefaultClassName},
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete %s: %w", e2eDefaultClassName, err)
+	}
+	return nil
+}
+
 func installChart() error {
 	// Must outlast the helm --timeout below, or this context cancels the
 	// install that is still legitimately waiting for a rollout.

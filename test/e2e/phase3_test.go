@@ -281,19 +281,16 @@ func TestPhase3_PoolWarmStartLifecycle(t *testing.T) {
 
 	const poolImage = "docker.io/library/alpine:3.19"
 	clsName := fmt.Sprintf("e2e-prewarm-%d", time.Now().Unix())
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: clsName},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
-			PreWarmPoolSize: 1,
-			PreWarmImage:    poolImage,
-			PreWarmTTL:      &metav1.Duration{Duration: time.Hour},
-			DefaultResources: &setecv1alpha1.Resources{
-				VCPU:   1,
-				Memory: resource.MustParse("256Mi"),
-			},
+	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
+		Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
+		PreWarmPoolSize: 1,
+		PreWarmImage:    poolImage,
+		PreWarmTTL:      &metav1.Duration{Duration: time.Hour},
+		DefaultResources: &setecv1alpha1.Resources{
+			VCPU:   1,
+			Memory: resource.MustParse("256Mi"),
 		},
-	}
+	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		t.Fatalf("create SandboxClass: %v", err)
 	}

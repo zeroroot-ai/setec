@@ -177,16 +177,13 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 	createTenantNamespace(ctx, t, ns)
 
 	// Seed a tight SandboxClass.
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "e2e-tight"},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM: setecv1alpha1.VMMFirecracker,
-			MaxResources: &setecv1alpha1.Resources{
-				VCPU:   1,
-				Memory: resource.MustParse("256Mi"),
-			},
+	cls := newSandboxClass("e2e-tight", setecv1alpha1.SandboxClassSpec{
+		VMM: setecv1alpha1.VMMFirecracker,
+		MaxResources: &setecv1alpha1.Resources{
+			VCPU:   1,
+			Memory: resource.MustParse("256Mi"),
 		},
-	}
+	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("create SandboxClass: %v", err)

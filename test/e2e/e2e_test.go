@@ -21,6 +21,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -48,16 +49,109 @@ const (
 	operatorLabel = "app.kubernetes.io/name=setec"
 )
 
+// sandboxHostTaintEnv names the taint reserving this cluster's sandbox
+// hosts, in `key=value:effect` form (e.g.
+// `setec.zeroroot.ai/sandbox-host=true:NoSchedule`).
+//
+// WHY THIS EXISTS (setec#330)
+//
+// KVM-capable metal is expensive, so operators reserve it with a
+// NoSchedule taint — and the nodes carrying that taint are the only ones
+// the runtime-agent ever labels `setec.zeroroot.ai/runtime.<backend>=true`,
+// which is the nodeSelector every RuntimeClass puts on a Sandbox Pod. That
+// pair is a contradiction the scheduler resolves by never scheduling: the
+// nodeSelector steers the Pod at the metal node and the taint forbids it
+// from landing. The Sandbox sits `Pending` until its timeout, and the only
+// evidence is a `FailedScheduling … had untolerated taint(s)` event on the
+// Pod (run 31918112679, every scenario in the `suites` job).
+//
+// # WHY IT IS AN ENV VAR AND NOT A CONSTANT
+//
+// The taint key is the cluster operator's choice, not setec's — the chart
+// makes the same call, shipping `runtimeClasses.*.scheduling.tolerations`
+// empty for exactly this reason. A hardcoded key would be right for the
+// zeroroot staging cluster and wrong for every other consumer of this
+// Apache-licensed suite.
+//
+// WHY THE SUITE CANNOT USE THE CHART'S MECHANISM
+//
+// `installChart` sets `runtimes.kata-fc.install=false` — kata-deploy owns
+// the RuntimeClass here, so the chart renders none and
+// `scheduling.tolerations` has nothing to land on. `SandboxClass.spec.
+// tolerations` (setec#115) is the only lever the suite actually holds,
+// which is why it is applied per-class below rather than once at install.
+//
+// Unset (the default) means "no tainted sandbox hosts" — kind, k3s, and
+// any single-pool cluster — and every helper below becomes a no-op.
+const sandboxHostTaintEnv = "SETEC_E2E_SANDBOX_HOST_TAINT"
+
+// e2eDefaultClassName is the suite-owned SandboxClass that minimalSpec
+// Sandboxes run under.
+//
+// The suite installs with `sandboxClasses.enabled=false`, so before this
+// existed a class-less Sandbox resolved to whatever cluster-default the
+// SHARED staging cluster happened to carry — an object owned by a
+// different release, whose tolerations, backend and resource ceiling are
+// not this suite's to set or even to read. Naming our own class makes the
+// happy path deterministic and gives the toleration somewhere to live.
+const e2eDefaultClassName = "e2e-suite-default"
+
+// sandboxHostTolerations returns the tolerations every SandboxClass this
+// suite creates must carry, parsed from sandboxHostTaintEnv. Returns nil
+// when the variable is unset or malformed — a cluster with no tainted
+// sandbox hosts needs nothing, and a malformed value must not silently
+// become a *different* toleration.
+func sandboxHostTolerations() []corev1.Toleration {
+	raw := strings.TrimSpace(os.Getenv(sandboxHostTaintEnv))
+	if raw == "" {
+		return nil
+	}
+	kv, effect, ok := strings.Cut(raw, ":")
+	if !ok {
+		return nil
+	}
+	key, value, ok := strings.Cut(kv, "=")
+	if !ok || key == "" {
+		return nil
+	}
+	return []corev1.Toleration{{
+		Key:      key,
+		Operator: corev1.TolerationOpEqual,
+		Value:    value,
+		Effect:   corev1.TaintEffect(effect),
+	}}
+}
+
+// newSandboxClass builds a cluster-scoped SandboxClass with the sandbox-host
+// tolerations already injected.
+//
+// EVERY SandboxClass this suite creates must go through here. A class built
+// with a bare `&setecv1alpha1.SandboxClass{}` literal gets no toleration and
+// its Sandboxes hang Pending on a tainted cluster — silently, because the
+// Sandbox status says only `Pending` and the scheduler's reason lands on the
+// Pod. TestSandboxClasses_CarrySandboxHostTolerations is the guard.
+func newSandboxClass(name string, spec setecv1alpha1.SandboxClassSpec) *setecv1alpha1.SandboxClass {
+	spec.Tolerations = append(spec.Tolerations, sandboxHostTolerations()...)
+	return &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       spec,
+	}
+}
+
 // minimalSpec returns a small but valid SandboxSpec for the happy-path tests.
 // Image is pinned to busybox since it is widely mirrored and has a small
 // uncompressed size that minimises microVM startup time.
+//
+// SandboxClassName is set deliberately (setec#330): see e2eDefaultClassName.
+// A caller that needs the class-less resolution path clears it explicitly.
 func minimalSpec(cmd ...string) setecv1alpha1.SandboxSpec {
 	if len(cmd) == 0 {
 		cmd = []string{"/bin/true"}
 	}
 	return setecv1alpha1.SandboxSpec{
-		Image:   "busybox:1.36",
-		Command: cmd,
+		SandboxClassName: e2eDefaultClassName,
+		Image:            "busybox:1.36",
+		Command:          cmd,
 		Resources: setecv1alpha1.Resources{
 			VCPU:   1,
 			Memory: resource.MustParse("128Mi"),

@@ -89,15 +89,12 @@ func TestRuntimeBackends_Smoke(t *testing.T) {
 			ctx := context.Background()
 
 			// Create the SandboxClass referencing this backend.
-			cls := &setecv1alpha1.SandboxClass{
-				ObjectMeta: metav1.ObjectMeta{Name: sc.className},
-				Spec: setecv1alpha1.SandboxClassSpec{
-					VMM: setecv1alpha1.VMMFirecracker,
-					Runtime: &setecv1alpha1.SandboxClassRuntime{
-						Backend: sc.backend,
-					},
+			cls := newSandboxClass(sc.className, setecv1alpha1.SandboxClassSpec{
+				VMM: setecv1alpha1.VMMFirecracker,
+				Runtime: &setecv1alpha1.SandboxClassRuntime{
+					Backend: sc.backend,
 				},
-			}
+			})
 			if err := k8sClient.Create(ctx, cls); err != nil {
 				t.Fatalf("create SandboxClass %q: %v", sc.className, err)
 			}
@@ -226,16 +223,13 @@ func TestRuntimeBackends_ZZ_Fallback(t *testing.T) {
 	}
 
 	// Create the SandboxClass with the fallback chain.
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "fallback-test-cls"},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM: setecv1alpha1.VMMFirecracker,
-			Runtime: &setecv1alpha1.SandboxClassRuntime{
-				Backend:  "kata-fc",
-				Fallback: []string{"gvisor"},
-			},
+	cls := newSandboxClass("fallback-test-cls", setecv1alpha1.SandboxClassSpec{
+		VMM: setecv1alpha1.VMMFirecracker,
+		Runtime: &setecv1alpha1.SandboxClassRuntime{
+			Backend:  "kata-fc",
+			Fallback: []string{"gvisor"},
 		},
-	}
+	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		t.Fatalf("create fallback SandboxClass: %v", err)
 	}

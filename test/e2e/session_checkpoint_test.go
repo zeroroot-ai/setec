@@ -176,15 +176,12 @@ func checkpointClassName() string { return "e2e-session-checkpoint-" + testNames
 // enabled and the given idle timeout, cleaning it up with the test.
 func installCheckpointClass(t *testing.T, idle time.Duration) {
 	t.Helper()
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: checkpointClassName()},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend},
-			SessionCheckpoint: &setecv1alpha1.SessionCheckpointSpec{
-				Backend: "s3",
-			},
+	cls := newSandboxClass(checkpointClassName(), setecv1alpha1.SandboxClassSpec{
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend},
+		SessionCheckpoint: &setecv1alpha1.SessionCheckpointSpec{
+			Backend: "s3",
 		},
-	}
+	})
 	if idle > 0 {
 		cls.Spec.SessionIdleTimeout = &metav1.Duration{Duration: idle}
 	}
