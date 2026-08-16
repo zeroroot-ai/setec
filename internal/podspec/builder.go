@@ -311,6 +311,13 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			Name:      WorkspaceVolumeName,
 			MountPath: WorkspaceMountPath,
 		})
+		// Root the session in its durable workspace. This is what makes
+		// SandboxService.Exec land there: the container runtime's exec
+		// primitive takes no working directory, so an exec'd command
+		// inherits the container's — and a session's turns must all
+		// start in the same place their predecessors left work behind.
+		// Ephemeral Sandboxes keep the image's own workdir.
+		c.WorkingDir = WorkspaceMountPath
 	}
 
 	// Resolve names through the operator-configured resolvers rather than

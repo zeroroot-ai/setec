@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -99,6 +100,23 @@ type Service struct {
 	// DefaultNamespace is the namespace used when AuthDisabled is true.
 	// Unit-test-only, same as AuthDisabled above.
 	DefaultNamespace string
+
+	// RESTConfig is the client-go REST config Exec opens pods/exec
+	// streams with. Required for Exec; every other RPC ignores it. A
+	// frontend started without one refuses Exec loudly rather than
+	// failing commands that never ran.
+	RESTConfig *rest.Config
+
+	// execer overrides the exec transport. Unexported and nil in
+	// production, where RESTConfig serves every exec; tests set it
+	// because no fake clientset can carry a pods/exec upgrade.
+	execer containerExecutor
+
+	// execReadyTimeout overrides how long Exec waits for a session's
+	// microVM to reach Running (including a resume). Zero means
+	// defaultExecReadyTimeout. Unexported: tests shrink it, production
+	// takes the default.
+	execReadyTimeout time.Duration
 
 	// logOpener overrides how container log streams are opened. It is
 	// unexported and left nil in production, where Clientset serves
@@ -444,15 +462,15 @@ func (s *Service) resumeAfterBrokenLogStream(
 		// The caller is gone; a broken read is the expected shape.
 		return nil
 	}
-	rest, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
+	remaining, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
 	if err != nil {
 		return status.Errorf(codes.Internal, "read log stream: %v", first.SourceErr)
 	}
 	defer func() {
-		_ = rest.Close()
+		_ = remaining.Close()
 	}()
 
-	outcome, err := relayLogStream(ctx, rest, stream, first.LinesRead)
+	outcome, err := relayLogStream(ctx, remaining, stream, first.LinesRead)
 	if err != nil {
 		return err
 	}

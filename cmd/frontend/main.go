@@ -120,8 +120,12 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "frontend: tenant resolution: %s\n", resolverDesc)
 	srv := &frontend.Service{
-		Client:         k8sClient,
-		Clientset:      clientset,
+		Client:    k8sClient,
+		Clientset: clientset,
+		// Exec opens pods/exec streams, which need the REST config
+		// itself: the connection is an HTTP upgrade the typed clientset
+		// does not model.
+		RESTConfig:     cfg,
 		TenantResolver: resolver,
 	}
 	leaseSrv := &frontend.LeaseService{

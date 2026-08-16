@@ -65,6 +65,62 @@ service SandboxService {
   //   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
   //     the ephemeral lifecycle has no reattach semantics (ADR-0006).
   rpc Attach(AttachRequest) returns (AttachResponse);
+
+  // Exec runs a command INSIDE an existing session Sandbox's running
+  // microVM and streams its stdio, so a session can be worked on
+  // across many turns instead of being limited to the single
+  // immutable spec.command it booted with (ADR-0008).
+  //
+  // This is not LeaseService.Exec: that verb launches a fresh
+  // one-shot Sandbox per call and shares nothing between calls. This
+  // one enters a VM that is already up, so successive commands see
+  // each other's effects on the durable /workspace volume.
+  //
+  // Protocol: the client sends exactly one SessionExecStart as the
+  // FIRST message, then zero or more stdin chunks, then optionally
+  // stdin_eof. The server streams SessionExecOutput messages and
+  // terminates the stream with EXACTLY ONE SessionExecExit.
+  //
+  // Exit reporting is definitive by construction. The caller must
+  // never infer success from a closed stream: SessionExecExit.status
+  // is the discriminator, and only STATUS_EXITED means exit_code is
+  // meaningful. When the command's fate cannot be established — the
+  // microVM vanished mid-exec, the node drained, the transport broke
+  // — the server still sends a SessionExecExit carrying the
+  // corresponding non-EXITED status instead of a fabricated code. A
+  // stream that ends with no SessionExecExit at all is an abnormal
+  // termination and the command MUST be treated as of unknown
+  // outcome; it is never success and never a specific exit code.
+  //
+  // The command runs rooted at the session's durable /workspace (the
+  // session container's working directory), as the same unprivileged
+  // user, with the same capabilities and seccomp profile as the
+  // booted workload: Exec is not an escalation path, it is a second
+  // process inside the same isolation boundary.
+  //
+  // An in-flight Exec registers as session activity for the whole of
+  // its run, so a long build can never be idle-evicted underneath the
+  // caller (ADR-0006).
+  //
+  // A session whose VM is paused or suspended is resumed first and
+  // the command runs once it is back (ADR-0006 suspend/resume); the
+  // caller sees only the added latency.
+  //
+  // Failure shapes (each carries an AttachFailure detail, the same
+  // typed session-handle resolution detail Attach returns, so a
+  // caller switches on one reason enum for both verbs):
+  //   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+  //     Sandbox.
+  //   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
+  //   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
+  //     ephemeral; its one command is its whole life (ADR-0006).
+  //   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
+  //     not be brought to a running microVM in time.
+  // These are RPC-level errors raised before the command starts, so
+  // no SessionExecExit is sent and no command ran. Once the stream is
+  // established, every outcome is reported as a SessionExecExit instead.
+  rpc Exec(stream SandboxServiceExecRequest)
+      returns (stream SandboxServiceExecResponse);
 }
 
 // LaunchRequest carries everything needed to construct the Sandbox spec.
@@ -241,8 +297,123 @@ message AttachResponse {
   string runtime = 6;
 }
 
-// AttachFailure is attached to the gRPC status details of a failed
-// Attach so callers can act on the failure class programmatically.
+// SandboxServiceExecRequest is one message of the client half of an
+// Exec stream. The verbose name is buf's collision-safe form: this
+// package already has a LeaseService.Exec with its own ExecRequest,
+// and the two verbs must never be mistaken for each other.
+// The first message MUST carry `start`; every later message carries
+// stdin bytes or the stdin half-close. A second `start`, or any other
+// message before the first `start`, is INVALID_ARGUMENT.
+message SandboxServiceExecRequest {
+  oneof request {
+    // start opens the exec. Exactly once, first.
+    SessionExecStart start = 1;
+
+    // stdin is a chunk of standard input for the running command.
+    // Ignored (with the stream failed) before start.
+    bytes stdin = 2;
+
+    // stdin_eof closes the command's standard input. A command that
+    // reads to EOF hangs forever without it. Set to true to
+    // half-close; the value false is meaningless and ignored. Sending
+    // stdin after stdin_eof is INVALID_ARGUMENT.
+    bool stdin_eof = 3;
+  }
+}
+
+// SessionExecStart names the session and the command to run in it.
+message SessionExecStart {
+  // sandbox_id is the session handle (<namespace>/<name>/<uid>)
+  // returned by Launch — the same handle Attach resolves. Required.
+  string sandbox_id = 1;
+
+  // command is the argv to execute, executed directly (no shell is
+  // interposed, so no quoting, globbing, or redirection is applied by
+  // Setec). At least one entry is required.
+  //
+  // The command inherits the session container's environment and
+  // working directory (/workspace). Setec deliberately offers no
+  // per-exec env or cwd override: the container runtime's exec
+  // primitive takes neither, and synthesising them would mean
+  // wrapping argv in a shell and silently changing its meaning.
+  // Callers that want either should run their own shell explicitly.
+  repeated string command = 2;
+}
+
+// SandboxServiceExecResponse is one message of the server half of an
+// Exec stream: output while the command runs, then exactly one
+// terminal exit.
+message SandboxServiceExecResponse {
+  oneof response {
+    SessionExecOutput output = 1;
+    SessionExecExit exit = 2;
+  }
+}
+
+// SessionExecOutput is a chunk of the command's output. `stream` is "stdout"
+// or "stderr", matching StreamLogsResponse. stdout and stderr stay
+// separated — Exec never merges them.
+message SessionExecOutput {
+  bytes data = 1;
+  string stream = 2;
+}
+
+// SessionExecExit terminates an Exec stream with a definitive verdict.
+// Exactly one is sent per established Exec, and it is always the last
+// message on the stream.
+message SessionExecExit {
+  // Status discriminates "the command ran and this is its code" from
+  // every way an exec can end WITHOUT one. It exists because an exit
+  // code cannot be synthesised: a caller handed a bare stream close,
+  // or a zero-valued int32, cannot tell a clean success from a
+  // microVM that disappeared mid-build.
+  enum Status {
+    // STATUS_UNSPECIFIED is never sent. Its presence means the
+    // message was not produced by a Setec frontend (or was
+    // zero-valued in transit) and the outcome is unknown.
+    STATUS_UNSPECIFIED = 0;
+
+    // STATUS_EXITED: the command ran to completion and the runtime
+    // reported its wait status. exit_code is authoritative — and is
+    // the ONLY status for which exit_code carries meaning.
+    STATUS_EXITED = 1;
+
+    // STATUS_SANDBOX_GONE: the session's microVM stopped existing
+    // while the command was running (evicted, node lost, session
+    // torn down, Pod deleted). The command's outcome is unknown and
+    // unknowable; it may have completed, failed, or been killed
+    // part-way.
+    STATUS_SANDBOX_GONE = 2;
+
+    // STATUS_TRANSPORT_FAILED: the exec channel to the microVM broke
+    // before a wait status was read. As with SANDBOX_GONE the
+    // command's outcome is unknown; unlike it, the session may still
+    // be perfectly healthy and a retry may well succeed.
+    STATUS_TRANSPORT_FAILED = 3;
+
+    // STATUS_CANCELED: the caller canceled the RPC (or its deadline
+    // elapsed) and the command was terminated with it. Emitted
+    // best-effort — a caller that has already gone away will not
+    // receive it.
+    STATUS_CANCELED = 4;
+  }
+  Status status = 1;
+
+  // exit_code is the command's wait status. Meaningful ONLY when
+  // status is STATUS_EXITED; always 0 otherwise, and 0 there means
+  // "no code was ever reported", never "success".
+  int32 exit_code = 2;
+
+  // message is a human-readable elaboration for non-EXITED statuses
+  // (empty for STATUS_EXITED). Diagnostics only — never parse it.
+  string message = 3;
+}
+
+// AttachFailure is the typed session-handle resolution failure
+// attached to the gRPC status details of a failed Attach or Exec, so
+// callers act on the failure class programmatically rather than
+// parsing message text. (The name predates Exec; the detail is shared
+// deliberately so a caller keeps one switch for both verbs.)
 message AttachFailure {
   // Reason is the typed failure class.
   enum Reason {
@@ -255,8 +426,15 @@ message AttachFailure {
     // over — it reached a terminal phase or teardown is in progress.
     REASON_SESSION_ENDED = 2;
     // REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
+    // REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
     // lifecycle, which rejects reattach (ADR-0006).
     REASON_NOT_A_SESSION = 3;
+    // REASON_SESSION_NOT_RUNNING: Exec-only. The session is live but
+    // its microVM could not be brought to Running in time — it is
+    // still coming up, or a resume from paused/suspended did not
+    // complete within the deadline. No command ran; the caller may
+    // retry.
+    REASON_SESSION_NOT_RUNNING = 4;
   }
   Reason reason = 1;
 
