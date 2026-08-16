@@ -909,6 +909,18 @@ snapshots:
     operatorCertSecret: setec-nodeagent-client-tls
     nodeAgentCertSecret: setec-nodeagent-server-tls
     caSecret: setec-nodeagent-ca
+    # -- caProvided acknowledges that caSecret exists in the release namespace.
+    # This chart does NOT create it: cert-manager mode issues only the two leaf
+    # certificates and there is no CA Issuer (setec#320). Both the operator and
+    # the node-agent mount caSecret non-optionally, so a missing one wedges the
+    # pods and surfaces as an opaque `context deadline exceeded` from
+    # `helm install --wait` rather than a useful error. Leaving this false makes
+    # the chart refuse to render instead.
+    #
+    # Note a selfsigned issuer is not enough on its own: each leaf is then its
+    # own root, so the two sides do not trust each other even once the mount
+    # resolves. The CA must sign BOTH leaves.
+    caProvided: false
     certManager:
       enabled: false
       issuerRef:

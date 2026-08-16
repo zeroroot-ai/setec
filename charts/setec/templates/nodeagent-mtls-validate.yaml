@@ -1,0 +1,45 @@
+{{/*
+Render-time validation for the operator<->node-agent mTLS channel (setec#320).
+
+snapshots.enabled=true in file mode makes BOTH the operator Deployment and the
+node-agent DaemonSet mount two Secrets, neither marked optional:
+
+  - snapshots.mTLS.operatorCertSecret  (setec-nodeagent-client-tls)
+  - snapshots.mTLS.caSecret            (setec-nodeagent-ca)
+
+The chart issues Certificates for the two LEAF secrets when
+snapshots.mTLS.certManager.enabled=true, and issues nothing at all when it is
+false. It has never produced caSecret in either case: nodeagent-certificates.yaml
+opens by describing three secrets from a shared Issuer, then defines two
+Certificates and no Issuer.
+
+A missing non-optional Secret does not fail the install cleanly — it wedges the
+pod, so `helm install --wait` dies minutes later with
+
+    Deployment/... not ready. status: InProgress, Available: 0/2
+    context deadline exceeded
+
+which names neither the Secret nor the cause. That opaque timeout is what the
+first real `suites` e2e run spent itself on (run 31914899389).
+
+So: fail at RENDER time, naming the missing Secret and the ways out. This does
+not decide HOW the CA should be provided — a chart-managed CA Issuer chaining
+both leaves is the better end state (and needs an RBAC grant the ARC runner
+does not yet have, see the issue) — it only stops the chart from producing a
+release that cannot start.
+*/}}
+{{- if and .Values.snapshots.enabled (ne .Values.credentials.mode "spiffe") }}
+  {{- $ca := .Values.snapshots.mTLS.caSecret }}
+  {{- if not $ca }}
+    {{- fail "snapshots.enabled=true in file mode mounts snapshots.mTLS.caSecret into the operator and the node-agent, but it is empty. Set it to the Secret holding the CA that signs both sides of the node-agent mTLS channel." }}
+  {{- end }}
+  {{- if not .Values.snapshots.mTLS.operatorCertSecret }}
+    {{- fail "snapshots.enabled=true in file mode mounts snapshots.mTLS.operatorCertSecret into the operator, but it is empty. Set it to the Secret holding the operator's client certificate." }}
+  {{- end }}
+  {{- if not .Values.snapshots.mTLS.nodeAgentCertSecret }}
+    {{- fail "snapshots.enabled=true in file mode mounts snapshots.mTLS.nodeAgentCertSecret into the node-agent, but it is empty. Set it to the Secret holding the node-agent's server certificate." }}
+  {{- end }}
+  {{- if not .Values.snapshots.mTLS.caProvided }}
+    {{- fail (printf "snapshots.enabled=true in file mode mounts the Secret %q (snapshots.mTLS.caSecret) into BOTH the operator and the node-agent, and this chart does not create it — cert-manager mode issues only the two leaf certificates, and there is no CA Issuer (setec#320). A non-optional missing Secret wedges the pods, so `helm install --wait` fails minutes later with an opaque 'context deadline exceeded' instead of telling you this.\n\nProvide the CA, then confirm it:\n  1. Create %q in namespace %q holding the CA that signs BOTH the node-agent server cert and the operator client cert (with a selfsigned issuer each leaf is its own root, so the two sides will NOT trust each other even once the mount resolves).\n  2. Set snapshots.mTLS.caProvided=true to acknowledge it exists.\n\nOr disable the channel: snapshots.enabled=false." $ca $ca .Values.namespace) }}
+  {{- end }}
+{{- end }}

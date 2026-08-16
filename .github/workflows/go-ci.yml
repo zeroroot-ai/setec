@@ -315,7 +315,24 @@ jobs:
             --set nodeAgent.enabled=true \
             --set webhook.enabled=true \
             --set webhook.certManager.enabled=true \
+            --set snapshots.mTLS.caProvided=true \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
+
+          # The chart does not create snapshots.mTLS.caSecret (setec#320), so
+          # rendering this path asserts caProvided=true — i.e. "an operator has
+          # supplied the CA out of band". Without it the chart now refuses to
+          # render rather than producing a release whose pods wedge on a missing
+          # non-optional Secret. Assert that refusal too, so the guard itself
+          # cannot rot into a no-op.
+          if helm template setec charts/setec \
+               --set snapshots.enabled=true \
+               --set nodeAgent.enabled=true \
+               --set webhook.enabled=true \
+               --set webhook.certManager.enabled=true \
+               --set sandboxNamespaces={sandbox-workloads} >/dev/null 2>&1; then
+            echo "::error::snapshots.enabled=true rendered without snapshots.mTLS.caProvided; the chart mounts a CA Secret it does not create (setec#320) and must refuse"
+            exit 1
+          fi
 
       - name: Helm template (frontend enabled with mTLS)
         # The frontend requires both TLS Secret names; without them the
