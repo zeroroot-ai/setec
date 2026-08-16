@@ -167,9 +167,18 @@ func (s *stubExecutor) stdinSeen() string {
 	return s.gotStdin
 }
 
+// The exec tests all work one session in one tenant; naming it once
+// keeps the handles below readable and the literals in one place.
+const (
+	execTestNS     = "tenant-a"
+	execTestName   = "sess"
+	execTestUID    = "uid-1"
+	execTestHandle = execTestNS + "/" + execTestName + "/" + execTestUID
+)
+
 // runningSession builds a session Sandbox already in phase Running.
-func runningSession(ns, name, uid string) *setecv1alpha1.Sandbox {
-	return sessionCR(ns, name, uid, setecv1alpha1.SandboxPhaseRunning)
+func runningSession(ns, uid string) *setecv1alpha1.Sandbox {
+	return sessionCR(ns, execTestName, uid, setecv1alpha1.SandboxPhaseRunning)
 }
 
 // execService wires a Service around a fake cluster holding sb, with
@@ -211,12 +220,12 @@ func stdinEOFMsg() *setecv1grpc.SessionExecRequest {
 // TestExec_Success streams stdout and stderr separately and closes
 // with exactly one STATUS_EXITED carrying the real exit code.
 func TestExec_Success(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{stdout: "hello\n", stderr: "warn\n"}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "make", "build"),
+		startMsg(execTestHandle, "make", "build"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -238,11 +247,11 @@ func TestExec_Success(t *testing.T) {
 	if exits[0].GetExitCode() != 0 {
 		t.Errorf("exit_code = %d, want 0", exits[0].GetExitCode())
 	}
-	if ex.gotNamespace != "tenant-a" {
-		t.Errorf("namespace = %q, want tenant-a", ex.gotNamespace)
+	if ex.gotNamespace != execTestNS {
+		t.Errorf("namespace = %q, want %q", ex.gotNamespace, execTestNS)
 	}
-	if ex.gotPod != "sess-vm" {
-		t.Errorf("pod = %q, want sess-vm", ex.gotPod)
+	if want := execTestName + "-vm"; ex.gotPod != want {
+		t.Errorf("pod = %q, want %q", ex.gotPod, want)
 	}
 	if ex.gotContainer != workloadContainerName {
 		t.Errorf("container = %q, want %q", ex.gotContainer, workloadContainerName)
@@ -256,12 +265,12 @@ func TestExec_Success(t *testing.T) {
 // STATUS_EXITED with the command's real code — the case that must stay
 // distinguishable from every "no code was reported" outcome.
 func TestExec_NonZeroExitReportsCode(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{err: utilexec.CodeExitError{Err: errors.New("exit 17"), Code: 17}}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "false"),
+		startMsg(execTestHandle, "false"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -281,12 +290,12 @@ func TestExec_NonZeroExitReportsCode(t *testing.T) {
 // TestExec_TransportFailureIsNotExitZero is the invariant gibson#1183
 // depends on: a broken exec channel must never look like a clean exit.
 func TestExec_TransportFailureIsNotExitZero(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{err: errors.New("stream reset by peer")}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "make"),
+		startMsg(execTestHandle, "make"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -312,7 +321,7 @@ func TestExec_TransportFailureIsNotExitZero(t *testing.T) {
 // eviction-mid-build case: a plugin must be able to tell it from a
 // build that genuinely failed.
 func TestExec_SandboxGoneMidExec(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{err: errors.New("connection closed")}
 	svc := execService(t, ex, sb)
 	ex.onExec = func() {
@@ -320,7 +329,7 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 	}
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "make"),
+		startMsg(execTestHandle, "make"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -340,14 +349,14 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 // TestExec_CanceledReportsCanceled asserts a caller-canceled exec is
 // reported as CANCELED rather than as a transport failure.
 func TestExec_CanceledReportsCanceled(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{block: make(chan struct{})}
 	svc := execService(t, ex, sb)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	st := &fakeExecStream{
 		ctx: ctx,
-		in:  []*setecv1grpc.SessionExecRequest{startMsg("tenant-a/sess/uid-1", "sleep", "60")},
+		in:  []*setecv1grpc.SessionExecRequest{startMsg(execTestHandle, "sleep", "60")},
 	}
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -368,12 +377,12 @@ func TestExec_CanceledReportsCanceled(t *testing.T) {
 // TestExec_StdinIsForwarded asserts stdin chunks reach the command and
 // that stdin_eof closes the pipe so a reader-to-EOF command finishes.
 func TestExec_StdinIsForwarded(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	ex := &stubExecutor{}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "cat"),
+		startMsg(execTestHandle, "cat"),
 		stdinMsg("one "),
 		stdinMsg("two"),
 		stdinEOFMsg(),
@@ -389,7 +398,7 @@ func TestExec_StdinIsForwarded(t *testing.T) {
 // TestExec_FirstMessageMustBeStart rejects a client that streams stdin
 // before naming a session.
 func TestExec_FirstMessageMustBeStart(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{stdinMsg("data")}}
@@ -407,13 +416,13 @@ func TestExec_FirstMessageMustBeStart(t *testing.T) {
 // message: a SessionExecExit is Setec's verdict on a command, and
 // Setec has no verdict to give here.
 func TestExec_SecondStartRejected(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	blocked := make(chan struct{})
 	svc := execService(t, &stubExecutor{block: blocked}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "sh"),
-		startMsg("tenant-a/sess/uid-1", "sh"),
+		startMsg(execTestHandle, "sh"),
+		startMsg(execTestHandle, "sh"),
 	}}
 	err := svc.Exec(st)
 	if status.Code(err) != codes.InvalidArgument {
@@ -426,11 +435,11 @@ func TestExec_SecondStartRejected(t *testing.T) {
 
 // TestExec_EmptyCommandRejected — argv is required.
 func TestExec_EmptyCommandRejected(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1"),
+		startMsg(execTestHandle),
 	}}
 	if err := svc.Exec(st); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument (err=%v)", status.Code(err), err)
@@ -440,12 +449,12 @@ func TestExec_EmptyCommandRejected(t *testing.T) {
 // TestExec_RejectsEphemeralSandbox — the ephemeral lifecycle has one
 // command and no second turn (ADR-0006).
 func TestExec_RejectsEphemeralSandbox(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	sb.Spec.Lifecycle = nil
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -459,7 +468,7 @@ func TestExec_RejectsEphemeralSandbox(t *testing.T) {
 // TestExec_UnknownHandle — a handle whose UID belongs to an earlier
 // same-name Sandbox must not reach the live one.
 func TestExec_UnknownHandle(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
@@ -477,12 +486,12 @@ func TestExec_UnknownHandle(t *testing.T) {
 // TestExec_TerminalSessionRejected — a finished session has nothing to
 // exec into.
 func TestExec_TerminalSessionRejected(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	sb.Status.Phase = setecv1alpha1.SandboxPhaseCompleted
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -496,9 +505,9 @@ func TestExec_TerminalSessionRejected(t *testing.T) {
 // TestExec_CrossTenantRefused — the handle names another tenant's
 // namespace.
 func TestExec_CrossTenantRefused(t *testing.T) {
-	sb := runningSession("tenant-b", "sess", "uid-1")
+	sb := runningSession("tenant-b", execTestUID)
 	svc := execService(t, &stubExecutor{}, sb)
-	svc.DefaultNamespace = "tenant-a"
+	svc.DefaultNamespace = execTestNS
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
 		startMsg("tenant-b/sess/uid-1", "ls"),
@@ -511,18 +520,18 @@ func TestExec_CrossTenantRefused(t *testing.T) {
 // TestExec_StampsSessionActivity asserts an exec counts as session
 // activity so the idle reaper cannot evict a session mid-build.
 func TestExec_StampsSessionActivity(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
 
 	got := &setecv1alpha1.Sandbox{}
-	if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: "tenant-a", Name: "sess"}, got); err != nil {
+	if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: execTestNS, Name: execTestName}, got); err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
 	if got.Annotations[setecv1alpha1.AnnotationLastActivity] == "" {
@@ -533,7 +542,7 @@ func TestExec_StampsSessionActivity(t *testing.T) {
 // TestExec_ResumesPausedSession asserts an exec against a paused
 // session flips desiredState back to Running rather than failing.
 func TestExec_ResumesPausedSession(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	sb.Status.Phase = setecv1alpha1.SandboxPhasePaused
 	sb.Spec.DesiredState = setecv1alpha1.SandboxDesiredStatePaused
 	svc := execService(t, &stubExecutor{}, sb)
@@ -543,7 +552,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 		for range 200 {
 			time.Sleep(5 * time.Millisecond)
 			cur := &setecv1alpha1.Sandbox{}
-			if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: "tenant-a", Name: "sess"}, cur); err != nil {
+			if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: execTestNS, Name: execTestName}, cur); err != nil {
 				continue
 			}
 			if cur.Spec.DesiredState != setecv1alpha1.SandboxDesiredStateRunning {
@@ -556,7 +565,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 	}()
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -567,7 +576,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 	}
 
 	got := &setecv1alpha1.Sandbox{}
-	if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: "tenant-a", Name: "sess"}, got); err != nil {
+	if err := svc.Client.Get(context.Background(), types.NamespacedName{Namespace: execTestNS, Name: execTestName}, got); err != nil {
 		t.Fatalf("get sandbox: %v", err)
 	}
 	if got.Spec.DesiredState != setecv1alpha1.SandboxDesiredStateRunning {
@@ -578,13 +587,13 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 // TestExec_NotRunningInTime refuses cleanly (no command ran, so no
 // exit message) when the VM never reaches Running.
 func TestExec_NotRunningInTime(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	sb.Status.Phase = setecv1alpha1.SandboxPhasePending
 	svc := execService(t, &stubExecutor{}, sb)
 	svc.execReadyTimeout = 100 * time.Millisecond
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -601,11 +610,11 @@ func TestExec_NotRunningInTime(t *testing.T) {
 // TestExec_NoExecutorConfigured fails loudly rather than pretending the
 // command succeeded.
 func TestExec_NoExecutorConfigured(t *testing.T) {
-	sb := runningSession("tenant-a", "sess", "uid-1")
+	sb := runningSession(execTestNS, execTestUID)
 	svc := execService(t, nil, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
-		startMsg("tenant-a/sess/uid-1", "ls"),
+		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)

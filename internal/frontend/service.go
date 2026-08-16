@@ -462,15 +462,15 @@ func (s *Service) resumeAfterBrokenLogStream(
 		// The caller is gone; a broken read is the expected shape.
 		return nil
 	}
-	rest, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
+	remaining, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
 	if err != nil {
 		return status.Errorf(codes.Internal, "read log stream: %v", first.SourceErr)
 	}
 	defer func() {
-		_ = rest.Close()
+		_ = remaining.Close()
 	}()
 
-	outcome, err := relayLogStream(ctx, rest, stream, first.LinesRead)
+	outcome, err := relayLogStream(ctx, remaining, stream, first.LinesRead)
 	if err != nil {
 		return err
 	}
