@@ -17,6 +17,7 @@ service SandboxService {
   rpc Wait(WaitRequest) returns (WaitResponse);
   rpc Kill(KillRequest) returns (KillResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
+  rpc Exec(stream SessionExecRequest) returns (stream SessionExecResponse);
 }
 ```
 
@@ -81,6 +82,101 @@ is open (plus a final stamp at disconnect). The operator's idle
 eviction (`SandboxClass.spec.sessionIdleTimeout`) reads that
 annotation, so an attached session is never idle-reaped; the idle clock
 starts when the last client disconnects.
+
+## Session exec (`Exec`)
+
+`SandboxService.Exec` runs a command **inside** an already-running
+session Sandbox and streams its stdio (ADR-0008). It is what makes a
+session more than an observable one-shot: successive commands enter the
+same live microVM and see each other's effects on the durable
+`/workspace` volume.
+
+It is not `LeaseService.Exec`, which launches a fresh throwaway Sandbox
+per call and shares nothing between calls.
+
+### Wire protocol
+
+The client sends exactly one `SessionExecStart` as the **first** message,
+then zero or more `stdin` chunks, then optionally `stdin_eof`:
+
+```protobuf
+message SessionExecStart {
+  string sandbox_id = 1;         // the session handle from Launch
+  repeated string command = 2;   // argv, executed directly (no shell)
+}
+```
+
+The server streams `SessionExecOutput` chunks (`stream` is `"stdout"` or
+`"stderr"`, never merged) and terminates with **exactly one**
+`SessionExecExit`.
+
+`Exec` deliberately offers no per-exec environment or working-directory
+override. The container runtime's exec primitive accepts neither, and
+synthesising them would mean wrapping `argv` in a shell and silently
+changing its meaning. The command inherits the session container's
+environment, and its working directory is `/workspace` — session Pods
+are built rooted there for exactly this reason. A caller that wants
+either should run its own shell explicitly.
+
+### Exit semantics (read this before writing a client)
+
+An exit code cannot be synthesised. A caller handed a bare stream close,
+or a zero-valued `int32`, cannot tell a clean success from a microVM
+that vanished mid-build. So `SessionExecExit.status` — not the stream
+ending — is the discriminator:
+
+| `status` | Meaning | `exit_code` |
+|---|---|---|
+| `STATUS_EXITED` | The command ran to completion; the runtime reported its wait status. | **authoritative** |
+| `STATUS_SANDBOX_GONE` | The session's microVM stopped existing mid-command (evicted, node lost, torn down). Outcome unknown and unknowable. | meaningless (always 0) |
+| `STATUS_TRANSPORT_FAILED` | The exec channel broke before a wait status was read. Outcome unknown; the session may still be healthy, so a retry may succeed. | meaningless (always 0) |
+| `STATUS_CANCELED` | The caller canceled the RPC or its deadline elapsed; the command was torn down with it. Sent best-effort. | meaningless (always 0) |
+| `STATUS_UNSPECIFIED` | Never sent by a Setec frontend. | meaningless |
+
+Two rules follow, and a correct client implements both:
+
+1. **`exit_code` is meaningful only for `STATUS_EXITED`.** Zero anywhere
+   else means "no code was ever reported", never "success".
+2. **A stream that ends with no `SessionExecExit` at all is an abnormal
+   termination.** The command's outcome is unknown. It is never success
+   and never a specific code.
+
+### Session state and activity
+
+An in-flight `Exec` registers as session activity for its whole run
+(the same `last-activity` annotation `Attach` stamps), so a long build
+cannot be idle-evicted underneath the caller.
+
+An `Exec` against a paused or suspended session flips
+`spec.desiredState` to `Running` and waits for the microVM to come back
+before running the command; the caller sees only the added latency. If
+it does not come back inside the frontend's readiness budget the RPC
+fails with `FAILED_PRECONDITION` +
+`AttachFailure.REASON_SESSION_NOT_RUNNING` — and because no command
+ran, no `SessionExecExit` is sent.
+
+### Failure shapes
+
+Handle resolution reuses `Attach`'s typed `AttachFailure` detail, so a
+client keeps one switch for both verbs:
+
+| Condition | Code | `AttachFailure.reason` |
+|---|---|---|
+| Handle resolves to no live Sandbox | `NOT_FOUND` | `REASON_SESSION_NOT_FOUND` |
+| Session over or teardown in progress | `FAILED_PRECONDITION` | `REASON_SESSION_ENDED` |
+| Sandbox is ephemeral | `FAILED_PRECONDITION` | `REASON_NOT_A_SESSION` |
+| microVM did not reach Running in time | `FAILED_PRECONDITION` | `REASON_SESSION_NOT_RUNNING` |
+
+Every one of these is raised **before** the command starts, so no
+`SessionExecExit` is sent and nothing ran. Once the stream is
+established, every outcome is reported as a `SessionExecExit` instead.
+
+### Isolation
+
+The exec'd process runs in the workload container's namespaces, as the
+same unprivileged user, with the same dropped capabilities and seccomp
+profile, inside the same microVM. `Exec` adds a second process to an
+existing isolation boundary; it does not widen one.
 
 ## Authentication
 
@@ -362,15 +458,20 @@ resolved tenant namespace and never cross tenant boundaries.
 The frontend also exports `setec_lease_pool_ready{namespace,sandbox_class}`
 and `setec_lease_pool_leased{namespace,sandbox_class}` gauges.
 
-> **Note on the runtime model.** Setec Sandboxes are one-shot: a microVM
-> runs its immutable `spec.command` then terminates, and the v1 ABI exposes
-> no in-VM exec channel. `Exec` therefore launches the caller's command as
-> a fresh workload Sandbox in the leased entry's class (snapshot-restored
-> from the class snapshot when one is configured, so it inherits the warm
-> base) rather than injecting a command into an already-running VM. The
+> **Note on the runtime model.** A leased Sandbox is *ephemeral*: the
+> microVM runs its immutable `spec.command` then terminates.
+> `LeaseService.Exec` therefore launches the caller's command as a fresh
+> workload Sandbox in the leased entry's class (snapshot-restored from the
+> class snapshot when one is configured, so it inherits the warm base)
+> rather than injecting a command into an already-running VM. The
 > warm-pool benefit is that image prefetch, scheduling, and (with a
-> snapshot) restore are already paid down. A future ADR may add an in-VM
-> exec channel to run directly inside the leased microVM.
+> snapshot) restore are already paid down.
+>
+> To run successive commands *inside one live microVM* — sharing a durable
+> `/workspace` across turns — use `SandboxService.Exec` against a session
+> Sandbox instead (see [Exec](#exec) above and ADR-0008). Leases are a
+> fast-start mechanism; sessions are a state mechanism. The two verbs
+> share a name and nothing else.
 
 ## Rate limiting and concurrency
 

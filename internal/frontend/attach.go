@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,41 +67,11 @@ func (s *Service) Attach(ctx context.Context, req *setecv1grpc.AttachRequest) (*
 		return nil, err
 	}
 
-	sb := &setecv1alpha1.Sandbox{}
-	if err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sb); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, attachFailure(codes.NotFound,
-				setecv1grpc.AttachFailure_REASON_SESSION_NOT_FOUND, "",
-				"no session for handle %q: Sandbox not found", req.GetSandboxId())
-		}
-		return nil, status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
-	}
-
-	// The UID pins the handle to one session. A same-name Sandbox
-	// created after the original ended is a different session and must
-	// not be reachable through the old handle (ADR-0005 invariant 3:
-	// never cross-session reuse).
-	if string(sb.UID) != uid {
-		return nil, attachFailure(codes.NotFound,
-			setecv1grpc.AttachFailure_REASON_SESSION_NOT_FOUND, "",
-			"no session for handle %q: the Sandbox it referenced no longer exists", req.GetSandboxId())
-	}
-
-	if !sb.Spec.IsSession() {
-		return nil, attachFailure(codes.FailedPrecondition,
-			setecv1grpc.AttachFailure_REASON_NOT_A_SESSION, "",
-			"Sandbox %q is ephemeral; only lifecycle.mode=session supports Attach (ADR-0006)", name)
-	}
-
-	if !sb.DeletionTimestamp.IsZero() {
-		return nil, attachFailure(codes.FailedPrecondition,
-			setecv1grpc.AttachFailure_REASON_SESSION_ENDED, string(sb.Status.Phase),
-			"session %q has ended: teardown is in progress", name)
-	}
-	if isTerminal(sb.Status.Phase) {
-		return nil, attachFailure(codes.FailedPrecondition,
-			setecv1grpc.AttachFailure_REASON_SESSION_ENDED, string(sb.Status.Phase),
-			"session %q has ended (phase %s, reason %s)", name, sb.Status.Phase, sb.Status.Reason)
+	// Handle validation is shared with Exec (see exec.go) so both verbs
+	// accept and refuse exactly the same handles for the same reasons.
+	sb, err := s.resolveLiveSession(ctx, ns, name, uid, req.GetSandboxId())
+	if err != nil {
+		return nil, err
 	}
 
 	// Registering activity is part of attaching — a session with an

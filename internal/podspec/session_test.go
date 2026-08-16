@@ -108,3 +108,29 @@ func TestBuild_EphemeralHasNoWorkspace(t *testing.T) {
 		t.Errorf("implicit vs explicit ephemeral Pod differ (-implicit +explicit):\n%s", diff)
 	}
 }
+
+// TestBuild_SessionWorkingDirIsWorkspace asserts a session's workload
+// container is rooted at /workspace. This is load-bearing for
+// SandboxService.Exec: the container runtime's exec primitive takes no
+// working directory, so an exec'd command inherits the container's —
+// and every turn of a session must start where the last one left off.
+func TestBuild_SessionWorkingDirIsWorkspace(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(withLifecycleMode(setecv1alpha1.LifecycleModeSession)), defaultRuntimeClass)
+
+	if got := pod.Spec.Containers[0].WorkingDir; got != WorkspaceMountPath {
+		t.Errorf("workingDir = %q, want %q", got, WorkspaceMountPath)
+	}
+}
+
+// TestBuild_EphemeralKeepsImageWorkingDir asserts the ephemeral Pod
+// spec is untouched: an ephemeral Sandbox has no workspace to be
+// rooted in, so it keeps whatever working directory its image declares.
+func TestBuild_EphemeralKeepsImageWorkingDir(t *testing.T) {
+	t.Parallel()
+	pod := buildOrFatal(t, newSandbox(), defaultRuntimeClass)
+
+	if got := pod.Spec.Containers[0].WorkingDir; got != "" {
+		t.Errorf("workingDir = %q, want empty (defer to the image)", got)
+	}
+}

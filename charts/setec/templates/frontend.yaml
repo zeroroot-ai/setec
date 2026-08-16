@@ -142,17 +142,27 @@ metadata:
 rules:
   # patch: the frontend stamps the last-activity annotation on session
   # Sandboxes (Attach + stream heartbeats) so the operator's idle
-  # eviction can tell an active session from an abandoned one. It is a
-  # metadata-only merge patch; the frontend never writes spec or status.
+  # eviction can tell an active session from an abandoned one, and
+  # flips spec.desiredState to Running when an Exec arrives for a
+  # paused or suspended session (ADR-0008 auto-resume). Both are
+  # narrow merge patches; the frontend never writes status.
   - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxes]
     verbs: [create, delete, get, list, patch, watch]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]
+  # pods/exec (create): SandboxService.Exec runs a command inside an
+  # already-running session's workload container. The exec lands in the
+  # same isolation boundary as the booted workload — same user, same
+  # capabilities, same seccomp profile, same microVM — so it grants the
+  # frontend no reach it did not already have by launching Sandboxes.
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

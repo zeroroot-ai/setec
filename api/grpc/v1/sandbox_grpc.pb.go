@@ -32,6 +32,7 @@ const (
 	SandboxService_Wait_FullMethodName       = "/setec.v1.SandboxService/Wait"
 	SandboxService_Kill_FullMethodName       = "/setec.v1.SandboxService/Kill"
 	SandboxService_Attach_FullMethodName     = "/setec.v1.SandboxService/Attach"
+	SandboxService_Exec_FullMethodName       = "/setec.v1.SandboxService/Exec"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -87,6 +88,61 @@ type SandboxServiceClient interface {
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
 	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
 	Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error)
+	// Exec runs a command INSIDE an existing session Sandbox's running
+	// microVM and streams its stdio, so a session can be worked on
+	// across many turns instead of being limited to the single
+	// immutable spec.command it booted with (ADR-0008).
+	//
+	// This is not LeaseService.Exec: that verb launches a fresh
+	// one-shot Sandbox per call and shares nothing between calls. This
+	// one enters a VM that is already up, so successive commands see
+	// each other's effects on the durable /workspace volume.
+	//
+	// Protocol: the client sends exactly one SessionExecStart as the FIRST
+	// message, then zero or more stdin chunks, then optionally
+	// stdin_eof. The server streams SessionExecOutput messages and terminates
+	// the stream with EXACTLY ONE SessionExecExit.
+	//
+	// Exit reporting is definitive by construction. The caller must
+	// never infer success from a closed stream: SessionExecExit.status is the
+	// discriminator, and only STATUS_EXITED means exit_code is
+	// meaningful. When the command's fate cannot be established — the
+	// microVM vanished mid-exec, the node drained, the transport broke
+	// — the server still sends a SessionExecExit, carrying the corresponding
+	// non-EXITED status instead of a fabricated code. A stream that
+	// ends with no SessionExecExit at all is an abnormal termination and the
+	// command MUST be treated as of unknown outcome; it is never
+	// success and never a specific exit code.
+	//
+	// The command runs rooted at the session's durable /workspace (the
+	// session container's working directory), as the same unprivileged
+	// user, with the same capabilities and seccomp profile as the
+	// booted workload: Exec is not an escalation path, it is a second
+	// process inside the same isolation boundary.
+	//
+	// An in-flight Exec registers as session activity for the whole of
+	// its run, so a long build can never be idle-evicted underneath the
+	// caller (ADR-0006).
+	//
+	// A session whose VM is paused or suspended is resumed first and
+	// the command runs once it is back (ADR-0006 suspend/resume); the
+	// caller sees only the added latency.
+	//
+	// Failure shapes (each carries an AttachFailure detail, the same
+	// typed session-handle resolution detail Attach returns, so a
+	// caller switches on one reason enum for both verbs):
+	//   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+	//     Sandbox.
+	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
+	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
+	//     ephemeral; its one command is its whole life (ADR-0006).
+	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
+	//     not be brought to a running microVM in time.
+	//
+	// These are RPC-level errors raised before the command starts, so
+	// no SessionExecExit is sent and no command ran. Once the stream is
+	// established, every outcome is reported as a SessionExecExit instead.
+	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse], error)
 }
 
 type sandboxServiceClient struct {
@@ -156,6 +212,19 @@ func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, op
 	return out, nil
 }
 
+func (c *sandboxServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SandboxService_ServiceDesc.Streams[1], SandboxService_Exec_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SessionExecRequest, SessionExecResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SandboxService_ExecClient = grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse]
+
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
 // for forward compatibility.
@@ -209,6 +278,61 @@ type SandboxServiceServer interface {
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
 	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
 	Attach(context.Context, *AttachRequest) (*AttachResponse, error)
+	// Exec runs a command INSIDE an existing session Sandbox's running
+	// microVM and streams its stdio, so a session can be worked on
+	// across many turns instead of being limited to the single
+	// immutable spec.command it booted with (ADR-0008).
+	//
+	// This is not LeaseService.Exec: that verb launches a fresh
+	// one-shot Sandbox per call and shares nothing between calls. This
+	// one enters a VM that is already up, so successive commands see
+	// each other's effects on the durable /workspace volume.
+	//
+	// Protocol: the client sends exactly one SessionExecStart as the FIRST
+	// message, then zero or more stdin chunks, then optionally
+	// stdin_eof. The server streams SessionExecOutput messages and terminates
+	// the stream with EXACTLY ONE SessionExecExit.
+	//
+	// Exit reporting is definitive by construction. The caller must
+	// never infer success from a closed stream: SessionExecExit.status is the
+	// discriminator, and only STATUS_EXITED means exit_code is
+	// meaningful. When the command's fate cannot be established — the
+	// microVM vanished mid-exec, the node drained, the transport broke
+	// — the server still sends a SessionExecExit, carrying the corresponding
+	// non-EXITED status instead of a fabricated code. A stream that
+	// ends with no SessionExecExit at all is an abnormal termination and the
+	// command MUST be treated as of unknown outcome; it is never
+	// success and never a specific exit code.
+	//
+	// The command runs rooted at the session's durable /workspace (the
+	// session container's working directory), as the same unprivileged
+	// user, with the same capabilities and seccomp profile as the
+	// booted workload: Exec is not an escalation path, it is a second
+	// process inside the same isolation boundary.
+	//
+	// An in-flight Exec registers as session activity for the whole of
+	// its run, so a long build can never be idle-evicted underneath the
+	// caller (ADR-0006).
+	//
+	// A session whose VM is paused or suspended is resumed first and
+	// the command runs once it is back (ADR-0006 suspend/resume); the
+	// caller sees only the added latency.
+	//
+	// Failure shapes (each carries an AttachFailure detail, the same
+	// typed session-handle resolution detail Attach returns, so a
+	// caller switches on one reason enum for both verbs):
+	//   - NOT_FOUND + SESSION_NOT_FOUND: the handle resolves to no live
+	//     Sandbox.
+	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
+	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
+	//     ephemeral; its one command is its whole life (ADR-0006).
+	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
+	//     not be brought to a running microVM in time.
+	//
+	// These are RPC-level errors raised before the command starts, so
+	// no SessionExecExit is sent and no command ran. Once the stream is
+	// established, every outcome is reported as a SessionExecExit instead.
+	Exec(grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]) error
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -233,6 +357,9 @@ func (UnimplementedSandboxServiceServer) Kill(context.Context, *KillRequest) (*K
 }
 func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
+}
+func (UnimplementedSandboxServiceServer) Exec(grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
 func (UnimplementedSandboxServiceServer) testEmbeddedByValue()                        {}
@@ -338,6 +465,13 @@ func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SandboxServiceServer).Exec(&grpc.GenericServerStream[SessionExecRequest, SessionExecResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SandboxService_ExecServer = grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]
+
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -367,6 +501,12 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamLogs",
 			Handler:       _SandboxService_StreamLogs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Exec",
+			Handler:       _SandboxService_Exec_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "api/grpc/v1/sandbox.proto",

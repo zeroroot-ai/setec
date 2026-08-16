@@ -247,12 +247,19 @@ func (s *LeaseService) PoolStatus(ctx context.Context, req *setecv1grpc.PoolStat
 }
 
 // Exec runs the caller's command in the leased Sandbox and streams its
-// output. Because Setec Sandboxes are one-shot — the microVM runs its
-// immutable spec.command then terminates and there is no in-VM exec
-// channel in the v1 surface — Exec launches a fresh workload Sandbox in
-// the leased entry's class, snapshot-restored from the class snapshot
-// when one is configured so it inherits the warm base, then streams its
-// logs to terminal. Exactly one Exec is permitted per lease.
+// output. A leased Sandbox is ephemeral — the microVM runs one
+// immutable spec.command and terminates — so this verb launches a
+// fresh workload Sandbox in the leased entry's class,
+// snapshot-restored from the class snapshot when one is configured so
+// it inherits the warm base, then streams its logs to terminal.
+// Exactly one Exec is permitted per lease.
+//
+// This is deliberately NOT SandboxService.Exec (ADR-0008). That verb
+// enters an already-running session microVM so successive commands
+// share a durable /workspace; this one buys a warm cold-start for a
+// single throwaway command. Leases are a fast-start mechanism, not a
+// session mechanism, and conflating them would give a caller a
+// workspace that silently vanishes between calls.
 func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.LeaseService_ExecServer) error {
 	ctx := stream.Context()
 	ns, err := s.resolveNamespaceStream(ctx)
