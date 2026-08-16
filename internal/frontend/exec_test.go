@@ -176,9 +176,10 @@ const (
 	execTestHandle = execTestNS + "/" + execTestName + "/" + execTestUID
 )
 
-// runningSession builds a session Sandbox already in phase Running.
-func runningSession(ns, uid string) *setecv1alpha1.Sandbox {
-	return sessionCR(ns, execTestName, uid, setecv1alpha1.SandboxPhaseRunning)
+// runningSession builds a session Sandbox already in phase Running, in
+// the given tenant namespace.
+func runningSession(ns string) *setecv1alpha1.Sandbox {
+	return sessionCR(ns, execTestName, execTestUID, setecv1alpha1.SandboxPhaseRunning)
 }
 
 // execService wires a Service around a fake cluster holding sb, with
@@ -220,7 +221,7 @@ func stdinEOFMsg() *setecv1grpc.SessionExecRequest {
 // TestExec_Success streams stdout and stderr separately and closes
 // with exactly one STATUS_EXITED carrying the real exit code.
 func TestExec_Success(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{stdout: "hello\n", stderr: "warn\n"}
 	svc := execService(t, ex, sb)
 
@@ -265,7 +266,7 @@ func TestExec_Success(t *testing.T) {
 // STATUS_EXITED with the command's real code — the case that must stay
 // distinguishable from every "no code was reported" outcome.
 func TestExec_NonZeroExitReportsCode(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{err: utilexec.CodeExitError{Err: errors.New("exit 17"), Code: 17}}
 	svc := execService(t, ex, sb)
 
@@ -290,7 +291,7 @@ func TestExec_NonZeroExitReportsCode(t *testing.T) {
 // TestExec_TransportFailureIsNotExitZero is the invariant gibson#1183
 // depends on: a broken exec channel must never look like a clean exit.
 func TestExec_TransportFailureIsNotExitZero(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{err: errors.New("stream reset by peer")}
 	svc := execService(t, ex, sb)
 
@@ -321,7 +322,7 @@ func TestExec_TransportFailureIsNotExitZero(t *testing.T) {
 // eviction-mid-build case: a plugin must be able to tell it from a
 // build that genuinely failed.
 func TestExec_SandboxGoneMidExec(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{err: errors.New("connection closed")}
 	svc := execService(t, ex, sb)
 	ex.onExec = func() {
@@ -349,7 +350,7 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 // TestExec_CanceledReportsCanceled asserts a caller-canceled exec is
 // reported as CANCELED rather than as a transport failure.
 func TestExec_CanceledReportsCanceled(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{block: make(chan struct{})}
 	svc := execService(t, ex, sb)
 
@@ -377,7 +378,7 @@ func TestExec_CanceledReportsCanceled(t *testing.T) {
 // TestExec_StdinIsForwarded asserts stdin chunks reach the command and
 // that stdin_eof closes the pipe so a reader-to-EOF command finishes.
 func TestExec_StdinIsForwarded(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	ex := &stubExecutor{}
 	svc := execService(t, ex, sb)
 
@@ -398,7 +399,7 @@ func TestExec_StdinIsForwarded(t *testing.T) {
 // TestExec_FirstMessageMustBeStart rejects a client that streams stdin
 // before naming a session.
 func TestExec_FirstMessageMustBeStart(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{stdinMsg("data")}}
@@ -416,7 +417,7 @@ func TestExec_FirstMessageMustBeStart(t *testing.T) {
 // message: a SessionExecExit is Setec's verdict on a command, and
 // Setec has no verdict to give here.
 func TestExec_SecondStartRejected(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	blocked := make(chan struct{})
 	svc := execService(t, &stubExecutor{block: blocked}, sb)
 
@@ -435,7 +436,7 @@ func TestExec_SecondStartRejected(t *testing.T) {
 
 // TestExec_EmptyCommandRejected — argv is required.
 func TestExec_EmptyCommandRejected(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
@@ -449,7 +450,7 @@ func TestExec_EmptyCommandRejected(t *testing.T) {
 // TestExec_RejectsEphemeralSandbox — the ephemeral lifecycle has one
 // command and no second turn (ADR-0006).
 func TestExec_RejectsEphemeralSandbox(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	sb.Spec.Lifecycle = nil
 	svc := execService(t, &stubExecutor{}, sb)
 
@@ -468,7 +469,7 @@ func TestExec_RejectsEphemeralSandbox(t *testing.T) {
 // TestExec_UnknownHandle — a handle whose UID belongs to an earlier
 // same-name Sandbox must not reach the live one.
 func TestExec_UnknownHandle(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
@@ -486,7 +487,7 @@ func TestExec_UnknownHandle(t *testing.T) {
 // TestExec_TerminalSessionRejected — a finished session has nothing to
 // exec into.
 func TestExec_TerminalSessionRejected(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	sb.Status.Phase = setecv1alpha1.SandboxPhaseCompleted
 	svc := execService(t, &stubExecutor{}, sb)
 
@@ -505,7 +506,7 @@ func TestExec_TerminalSessionRejected(t *testing.T) {
 // TestExec_CrossTenantRefused — the handle names another tenant's
 // namespace.
 func TestExec_CrossTenantRefused(t *testing.T) {
-	sb := runningSession("tenant-b", execTestUID)
+	sb := runningSession("tenant-b")
 	svc := execService(t, &stubExecutor{}, sb)
 	svc.DefaultNamespace = execTestNS
 
@@ -520,7 +521,7 @@ func TestExec_CrossTenantRefused(t *testing.T) {
 // TestExec_StampsSessionActivity asserts an exec counts as session
 // activity so the idle reaper cannot evict a session mid-build.
 func TestExec_StampsSessionActivity(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
@@ -542,7 +543,7 @@ func TestExec_StampsSessionActivity(t *testing.T) {
 // TestExec_ResumesPausedSession asserts an exec against a paused
 // session flips desiredState back to Running rather than failing.
 func TestExec_ResumesPausedSession(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	sb.Status.Phase = setecv1alpha1.SandboxPhasePaused
 	sb.Spec.DesiredState = setecv1alpha1.SandboxDesiredStatePaused
 	svc := execService(t, &stubExecutor{}, sb)
@@ -587,7 +588,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 // TestExec_NotRunningInTime refuses cleanly (no command ran, so no
 // exit message) when the VM never reaches Running.
 func TestExec_NotRunningInTime(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	sb.Status.Phase = setecv1alpha1.SandboxPhasePending
 	svc := execService(t, &stubExecutor{}, sb)
 	svc.execReadyTimeout = 100 * time.Millisecond
@@ -610,7 +611,7 @@ func TestExec_NotRunningInTime(t *testing.T) {
 // TestExec_NoExecutorConfigured fails loudly rather than pretending the
 // command succeeded.
 func TestExec_NoExecutorConfigured(t *testing.T) {
-	sb := runningSession(execTestNS, execTestUID)
+	sb := runningSession(execTestNS)
 	svc := execService(t, nil, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
