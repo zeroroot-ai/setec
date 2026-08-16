@@ -1241,7 +1241,16 @@ jobs:
         # `consolidateAfter: 120s` would otherwise reap the metal node two
         # minutes after the last sandbox exits, mid-run, and the next scenario
         # would wait out its timeout against a cluster with no metal in it.
-        # `sleep 4200` outstrips this job's `timeout-minutes: 60`.
+        #
+        # 3300s (55m) sits just INSIDE this job's `timeout-minutes: 60`, and
+        # that direction matters. `Cleanup (always)` does not run when the job
+        # is cancelled or times out (setec#255) — observed on run 31918112679,
+        # where the runner was evicted mid-scenario (zeroroot-ai/gitops#532)
+        # and cleanup was `skipped`. The earlier 4200s (70m) OUTLASTED the
+        # timeout, so in exactly that case the placeholder went on pinning a
+        # ~$4/hr m5zn.metal with no job left to use it. A sleep shorter than
+        # the job ceiling makes the expiry itself the backstop, rather than a
+        # cleanup step that is not guaranteed to run.
         #
         # It lives in its own namespace, NOT ${E2E_NAMESPACE}: TestMain
         # CREATES that namespace and fails if it already exists.
@@ -1268,7 +1277,7 @@ jobs:
             containers:
               - name: warm
                 image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
-                command: ["sleep", "4200"]
+                command: ["sleep", "3300"]
                 resources:
                   requests:
                     cpu: 50m
