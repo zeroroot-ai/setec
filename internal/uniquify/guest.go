@@ -106,13 +106,11 @@ func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return fmt.Errorf("uniquify: accept: %w", err)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if serveErr := h.ServeConn(conn); serveErr != nil {
 				h.logf("uniquify request failed: %v", serveErr)
 			}
-		}()
+		})
 	}
 }
 

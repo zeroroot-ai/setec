@@ -82,13 +82,11 @@ func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return fmt.Errorf("entropy: accept: %w", err)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if serveErr := h.ServeConn(conn); serveErr != nil {
 				h.logf("entropy reseed request failed: %v", serveErr)
 			}
-		}()
+		})
 	}
 }
 
