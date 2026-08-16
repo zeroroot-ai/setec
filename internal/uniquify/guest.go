@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -77,11 +78,26 @@ type GuestHandler struct {
 
 // Serve accepts connections from ln until ctx is cancelled, serving
 // each with ServeConn on its own goroutine.
+//
+// Serve does not return until every handler it started has finished. The
+// handlers used to be unsupervised, so a return meant only "the accept loop
+// stopped" — callers that treat it as "all work is done" (every caller does)
+// could observe a handler still running afterwards. In the guest agent that
+// means SIGTERM can cut a reseed injection or a uniquify directive off
+// mid-flight, and for entropy that is an ADR-0005 concern: the reseed is what
+// stands between a restored clone and a duplicated RNG stream, so "mostly
+// completes before shutdown" is not the guarantee the invariant needs
+// (setec#319).
 func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+	// Every handler is tracked, and Serve waits for all of them on the way
+	// out — via defer, so BOTH return paths below (clean shutdown and accept
+	// error) wait rather than only the happy one.
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -90,11 +106,11 @@ func (h *GuestHandler) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return fmt.Errorf("uniquify: accept: %w", err)
 		}
-		go func() {
+		wg.Go(func() {
 			if serveErr := h.ServeConn(conn); serveErr != nil {
 				h.logf("uniquify request failed: %v", serveErr)
 			}
-		}()
+		})
 	}
 }
 
