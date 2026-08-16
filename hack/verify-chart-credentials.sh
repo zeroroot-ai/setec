@@ -108,6 +108,11 @@ BASE=(
 FILE_CREDS=(
 	--set frontend.tlsCertSecretName=fe-tls
 	--set frontend.tlsClientCASecretName=fe-ca
+	# The chart mounts snapshots.mTLS.caSecret in file mode but does not create
+	# it (setec#320), so it now refuses to render unless the operator declares
+	# the CA exists. This script is asserting credential WIRING, not CA
+	# provisioning, so it declares it and moves on.
+	--set snapshots.mTLS.caProvided=true
 )
 SPIFFE=(
 	--set credentials.mode=spiffe
@@ -216,9 +221,19 @@ assert_render_fails "socketPath with a scheme prefix fails the render" \
 assert_render_fails "cert-manager for the node-agent channel fails in spiffe mode" \
 	"snapshots.mTLS.certManager.enabled has no effect" \
 	"${BASE[@]}" "${SPIFFE[@]}" --set snapshots.mTLS.certManager.enabled=true
+# caProvided is set so THIS assertion isolates the frontend guard: without it
+# the node-agent CA guard (setec#320) fires first and the render fails for a
+# different, correct reason, which would let the frontend guard rot unnoticed.
 assert_render_fails "file mode still requires the frontend Secrets" \
 	"frontend.tlsCertSecretName is required" \
-	"${BASE[@]}"
+	"${BASE[@]}" --set snapshots.mTLS.caProvided=true
+
+# And the node-agent CA guard itself: file mode mounts a Secret the chart does
+# not create, so an undeclared CA must fail the render rather than produce a
+# release whose pods wedge on the missing mount (setec#320).
+assert_render_fails "file mode requires the node-agent CA to be declared" \
+	"snapshots.mTLS.caProvided" \
+	"${BASE[@]}" "${FILE_CREDS[@]}" --set snapshots.mTLS.caProvided=false
 
 if [ "$fail_count" -gt 0 ]; then
 	printf 'verify-chart-credentials: %d failure(s)\n' "$fail_count" >&2
