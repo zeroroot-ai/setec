@@ -98,21 +98,21 @@ type SandboxServiceClient interface {
 	// one enters a VM that is already up, so successive commands see
 	// each other's effects on the durable /workspace volume.
 	//
-	// Protocol: the client sends exactly one SessionExecStart as the FIRST
-	// message, then zero or more stdin chunks, then optionally
-	// stdin_eof. The server streams SessionExecOutput messages and terminates
-	// the stream with EXACTLY ONE SessionExecExit.
+	// Protocol: the client sends exactly one SessionExecStart as the
+	// FIRST message, then zero or more stdin chunks, then optionally
+	// stdin_eof. The server streams SessionExecOutput messages and
+	// terminates the stream with EXACTLY ONE SessionExecExit.
 	//
 	// Exit reporting is definitive by construction. The caller must
-	// never infer success from a closed stream: SessionExecExit.status is the
-	// discriminator, and only STATUS_EXITED means exit_code is
+	// never infer success from a closed stream: SessionExecExit.status
+	// is the discriminator, and only STATUS_EXITED means exit_code is
 	// meaningful. When the command's fate cannot be established — the
 	// microVM vanished mid-exec, the node drained, the transport broke
-	// — the server still sends a SessionExecExit, carrying the corresponding
-	// non-EXITED status instead of a fabricated code. A stream that
-	// ends with no SessionExecExit at all is an abnormal termination and the
-	// command MUST be treated as of unknown outcome; it is never
-	// success and never a specific exit code.
+	// — the server still sends a SessionExecExit carrying the
+	// corresponding non-EXITED status instead of a fabricated code. A
+	// stream that ends with no SessionExecExit at all is an abnormal
+	// termination and the command MUST be treated as of unknown
+	// outcome; it is never success and never a specific exit code.
 	//
 	// The command runs rooted at the session's durable /workspace (the
 	// session container's working directory), as the same unprivileged
@@ -288,21 +288,21 @@ type SandboxServiceServer interface {
 	// one enters a VM that is already up, so successive commands see
 	// each other's effects on the durable /workspace volume.
 	//
-	// Protocol: the client sends exactly one SessionExecStart as the FIRST
-	// message, then zero or more stdin chunks, then optionally
-	// stdin_eof. The server streams SessionExecOutput messages and terminates
-	// the stream with EXACTLY ONE SessionExecExit.
+	// Protocol: the client sends exactly one SessionExecStart as the
+	// FIRST message, then zero or more stdin chunks, then optionally
+	// stdin_eof. The server streams SessionExecOutput messages and
+	// terminates the stream with EXACTLY ONE SessionExecExit.
 	//
 	// Exit reporting is definitive by construction. The caller must
-	// never infer success from a closed stream: SessionExecExit.status is the
-	// discriminator, and only STATUS_EXITED means exit_code is
+	// never infer success from a closed stream: SessionExecExit.status
+	// is the discriminator, and only STATUS_EXITED means exit_code is
 	// meaningful. When the command's fate cannot be established — the
 	// microVM vanished mid-exec, the node drained, the transport broke
-	// — the server still sends a SessionExecExit, carrying the corresponding
-	// non-EXITED status instead of a fabricated code. A stream that
-	// ends with no SessionExecExit at all is an abnormal termination and the
-	// command MUST be treated as of unknown outcome; it is never
-	// success and never a specific exit code.
+	// — the server still sends a SessionExecExit carrying the
+	// corresponding non-EXITED status instead of a fabricated code. A
+	// stream that ends with no SessionExecExit at all is an abnormal
+	// termination and the command MUST be treated as of unknown
+	// outcome; it is never success and never a specific exit code.
 	//
 	// The command runs rooted at the session's durable /workspace (the
 	// session container's working directory), as the same unprivileged
