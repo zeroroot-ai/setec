@@ -365,8 +365,12 @@ jobs:
             --set webhook.enabled=false \
             --set rbac.allowClusterWideSandboxWrite=true \
             --set installer.enabled=false \
-            "${overhead_args[@]}" \
-            --wait --timeout 5m
+            "${overhead_args[@]}"
+          # NOTE: no --wait. Readiness is asserted by the next step instead,
+          # because `helm --wait` gates on the runtime-agent DaemonSet being
+          # Available on EVERY node, and on this cluster that condition is
+          # frequently unreachable — see that step's header.
+          #
           # Notes on the values above:
           #  - image tags are the sha-<sha> refs build-images pushed to ghcr;
           #    pullPolicy stays the chart default (IfNotPresent) — unlike the
@@ -392,6 +396,115 @@ jobs:
           #    throwaway namespace, so sandboxNamespaces cannot express it;
           #    this is the documented deliberate opt-out, scoped to a
           #    single ephemeral namespace deleted at job end.
+
+      - name: Wait for the shadow release, ignoring nodes the cluster cannot run
+        # This step replaces `helm install --wait` (setec#315).
+        #
+        # WHY HELM'S OWN WAIT CANNOT WORK HERE
+        #
+        # `helm --wait` treats a DaemonSet as ready only when
+        # status.numberAvailable == status.desiredNumberScheduled — every
+        # eligible node, no exceptions. The DaemonSet controller schedules a
+        # pod onto NotReady and unreachable nodes too: it stamps every
+        # DaemonSet pod with `node.kubernetes.io/not-ready:NoExecute` and
+        # `node.kubernetes.io/unreachable:NoExecute` tolerations itself
+        # (kubernetes pkg/controller/daemon/util.AddOrUpdateDaemonPodTolerations),
+        # so there is no chart-side toleration or nodeSelector that can opt
+        # out. A dead node therefore holds a permanently Pending pod, and
+        # desiredNumberScheduled counts it.
+        #
+        # Staging always has such a node. The setec-metal NodePool is
+        # scale-to-zero, so after a run the m5zn.metal it provisioned is
+        # disrupted by Karpenter and sits `NotReady` /
+        # `node.kubernetes.io/unreachable:NoExecute` /
+        # `karpenter.sh/disrupted:NoSchedule` in the API for minutes while
+        # it drains. Run 31916042487 died on `Available: 2/3` against
+        # ip-10-40-95-240 in exactly that state; run 31914271177 died on
+        # `Available: 3/4`. Raising --timeout does not help — the pod is not
+        # slow, its node is gone.
+        #
+        # WHAT IS ASSERTED INSTEAD
+        #
+        # The operator Deployment must roll out (it is what reconciles the
+        # Sandbox, so nothing downstream works without it), and every
+        # runtime-agent pod whose node the cluster reports Ready must itself
+        # be Ready, with at least one such pod. Pods pinned to a NotReady
+        # node are named and excluded, out loud, rather than silently
+        # tolerated. That is strictly the coverage the round-trip needs: the
+        # per-node capability probe on the node that actually hosts the
+        # microVM is asserted by the pre-warm step below, which waits for
+        # `setec.zeroroot.ai/runtime.kata-qemu=true` — a label only a live
+        # runtime-agent writes.
+        env:
+          # 5m, sized against the job's own `timeout-minutes: 30` rather than
+          # generously: the pre-warm step below can spend 18 of those 30
+          # minutes, so a ceiling here that is too high turns a diagnosable
+          # step failure into an undiagnosable job timeout. It is a ceiling,
+          # not a budget — the install runs BEFORE pre-warm, so every node
+          # this gate looks at is an established general node whose agent
+          # image pull measured under a second (run 31916042487: 572ms).
+          READY_TIMEOUT_SECONDS: "300"
+        run: |
+          set -euo pipefail
+
+          echo "--- operator Deployment ---"
+          kubectl -n "${E2E_NAMESPACE}" rollout status "deployment/${E2E_RELEASE}" --timeout=5m
+
+          echo "--- runtime-agent DaemonSet (nodes the cluster reports Ready) ---"
+          deadline=$(( $(date -u +%s) + READY_TIMEOUT_SECONDS ))
+          while :; do
+            # Node names the cluster reports Ready=True. `$n` below is a Go
+            # template variable, not a shell one — the single quotes are
+            # deliberate.
+            # shellcheck disable=SC2016
+            ready_nodes="$(kubectl get nodes -o go-template='{{range .items}}{{$n := .metadata.name}}{{range .status.conditions}}{{if eq .type "Ready"}}{{if eq .status "True"}}{{$n}}{{"\n"}}{{end}}{{end}}{{end}}{{end}}')"
+
+            # One line per agent pod: name|node|Ready-condition (empty while
+            # the pod is still Pending and has no condition yet).
+            pods="$(kubectl -n "${E2E_NAMESPACE}" get pods \
+              -l "app.kubernetes.io/instance=${E2E_RELEASE},app.kubernetes.io/component=runtime-agent" \
+              -o go-template='{{range .items}}{{.metadata.name}}|{{.spec.nodeName}}|{{range .status.conditions}}{{if eq .type "Ready"}}{{.status}}{{end}}{{end}}{{"\n"}}{{end}}')"
+
+            considered=0
+            agent_ready=0
+            skipped=""
+            pending=""
+            while IFS='|' read -r pod node cond; do
+              [ -n "$pod" ] || continue
+              if [ -z "$node" ] || ! printf '%s\n' "${ready_nodes}" | grep -qxF -- "${node}"; then
+                skipped="${skipped} ${pod}(${node:-unscheduled})"
+                continue
+              fi
+              considered=$(( considered + 1 ))
+              if [ "$cond" = "True" ]; then
+                agent_ready=$(( agent_ready + 1 ))
+              else
+                pending="${pending} ${pod}(${node})"
+              fi
+            done <<EOF
+          ${pods}
+          EOF
+
+            echo "runtime-agent ready ${agent_ready}/${considered} on Ready nodes;${skipped:+ excluded (node not Ready):${skipped};} $(( deadline - $(date -u +%s) ))s left"
+
+            if [ "$considered" -ge 1 ] && [ "$agent_ready" -eq "$considered" ]; then
+              if [ -n "${skipped}" ]; then
+                echo "::notice::runtime-agent pods on nodes the cluster does not report Ready were excluded from the readiness gate:${skipped}"
+              fi
+              echo "shadow release ready"
+              exit 0
+            fi
+
+            if [ "$(date -u +%s)" -ge "$deadline" ]; then
+              echo "::error::runtime-agent not ready on every Ready node within ${READY_TIMEOUT_SECONDS}s (ready ${agent_ready}/${considered}, waiting on:${pending:-none})"
+              kubectl get nodes -o wide || true
+              kubectl -n "${E2E_NAMESPACE}" get pods -o wide || true
+              kubectl -n "${E2E_NAMESPACE}" describe daemonset "${E2E_RELEASE}-runtime-agent" || true
+              kubectl -n "${E2E_NAMESPACE}" get events --sort-by=.lastTimestamp || true
+              exit 1
+            fi
+            sleep 10
+          done
 
       - name: Ensure a kata-qemu SandboxClass exists (throwaway, this run only)
         # SandboxClass is CLUSTER-scoped (api/v1alpha1/sandboxclass_types.go:
