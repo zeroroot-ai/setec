@@ -181,6 +181,14 @@ func TestMain(m *testing.M) {
 
 	if err := installChart(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: helm install failed: %v\n", err)
+		// Dump the wreckage BEFORE tearing it down. The teardown below is what
+		// makes an install failure unreadable: by the time the workflow's own
+		// "Collect diagnostics" step runs, this has already deleted the
+		// namespace, so the step reports "No resources found" and the only
+		// evidence left is helm's one-line verdict — "DaemonSet ... not ready,
+		// Available: 3/4", with no way to learn WHICH replica or why (observed
+		// on run 31916255452).
+		dumpInstallFailureState()
 		// Best-effort teardown of whatever partial state got created.
 		_ = uninstallChart()
 		os.Exit(1)
@@ -460,7 +468,9 @@ func preflight() error {
 // installChart creates the test namespace and helm-installs the chart into
 // it, waiting for the operator Deployment to become Ready before returning.
 func installChart() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Must outlast the helm --timeout below, or this context cancels the
+	// install that is still legitimately waiting for a rollout.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
 	// Create the namespace. Helm could do this via --create-namespace, but
@@ -575,7 +585,17 @@ func installChart() error {
 		// Flip SETEC_E2E_SNAPSHOTS=1 the moment #320 lands; that is the only
 		// change needed here.
 		"--wait",
-		"--timeout", "5m",
+		// 10m, not 5m. The suites job pre-warms a metal node BEFORE installing
+		// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
+		// runtime-agent DaemonSet has to roll out onto an m5zn.metal that came
+		// up minutes ago and has none of the images cached. Five minutes was
+		// not enough: run 31916255452 died on
+		// `DaemonSet ... not ready, Available: 3/4` with four amd64 nodes, the
+		// fourth being that fresh metal node.
+		//
+		// The roundtrip job does not hit this only because it installs BEFORE
+		// its own pre-warm, so its rollout never sees the metal node at all.
+		"--timeout", "10m",
 	}
 
 	if os.Getenv("SETEC_E2E_SNAPSHOTS") == "1" {
@@ -661,6 +681,28 @@ func installChart() error {
 		}
 	}
 	return nil
+}
+
+// dumpInstallFailureState prints the state of the half-installed release to
+// stderr, so an install failure says which workload did not come up and why.
+//
+// Best-effort throughout: this runs on a path that is already failing, and a
+// diagnostic that can itself fail the run is worse than no diagnostic.
+func dumpInstallFailureState() {
+	for _, args := range [][]string{
+		{"get", "pods", "-n", testNamespace, "-o", "wide"},
+		{"get", "daemonset,deployment", "-n", testNamespace, "-o", "wide"},
+		// Why a pod is not ready is almost always in its events (ImagePullBackOff,
+		// FailedScheduling, a failing probe) rather than in its status.
+		{"get", "events", "-n", testNamespace, "--sort-by=.lastTimestamp"},
+		{"describe", "pods", "-n", testNamespace},
+	} {
+		fmt.Fprintf(os.Stderr, "\ne2e: --- kubectl %s ---\n", strings.Join(args, " "))
+		cmd := exec.Command("kubectl", args...)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	}
 }
 
 // snapshotMTLSArgs issues the operator's node-agent client certificate, which
