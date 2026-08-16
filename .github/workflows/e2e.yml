@@ -907,7 +907,12 @@ jobs:
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
-          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          # Both are CLUSTER-scoped and created by test bodies under t.Cleanup,
+          # which does not run when a job is cancelled (setec#255) — so a leak
+          # here outlives the namespace and is visible cluster-wide.
+          for cls in "e2e-session-checkpoint-${E2E_NAMESPACE}" "e2e-session-${E2E_NAMESPACE}"; do
+            kubectl delete sandboxclass "$cls" --ignore-not-found --wait=false || true
+          done
 
       # WITHOUT THIS STEP THIS JOB CAN NEVER BE GREEN (setec#296).
       #
@@ -1110,7 +1115,12 @@ jobs:
           # The placeholder pins the metal node for as long as it exists, so
           # reaping it is a cost control rather than tidiness.
           kubectl delete namespace "${WARM_NAMESPACE}" --ignore-not-found --wait=false || true
-          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          # Both are CLUSTER-scoped and created by test bodies under t.Cleanup,
+          # which does not run when a job is cancelled (setec#255) — so a leak
+          # here outlives the namespace and is visible cluster-wide.
+          for cls in "e2e-session-checkpoint-${E2E_NAMESPACE}" "e2e-session-${E2E_NAMESPACE}"; do
+            kubectl delete sandboxclass "$cls" --ignore-not-found --wait=false || true
+          done
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
@@ -1216,6 +1226,9 @@ jobs:
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
+          # Cluster-scoped and created by a test body under t.Cleanup, which
+          # does not run on a cancelled job (setec#255).
+          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
 
       - name: Pre-warm a kata-fc-capable metal node (scale-from-zero)
         # WITHOUT THIS STEP THE JOB CAN NEVER BE GREEN.
@@ -1410,6 +1423,7 @@ jobs:
           # it exists, so reaping it is a cost control, not tidiness. Karpenter
           # consolidates the node 120s after it goes empty.
           kubectl delete namespace setec-e2e-suites-warm --ignore-not-found --wait=false || true
+          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true

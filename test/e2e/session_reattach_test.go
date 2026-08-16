@@ -88,7 +88,13 @@ func newInProcessFrontend() *frontend.Service {
 //  5. typed failures: an ephemeral Sandbox refuses Attach, an unknown
 //     handle is NotFound, and an ended session refuses reattach.
 func TestSession_ReattachByHandle(t *testing.T) {
+	// Pin to the suite-owned class: it carries the sandbox-host toleration
+	// without which this Sandbox never leaves Pending on staging (setec#330
+	// for the suite-wide case; see sandboxHostTolerations).
+	installSessionClass(t)
+
 	spec := minimalSpec(tickerCommand...)
+	spec.SandboxClassName = sessionClassName()
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
@@ -177,7 +183,11 @@ func TestSession_ReattachByHandle(t *testing.T) {
 	}
 
 	// (5b) Ephemeral Sandbox refuses Attach.
-	eph := newSandbox("e2e-reattach-eph", minimalSpec("/bin/sh", "-c", "sleep 300"))
+	ephSpec := minimalSpec("/bin/sh", "-c", "sleep 300")
+	// Same class, same reason: this one has to reach Running before the
+	// Attach refusal can be asserted, so it has to be schedulable too.
+	ephSpec.SandboxClassName = sessionClassName()
+	eph := newSandbox("e2e-reattach-eph", ephSpec)
 	createAndCleanup(t, eph)
 	waitForPhase(t, client.ObjectKeyFromObject(eph), defaultWait, setecv1alpha1.SandboxPhaseRunning)
 	var ephCurrent setecv1alpha1.Sandbox
