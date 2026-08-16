@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -84,7 +85,10 @@ type S3Config struct {
 // cannot honour the interface's overwrite-before-unlink guidance, so
 // callers MUST front this backend with EncryptedBackend — destroying
 // the sealed DEK is what actually erases an S3 checkpoint
-// (crypto-erase, ADR-0005 invariant 5).
+// (crypto-erase, ADR-0005 invariant 5). That destroy removes every
+// version of the sealed DEK, not only the current one; on a versioned
+// bucket a plain delete would leave the key material alive as a
+// noncurrent version and the erasure would be nominal (#297).
 type S3Backend struct {
 	// Client is the S3 API client. Required.
 	Client *s3.Client
@@ -176,9 +180,10 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	}); err != nil {
 		// The payload landed but its integrity record did not; remove
 		// the orphan payload so the snapshot never looks half-created.
-		_, _ = b.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(b.Bucket), Key: aws.String(b.stateKey(snapshotID)),
-		})
+		// All versions: on a versioned bucket a plain delete would leave the
+		// half-written payload behind as a noncurrent version, still billed
+		// and still readable to anyone with the KEK.
+		_ = b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID))
 		return 0, "", fmt.Errorf("storage: s3 write sha sidecar %q: %w", snapshotID, err)
 	}
 	return counter.n, snapshotID, nil
@@ -251,10 +256,8 @@ func (b *S3Backend) Delete(ctx context.Context, storageRef string) error {
 		return err
 	}
 	for _, key := range []string{b.stateKey(storageRef), b.shaKey(storageRef), b.dekKey(storageRef)} {
-		if _, err := b.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(b.Bucket), Key: aws.String(key),
-		}); err != nil && !isS3NotFound(err) {
-			return fmt.Errorf("storage: s3 delete %q: %w", key, err)
+		if err := b.deleteObjectAllVersions(ctx, key); err != nil {
+			return err
 		}
 	}
 	if !exists {
@@ -278,6 +281,9 @@ func (b *S3Backend) Stat(ctx context.Context, storageRef string) (int64, bool, e
 		if isS3NotFound(err) {
 			return 0, false, nil
 		}
+		if isS3AccessDenied(err) {
+			return 0, false, fmt.Errorf("storage: s3 head %q: %w", storageRef, errHeadForbidden(err))
+		}
 		return 0, false, fmt.Errorf("storage: s3 head %q: %w", storageRef, err)
 	}
 	return aws.ToInt64(head.ContentLength), true, nil
@@ -294,7 +300,171 @@ func (b *S3Backend) exists(ctx context.Context, key string) (bool, error) {
 	if isS3NotFound(err) {
 		return false, nil
 	}
+	if isS3AccessDenied(err) {
+		return false, fmt.Errorf("storage: s3 head %q: %w", key, errHeadForbidden(err))
+	}
 	return false, fmt.Errorf("storage: s3 head %q: %w", key, err)
+}
+
+// errHeadForbidden wraps a 403 from HeadObject with the remedy, because
+// the obvious reading of the error is wrong.
+//
+// S3 answers HeadObject for a key that DOES NOT EXIST with 403, not 404,
+// unless the caller holds s3:ListBucket on the bucket. Save() heads the
+// target key before every write and on the happy path that key does not
+// exist — so a least-privilege policy scoped to object actions on a prefix,
+// which is the obvious way to write one, makes every checkpoint fail on the
+// first suspend, hours after the deploy, on a path nobody is watching.
+//
+// An s3:prefix condition does not rescue it: that condition key is only
+// populated for ListObjects* requests, so a conditioned ListBucket is not
+// satisfied by a HeadObject and the 403 comes back anyway. The grant has to
+// be unconditioned.
+func errHeadForbidden(err error) error {
+	return fmt.Errorf("%w (HeadObject returns 403 rather than 404 for a key that does not "+
+		"exist unless the principal holds s3:ListBucket on the whole bucket, unconditioned — "+
+		"an s3:prefix condition does not satisfy a HeadObject)", err)
+}
+
+// deleteObjectAllVersions removes an object and every non-current version
+// and delete marker it has.
+//
+// A plain DeleteObject on a VERSIONED bucket deletes nothing: it writes a
+// delete marker and the previous version survives until a lifecycle rule
+// reaps it. Every platform bucket in zeroroot-ai/deploy's eks/gibson is
+// versioned, and that is a sane default generally.
+//
+// For the sealed DEK that is the difference between crypto-erase and the
+// appearance of one — S3DEKStore.Destroy is what ADR-0005 invariant 5 leans
+// on. As deployed it is not a confidentiality hole, because the sealed DEK is
+// useless without the per-session KEK in a Kubernetes Secret that never
+// enters the bucket, so deleting that Secret is still a true crypto-erase.
+// But the code claimed an erasure it did not perform on its own, and on any
+// store where the KEK Secret is not the only copy the reasoning changes with
+// nothing in the code to say so. Now the delete is real either way.
+//
+// Services with no versioning API (MinIO in some configurations, other
+// S3-compatibles) answer ListObjectVersions with NotImplemented; that is not
+// an error here, it means there are no versions to chase and the plain
+// delete below was already sufficient.
+func (b *S3Backend) deleteObjectAllVersions(ctx context.Context, key string) error {
+	if _, err := b.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(b.Bucket), Key: aws.String(key),
+	}); err != nil && !isS3NotFound(err) {
+		return fmt.Errorf("storage: s3 delete %q: %w", key, err)
+	}
+
+	paginator := s3.NewListObjectVersionsPaginator(b.Client, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(b.Bucket),
+		// Prefix, not exact match — the API has no exact-key filter. Our own
+		// keys are prefixes of each other (state.bin, state.bin.sha256,
+		// state.bin.dek), so every entry MUST be checked against the key we
+		// were asked for or deleting the payload would take the sidecars with
+		// it.
+		Prefix: aws.String(key),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			if isS3NotFound(err) || isS3NotImplemented(err) {
+				return nil
+			}
+			return fmt.Errorf("storage: s3 list versions %q: %w", key, err)
+		}
+		ids := make([]string, 0, len(page.Versions)+len(page.DeleteMarkers))
+		for _, v := range page.Versions {
+			if aws.ToString(v.Key) == key {
+				ids = append(ids, aws.ToString(v.VersionId))
+			}
+		}
+		for _, m := range page.DeleteMarkers {
+			if aws.ToString(m.Key) == key {
+				ids = append(ids, aws.ToString(m.VersionId))
+			}
+		}
+		for _, id := range ids {
+			if id == "" || id == "null" {
+				// An unversioned bucket reports "null"; the plain delete above
+				// already handled it.
+				continue
+			}
+			if _, err := b.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket:    aws.String(b.Bucket),
+				Key:       aws.String(key),
+				VersionId: aws.String(id),
+			}); err != nil && !isS3NotFound(err) {
+				return fmt.Errorf("storage: s3 delete version %s of %q: %w", id, key, err)
+			}
+		}
+	}
+	return nil
+}
+
+// AbortStaleMultipartUploads aborts every in-progress multipart upload under
+// this backend's prefix that was initiated more than olderThan ago, and
+// returns how many it aborted.
+//
+// Save streams through the multipart uploader. The uploader aborts its own
+// upload when Upload returns an error, but it cannot when the node-agent is
+// killed mid-suspend — an OOM or a node drain, which is precisely the
+// situation session checkpoints exist for. The parts left behind are billed,
+// are NOT returned by ListObjects, and no expiration rule touches them. Only
+// an abort_incomplete_multipart_upload lifecycle rule or an explicit abort
+// reaps them, and a self-hosted MinIO has neither by default.
+//
+// Call this at node-agent startup. olderThan must comfortably exceed the
+// longest suspend this node will run, or a sweep will abort a live upload
+// from another agent sharing the prefix.
+//
+// Needs s3:AbortMultipartUpload and s3:ListBucketMultipartUploads, both easy
+// to omit from a Put/Get/Delete least-privilege policy.
+func (b *S3Backend) AbortStaleMultipartUploads(ctx context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, errors.New("storage: s3 abort stale multipart uploads: olderThan must be positive")
+	}
+	cutoff := time.Now().Add(-olderThan)
+
+	var aborted int
+	var keyMarker, uploadIDMarker *string
+	for {
+		out, err := b.Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket:         aws.String(b.Bucket),
+			Prefix:         aws.String(b.Prefix),
+			KeyMarker:      keyMarker,
+			UploadIdMarker: uploadIDMarker,
+		})
+		if err != nil {
+			if isS3NotImplemented(err) {
+				return aborted, nil
+			}
+			if isS3AccessDenied(err) {
+				return aborted, fmt.Errorf("storage: s3 list multipart uploads: %w "+
+					"(the principal needs s3:ListBucketMultipartUploads on the bucket)", err)
+			}
+			return aborted, fmt.Errorf("storage: s3 list multipart uploads: %w", err)
+		}
+		for _, u := range out.Uploads {
+			if u.Initiated == nil || !u.Initiated.Before(cutoff) {
+				continue
+			}
+			if _, err := b.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(b.Bucket),
+				Key:      u.Key,
+				UploadId: u.UploadId,
+			}); err != nil {
+				if isS3NotFound(err) {
+					continue // someone else got there first
+				}
+				return aborted, fmt.Errorf("storage: s3 abort multipart upload %q on %q: %w",
+					aws.ToString(u.UploadId), aws.ToString(u.Key), err)
+			}
+			aborted++
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			return aborted, nil
+		}
+		keyMarker, uploadIDMarker = out.NextKeyMarker, out.NextUploadIdMarker
+	}
 }
 
 // DEKStore returns the SealedDEKStore that keeps sealed DEKs as
@@ -372,9 +542,11 @@ func (s *S3DEKStore) Destroy(ctx context.Context, snapshotID string) error {
 	if !exists {
 		return os.ErrNotExist
 	}
-	if _, err := s.Backend.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.Backend.Bucket), Key: aws.String(s.Backend.dekKey(snapshotID)),
-	}); err != nil {
+	// Every version, not just the current one. On a versioned bucket a plain
+	// DeleteObject writes a delete marker and leaves the sealed DEK alive as
+	// a noncurrent version — and this call is what ADR-0005 invariant 5
+	// treats as the erasure.
+	if err := s.Backend.deleteObjectAllVersions(ctx, s.Backend.dekKey(snapshotID)); err != nil {
 		return fmt.Errorf("storage: s3 destroy sealed DEK %q: %w", snapshotID, err)
 	}
 	return nil
@@ -392,6 +564,44 @@ func isS3NotFound(err error) bool {
 	}
 	var respErr interface{ HTTPStatusCode() int }
 	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	return false
+}
+
+// isS3AccessDenied matches the shapes an S3-compatible service uses for
+// "you may not do that". Kept separate from isS3NotFound on purpose: a 403 is
+// NOT a 404, and treating it as one would turn a broken IAM policy into a
+// silent "no such checkpoint".
+func isS3AccessDenied(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessDenied", "AccessDeniedException", "Forbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch":
+			return true
+		}
+	}
+	var respErr interface{ HTTPStatusCode() int }
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusForbidden {
+		return true
+	}
+	return false
+}
+
+// isS3NotImplemented matches an S3-compatible service that does not offer an
+// API at all — versioning and multipart listing are both optional in
+// practice. Absence of the API means there is nothing for us to clean up, not
+// that cleanup failed.
+func isS3NotImplemented(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NotImplemented", "MethodNotAllowed":
+			return true
+		}
+	}
+	var respErr interface{ HTTPStatusCode() int }
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotImplemented {
 		return true
 	}
 	return false

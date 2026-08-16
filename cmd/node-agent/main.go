@@ -109,6 +109,8 @@ func main() {
 		s3Region    string
 		s3Prefix    string
 		s3PathStyle bool
+
+		staleMultipartWindow time.Duration
 	)
 	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
 		"Name of the devicemapper thin-pool to manage.")
@@ -183,6 +185,11 @@ func main() {
 	flag.BoolVar(&s3PathStyle, "s3-path-style", true,
 		"Use path-style S3 addressing (required by MinIO and most self-hosted stores; "+
 			"set false for real S3 virtual-hosted addressing).")
+	flag.DurationVar(&staleMultipartWindow, "s3-stale-multipart-window", 6*time.Hour,
+		"At startup, abort multipart checkpoint uploads under --s3-prefix older than this "+
+			"(setec#297). An upload orphaned by an OOM or a node drain is billed forever and "+
+			"is invisible to ListObjects. MUST exceed the longest suspend any agent sharing "+
+			"the prefix will run, or the sweep aborts a live upload.")
 	flag.StringVar(&entropyReseedMode, "entropy-reseed", requireMode,
 		"Active entropy reseed on snapshot restore (setec#72). 'require' (default) fails a "+
 			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
@@ -400,6 +407,26 @@ func main() {
 			}
 			fmt.Fprintf(os.Stderr, "node-agent: s3 session-checkpoint backend enabled (bucket=%q endpoint=%q)\n",
 				s3Bucket, s3Endpoint)
+
+			// Sweep multipart uploads orphaned by a previous life of this
+			// agent (setec#297). Save streams through the multipart uploader,
+			// which aborts its own upload on error but cannot when the process
+			// is killed mid-suspend — an OOM or a node drain, exactly the
+			// situations checkpoints exist for. Orphaned parts are billed, are
+			// not returned by ListObjects, and nothing else reaps them on a
+			// store without an abort_incomplete_multipart_upload lifecycle
+			// rule (a self-hosted MinIO has none by default).
+			//
+			// The window has to exceed the longest suspend any agent sharing
+			// this prefix will run, or the sweep aborts a live upload. Best
+			// effort: a store that denies s3:ListBucketMultipartUploads, or
+			// does not implement the API, must not stop the agent starting.
+			if aborted, err := s3Backend.AbortStaleMultipartUploads(ctx, staleMultipartWindow); err != nil {
+				fmt.Fprintf(os.Stderr, "node-agent: sweep stale multipart uploads: %v\n", err)
+			} else if aborted > 0 {
+				fmt.Fprintf(os.Stderr, "node-agent: aborted %d stale multipart upload(s) older than %s\n",
+					aborted, staleMultipartWindow)
+			}
 		} else {
 			fmt.Fprintln(os.Stderr, "node-agent: s3 session-checkpoint backend disabled (--s3-bucket empty)")
 		}
