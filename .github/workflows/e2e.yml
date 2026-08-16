@@ -68,14 +68,6 @@ name: e2e
 on:
   merge_group:
   workflow_dispatch: {}
-  # Nightly, for the `suites` job (setec#298). The Go e2e scenarios need a
-  # metal node and tens of minutes, so they are not charged to every
-  # merge-group entry — but "not on every merge" must not mean "never", which
-  # is exactly where they were. 04:00 UTC is outside the working day in every
-  # timezone the team is in, so the single m5zn.metal it provisions is not
-  # competing with a human's `roundtrip`.
-  schedule:
-    - cron: '0 4 * * *'
 
 permissions:
   contents: read
@@ -318,40 +310,7 @@ jobs:
             [ -n "$qemu_cpu" ] && overhead_args+=(--set "runtimes.kata-qemu.defaultOverhead.cpu=${qemu_cpu}")
           fi
 
-          # Do not fight Argo for the cluster-scoped CRDs (setec#298).
-          #
-          # Helm 4 applies chart CRDs SERVER-SIDE by default (--server-side
-          # defaults to true), so the shadow install tries to take ownership
-          # of .spec.versions from whoever already owns it. On this cluster
-          # that is `argocd-controller` — staging's setec release is
-          # GitOps-managed — and the API server refuses:
-          #
-          #   INSTALLATION FAILED: failed to install CRD
-          #   setec.zeroroot.ai_sandboxclasses.yaml: conflict occurred while
-          #   applying object ... conflict with "argocd-controller":
-          #   .spec.versions
-          #
-          # Every merge_group e2e run failed here from the moment the chart's
-          # CRDs diverged from the live ones; nothing caught it because `e2e`
-          # is not one of ci-required's needs (they are separate workflow
-          # files, and `needs:` cannot cross files).
-          #
-          # --force-conflicts is NOT the fix: it would overwrite the LIVE
-          # staging CRD schema with this PR's, on a shared cluster. Skipping
-          # is, and it matches the intent the header already documented
-          # ("helm only installs charts/setec/crds/ when the CRDs are
-          # absent") — an intent Helm 4 silently stopped honouring.
-          crd_args=()
-          if kubectl get crd sandboxes.setec.zeroroot.ai >/dev/null 2>&1; then
-            owners="$(kubectl get crd sandboxes.setec.zeroroot.ai \
-              -o jsonpath='{range .metadata.managedFields[*]}{.manager}{" "}{end}' 2>/dev/null || echo unknown)"
-            crd_args+=(--skip-crds)
-            echo "::notice::setec CRDs already exist (field managers: ${owners}); installing with --skip-crds"
-            echo "::warning::this run exercises the CLUSTER's CRD schema, not this PR's — an API-type change is NOT covered by it (setec#298)"
-          fi
-
           helm install "${E2E_RELEASE}" ./charts/setec \
-            "${crd_args[@]}" \
             --namespace "${E2E_NAMESPACE}" --create-namespace \
             --set "namespace=${E2E_NAMESPACE}" \
             --set "image.repository=${MANAGER_IMAGE%:*}" \
@@ -929,32 +888,9 @@ jobs:
   # all-skip. It now asks the cluster (does any node carry the kata-fc
   # capability label?) rather than stat'ing /dev/kvm on the runner, because
   # under ARC the test binary and the microVM host are different machines.
-  #
-  # WHEN IT RUNS, and why not on merge_group (setec#298 follow-up)
-  #
-  # As first landed this job was gated on `vars.STAGING_E2E_SUITES_READY`,
-  # a variable that was never set and that nothing in the repo would ever set
-  # — so the job reported `skipped` on every run and the suite still never
-  # executed. A test suite behind a flag nobody flips is the same defect as a
-  # suite with no runner at all, which is the defect this issue is about, so
-  # the flag is gone.
-  #
-  # What replaces it is a schedule, not a merge-queue gate. The scenarios need
-  # an m5zn.metal (~$4/hr) and the whole suite takes tens of minutes; charging
-  # that to every merge-group entry is the "size it deliberately" mistake the
-  # issue warns against. Nightly + on-demand means it runs without anyone
-  # remembering to run it, which is the property that was missing. A failure
-  # opens/updates a tracking issue (`notify-suites` below) so a red nightly is
-  # not something a human has to go looking for.
-  #
-  # `STAGING_EPHEMERAL_READY` is the gate it does use — the same one
-  # `roundtrip` uses, and the only true precondition: an ARC runner that can
-  # take the job. That variable IS set.
   # ----------------------------------------------------------------------
   suites:
-    if: >-
-      vars.STAGING_EPHEMERAL_READY == 'true' &&
-      github.event_name != 'merge_group'
+    if: vars.STAGING_E2E_SUITES_READY == 'true'
     needs: build-images
     runs-on: staging-ephemeral
     timeout-minutes: 60
@@ -979,17 +915,24 @@ jobs:
       - name: Install helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
-      - name: Preflight — the kata RuntimeClasses exist
+      - name: Preflight — a kata-fc-capable node exists
         run: |
           set -uo pipefail
           if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
             echo "::error::RuntimeClass kata-fc is absent; kata-deploy has not run on this cluster"
             exit 1
           fi
+          capable="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-fc=true \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
+          echo "kata-fc-capable nodes: ${capable}"
+          if [ "${capable}" -lt 1 ]; then
+            kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu || true
+            echo "::error::no node carries setec.zeroroot.ai/runtime.kata-fc=true — the suite would skip into a green run"
+            exit 1
+          fi
 
       # Same reasoning as the session job: a previous run that died between
-      # install and cleanup leaves a release in the way. This runs BEFORE the
-      # pre-warm so the namespace the warm pod lands in is freshly created.
+      # install and cleanup leaves a release in the way.
       - name: Reap a previous run's leftovers
         run: |
           set -uo pipefail
@@ -1000,87 +943,6 @@ jobs:
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
-
-      - name: Pre-warm a kata-fc-capable metal node (scale-from-zero)
-        # WITHOUT THIS STEP THE JOB CAN NEVER BE GREEN.
-        #
-        # As first landed, this job's preflight asserted that a node already
-        # carried `setec.zeroroot.ai/runtime.kata-fc=true` and exited 1 within
-        # seconds if none did. But the setec-metal Karpenter NodePool is
-        # scale-to-zero by design and NOTHING in this job provokes it, so that
-        # assertion was guaranteed to fail on a quiet cluster — which is the
-        # normal state. Verified 2026-08-15: `kubectl get nodepool setec-metal`
-        # reports 0 nodes and no node in staging carries the label.
-        #
-        # `roundtrip` already solved this and this step is modelled on its
-        # solution: schedule a placeholder that requires ONLY the label the
-        # NodePool template declares (`setec.zeroroot.ai/sandbox-host`), which
-        # is the one thing Karpenter will provision for — a Sandbox Pod's own
-        # required `runtime.<backend>` affinity names a label key the
-        # hand-rolled terraform NodePool does not declare, and Karpenter
-        # rejects those outright. See the long note on roundtrip's own
-        # pre-warm step.
-        #
-        # The placeholder then STAYS UP for the whole suite. The NodePool's
-        # `consolidateAfter: 120s` would otherwise reap the metal node two
-        # minutes after the last sandbox exits, mid-run, and the next scenario
-        # would wait out its timeout against a cluster with no metal in it.
-        # `sleep 4200` outstrips this job's `timeout-minutes: 60`.
-        #
-        # It lives in its own namespace, NOT ${E2E_NAMESPACE}: TestMain
-        # CREATES that namespace and fails if it already exists.
-        env:
-          WARM_NAMESPACE: setec-e2e-suites-warm
-        run: |
-          set -euo pipefail
-          kubectl create namespace "${WARM_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl delete pod setec-e2e-suites-warm -n "${WARM_NAMESPACE}" --ignore-not-found --wait=true --timeout=2m
-          cat <<EOF | kubectl apply -f -
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: setec-e2e-suites-warm
-            namespace: ${WARM_NAMESPACE}
-          spec:
-            nodeSelector:
-              setec.zeroroot.ai/sandbox-host: "true"
-            tolerations:
-              - key: setec.zeroroot.ai/sandbox-host
-                operator: Equal
-                value: "true"
-                effect: NoSchedule
-            containers:
-              - name: warm
-                image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
-                command: ["sleep", "4200"]
-                resources:
-                  requests:
-                    cpu: 50m
-                    memory: 32Mi
-            restartPolicy: Never
-          EOF
-
-          echo "waiting for a kata-fc-capable node (metal boot + kata-deploy, up to ~18 min)..."
-          for i in $(seq 1 72); do
-            # BOTH labels, for the reason roundtrip documents (setec#243): the
-            # runtime-agent's capability label can fire before kata is really
-            # installed, and `katacontainers.io/kata-runtime=true` is written
-            # by kata-deploy only once containerd is configured.
-            n="$(kubectl get nodes \
-              -l setec.zeroroot.ai/runtime.kata-fc=true,katacontainers.io/kata-runtime=true \
-              -o name 2>/dev/null | head -1)"
-            if [ -n "$n" ]; then
-              echo "kata-fc-capable node ready after ${i} polls: ${n}"
-              exit 0
-            fi
-            sleep 15
-          done
-
-          echo "::error::no node gained setec.zeroroot.ai/runtime.kata-fc=true within the wait window — the suite would skip into a green run, so this fails instead"
-          kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu,katacontainers.io/kata-runtime -o wide || true
-          kubectl -n "${WARM_NAMESPACE}" describe pod setec-e2e-suites-warm || true
-          kubectl get nodeclaims -o wide 2>/dev/null || true
-          exit 1
 
       - name: Run the previously-unwired scenarios
         env:
@@ -1100,24 +962,19 @@ jobs:
           # cleanup fails every Sandbox write cluster-wide until a human
           # removes it. TestPhase2_WebhookRejects is therefore NOT in the
           # -run set below; it needs an isolated cluster.
-          #
-          # TestSandbox_ZZ_NoRuntimeClass is out for the same class of reason
-          # and is worth naming separately: it DELETES the cluster-scoped
-          # kata-fc RuntimeClass and restores it in t.Cleanup. On a shared
-          # cluster that breaks the live setec release and every other kata
-          # workload for the duration — and permanently if the run dies before
-          # its cleanup. Isolated cluster only.
           SETEC_E2E_WEBHOOK: "0"
         run: |
-          # TestPhase3_UpgradeFromPhase2 is NOT in the -run set below: its body
-          # is empty apart from the cluster guard, so it asserts nothing and
-          # would contribute a PASS line that means nothing. Listing it would
-          # be faking coverage, which is the thing setec#298 is about. Tracked
-          # separately (setec#318).
           # TestEnv_KVMPresent first: it is the guard that keeps an incapable
           # environment from turning everything after it into a green all-skip.
+          #
+          # TestPhase3_UpgradeFromPhase2 is deliberately ABSENT: its body is
+          # empty apart from a cluster check, so against a cluster it asserts
+          # nothing and reports PASS (setec#318). Listing it would add a
+          # meaningless PASS line to a job whose entire purpose is to stop
+          # coverage being claimed that does not exist. Re-add it when it
+          # asserts something.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_WorkspaceSurvivesPodKill)$' \
+            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSession_WorkspaceSurvivesPodKill)$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of
@@ -1130,9 +987,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if grep -q -- '--- SKIP' suites-e2e.log; then
             echo "::warning::one or more scenarios SKIPPED — see the job summary; this run did not verify them"
-            if grep -q 'snapshots.enabled=false' suites-e2e.log; then
-              echo "::warning::the Phase 3 skips (both ADR-0005 invariants + the warm-start gate) are setec#320: the chart cannot install with snapshots.enabled=true because it mounts a CA secret it never creates. Set SETEC_E2E_SNAPSHOTS=1 here once that lands."
-            fi
           fi
           exit "$status"
 
@@ -1150,61 +1004,8 @@ jobs:
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
-          # The pre-warm placeholder pins the ~$4/hr metal node for as long as
-          # it exists, so reaping it is a cost control, not tidiness. Karpenter
-          # consolidates the node 120s after it goes empty.
-          kubectl delete namespace setec-e2e-suites-warm --ignore-not-found --wait=false || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
-
-  # ----------------------------------------------------------------------
-  # notify-suites — make a red nightly loud.
-  #
-  # `suites` runs on a schedule, and a scheduled workflow that fails is the
-  # quietest thing in GitHub: no PR turns red, no merge is blocked, and the
-  # only trace is a row in a list nobody opens. That is the same failure mode
-  # as the suite having no runner at all (setec#298), one step removed, so
-  # the run files its own report.
-  #
-  # Deduplicated by a marker in the title: a suite that stays broken for a
-  # week updates one issue rather than opening seven.
-  # ----------------------------------------------------------------------
-  notify-suites:
-    needs: suites
-    if: failure() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: File or update the tracking issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'e2e: the nightly `suites` run is failing'
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
-            --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
-          # printf rather than a heredoc: a heredoc terminator must sit at
-          # column 0, and a line at column 0 would end this YAML block scalar.
-          # Leading whitespace also has to stay out of the body itself — an
-          # indented line renders as a code block in a GitHub issue.
-          body="$(printf '%s\n' \
-            "The nightly \`e2e / suites\` run failed: ${RUN_URL}" \
-            "" \
-            "These are the Go e2e scenarios that had no runner before setec#298 — the" \
-            "ADR-0005 invariants, egress confinement, the phase2/phase3 lifecycle, and" \
-            "the \`TestEnv_KVMPresent\` guard. A red run here means one of those" \
-            "invariants is unverified, not that CI is untidy." \
-            "" \
-            "Check the job summary for the PASS/FAIL/SKIP list before triaging: a SKIP" \
-            "is also a failure of coverage, and the run warns on one.")"
-          if [ -n "${existing}" ]; then
-            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
-          else
-            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${body}"
-          fi

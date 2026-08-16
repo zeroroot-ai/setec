@@ -100,30 +100,6 @@ const (
 	// minute late.
 	classNotFoundRequeue = 30 * time.Second
 
-	// orphanedSandboxRetention bounds how long a Sandbox that failed
-	// terminally on ClassNotFound is kept before the reconciler deletes it
-	// (setec#299).
-	//
-	// Failing the object terminally stops it pretending to be schedulable,
-	// but it does not stop the pile growing: the staging cluster still
-	// accumulates one dead object per leaked class. Nothing else will ever
-	// remove them — Kubernetes garbage collection needs an in-cluster owner,
-	// and by definition this Sandbox has none: its class is gone, and the run
-	// that dispatched it lives in gibson, outside the cluster. So the
-	// reconciler owns the reap.
-	//
-	// The blast radius is deliberately the narrowest population that is
-	// provably garbage: terminal, reason ClassNotFound, and the class still
-	// unresolvable on the reconcile that reaps it. Such a Sandbox never had a
-	// Pod and holds no result — there is nothing to lose by deleting it, and
-	// the Warning Events explaining why it failed outlive it.
-	//
-	// One hour leaves a generous window to `kubectl describe` a genuine
-	// misconfiguration before the object is collected. Terminal Sandboxes
-	// that actually ran (Completed, or Failed for any other reason) are never
-	// touched by this path: they carry a result their creator owns.
-	orphanedSandboxRetention = time.Hour
-
 	// Event reasons. Kept as constants so tests and docs can reference them
 	// by name rather than string-matching fragments of the message.
 	eventReasonRuntimeUnavailable    = "RuntimeUnavailable"
@@ -134,7 +110,6 @@ const (
 	eventReasonPauseTimeout          = "PauseTimeoutExceeded"
 	eventReasonReconcileError        = "ReconcileError"
 	eventReasonClassNotFound         = "ClassNotFound"
-	eventReasonOrphanReaped          = "OrphanedSandboxReaped"
 	eventReasonConstraintViolated    = "ConstraintViolated"
 	eventReasonTenantMissing         = "TenantLabelMissing"
 	eventReasonNetworkPolicy         = "NetworkPolicyApplied"
@@ -247,12 +222,6 @@ type SandboxReconciler struct {
 	// Zero means classNotFoundGrace. Overridden in tests so the terminal
 	// transition can be driven through a real reconcile without waiting.
 	ClassNotFoundGrace time.Duration
-
-	// OrphanRetention bounds how long a Sandbox that failed terminally on an
-	// unresolvable SandboxClass is kept before it is deleted (setec#299).
-	// Zero means orphanedSandboxRetention. Overridden in tests so the reap
-	// can be driven through a real reconcile without waiting.
-	OrphanRetention time.Duration
 
 	// --- Phase 3 optional dependencies ---
 	//
@@ -401,8 +370,30 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// (no class name, no multitenancy) is explicitly back-compat-tolerated.
 	cls, classResolved, classErr := r.resolveClass(ctx, sb)
 	if classErr != nil {
+		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass, "%s", classErr.Error())
+
+		// An unresolvable class is transient only while this controller's
+		// cache catches up with a class created alongside the Sandbox. Past
+		// classNotFoundGrace it is a permanent condition — the class was
+		// never created, or (the staging case) it was a per-run class that
+		// has since been deleted — so fail terminally instead of requeueing
+		// forever (setec#299).
 		setSpanError(span, classErr.Error())
-		return r.handleUnresolvableClass(ctx, logger, sb, classErr)
+		grace := r.classNotFoundGraceOrDefault()
+		if classNotFoundExpired(sb, time.Now(), grace) {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass,
+				"SandboxClass did not resolve within %s; failing terminally", grace)
+			if err := r.patchFailedStatus(ctx, sb, eventReasonClassNotFound); err != nil {
+				return ctrl.Result{}, fmt.Errorf("patch ClassNotFound terminal status: %w", err)
+			}
+			return ctrl.Result{}, nil
+		}
+		if err := r.patchPendingStatus(ctx, sb, eventReasonClassNotFound); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch ClassNotFound status: %w", err)
+		}
+		// Requeue past the grace deadline so the terminal transition happens
+		// even if nothing else touches this Sandbox again.
+		return ctrl.Result{RequeueAfter: classNotFoundRequeue}, nil
 	}
 
 	// (5) Phase 2: validate the Sandbox against its class. Defense in
@@ -452,81 +443,6 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("get Pod %q: %w", podName, err))
 	}
 	return r.reconcileExistingPod(ctx, span, sb, cls, pod, prevPhase, tenantID)
-}
-
-// handleUnresolvableClass owns the whole lifecycle of a Sandbox whose
-// SandboxClass does not resolve (setec#299). It is a three-stage ramp, and
-// each stage exists because the previous one alone leaves objects piling up:
-//
-//  1. Inside classNotFoundGrace the condition is genuinely transient — the
-//     Sandbox and its class were created together and this controller's cache
-//     has not observed the class yet. Stay Pending and re-check.
-//  2. Past the grace period the class was never created, or (the staging
-//     case) it was a per-run class that has since been deleted. No amount of
-//     requeueing brings it back, so the Sandbox fails terminally instead of
-//     pretending to be schedulable forever.
-//  3. Past a further orphanedSandboxRetention the object is deleted. Terminal
-//     is not enough on its own: without a reap the cluster still accumulates
-//     one dead Sandbox per leaked class, which is the pile the issue reports.
-//     Kubernetes garbage collection cannot do this — it needs an in-cluster
-//     owner, and an orphan by definition has none (its class is gone, and the
-//     run that dispatched it lives in gibson, out of cluster).
-//
-// A Sandbox that already reached a terminal phase for some OTHER reason is
-// left completely alone: it ran, it holds a result, and its class going away
-// afterwards says nothing about it. That guard also closes a rollback bug —
-// patchPendingStatus writes Pending unconditionally, so a Completed Sandbox
-// whose class was deleted used to be dragged back to Pending/ClassNotFound,
-// violating the terminal-phase invariant documented on SandboxStatus.Phase.
-func (r *SandboxReconciler) handleUnresolvableClass(
-	ctx context.Context,
-	logger logr.Logger,
-	sb *setecv1alpha1.Sandbox,
-	classErr error,
-) (ctrl.Result, error) {
-	if isTerminalPhase(sb.Status.Phase) && sb.Status.Reason != eventReasonClassNotFound {
-		logger.V(1).Info("Sandbox already terminal; ignoring unresolvable class",
-			"phase", sb.Status.Phase, "reason", sb.Status.Reason)
-		return ctrl.Result{}, nil
-	}
-
-	r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass, "%s", classErr.Error())
-
-	now := time.Now()
-	grace := r.classNotFoundGraceOrDefault()
-	if !classNotFoundExpired(sb, now, grace) {
-		if err := r.patchPendingStatus(ctx, sb, eventReasonClassNotFound); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch ClassNotFound status: %w", err)
-		}
-		// Requeue past the grace deadline so the terminal transition happens
-		// even if nothing else touches this Sandbox again.
-		return ctrl.Result{RequeueAfter: classNotFoundRequeue}, nil
-	}
-
-	retention := r.orphanRetentionOrDefault()
-	due, remaining := orphanReapDue(sb, now, grace, retention)
-	if due {
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonOrphanReaped, actionReapOrphanedSandbox,
-			"SandboxClass never resolved; deleting the orphaned Sandbox %s after it failed", retention)
-		logger.Info("reaping orphaned Sandbox whose SandboxClass never resolved",
-			"class", sb.Spec.SandboxClassName, "retention", retention)
-		if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete orphaned Sandbox: %w", err)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if !isTerminalPhase(sb.Status.Phase) {
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonClassNotFound, actionResolveSandboxClass,
-			"SandboxClass did not resolve within %s; failing terminally", grace)
-	}
-	if err := r.patchFailedStatus(ctx, sb, eventReasonClassNotFound); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch ClassNotFound terminal status: %w", err)
-	}
-	// Come back exactly when the object is due to be reaped. Without this the
-	// Sandbox would be terminal but immortal: nothing else generates an event
-	// for a Sandbox that has no Pod.
-	return ctrl.Result{RequeueAfter: remaining}, nil
 }
 
 // handleMissingPod is called when the owned Pod does not yet exist. It skips
@@ -1636,6 +1552,9 @@ func (r *SandboxReconciler) createPod(
 	return ctrl.Result{}, nil
 }
 
+// patchPendingStatus writes a minimal Pending/<reason> status using the
+// status subresource. It is idempotent: no-op if the live status already
+// reflects the desired phase and reason.
 // classNotFoundExpired reports whether a Sandbox has been waiting on an
 // unresolvable SandboxClass for longer than classNotFoundGrace (setec#299).
 //
@@ -1645,6 +1564,10 @@ func (r *SandboxReconciler) createPod(
 // would work here too — but creationTimestamp is set by the API server, is
 // immutable, and cannot be reset by a status rewrite, which makes the deadline
 // impossible to extend accidentally.
+//
+// A Sandbox that never recorded a ClassNotFound status (phase is not Pending,
+// or the reason differs) is not counted as waiting: this is only about the
+// stuck-Pending pile-up.
 func classNotFoundExpired(sb *setecv1alpha1.Sandbox, now time.Time, grace time.Duration) bool {
 	if grace <= 0 {
 		grace = classNotFoundGrace
@@ -1665,31 +1588,6 @@ func (r *SandboxReconciler) classNotFoundGraceOrDefault() time.Duration {
 		return r.ClassNotFoundGrace
 	}
 	return classNotFoundGrace
-}
-
-// orphanRetentionOrDefault resolves the effective post-terminal retention for
-// a Sandbox whose class never resolved.
-func (r *SandboxReconciler) orphanRetentionOrDefault() time.Duration {
-	if r.OrphanRetention > 0 {
-		return r.OrphanRetention
-	}
-	return orphanedSandboxRetention
-}
-
-// orphanReapDue reports whether an orphaned Sandbox has outlived both the
-// class-resolution grace period and the post-terminal diagnosis window, and
-// returns how long remains when it has not (setec#299).
-//
-// Both deadlines hang off creationTimestamp for the same reason the grace
-// period does: it is API-server-set, immutable, and cannot be pushed out by a
-// status rewrite, so the reap instant is fixed the moment the object exists.
-func orphanReapDue(sb *setecv1alpha1.Sandbox, now time.Time, grace, retention time.Duration) (bool, time.Duration) {
-	created := sb.CreationTimestamp.Time
-	if created.IsZero() {
-		return false, retention
-	}
-	remaining := created.Add(grace + retention).Sub(now)
-	return remaining <= 0, remaining
 }
 
 // patchFailedStatus drives a Sandbox to the terminal Failed phase with a
@@ -1715,9 +1613,6 @@ func (r *SandboxReconciler) patchFailedStatus(
 	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
 }
 
-// patchPendingStatus writes a minimal Pending/<reason> status using the
-// status subresource. It is idempotent: no-op if the live status already
-// reflects the desired phase and reason.
 func (r *SandboxReconciler) patchPendingStatus(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,

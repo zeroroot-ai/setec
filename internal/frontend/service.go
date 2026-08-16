@@ -99,13 +99,6 @@ type Service struct {
 	// DefaultNamespace is the namespace used when AuthDisabled is true.
 	// Unit-test-only, same as AuthDisabled above.
 	DefaultNamespace string
-
-	// logOpener overrides how container log streams are opened. It is
-	// unexported and left nil in production, where Clientset serves
-	// every open; tests set it because the fake clientset can never
-	// refuse an attach, which is precisely the failure the fallback
-	// path exists for.
-	logOpener podLogOpener
 }
 
 // resolveNamespace returns the namespace for the caller. mTLS-authenticated
@@ -385,19 +378,15 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	}
 
 	podName := name + "-vm"
-	pod, err := s.waitForLoggablePod(ctx, ns, podName, req.GetFollow())
-	if err != nil {
+	if err := s.waitForLoggablePod(ctx, ns, podName, req.GetFollow()); err != nil {
 		return err
 	}
 
-	// A run-to-completion Sandbox commonly finishes before its caller
-	// attaches. There is nothing left to follow at that point, and a
-	// Follow attach against a dead container is refused by the kubelet
-	// — which used to lose the workload's entire output (setec#263).
-	// Serve the captured log instead.
-	follow := req.GetFollow() && !workloadContainerTerminated(pod)
-
-	logStream, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, follow)
+	opts := &corev1.PodLogOptions{
+		Follow:    req.GetFollow(),
+		Container: workloadContainerName,
+	}
+	logStream, err := s.Clientset.CoreV1().Pods(ns).GetLogs(podName, opts).Stream(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			// Client hung up before the stream opened; no error
@@ -418,129 +407,18 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 		_ = logStream.Close()
 	}()
 
-	outcome, err := relayLogStream(ctx, logStream, stream, 0)
-	if err != nil {
-		return err
-	}
-	if outcome.SourceErr == nil {
-		return nil
-	}
-	return s.resumeAfterBrokenLogStream(ctx, ns, podName, stream, outcome)
-}
-
-// resumeAfterBrokenLogStream recovers the tail of a log stream that
-// broke before EOF — the shape a container termination takes when it
-// lands mid-follow. It re-reads the container's completed log and
-// emits only the lines the caller has not seen, so partial output is
-// never lost and never duplicated. If the re-read is impossible the
-// original source failure is surfaced.
-func (s *Service) resumeAfterBrokenLogStream(
-	ctx context.Context,
-	ns, podName string,
-	stream setecv1grpc.SandboxService_StreamLogsServer,
-	first relayOutcome,
-) error {
-	if ctx.Err() != nil {
-		// The caller is gone; a broken read is the expected shape.
-		return nil
-	}
-	rest, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
-	if err != nil {
-		return status.Errorf(codes.Internal, "read log stream: %v", first.SourceErr)
-	}
-	defer func() {
-		_ = rest.Close()
-	}()
-
-	outcome, err := relayLogStream(ctx, rest, stream, first.LinesRead)
-	if err != nil {
-		return err
-	}
-	if outcome.SourceErr != nil {
-		return status.Errorf(codes.Internal, "read log stream: %v", outcome.SourceErr)
-	}
-	return nil
-}
-
-// podLogOpener returns the seam StreamLogs opens container logs
-// through. Production wiring goes to the clientset; tests substitute a
-// stub because the fake clientset can never fail an attach.
-func (s *Service) podLogOpener() podLogOpener {
-	if s.logOpener != nil {
-		return s.logOpener
-	}
-	return clientsetLogOpener(s.Clientset)
-}
-
-// podLogOpener opens a byte stream of a Pod container's logs.
-type podLogOpener func(ctx context.Context, ns, podName string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
-
-// clientsetLogOpener adapts a Kubernetes clientset to podLogOpener.
-func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
-	return func(ctx context.Context, ns, podName string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
-		return cs.CoreV1().Pods(ns).GetLogs(podName, opts).Stream(ctx)
-	}
-}
-
-// openWorkloadLogs opens the workload container's log byte stream.
-// When a Follow attach is refused — the container terminated between
-// the status read and the attach, which is the whole failure mode of
-// setec#263 — it retries once as a completed-log read, because
-// Kubernetes serves the logs of a terminated container perfectly well.
-// Errors that a retry cannot fix (missing Pod, RBAC denial, a caller
-// that hung up) are returned as-is, and if the retry fails too the
-// original attach error is surfaced because it is the informative one.
-func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string, follow bool) (io.ReadCloser, error) {
-	rc, err := open(ctx, ns, podName, &corev1.PodLogOptions{
-		Follow:    follow,
-		Container: workloadContainerName,
-	})
-	if err == nil || !follow {
-		return rc, err
-	}
-	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) ||
-		errors.Is(err, context.Canceled) || ctx.Err() != nil {
-		return nil, err
-	}
-
-	completed, retryErr := open(ctx, ns, podName, &corev1.PodLogOptions{
-		Follow:    false,
-		Container: workloadContainerName,
-	})
-	if retryErr != nil {
-		return nil, err
-	}
-	return completed, nil
-}
-
-// workloadContainerTerminated reports whether the Pod's workload
-// container has already exited, so following it would attach to
-// nothing. A Pod can still report Running while its single workload
-// container has terminated, so the container status is authoritative;
-// a terminal Pod phase without container statuses counts as
-// terminated.
-func workloadContainerTerminated(pod *corev1.Pod) bool {
-	if pod == nil {
-		return false
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == workloadContainerName {
-			return cs.State.Terminated != nil
-		}
-	}
-	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+	return relayLogStream(ctx, logStream, stream)
 }
 
 // waitForLoggablePod polls the Pod until it reaches a phase where the
-// kubelet exposes container log bytes (Running, Succeeded, or Failed),
-// and returns that Pod so the caller can decide whether following it
-// still makes sense. When follow is false and the Pod already exists
-// in any phase the call returns immediately so callers can fetch
-// terminal logs of an already-exited Sandbox. When follow is true and
-// the Pod has yet to progress past Pending the call waits up to
-// streamLogsPodPollTimeout and returns FailedPrecondition on timeout
-// so the client sees a clean remediation path.
-func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, follow bool) (*corev1.Pod, error) {
+// kubelet exposes container log bytes (Running, Succeeded, or Failed).
+// When follow is false and the Pod already exists in any phase the
+// call returns immediately so callers can fetch terminal logs of an
+// already-exited Sandbox. When follow is true and the Pod has yet to
+// progress past Pending the call waits up to streamLogsPodPollTimeout
+// and returns FailedPrecondition on timeout so the client sees a
+// clean remediation path.
+func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, follow bool) error {
 	deadline := time.Now().Add(streamLogsPodPollTimeout)
 	ticker := time.NewTicker(streamLogsPodPollInterval)
 	defer ticker.Stop()
@@ -551,28 +429,28 @@ func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, fo
 		switch {
 		case apierrors.IsNotFound(err):
 			if !follow {
-				return nil, status.Errorf(codes.FailedPrecondition,
+				return status.Errorf(codes.FailedPrecondition,
 					"Pod %q not yet created; wait for the Sandbox to reach Running", podName)
 			}
 		case err != nil:
-			return nil, status.Errorf(grpcCodeFor(err), "get Pod: %v", err)
+			return status.Errorf(grpcCodeFor(err), "get Pod: %v", err)
 		default:
 			if podLogsAvailable(pod) {
-				return pod, nil
+				return nil
 			}
 			if !follow {
-				return nil, status.Errorf(codes.FailedPrecondition,
+				return status.Errorf(codes.FailedPrecondition,
 					"Pod %q is in phase %q; no logs available", podName, pod.Status.Phase)
 			}
 		}
 
 		if time.Now().After(deadline) {
-			return nil, status.Errorf(codes.FailedPrecondition,
+			return status.Errorf(codes.FailedPrecondition,
 				"timed out waiting for Pod %q to reach a loggable phase", podName)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
+			return status.FromContextError(ctx.Err()).Err()
 		case <-ticker.C:
 		}
 	}
@@ -590,46 +468,18 @@ func podLogsAvailable(pod *corev1.Pod) bool {
 	}
 }
 
-// relayOutcome reports what one pass over a log source achieved.
-type relayOutcome struct {
-	// LinesRead counts the complete lines consumed from the source,
-	// including any the pass was told to skip, so a follow-up pass
-	// over the same log resumes exactly where this one stopped.
-	LinesRead int
-	// SourceErr is non-nil when the log source broke before EOF. It
-	// is reported separately from the returned error because a broken
-	// source is recoverable — the container's completed log still
-	// holds the bytes — whereas a failed Send is not.
-	SourceErr error
-}
-
 // relayLogStream reads the Pod log stream line-by-line and forwards
-// each line as a StreamLogsResponse over the gRPC server-streaming
-// channel, skipping the first skipLines lines so a resumed pass does
-// not repeat what the caller already received. A client cancel becomes
-// a clean return (no error and no SourceErr); a failed Send is fatal
-// and returned as Internal; a broken source is reported in the
-// outcome for the caller to recover from.
-func relayLogStream(
-	ctx context.Context,
-	r io.Reader,
-	stream setecv1grpc.SandboxService_StreamLogsServer,
-	skipLines int,
-) (relayOutcome, error) {
-	out := relayOutcome{LinesRead: skipLines}
+// each line as a StreamLogsResponse over the gRPC server-streaming channel. A
+// client cancel becomes a clean return (no error); a Scanner error is
+// surfaced as Internal unless it was driven by context cancellation.
+func relayLogStream(ctx context.Context, r io.Reader, stream setecv1grpc.SandboxService_StreamLogsServer) error {
 	scanner := bufio.NewScanner(r)
 	// 1 MiB per line upper bound — matches kubelet's log line limit
 	// and avoids an OOM if a workload ever emits something huge on
 	// a single line.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	seen := 0
 	for scanner.Scan() {
-		seen++
-		if seen <= skipLines {
-			continue
-		}
-		out.LinesRead = seen
 		line := append(scanner.Bytes(), '\n')
 		chunk := &setecv1grpc.StreamLogsResponse{
 			Data:   append([]byte(nil), line...),
@@ -637,18 +487,18 @@ func relayLogStream(
 		}
 		if err := stream.Send(chunk); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				return out, nil
+				return nil
 			}
-			return out, status.Errorf(codes.Internal, "send log chunk: %v", err)
+			return status.Errorf(codes.Internal, "send log chunk: %v", err)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return out, nil
+			return nil
 		}
-		out.SourceErr = err
+		return status.Errorf(codes.Internal, "read log stream: %v", err)
 	}
-	return out, nil
+	return nil
 }
 
 // checkTenantNamespace is the tenant-scope guard. It verifies the
