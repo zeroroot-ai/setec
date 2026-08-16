@@ -119,7 +119,8 @@ service SandboxService {
   // These are RPC-level errors raised before the command starts, so
   // no SessionExecExit is sent and no command ran. Once the stream is
   // established, every outcome is reported as a SessionExecExit instead.
-  rpc Exec(stream SessionExecRequest) returns (stream SessionExecResponse);
+  rpc Exec(stream SandboxServiceExecRequest)
+      returns (stream SandboxServiceExecResponse);
 }
 
 // LaunchRequest carries everything needed to construct the Sandbox spec.
@@ -296,11 +297,14 @@ message AttachResponse {
   string runtime = 6;
 }
 
-// SessionExecRequest is one message of the client half of an Exec stream.
+// SandboxServiceExecRequest is one message of the client half of an
+// Exec stream. The verbose name is buf's collision-safe form: this
+// package already has a LeaseService.Exec with its own ExecRequest,
+// and the two verbs must never be mistaken for each other.
 // The first message MUST carry `start`; every later message carries
 // stdin bytes or the stdin half-close. A second `start`, or any other
 // message before the first `start`, is INVALID_ARGUMENT.
-message SessionExecRequest {
+message SandboxServiceExecRequest {
   oneof request {
     // start opens the exec. Exactly once, first.
     SessionExecStart start = 1;
@@ -336,9 +340,10 @@ message SessionExecStart {
   repeated string command = 2;
 }
 
-// SessionExecResponse is one message of the server half of an Exec stream:
-// output while the command runs, then exactly one terminal exit.
-message SessionExecResponse {
+// SandboxServiceExecResponse is one message of the server half of an
+// Exec stream: output while the command runs, then exactly one
+// terminal exit.
+message SandboxServiceExecResponse {
   oneof response {
     SessionExecOutput output = 1;
     SessionExecExit exit = 2;

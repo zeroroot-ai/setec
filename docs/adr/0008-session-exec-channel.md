@@ -47,8 +47,14 @@ it lands where `/workspace` is visible.
 
 ## Decision
 
-**Add `rpc Exec(stream SessionExecRequest) returns (stream SessionExecResponse)`
-to `SandboxService`, implemented over the Kubernetes `pods/exec` subresource.**
+**Add `rpc Exec(stream SandboxServiceExecRequest) returns (stream
+SandboxServiceExecResponse)` to `SandboxService`, implemented over the
+Kubernetes `pods/exec` subresource.**
+
+(The envelope messages carry the service prefix because buf's
+`RPC_REQUEST_STANDARD_NAME` demands a collision-safe name: `ExecRequest` is
+already `LeaseService.Exec`'s. The awkwardness is a feature — the two verbs
+must never be mistaken for each other.)
 
 - The frontend resolves the session handle with the same validation `Attach`
   uses (shared code, shared typed `AttachFailure` detail), then opens a

@@ -207,8 +207,8 @@ func (s *Service) runExec(
 		return err
 	}
 
-	return sender.send(&setecv1grpc.SessionExecResponse{
-		Response: &setecv1grpc.SessionExecResponse_Exit{
+	return sender.send(&setecv1grpc.SandboxServiceExecResponse{
+		Response: &setecv1grpc.SandboxServiceExecResponse_Exit{
 			Exit: s.classifyExecOutcome(ctx, ns, name, execErr),
 		},
 	})
@@ -453,10 +453,10 @@ func (p *stdinPump) run() {
 			return
 		}
 		switch r := msg.GetRequest().(type) {
-		case *setecv1grpc.SessionExecRequest_Start:
+		case *setecv1grpc.SandboxServiceExecRequest_Start:
 			p.fail(errDuplicateStart)
 			return
-		case *setecv1grpc.SessionExecRequest_Stdin:
+		case *setecv1grpc.SandboxServiceExecRequest_Stdin:
 			if eofSeen {
 				p.fail(errors.New("stdin sent after stdin_eof"))
 				return
@@ -464,7 +464,7 @@ func (p *stdinPump) run() {
 			if _, werr := p.w.Write(r.Stdin); werr != nil {
 				return
 			}
-		case *setecv1grpc.SessionExecRequest_StdinEof:
+		case *setecv1grpc.SandboxServiceExecRequest_StdinEof:
 			if r.StdinEof {
 				eofSeen = true
 				_ = p.w.Close()
@@ -502,7 +502,7 @@ type execSender struct {
 	sendErr error
 }
 
-func (s *execSender) send(msg *setecv1grpc.SessionExecResponse) error {
+func (s *execSender) send(msg *setecv1grpc.SandboxServiceExecResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sendErr != nil {
@@ -538,8 +538,8 @@ func (w *execStreamWriter) Write(b []byte) (int, error) {
 	// while the gRPC codec may still be marshalling ours.
 	chunk := make([]byte, len(b))
 	copy(chunk, b)
-	if err := w.sender.send(&setecv1grpc.SessionExecResponse{
-		Response: &setecv1grpc.SessionExecResponse_Output{
+	if err := w.sender.send(&setecv1grpc.SandboxServiceExecResponse{
+		Response: &setecv1grpc.SandboxServiceExecResponse_Output{
 			Output: &setecv1grpc.SessionExecOutput{Data: chunk, Stream: w.name},
 		},
 	}); err != nil {

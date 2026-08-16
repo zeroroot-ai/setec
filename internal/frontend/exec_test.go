@@ -43,8 +43,8 @@ type fakeExecStream struct {
 	ctx context.Context
 
 	mu   sync.Mutex
-	in   []*setecv1grpc.SessionExecRequest
-	sent []*setecv1grpc.SessionExecResponse
+	in   []*setecv1grpc.SandboxServiceExecRequest
+	sent []*setecv1grpc.SandboxServiceExecResponse
 }
 
 func (f *fakeExecStream) Context() context.Context {
@@ -54,7 +54,7 @@ func (f *fakeExecStream) Context() context.Context {
 	return context.Background()
 }
 
-func (f *fakeExecStream) Recv() (*setecv1grpc.SessionExecRequest, error) {
+func (f *fakeExecStream) Recv() (*setecv1grpc.SandboxServiceExecRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.in) == 0 {
@@ -67,7 +67,7 @@ func (f *fakeExecStream) Recv() (*setecv1grpc.SessionExecRequest, error) {
 	return m, nil
 }
 
-func (f *fakeExecStream) Send(m *setecv1grpc.SessionExecResponse) error {
+func (f *fakeExecStream) Send(m *setecv1grpc.SandboxServiceExecResponse) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, m)
@@ -198,23 +198,23 @@ func execService(t *testing.T, ex containerExecutor, sb *setecv1alpha1.Sandbox) 
 	return s
 }
 
-func startMsg(handle string, argv ...string) *setecv1grpc.SessionExecRequest {
-	return &setecv1grpc.SessionExecRequest{
-		Request: &setecv1grpc.SessionExecRequest_Start{
+func startMsg(handle string, argv ...string) *setecv1grpc.SandboxServiceExecRequest {
+	return &setecv1grpc.SandboxServiceExecRequest{
+		Request: &setecv1grpc.SandboxServiceExecRequest_Start{
 			Start: &setecv1grpc.SessionExecStart{SandboxId: handle, Command: argv},
 		},
 	}
 }
 
-func stdinMsg(b string) *setecv1grpc.SessionExecRequest {
-	return &setecv1grpc.SessionExecRequest{
-		Request: &setecv1grpc.SessionExecRequest_Stdin{Stdin: []byte(b)},
+func stdinMsg(b string) *setecv1grpc.SandboxServiceExecRequest {
+	return &setecv1grpc.SandboxServiceExecRequest{
+		Request: &setecv1grpc.SandboxServiceExecRequest_Stdin{Stdin: []byte(b)},
 	}
 }
 
-func stdinEOFMsg() *setecv1grpc.SessionExecRequest {
-	return &setecv1grpc.SessionExecRequest{
-		Request: &setecv1grpc.SessionExecRequest_StdinEof{StdinEof: true},
+func stdinEOFMsg() *setecv1grpc.SandboxServiceExecRequest {
+	return &setecv1grpc.SandboxServiceExecRequest{
+		Request: &setecv1grpc.SandboxServiceExecRequest_StdinEof{StdinEof: true},
 	}
 }
 
@@ -225,7 +225,7 @@ func TestExec_Success(t *testing.T) {
 	ex := &stubExecutor{stdout: "hello\n", stderr: "warn\n"}
 	svc := execService(t, ex, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "make", "build"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -270,7 +270,7 @@ func TestExec_NonZeroExitReportsCode(t *testing.T) {
 	ex := &stubExecutor{err: utilexec.CodeExitError{Err: errors.New("exit 17"), Code: 17}}
 	svc := execService(t, ex, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "false"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -295,7 +295,7 @@ func TestExec_TransportFailureIsNotExitZero(t *testing.T) {
 	ex := &stubExecutor{err: errors.New("stream reset by peer")}
 	svc := execService(t, ex, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "make"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -329,7 +329,7 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 		_ = svc.Client.Delete(context.Background(), sb)
 	}
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "make"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -357,7 +357,7 @@ func TestExec_CanceledReportsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	st := &fakeExecStream{
 		ctx: ctx,
-		in:  []*setecv1grpc.SessionExecRequest{startMsg(execTestHandle, "sleep", "60")},
+		in:  []*setecv1grpc.SandboxServiceExecRequest{startMsg(execTestHandle, "sleep", "60")},
 	}
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -382,7 +382,7 @@ func TestExec_StdinIsForwarded(t *testing.T) {
 	ex := &stubExecutor{}
 	svc := execService(t, ex, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "cat"),
 		stdinMsg("one "),
 		stdinMsg("two"),
@@ -402,7 +402,7 @@ func TestExec_FirstMessageMustBeStart(t *testing.T) {
 	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{stdinMsg("data")}}
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{stdinMsg("data")}}
 	err := svc.Exec(st)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument (err=%v)", status.Code(err), err)
@@ -421,7 +421,7 @@ func TestExec_SecondStartRejected(t *testing.T) {
 	blocked := make(chan struct{})
 	svc := execService(t, &stubExecutor{block: blocked}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "sh"),
 		startMsg(execTestHandle, "sh"),
 	}}
@@ -439,7 +439,7 @@ func TestExec_EmptyCommandRejected(t *testing.T) {
 	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle),
 	}}
 	if err := svc.Exec(st); status.Code(err) != codes.InvalidArgument {
@@ -454,7 +454,7 @@ func TestExec_RejectsEphemeralSandbox(t *testing.T) {
 	sb.Spec.Lifecycle = nil
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
@@ -472,7 +472,7 @@ func TestExec_UnknownHandle(t *testing.T) {
 	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg("tenant-a/sess/uid-OTHER", "ls"),
 	}}
 	err := svc.Exec(st)
@@ -491,7 +491,7 @@ func TestExec_TerminalSessionRejected(t *testing.T) {
 	sb.Status.Phase = setecv1alpha1.SandboxPhaseCompleted
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
@@ -510,7 +510,7 @@ func TestExec_CrossTenantRefused(t *testing.T) {
 	svc := execService(t, &stubExecutor{}, sb)
 	svc.DefaultNamespace = execTestNS
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg("tenant-b/sess/uid-1", "ls"),
 	}}
 	if err := svc.Exec(st); status.Code(err) != codes.PermissionDenied {
@@ -524,7 +524,7 @@ func TestExec_StampsSessionActivity(t *testing.T) {
 	sb := runningSession(execTestNS)
 	svc := execService(t, &stubExecutor{}, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -565,7 +565,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 		}
 	}()
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); err != nil {
@@ -593,7 +593,7 @@ func TestExec_NotRunningInTime(t *testing.T) {
 	svc := execService(t, &stubExecutor{}, sb)
 	svc.execReadyTimeout = 100 * time.Millisecond
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	err := svc.Exec(st)
@@ -614,7 +614,7 @@ func TestExec_NoExecutorConfigured(t *testing.T) {
 	sb := runningSession(execTestNS)
 	svc := execService(t, nil, sb)
 
-	st := &fakeExecStream{in: []*setecv1grpc.SessionExecRequest{
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
 		startMsg(execTestHandle, "ls"),
 	}}
 	if err := svc.Exec(st); status.Code(err) != codes.FailedPrecondition {

@@ -17,7 +17,7 @@ service SandboxService {
   rpc Wait(WaitRequest) returns (WaitResponse);
   rpc Kill(KillRequest) returns (KillResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
-  rpc Exec(stream SessionExecRequest) returns (stream SessionExecResponse);
+  rpc Exec(stream SandboxServiceExecRequest) returns (stream SandboxServiceExecResponse);
 }
 ```
 

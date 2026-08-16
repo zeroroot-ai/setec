@@ -142,7 +142,7 @@ type SandboxServiceClient interface {
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
-	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse], error)
+	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SandboxServiceExecRequest, SandboxServiceExecResponse], error)
 }
 
 type sandboxServiceClient struct {
@@ -212,18 +212,18 @@ func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, op
 	return out, nil
 }
 
-func (c *sandboxServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse], error) {
+func (c *sandboxServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SandboxServiceExecRequest, SandboxServiceExecResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &SandboxService_ServiceDesc.Streams[1], SandboxService_Exec_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SessionExecRequest, SessionExecResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[SandboxServiceExecRequest, SandboxServiceExecResponse]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type SandboxService_ExecClient = grpc.BidiStreamingClient[SessionExecRequest, SessionExecResponse]
+type SandboxService_ExecClient = grpc.BidiStreamingClient[SandboxServiceExecRequest, SandboxServiceExecResponse]
 
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
@@ -332,7 +332,7 @@ type SandboxServiceServer interface {
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
-	Exec(grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]) error
+	Exec(grpc.BidiStreamingServer[SandboxServiceExecRequest, SandboxServiceExecResponse]) error
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -358,7 +358,7 @@ func (UnimplementedSandboxServiceServer) Kill(context.Context, *KillRequest) (*K
 func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
 }
-func (UnimplementedSandboxServiceServer) Exec(grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]) error {
+func (UnimplementedSandboxServiceServer) Exec(grpc.BidiStreamingServer[SandboxServiceExecRequest, SandboxServiceExecResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
@@ -466,11 +466,11 @@ func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec fu
 }
 
 func _SandboxService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(SandboxServiceServer).Exec(&grpc.GenericServerStream[SessionExecRequest, SessionExecResponse]{ServerStream: stream})
+	return srv.(SandboxServiceServer).Exec(&grpc.GenericServerStream[SandboxServiceExecRequest, SandboxServiceExecResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type SandboxService_ExecServer = grpc.BidiStreamingServer[SessionExecRequest, SessionExecResponse]
+type SandboxService_ExecServer = grpc.BidiStreamingServer[SandboxServiceExecRequest, SandboxServiceExecResponse]
 
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
