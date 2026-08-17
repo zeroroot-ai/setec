@@ -58,7 +58,7 @@ RUN set -eux; \
 # ----------------------------------------------------------------------------
 # Distroless static on Debian 12, nonroot by default (UID/GID 65532).
 # Mirror-sourced + digest-pinned (mirror dest: distroless-static-debian12).
-FROM ghcr.io/zeroroot-ai/mirror/distroless-static-debian12:nonroot@sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1
+FROM ghcr.io/zeroroot-ai/mirror/distroless-static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
 ARG CMD=manager
 
 WORKDIR /
