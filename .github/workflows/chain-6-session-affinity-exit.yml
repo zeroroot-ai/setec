@@ -120,7 +120,11 @@ jobs:
         # runtime-agent DaemonSet probes each node and writes that label.
         #
         # Here the label is applied directly and the DaemonSet is pinned to an
-        # unmatched nodeSelector, so it renders with ZERO desired pods. That
+        # unmatched nodeSelector, so it renders with ZERO desired pods. The
+        # selector VALUE is the string "absent", not `true`: helm --set types
+        # a bare true as a boolean, and server-side apply then rejects the
+        # DaemonSet with ".spec.template.spec.nodeSelector.<k>: expected
+        # string, got true". That
         # removes a whole image from this workflow, and the agent has nothing
         # to discover anyway: kind's containerd ships the runc handler, so the
         # capability is a known fact rather than something to probe for.
@@ -166,7 +170,7 @@ jobs:
           # enabled"). That guard is right — a default pointing at a disabled
           # backend would fail at dispatch instead of at install.
           SETEC_E2E_EXTRA_SET: >-
-            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=true
+            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
         run: |
           # NOT `set -e`: with pipefail a failing `go test` would abort the
           # step before PIPESTATUS is read, so the SKIP guard below would never
