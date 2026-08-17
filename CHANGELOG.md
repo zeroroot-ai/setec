@@ -251,37 +251,37 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 * **deps:** update ast-checks to v0.1.2 at new module path github.com/zeroroot-ai/ast-checks ([#54](https://github.com/zeroroot-ai/setec/issues/54)) ([0e7395f](https://github.com/zeroroot-ai/setec/commit/0e7395f455500eda0e40eabbb9fd13cf2809a2d1))
 
-## [0.104.2](https://github.com/zero-day-ai/setec/compare/v0.104.1...v0.104.2) (2026-05-24)
+## [0.104.2](https://github.com/zeroroot-ai/setec/compare/v0.104.1...v0.104.2) (2026-05-24)
 
 
 ### Bug Fixes
 
-* **ci:** add actions:read to images.yml — resolves startup_failure ([#48](https://github.com/zero-day-ai/setec/issues/48)) ([0c42217](https://github.com/zero-day-ai/setec/commit/0c422172ba0db1db3da4d41283b1c364f73a5c35)), closes [#40](https://github.com/zero-day-ai/setec/issues/40)
-* **ci:** remove PR trigger and use security-extended for CodeQL ([#51](https://github.com/zero-day-ai/setec/issues/51)) ([2b80ea2](https://github.com/zero-day-ai/setec/commit/2b80ea2b515465d7ebaefb17f8862b3498d35f8f)), closes [#50](https://github.com/zero-day-ai/setec/issues/50)
+* **ci:** add actions:read to images.yml — resolves startup_failure ([#48](https://github.com/zeroroot-ai/setec/issues/48)) ([0c42217](https://github.com/zeroroot-ai/setec/commit/0c422172ba0db1db3da4d41283b1c364f73a5c35)), closes [#40](https://github.com/zeroroot-ai/setec/issues/40)
+* **ci:** remove PR trigger and use security-extended for CodeQL ([#51](https://github.com/zeroroot-ai/setec/issues/51)) ([2b80ea2](https://github.com/zeroroot-ai/setec/commit/2b80ea2b515465d7ebaefb17f8862b3498d35f8f)), closes [#50](https://github.com/zeroroot-ai/setec/issues/50)
 
-## [0.104.1](https://github.com/zero-day-ai/setec/compare/v0.104.0...v0.104.1) (2026-05-24)
+## [0.104.1](https://github.com/zeroroot-ai/setec/compare/v0.104.0...v0.104.1) (2026-05-24)
 
 
 ### Bug Fixes
 
-* **ci:** tidy examples go.mod and fix modernize lint errors ([#46](https://github.com/zero-day-ai/setec/issues/46)) ([e0041e2](https://github.com/zero-day-ai/setec/commit/e0041e26d9739be7e08121031a12f137e5cee85b))
+* **ci:** tidy examples go.mod and fix modernize lint errors ([#46](https://github.com/zeroroot-ai/setec/issues/46)) ([e0041e2](https://github.com/zeroroot-ai/setec/commit/e0041e26d9739be7e08121031a12f137e5cee85b))
 
-## [0.104.0](https:\/\/github.com\/zero-day-ai\/setec\/compare\/v0.X.Y...v0.104.0) (2026-05-17)
+## [0.104.0](https:\/\/github.com\/zeroroot-ai\/setec\/compare\/v0.X.Y...v0.104.0) (2026-05-17)
 
-Polyrepo zero-dot-x reset (PRD zero-day-ai\/.github#25, board #14). The v1.x line was cut prematurely; nothing in the platform is at 1.0 maturity yet. The v1.0.0 tag + release has been deleted; this repo lands at the polyrepo-wide v0.104.0 marker. Going forward, `bump-minor-pre-major: true` ensures `feat!:` commits bump minor not major.
-## [0.2.0](https://github.com/zero-day-ai/setec/compare/v0.1.0...v0.2.0) (2026-05-10)
-
-
-### Features
-
-* migrate setec to controller-runtime events API (drop SA1019 nolints) ([#17](https://github.com/zero-day-ai/setec/issues/17)) ([8b3119a](https://github.com/zero-day-ai/setec/commit/8b3119aff51a4ea09a4e9b4de2d9380ae084d7e0))
-
-## [0.1.0](https://github.com/zero-day-ai/setec/compare/v0.0.2...v0.1.0) (2026-05-10)
+Polyrepo zero-dot-x reset (PRD zeroroot-ai\/.github#25, board #14). The v1.x line was cut prematurely; nothing in the platform is at 1.0 maturity yet. The v1.0.0 tag + release has been deleted; this repo lands at the polyrepo-wide v0.104.0 marker. Going forward, `bump-minor-pre-major: true` ensures `feat!:` commits bump minor not major.
+## [0.2.0](https://github.com/zeroroot-ai/setec/compare/v0.1.0...v0.2.0) (2026-05-10)
 
 
 ### Features
 
-* install release-please and pr-title-lint ([#13](https://github.com/zero-day-ai/setec/issues/13)) ([b092d9f](https://github.com/zero-day-ai/setec/commit/b092d9f3022bb4e3c773d8a957d960455feadd70))
+* migrate setec to controller-runtime events API (drop SA1019 nolints) ([#17](https://github.com/zeroroot-ai/setec/issues/17)) ([8b3119a](https://github.com/zeroroot-ai/setec/commit/8b3119aff51a4ea09a4e9b4de2d9380ae084d7e0))
+
+## [0.1.0](https://github.com/zeroroot-ai/setec/compare/v0.0.2...v0.1.0) (2026-05-10)
+
+
+### Features
+
+* install release-please and pr-title-lint ([#13](https://github.com/zeroroot-ai/setec/issues/13)) ([b092d9f](https://github.com/zeroroot-ai/setec/commit/b092d9f3022bb4e3c773d8a957d960455feadd70))
 
 ## [Unreleased]
 
@@ -354,5 +354,5 @@ First public release. Phases 1, 2, and 3 ship together as v0.1.0. See [`docs/lau
 - Pre-warmed pool cold starts are observed sub-100ms P50 on prepared bare-metal hosts; clusters without KVM will not hit that number.
 - The frontend gRPC API is `v1alpha1` and subject to change before `v1`.
 
-[Unreleased]: https://github.com/zero-day-ai/setec/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/zero-day-ai/setec/releases/tag/v0.1.0
+[Unreleased]: https://github.com/zeroroot-ai/setec/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/zeroroot-ai/setec/releases/tag/v0.1.0
