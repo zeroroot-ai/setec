@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.112.2](https://github.com/zeroroot-ai/setec/compare/v0.112.1...v0.112.2) (2026-08-17)
+
+
+### Bug Fixes
+
+* **e2e:** give every suite SandboxClass the sandbox-host toleration ([#341](https://github.com/zeroroot-ai/setec/issues/341)) ([f71a916](https://github.com/zeroroot-ai/setec/commit/f71a91629f439583ee433db9089767a5567ba9e6))
+* **snapshot:** close the three S3 checkpoint failure modes ([#343](https://github.com/zeroroot-ai/setec/issues/343)) ([48f540b](https://github.com/zeroroot-ai/setec/commit/48f540b9d46efdf7ec554c894bf30eb1d23d0d3e))
+
 ## [0.112.1](https://github.com/zeroroot-ai/setec/compare/v0.112.0...v0.112.1) (2026-08-16)
 
 
