@@ -159,8 +159,14 @@ jobs:
           # Enable the runc backend and let the chart leave the RuntimeClass
           # alone (we created it above, exactly as the metal path leaves
           # kata-deploy's alone).
+          #
+          # defaults.runtime.backend MUST move with it: the chart validates
+          # that its default backend is one of the enabled ones and refuses to
+          # render otherwise ("defaults.runtime.backend=\"kata-fc\" is not
+          # enabled"). That guard is right — a default pointing at a disabled
+          # backend would fail at dispatch instead of at install.
           SETEC_E2E_EXTRA_SET: >-
-            runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=true
+            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=true
         run: |
           # NOT `set -e`: with pipefail a failing `go test` would abort the
           # step before PIPESTATUS is read, so the SKIP guard below would never
