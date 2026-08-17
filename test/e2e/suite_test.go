@@ -50,6 +50,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -62,6 +63,12 @@ import (
 var (
 	helmReleaseName string
 	testNamespace   string
+
+	// restConfig is the kubeconfig the suite resolved. frontend.Service needs
+	// it to run commands: Exec goes through the Kubernetes pods/exec
+	// subresource, and a Service with a nil RESTConfig reports that it cannot
+	// exec rather than pretending.
+	restConfig *rest.Config
 
 	// chartPath points at the Helm chart under source control. Defaults to
 	// the repo-relative path but callers can override for out-of-tree runs.
@@ -351,6 +358,11 @@ func buildClient() error {
 		return fmt.Errorf("build client: %w", err)
 	}
 	k8sClient = c
+	// Exec goes through the Kubernetes pods/exec subresource, so a
+	// frontend.Service that runs commands needs the REST config as well as the
+	// controller-runtime client. Keeping it here means a test does not rebuild
+	// (and re-resolve) the kubeconfig it already loaded.
+	restConfig = cfg
 	return nil
 }
 
@@ -754,6 +766,28 @@ func installChart() error {
 	}
 
 	args = append(args, crdInstallArgs()...)
+
+	// SETEC_E2E_EXTRA_SET is a comma-separated list of extra `--set` values,
+	// appended LAST so it can override anything above.
+	//
+	// It exists for the chain-6 exit test, which must run without staging or
+	// prod: on a kind cluster there is no KVM, so the sandbox runs on the
+	// `runc` backend, and the settings that enable it are per-run rather than
+	// a property of this suite. Hard-coding a second backend here would mean
+	// every metal run also carried it.
+	//
+	// Deliberately not a values FILE: a file makes it easy to smuggle in a
+	// whole alternate configuration, and a short --set list stays legible in
+	// the workflow that sets it.
+	if extra := strings.TrimSpace(os.Getenv("SETEC_E2E_EXTRA_SET")); extra != "" {
+		for _, kv := range strings.Split(extra, ",") {
+			kv = strings.TrimSpace(kv)
+			if kv == "" {
+				continue
+			}
+			args = append(args, "--set", kv)
+		}
+	}
 
 	cmd := exec.Command("helm", args...)
 	cmd.Stdout = os.Stdout
