@@ -3,7 +3,7 @@ module github.com/zeroroot-ai/setec/examples/sec-research
 go 1.26.6
 
 require (
-	github.com/zeroroot-ai/setec v0.105.0
+	github.com/zeroroot-ai/setec v0.110.0
 	google.golang.org/grpc v1.83.0
 )
 
