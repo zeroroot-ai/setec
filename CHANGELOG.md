@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.112.3](https://github.com/zeroroot-ai/setec/compare/v0.112.2...v0.112.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* **ci:** stop the runner's errexit from aborting the fixture it is meant to require ([#349](https://github.com/zeroroot-ai/setec/issues/349)) ([5ee305d](https://github.com/zeroroot-ai/setec/commit/5ee305d4892fbc7ddfd6ab456127357d578e4719))
+
 ## [0.112.2](https://github.com/zeroroot-ai/setec/compare/v0.112.1...v0.112.2) (2026-08-17)
 
 
