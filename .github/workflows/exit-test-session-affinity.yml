@@ -27,8 +27,18 @@
 # Chain 6 asks whether a session keeps its worktree. This answers exactly that
 # and nothing more. Do not cite a green run here as evidence of containment.
 #
+# WHY THE FILENAME MATTERS
+#
+# The launch board resolves each blocker to a workflow FILE
+# (zeroroot-ai/.github `data/launch-blockers.tsv` names
+# `exit-test-session-affinity.yml`) and reports NOT_BUILT when it cannot find
+# it. This file used to be called `chain-6-session-affinity-exit.yml`, so the
+# board read NOT_BUILT while the test was green on a daily schedule — the work
+# was done and invisible. Keep this name in step with the TSV; renaming it
+# silently un-closes the blocker on the board.
+#
 # Refs: gibson#1183, gibson#1450, setec#239
-name: chain-6-session-affinity-exit
+name: exit-test-session-affinity
 
 on:
   workflow_dispatch:
@@ -38,7 +48,7 @@ on:
       - 'test/e2e/suite_test.go'
       - 'internal/frontend/exec.go'
       - 'charts/setec/**'
-      - '.github/workflows/chain-6-session-affinity-exit.yml'
+      - '.github/workflows/exit-test-session-affinity.yml'
   schedule:
     # Daily, so a regression surfaces without waiting for someone to touch the
     # session code. The chain is only closed for as long as this stays green.
@@ -48,7 +58,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: chain-6-session-affinity-exit-${{ github.ref }}
+  group: exit-test-session-affinity-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -193,11 +203,69 @@ jobs:
           fi
           exit "$status"
 
-      - name: Collect diagnostics
-        if: failure()
+      - name: FAILING FIXTURE — with affinity broken, the exit test must FAIL
+        # The guard on the guard. Everything above proves the assertions pass
+        # when the property holds; nothing above proves they would notice if it
+        # did not. This run deletes the session Pod between the two commands,
+        # so the session is genuinely broken, and REQUIRES a non-zero exit.
+        #
+        # Same shape as exit-test-backup-restore.yml's --skip-unseal-capture
+        # run. If this step's `go test` ever PASSES, the exit test is not
+        # asserting what it claims and the job fails here.
+        env:
+          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          # Its own release and namespace: TestMain uninstalls on the way out,
+          # but distinct names keep the two runs' diagnostics unambiguous.
+          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}-fixture
+          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}-fixture
+          SETEC_E2E_RUNTIMECLASS: runc
+          SETEC_E2E_BACKEND: runc
+          SETEC_E2E_IMAGE_REPO: setec
+          SETEC_E2E_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          SETEC_E2E_IMAGE_PULL_POLICY: Never
+          SETEC_E2E_WEBHOOK: "0"
+          SETEC_E2E_CHAIN6_BREAK: relaunch
+          SETEC_E2E_EXTRA_SET: >-
+            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
         run: |
           set -uo pipefail
-          kubectl get sandboxes,sandboxclasses,pods,pvc -n "${E2E_NAMESPACE}" -o wide || true
-          kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp | tail -60 || true
-          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=300 --all-containers || true
-          kubectl describe pod -n "${E2E_NAMESPACE}" -l setec.zeroroot.ai/sandbox || true
+          go test -tags=e2e ./test/e2e/... -v -timeout 25m \
+            -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
+          status="${PIPESTATUS[0]}"
+          {
+            echo "### Chain 6 failing fixture (affinity broken on purpose)"
+            echo ''
+            grep -E '^(--- (PASS|FAIL|SKIP)|.*FIXTURE:|.*CHAIN 6)' chain6-fixture.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A SKIP here is as bad as a pass: it means the break never ran.
+          if grep -q -- '--- SKIP' chain6-fixture.log; then
+            echo "::error::the fixture SKIPPED — it proves nothing about whether the exit test can fail"
+            exit 1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the exit test PASSED with session affinity deliberately broken. It is not asserting what it claims — chain 6 is NOT closed."
+            exit 1
+          fi
+          echo "fixture failed as required (go test exit ${status}) — the exit test can detect a broken session"
+
+      - name: Collect diagnostics
+        if: failure()
+        # BOTH namespaces. The fixture run has its own, and a fixture step
+        # that fails while diagnostics only dump the primary namespace prints
+        # "No resources found" for the run that actually broke.
+        #
+        # TestMain uninstalls and deletes its namespace on the way out, so for
+        # a step that got past install there may be nothing left to dump —
+        # cluster-scoped objects and the node state are still worth having.
+        run: |
+          set -uo pipefail
+          kubectl get runtimeclass,sandboxclasses -o wide || true
+          kubectl get nodes -L setec.zeroroot.ai/runtime.runc || true
+          for ns in "${E2E_NAMESPACE}" "${E2E_NAMESPACE}-fixture"; do
+            echo "::group::diagnostics for namespace ${ns}"
+            kubectl get sandboxes,pods,pvc -n "$ns" -o wide || true
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -60 || true
+            kubectl logs -n "$ns" -l app.kubernetes.io/name=setec --tail=300 --all-containers || true
+            kubectl describe pod -n "$ns" -l setec.zeroroot.ai/sandbox || true
+            echo "::endgroup::"
+          done
