@@ -182,9 +182,14 @@ jobs:
           SETEC_E2E_EXTRA_SET: >-
             defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
         run: |
-          # NOT `set -e`: with pipefail a failing `go test` would abort the
-          # step before PIPESTATUS is read, so the SKIP guard below would never
-          # run and a skipped suite could still report green.
+          # `set +e` is REQUIRED and is not a style choice. GitHub runs `run:`
+          # with `bash -e {0}`, so errexit is already on before this script's
+          # first line: a failing `go test` aborts the step immediately and
+          # every line below — the step summary and the SKIP guard — is
+          # skipped. Turning it off here is what makes the exit status
+          # something this script decides rather than something bash decides
+          # for it.
+          set +e
           set -uo pipefail
           go test -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6.log
@@ -228,6 +233,12 @@ jobs:
           SETEC_E2E_EXTRA_SET: >-
             defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
         run: |
+          # `set +e` — see the primary run. It matters MORE here: this step
+          # expects `go test` to fail, so under the runner's default errexit
+          # the step aborted on the very outcome it exists to require, and a
+          # correctly-failing fixture was reported as a broken workflow
+          # (observed on run 32166512990).
+          set +e
           set -uo pipefail
           go test -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
