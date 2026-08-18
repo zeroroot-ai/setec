@@ -75,6 +75,11 @@ const (
 	// chain6Marker is written by the first command and read by the second.
 	// Its whole job is to be a value that cannot appear by accident.
 	chain6Marker = "chain6-worktree-is-shared"
+
+	// chain6BreakEnv opts into the failing fixture: it breaks the property on
+	// purpose so the workflow can prove this test is able to fail.
+	chain6BreakEnv      = "SETEC_E2E_CHAIN6_BREAK"
+	chain6BreakRelaunch = "relaunch"
 )
 
 // chain6ExecStream is an in-memory SandboxService_ExecServer. It feeds a
@@ -249,6 +254,15 @@ func TestChain6_SessionAffinity(t *testing.T) {
 		fmt.Sprintf("printf '%%s' %q > /workspace/chain6-marker", chain6Marker))
 	requireCleanExit(t, "first command (write)", write)
 
+	// The failing fixture's hook. A guard that cannot fail is worse than no
+	// guard, so the workflow runs this test a second time with
+	// SETEC_E2E_CHAIN6_BREAK=relaunch and REQUIRES it to fail. Without that
+	// second run, a green tick here is consistent with an assertion that never
+	// really looked.
+	if os.Getenv(chain6BreakEnv) == chain6BreakRelaunch {
+		breakSessionAffinity(t, podKey)
+	}
+
 	// (2) Second command — a wholly separate Exec — reads it back.
 	read := chain6Exec(t, handle, "/bin/sh", "-c", "cat /workspace/chain6-marker")
 	requireCleanExit(t, "second command (read)", read)
@@ -272,6 +286,49 @@ func TestChain6_SessionAffinity(t *testing.T) {
 
 	t.Logf("CHAIN 6 EXIT TEST PASSED (backend=%s): two commands, one microVM (pod %s), shared /workspace",
 		backend, podAfter.Name)
+}
+
+// breakSessionAffinity destroys the property under test, so the assertions
+// below it can be shown to have teeth.
+//
+// Deleting the Pod is the sharpest available break: the session's identity IS
+// its live sandbox, so a relaunch is exactly the failure a coding agent
+// experiences as "my session lost my work". Two outcomes are both correct
+// failures, and which one occurs depends on how fast the operator reconciles:
+//
+//   - the operator relaunches and remounts the same PVC — the marker read
+//     SUCCEEDS and the pod-UID assertion fires, which is precisely why that
+//     assertion is not redundant with the read;
+//   - no pod is available when the second Exec runs — Exec fails instead.
+//
+// Either way the test must fail. What must never happen is a pass.
+func breakSessionAffinity(t *testing.T, podKey types.NamespacedName) {
+	t.Helper()
+
+	var pod corev1.Pod
+	if err := k8sClient.Get(context.Background(), podKey, &pod); err != nil {
+		t.Fatalf("fixture: get session pod before deleting it: %v", err)
+	}
+	t.Logf("FIXTURE: deleting session pod %s (uid %s) to break affinity on purpose",
+		pod.Name, pod.UID)
+	if err := k8sClient.Delete(context.Background(), &pod); err != nil {
+		t.Fatalf("fixture: delete session pod: %v", err)
+	}
+
+	// Give the operator a bounded chance to relaunch. Not waiting for Running:
+	// the point is to reach the second Exec with the session broken, and both
+	// "relaunched with a new UID" and "nothing there yet" are breaks.
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		var current corev1.Pod
+		err := k8sClient.Get(context.Background(), podKey, &current)
+		if err == nil && current.UID != pod.UID {
+			t.Logf("FIXTURE: session relaunched as uid %s", current.UID)
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
+	t.Logf("FIXTURE: no replacement pod within the wait; the second command will fail on a missing sandbox")
 }
 
 // podNameForChain6 mirrors the operator's Pod naming for a Sandbox.
