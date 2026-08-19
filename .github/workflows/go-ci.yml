@@ -73,7 +73,7 @@ jobs:
   # ---- fast tier (pull_request): reusable mod-tidy/vet/build/test ----
   fast:
     if: github.event_name == 'pull_request'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@51525c41470695bc2de52de4255967d4a8767bf4 # v2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@7f6f1e6be42a282a284b1008f85d92a17e1e6a27 # v2
     with:
       tier: fast
       private-modules: false
@@ -82,7 +82,7 @@ jobs:
   # ---- heavy tier (merge_group): reusable race test + govulncheck ----
   heavy:
     if: github.event_name == 'merge_group'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@51525c41470695bc2de52de4255967d4a8767bf4 # v2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@7f6f1e6be42a282a284b1008f85d92a17e1e6a27 # v2
     with:
       tier: heavy
       private-modules: false
