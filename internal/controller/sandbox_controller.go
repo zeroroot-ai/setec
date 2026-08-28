@@ -124,6 +124,34 @@ const (
 	// touched by this path: they carry a result their creator owns.
 	orphanedSandboxRetention = time.Hour
 
+	// ephemeralFinishedRetention bounds how long an ephemeral Sandbox that
+	// reached a terminal phase (Completed or Failed) is kept before the
+	// reconciler deletes it, honoring ADR-0006's "auto-destroy on exit" for
+	// the run-to-completion lifecycle.
+	//
+	// An ephemeral Sandbox is one agent/tool action. Its creator lives in
+	// gibson, outside the cluster, and drives it request/response: Launch,
+	// then StreamLogs and/or Wait, then — on the happy path — Kill. Nothing
+	// in the cluster owns it, so a creator that dies between Launch and Kill
+	// (a crashed run, a dropped connection) used to leak the Sandbox, its
+	// Pod, and the microVM forever: a terminal Sandbox with a stable Pod
+	// generates no further watch events and was never revisited.
+	//
+	// The retention is a grace window, not an eviction: it starts when the
+	// Sandbox goes terminal (status.LastTransitionTime), so the creator
+	// keeps a bounded window to read the outcome (Wait) and drain the
+	// captured output (StreamLogs, which serves a terminated container's
+	// log, setec#263) before the object is collected. After it, the
+	// reconciler deletes the Sandbox and owner-reference GC removes the Pod
+	// and any NetworkPolicy — no lingering resources. Session Sandboxes are
+	// never touched by this path: they end by explicit teardown (Kill) which
+	// wipes the durable workspace via the finalizer.
+	//
+	// Ten minutes is far longer than the request/response turnaround of a
+	// tool call, yet short enough that a leaked Sandbox does not hold a
+	// microVM for long.
+	ephemeralFinishedRetention = 10 * time.Minute
+
 	// Event reasons. Kept as constants so tests and docs can reference them
 	// by name rather than string-matching fragments of the message.
 	eventReasonRuntimeUnavailable    = "RuntimeUnavailable"
@@ -135,6 +163,7 @@ const (
 	eventReasonReconcileError        = "ReconcileError"
 	eventReasonClassNotFound         = "ClassNotFound"
 	eventReasonOrphanReaped          = "OrphanedSandboxReaped"
+	eventReasonEphemeralReaped       = "EphemeralSandboxReaped"
 	eventReasonConstraintViolated    = "ConstraintViolated"
 	eventReasonTenantMissing         = "TenantLabelMissing"
 	eventReasonNetworkPolicy         = "NetworkPolicyApplied"
@@ -254,6 +283,12 @@ type SandboxReconciler struct {
 	// can be driven through a real reconcile without waiting.
 	OrphanRetention time.Duration
 
+	// EphemeralRetention bounds how long an ephemeral Sandbox that reached a
+	// terminal phase is kept before it is auto-destroyed (ADR-0006). Zero
+	// means ephemeralFinishedRetention. Overridden in tests so the reap can
+	// be driven through a real reconcile without waiting.
+	EphemeralRetention time.Duration
+
 	// --- Phase 3 optional dependencies ---
 	//
 	// Both fields may be nil. A nil Coordinator disables every Phase 3
@@ -367,6 +402,15 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add workspace finalizer: %w", err)
 		}
+	}
+
+	// (1c) ADR-0006 "auto-destroy on exit": a terminal ephemeral Sandbox is
+	// kept for a bounded window so its creator can read the outcome, then the
+	// reconciler deletes it and owner-ref GC collects the Pod. This owns the
+	// reconcile for a terminal ephemeral Sandbox — nothing below (class
+	// resolution, Pod reconcile) applies once an ephemeral run has finished.
+	if res, handled, err := r.reapExpiredEphemeral(ctx, logger, sb); handled || err != nil {
+		return res, err
 	}
 
 	// (2) Phase 2: start OTEL span. The helper returns a no-op span when
@@ -1690,6 +1734,74 @@ func orphanReapDue(sb *setecv1alpha1.Sandbox, now time.Time, grace, retention ti
 	}
 	remaining := created.Add(grace + retention).Sub(now)
 	return remaining <= 0, remaining
+}
+
+// ephemeralRetentionOrDefault resolves the effective post-terminal retention
+// for an ephemeral Sandbox before it is auto-destroyed (ADR-0006).
+func (r *SandboxReconciler) ephemeralRetentionOrDefault() time.Duration {
+	if r.EphemeralRetention > 0 {
+		return r.EphemeralRetention
+	}
+	return ephemeralFinishedRetention
+}
+
+// ephemeralReapDue reports whether a terminal ephemeral Sandbox has outlived
+// its post-terminal retention window, and how long remains when it has not.
+//
+// The window is anchored on status.LastTransitionTime — the instant the
+// Sandbox went terminal — not on creationTimestamp, so the creator gets the
+// full window to read the result no matter how long the run itself took. A
+// terminal Sandbox always carries LastTransitionTime: internal/status.setPhase
+// stamps it on the transition. The nil guard is belt-and-braces — a Sandbox
+// whose finish instant is unknown is never deleted; the reap is simply
+// deferred one retention period so a hand-built object cannot be collected on
+// a timeline the controller cannot see.
+func ephemeralReapDue(sb *setecv1alpha1.Sandbox, now time.Time, retention time.Duration) (bool, time.Duration) {
+	fin := sb.Status.LastTransitionTime
+	if fin == nil || fin.Time.IsZero() {
+		return false, retention
+	}
+	remaining := fin.Time.Add(retention).Sub(now)
+	return remaining <= 0, remaining
+}
+
+// reapExpiredEphemeral enforces ADR-0006's "auto-destroy on exit" for the
+// ephemeral lifecycle. A terminal ephemeral Sandbox is kept for
+// ephemeralRetentionOrDefault() so its creator can read the outcome (Wait)
+// and drain the captured output (StreamLogs), then the reconciler deletes it;
+// owner-reference GC removes the backing Pod and any NetworkPolicy so no
+// microVM lingers when a caller never calls Kill.
+//
+// It returns handled=true when it owns this reconcile — the Sandbox is a
+// terminal ephemeral object — so the caller returns immediately: no class
+// resolution or Pod reconcile is needed once an ephemeral run has finished.
+// A live Sandbox, or any session Sandbox, returns handled=false and the
+// normal reconcile proceeds. When the window has not yet closed it requeues
+// for exactly the remaining time, because a terminal Sandbox with a stable
+// Pod generates no further watch events and would otherwise be immortal.
+func (r *SandboxReconciler) reapExpiredEphemeral(
+	ctx context.Context,
+	logger logr.Logger,
+	sb *setecv1alpha1.Sandbox,
+) (ctrl.Result, bool, error) {
+	if !sb.Spec.IsEphemeral() || !isTerminalPhase(sb.Status.Phase) {
+		return ctrl.Result{}, false, nil
+	}
+
+	retention := r.ephemeralRetentionOrDefault()
+	due, remaining := ephemeralReapDue(sb, time.Now(), retention)
+	if !due {
+		return ctrl.Result{RequeueAfter: remaining}, true, nil
+	}
+
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonEphemeralReaped, actionReapEphemeralSandbox,
+		"ephemeral Sandbox reached %s; auto-destroyed %s after it finished (ADR-0006)", sb.Status.Phase, retention)
+	logger.Info("reaping terminal ephemeral Sandbox",
+		"phase", sb.Status.Phase, "retention", retention)
+	if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, true, fmt.Errorf("delete terminal ephemeral Sandbox: %w", err)
+	}
+	return ctrl.Result{}, true, nil
 }
 
 // patchFailedStatus drives a Sandbox to the terminal Failed phase with a

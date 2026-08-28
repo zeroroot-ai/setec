@@ -196,7 +196,9 @@ func TestTerminalSandboxSurvivesDeletedClass(t *testing.T) {
 			g := NewWithT(t)
 
 			sb := newSandboxWithClass("default", "finished", "deleted-per-run-class")
-			// Far past every deadline the orphan path knows about.
+			// Far past every deadline the orphan path knows about, but its
+			// finish instant is unknown (no LastTransitionTime), so the
+			// ephemeral auto-destroy path defers rather than reaps.
 			sb.CreationTimestamp = metav1.NewTime(time.Now().Add(-42 * time.Hour))
 			sb.Status.Phase = phase
 			sb.Status.Reason = "WorkloadExited"
@@ -205,12 +207,13 @@ func TestTerminalSandboxSurvivesDeletedClass(t *testing.T) {
 
 			res, err := reconcileSandbox(r, sb)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(res.RequeueAfter).To(BeZero(), "a finished Sandbox needs no further reconciles")
+			g.Expect(res.RequeueAfter).To(BeNumerically(">", time.Duration(0)),
+				"a terminal ephemeral Sandbox is requeued for its own finished-TTL auto-destroy (ADR-0006), not dragged onto the ClassNotFound path")
 
 			got := &setecv1alpha1.Sandbox{}
 			g.Expect(c.Get(context.Background(),
 				types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name}, got)).To(Succeed(),
-				"a Sandbox that already ran must not be deleted because its class was cleaned up afterwards")
+				"a Sandbox that already ran must not be reaped by the ClassNotFound path just because its class was cleaned up afterwards")
 			g.Expect(got.Status.Phase).To(Equal(phase),
 				"a terminal Sandbox must never be rolled back by the ClassNotFound path")
 			g.Expect(got.Status.Reason).To(Equal("WorkloadExited"),

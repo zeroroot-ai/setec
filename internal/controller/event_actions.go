@@ -26,6 +26,7 @@ const (
 	actionResolveTenant        = "ResolveTenant"
 	actionResolveSandboxClass  = "ResolveSandboxClass"
 	actionReapOrphanedSandbox  = "ReapOrphanedSandbox"
+	actionReapEphemeralSandbox = "ReapEphemeralSandbox"
 	actionValidateConstraints  = "ValidateConstraints"
 	actionResolveRuntime       = "ResolveRuntime"
 	actionResolveSnapshot      = "ResolveSnapshot"
