@@ -422,6 +422,14 @@ func (s *SandboxSpec) IsSession() bool {
 	return s.EffectiveLifecycleMode() == LifecycleModeSession
 }
 
+// IsEphemeral reports whether the Sandbox follows the ephemeral,
+// run-to-completion lifecycle: it starts, runs its command to a terminal
+// phase, and is auto-destroyed after (ADR-0006). It is the exact
+// complement of IsSession.
+func (s *SandboxSpec) IsEphemeral() bool {
+	return s.EffectiveLifecycleMode() == LifecycleModeEphemeral
+}
+
 // SandboxRuntimeStatus records the runtime backend that was actually selected
 // for this Sandbox after fallback resolution. Populated by the reconciler
 // once a backend is chosen; empty while the Sandbox is still Pending.
