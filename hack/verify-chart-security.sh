@@ -155,6 +155,21 @@ render "$workdir/agent-rbac.yaml" --show-only templates/runtime-agent-rbac.yaml
 render "$workdir/agent-ds.yaml" --show-only templates/runtime-agent-daemonset.yaml
 render "$workdir/agent-guard.yaml" --show-only templates/runtime-agent-node-guard.yaml
 
+# ---------------------------------------------------------------------------
+# Operator event RBAC.
+#
+# controller-runtime records events through the events.k8s.io API group. A
+# ClusterRole that grants only the core-group `events` resource installs
+# cleanly and then rejects every event the operator emits, which is how the
+# chain-6 exit test lost its diagnostics for two days. Assert the rule on the
+# comment-stripped copy: the template's own comment names the API group.
+# ---------------------------------------------------------------------------
+render "$workdir/manager-rbac.yaml" --show-only templates/clusterrole.yaml
+strip_comments "$workdir/manager-rbac.yaml" "$workdir/manager-rbac.stripped.yaml"
+note "operator can record events (events.k8s.io)"
+assert_contains "$workdir/manager-rbac.stripped.yaml" "manager ClusterRole grants events.k8s.io events" \
+	"- events.k8s.io"
+
 note "runtime-agent least privilege (GHSA-p8f8-3qpw-7h93)"
 # The rule, not the prose: the ClusterRole comment explains why the grant
 # was dropped, so a bare substring match would fail on its own rationale.

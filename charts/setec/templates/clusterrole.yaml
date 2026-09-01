@@ -12,6 +12,17 @@ rules:
     verbs:
       - create
       - patch
+  # controller-runtime's event recorder writes through the events.k8s.io
+  # broadcaster, not the core group. Without this rule every Sandbox event
+  # is rejected ("events.events.k8s.io is forbidden") and the operator's
+  # own diagnostics never reach `kubectl describe`.
+  - apiGroups:
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
   # Node reads are cluster-wide; `watch` powers the checkpoint-on-drain
   # trigger (setec#194): a cordoned node fans out reconciles to the
   # session Sandboxes running on it.
