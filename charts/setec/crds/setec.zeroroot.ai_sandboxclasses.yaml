@@ -283,6 +283,40 @@ spec:
                   kernel state accumulating in paused VMs. When unset the
                   node-agent defaults to 24h at runtime.
                 type: string
+              requests:
+                description: |-
+                  Requests is the scheduler reservation for every Sandbox Pod in
+                  this class, declared separately from the Sandbox's own resources
+                  block, which stays the Pod's limits. A Sandbox that sits idle most
+                  of the time can then reserve a small slice of a node and still
+                  burst to its full budget: an always-on agent member reserves
+                  250m / 768Mi and runs with a 2 vCPU / 4Gi ceiling.
+
+                  Each value is bounded by the Sandbox's limits on the Pod: a
+                  reservation above the budget would make the Pod invalid, so the
+                  controller writes min(request, limit). Unset, or an unset field,
+                  keeps the Phase 1 shape where requests equal limits (Guaranteed
+                  QoS).
+                properties:
+                  cpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      CPU is the CPU reservation, e.g. "250m" or "1". Must be positive
+                      when set.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Memory is the memory reservation, e.g. "768Mi". Must be positive
+                      when set.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
               rootfsImage:
                 description: |-
                   RootfsImage is an optional OCI reference to a custom guest rootfs

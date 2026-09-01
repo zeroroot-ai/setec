@@ -1626,6 +1626,11 @@ func (r *SandboxReconciler) createPod(
 	if sel != nil {
 		opts.RuntimeSelection = sel
 	}
+	// The class's scheduler reservation rides into the Pod here so an
+	// idle long-lived Sandbox reserves less than its burst ceiling.
+	if cls != nil {
+		opts.Requests = cls.Spec.Requests
+	}
 	pod, err := podspec.BuildWithOptions(sb, rcName, opts)
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))

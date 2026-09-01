@@ -774,6 +774,15 @@ frontend:
 # the default posture something other than deny-all.
 #
 # Each entry is {name, spec}; spec is the SandboxClass spec verbatim.
+#
+# A class for Sandboxes that stay up for a long time and idle most of
+# it can declare `requests` separate from the Sandbox's own resources
+# block (the Pod's limits), so an idle Sandbox reserves a small slice
+# of a node and still bursts to its budget:
+#
+#   spec:
+#     requests: {cpu: 250m, memory: 768Mi}
+#     maxResources: {vcpu: 2, memory: 4Gi}
 sandboxClasses:
   enabled: true
   classes:

@@ -112,6 +112,13 @@ type BuildOptions struct {
 	// only appropriate for tests: the operator refuses to start without
 	// a resolver list.
 	ResolverIPs []string
+
+	// Requests, when non-nil, is the SandboxClass's scheduler
+	// reservation (SandboxClassSpec.Requests). Each set field replaces
+	// the matching request on the workload container, bounded by the
+	// Sandbox's limit for that resource. Nil keeps requests equal to
+	// limits.
+	Requests *setecv1alpha1.ResourceRequests
 }
 
 // Hardening constants applied to every Sandbox Pod.
@@ -236,7 +243,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		Image:     sb.Spec.Image,
 		Command:   append([]string(nil), sb.Spec.Command...),
 		Env:       append([]corev1.EnvVar(nil), sb.Spec.Env...),
-		Resources: buildResourceRequirements(sb.Spec.Resources),
+		Resources: buildResourceRequirements(sb.Spec.Resources, opts.Requests),
 		// A read-only root filesystem needs somewhere to write, or every
 		// tool that touches a temporary file fails.
 		VolumeMounts: []corev1.VolumeMount{{
@@ -436,20 +443,41 @@ func validate(sb *setecv1alpha1.Sandbox, runtimeClassName string) error {
 	return nil
 }
 
-// buildResourceRequirements maps the Sandbox resources block to a
-// corev1.ResourceRequirements value with identical requests and limits so the
-// kubelet guarantees the microVM gets exactly what was asked for.
-func buildResourceRequirements(r setecv1alpha1.Resources) corev1.ResourceRequirements {
+// buildResourceRequirements maps the Sandbox resources block to the
+// workload container's limits, and derives its requests. With no class
+// reservation the requests equal the limits, so the kubelet guarantees
+// the microVM exactly what was asked for. A class reservation replaces
+// the request for each resource it names, bounded by that resource's
+// limit: a request above its limit is an invalid Pod, so the
+// reservation can only ever lower what the scheduler sets aside.
+func buildResourceRequirements(r setecv1alpha1.Resources, req *setecv1alpha1.ResourceRequests) corev1.ResourceRequirements {
 	cpu := *resource.NewQuantity(int64(r.VCPU), resource.DecimalSI)
 	mem := r.Memory.DeepCopy()
 
-	rl := corev1.ResourceList{
+	limits := corev1.ResourceList{
 		corev1.ResourceCPU:    cpu,
 		corev1.ResourceMemory: mem,
 	}
+	requests := limits.DeepCopy()
+	if req != nil {
+		if req.CPU != nil {
+			requests[corev1.ResourceCPU] = minQuantity(*req.CPU, cpu)
+		}
+		if req.Memory != nil {
+			requests[corev1.ResourceMemory] = minQuantity(*req.Memory, mem)
+		}
+	}
 
 	return corev1.ResourceRequirements{
-		Requests: rl.DeepCopy(),
-		Limits:   rl.DeepCopy(),
+		Requests: requests,
+		Limits:   limits,
 	}
+}
+
+// minQuantity returns a copy of the smaller of a and b.
+func minQuantity(a, b resource.Quantity) resource.Quantity {
+	if a.Cmp(b) > 0 {
+		return b.DeepCopy()
+	}
+	return a.DeepCopy()
 }
