@@ -134,6 +134,15 @@ and create a new one.
 on exit, stateless. A Sandbox with no `lifecycle` block, or with
 `mode: ephemeral`, behaves exactly as before the mode existed.
 
+The auto-destroy is a finished-TTL: after the Sandbox reaches
+`Completed` or `Failed` the controller keeps it for a bounded window
+(10 minutes by default) so its creator can still `Wait` for the
+outcome and `StreamLogs` the captured output, then deletes it. The
+window opens only on a terminal phase. A live Sandbox, in `Running`
+or any other non-terminal phase, is never deleted by this clock no
+matter how long it has run. Only `spec.lifecycle.timeout` bounds a
+running ephemeral Sandbox.
+
 **`session`.** Long-lived, ended only by explicit teardown (deleting the
 Sandbox, or `Kill` on the gRPC frontend):
 

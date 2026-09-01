@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -178,4 +179,45 @@ func TestEphemeralReapDue(t *testing.T) {
 	due, remaining = ephemeralReapDue(nilSb, now, retention)
 	g.Expect(due).To(BeFalse(), "an unknown finish instant is never due")
 	g.Expect(remaining).To(Equal(retention))
+}
+
+// TestRunningEphemeralSandboxOutlivesFinishedTTL proves the finished-TTL
+// reaper never touches a live Sandbox (setec#372): the window opens only
+// on a terminal phase. An ephemeral Sandbox that has been Running for
+// twice the retention, and every other live phase, falls through to the
+// normal reconcile untouched, so a member that stays up for weeks is
+// never auto-destroyed by the clock.
+func TestRunningEphemeralSandboxOutlivesFinishedTTL(t *testing.T) {
+	retention := 30 * time.Minute
+	for _, phase := range []setecv1alpha1.SandboxPhase{
+		setecv1alpha1.SandboxPhaseRunning,
+		setecv1alpha1.SandboxPhasePending,
+		setecv1alpha1.SandboxPhasePaused,
+		setecv1alpha1.SandboxPhaseSnapshotting,
+		setecv1alpha1.SandboxPhaseRestoring,
+		setecv1alpha1.SandboxPhaseSuspended,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			g := NewWithT(t)
+
+			// The last transition (into this phase) is 2x the TTL ago.
+			transitioned := time.Now().Add(-2 * retention)
+			sb := terminalEphemeral("long-lived", phase, &transitioned)
+			sb.Status.Reason = ""
+
+			c, r := newEphemeralReapReconciler(g, sb, retention)
+
+			res, handled, err := r.reapExpiredEphemeral(context.Background(), log.FromContext(context.Background()), sb)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(handled).To(BeFalse(),
+				"a live ephemeral Sandbox must fall through to the normal reconcile, never the finished-TTL reaper")
+			g.Expect(res).To(Equal(ctrl.Result{}), "the reaper schedules nothing for a live Sandbox")
+
+			got := &setecv1alpha1.Sandbox{}
+			g.Expect(c.Get(context.Background(),
+				types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name}, got)).To(Succeed(),
+				"a live Sandbox past 2x the finished-TTL must still exist")
+			g.Expect(got.Status.Phase).To(Equal(phase))
+		})
+	}
 }
