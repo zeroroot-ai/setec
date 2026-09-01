@@ -297,6 +297,14 @@ jobs:
         # becoming a startup error.
         run: ./hack/verify-chart-credentials.sh charts/setec
 
+      - name: Idle-footprint drift check self-test
+        # hack/measure-idle-footprint.sh decides whether a long-lived
+        # Sandbox held its memory. The soak itself needs a cluster and
+        # hours, but its arithmetic does not: the self-test feeds the
+        # check a steady series and a leaking one, so a change that
+        # makes the check unable to fail is caught here.
+        run: ./hack/measure-idle-footprint.sh --self-test
+
       - name: x86-substrate assertions (ADR-0001)
         # The sandbox substrate is x86 only (setec#186): image publishing
         # must stay single-arch linux/amd64 and the node-facing DaemonSets

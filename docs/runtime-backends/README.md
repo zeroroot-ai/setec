@@ -43,6 +43,10 @@ The operator is expected to configure a `fallback` chain on each `SandboxClass` 
 
 ## Pointers
 
+Operating notes:
+
+- [Idle footprint of a long-lived Sandbox](./idle-footprint.md)
+
 Platform-specific playbooks:
 
 - [AWS EKS](./eks.md)
