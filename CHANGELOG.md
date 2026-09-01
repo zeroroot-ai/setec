@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.113.0](https://github.com/zeroroot-ai/setec/compare/v0.112.2...v0.113.0) (2026-09-01)
+
+
+### Features
+
+* **controller:** auto-destroy ephemeral Sandboxes after a finished-TTL ([#366](https://github.com/zeroroot-ai/setec/issues/366)) ([b58eb32](https://github.com/zeroroot-ai/setec/commit/b58eb32d279e594b702cb59fb71b308b7817c674))
+* **frontend:** honor a grace period on Kill ([#375](https://github.com/zeroroot-ai/setec/issues/375)) ([8c88559](https://github.com/zeroroot-ai/setec/commit/8c885597326e05d6242a2541f94dcd6b4eef4677))
+* **hack:** measure the idle footprint of a long-lived Sandbox ([#377](https://github.com/zeroroot-ai/setec/issues/377)) ([acb5b25](https://github.com/zeroroot-ai/setec/commit/acb5b25af8c7d7da4254f54ea4e2c4ca52463154))
+* **sandboxclass:** scheduler requests separate from limits ([#373](https://github.com/zeroroot-ai/setec/issues/373)) ([3b0c686](https://github.com/zeroroot-ai/setec/commit/3b0c686158cfe96d99c2ed61ff4749b8a98dd1d6))
+
+
+### Bug Fixes
+
+* **chart:** grant the operator events.k8s.io so its events are not rejected ([#370](https://github.com/zeroroot-ai/setec/issues/370)) ([f38caed](https://github.com/zeroroot-ai/setec/commit/f38caed9b1aa4674c5ffeb81d0b519f16837100b))
+* **ci:** stop the runner's errexit from aborting the fixture it is meant to require ([#349](https://github.com/zeroroot-ai/setec/issues/349)) ([5ee305d](https://github.com/zeroroot-ai/setec/commit/5ee305d4892fbc7ddfd6ab456127357d578e4719))
+* **e2e:** give the chain-6 kind cluster a worker node so the Sandbox can schedule ([#369](https://github.com/zeroroot-ai/setec/issues/369)) ([cd8162d](https://github.com/zeroroot-ai/setec/commit/cd8162da2368c17c7368ab0f1982f761a5aee564))
+* **e2e:** session scenarios land on a warmed node and assert node-agent mTLS end to end ([#368](https://github.com/zeroroot-ai/setec/issues/368)) ([a3e1dc3](https://github.com/zeroroot-ai/setec/commit/a3e1dc392459b5183cf9d1609f21a16583112569))
+
 ## [0.112.2](https://github.com/zeroroot-ai/setec/compare/v0.112.1...v0.112.2) (2026-08-17)
 
 
