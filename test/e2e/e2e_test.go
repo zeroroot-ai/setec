@@ -229,6 +229,9 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 		{"kubectl", "describe", "sandbox", key.Name, "-n", key.Namespace},
 		{"kubectl", "get", "pods", "-n", key.Namespace, "-o", "wide"},
 		{"kubectl", "describe", "pod", key.Name + "-vm", "-n", key.Namespace},
+		// Allocatable and Allocated resources per node: a Pending Sandbox
+		// with "Insufficient cpu" is only diagnosable with these numbers.
+		{"kubectl", "describe", "nodes"},
 		{"kubectl", "get", "events", "-n", key.Namespace, "--sort-by=.lastTimestamp"},
 		{"kubectl", "logs", "-l", operatorLabel, "-n", testNamespace, "--tail=200"},
 	}
