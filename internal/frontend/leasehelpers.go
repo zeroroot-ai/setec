@@ -56,11 +56,14 @@ func parseLeaseToken(tok string) (ns, leaseID string, err error) {
 // the caller, not here.
 func relayExecLogs(ctx context.Context, r io.Reader, stream setecv1grpc.LeaseService_ExecServer) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	for scanner.Scan() {
-		line := append(scanner.Bytes(), '\n')
+		// Every log read asks the kubelet for timestamps, so a resumed
+		// read can position itself. The exec caller wants the workload's
+		// own bytes, so the stamp comes off here.
+		_, payload, _ := splitLogTimestamp(scanner.Bytes())
 		chunk := &setecv1grpc.ExecResponse{
-			Data:   append([]byte(nil), line...),
+			Data:   append(append([]byte(nil), payload...), '\n'),
 			Stream: "stdout",
 		}
 		if err := stream.Send(chunk); err != nil {

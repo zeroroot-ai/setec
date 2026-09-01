@@ -340,7 +340,7 @@ func (s *LeaseService) streamExec(ctx context.Context, ns, name string, stream s
 			// Same fallback as StreamLogs (setec#263): a short exec
 			// often exits before the attach lands, and a refused
 			// follow attach must not cost the caller its output.
-			logStream, err := openWorkloadLogs(ctx, clientsetLogOpener(s.Clientset), ns, podName, true)
+			logStream, err := openWorkloadLogs(ctx, clientsetLogOpener(s.Clientset), ns, podName, logWindow{Follow: true})
 			if err == nil {
 				_ = relayExecLogs(ctx, logStream, stream)
 				_ = logStream.Close()

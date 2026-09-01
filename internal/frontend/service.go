@@ -18,6 +18,7 @@ package frontend
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,6 +61,11 @@ const streamLogsPodPollTimeout = 30 * time.Second
 // workload container. Duplicated here (rather than imported) to keep
 // the frontend free of a dependency on the podspec package.
 const workloadContainerName = "workload"
+
+// maxLogLineBytes caps one log line. It matches the kubelet's own log
+// line limit and is what keeps a workload that emits something huge on
+// a single line from growing the frontend's buffer without bound.
+const maxLogLineBytes = 1024 * 1024
 
 // TenantResolver maps a TenantID to the Kubernetes namespace the
 // frontend should operate against. Implementations typically list
@@ -394,6 +400,10 @@ func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*sete
 // stream open until either the underlying container exits, the client
 // cancels, or streamLogsPodPollTimeout elapses waiting for the Pod to
 // reach a loggable phase.
+//
+// tail_lines bounds where the stream starts. A client reconnecting to
+// a Sandbox that has been up for weeks sets it and receives that many
+// trailing lines plus every new one, instead of the whole history.
 func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1grpc.SandboxService_StreamLogsServer) error {
 	ctx := stream.Context()
 
@@ -403,6 +413,11 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	}
 	if err := s.checkTenantNamespace(ctx, ns); err != nil {
 		return err
+	}
+	tail := req.GetTailLines()
+	if tail < 0 {
+		return status.Errorf(codes.InvalidArgument,
+			"tail_lines must be zero or positive, got %d", tail)
 	}
 
 	// Resolve the Sandbox so we can surface NotFound distinctly from
@@ -439,7 +454,12 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	// Serve the captured log instead.
 	follow := req.GetFollow() && !workloadContainerTerminated(pod)
 
-	logStream, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, follow)
+	window := logWindow{Follow: follow}
+	if tail > 0 {
+		window.TailLines = &tail
+	}
+
+	logStream, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, window)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			// Client hung up before the stream opened; no error
@@ -460,7 +480,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 		_ = logStream.Close()
 	}()
 
-	outcome, err := relayLogStream(ctx, logStream, stream, 0)
+	outcome, err := relayLogStream(ctx, logStream, stream, logAnchor{})
 	if err != nil {
 		return err
 	}
@@ -472,10 +492,16 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 
 // resumeAfterBrokenLogStream recovers the tail of a log stream that
 // broke before EOF — the shape a container termination takes when it
-// lands mid-follow. It re-reads the container's completed log and
-// emits only the lines the caller has not seen, so partial output is
-// never lost and never duplicated. If the re-read is impossible the
-// original source failure is surfaced.
+// lands mid-follow. It re-reads the log from the instant of the last
+// line the caller received and emits only what follows it, so partial
+// output is never lost and never duplicated. If the re-read is
+// impossible the original source failure is surfaced.
+//
+// The re-read is anchored on that instant rather than on a count of
+// lines from the start of the log. A Sandbox that has run for weeks
+// has a log the kubelet has already rotated, which makes any position
+// counted from the beginning wrong, and re-reading it whole to throw
+// most of it away is work proportional to the run, not to the gap.
 func (s *Service) resumeAfterBrokenLogStream(
 	ctx context.Context,
 	ns, podName string,
@@ -486,7 +512,15 @@ func (s *Service) resumeAfterBrokenLogStream(
 		// The caller is gone; a broken read is the expected shape.
 		return nil
 	}
-	remaining, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, false)
+	window := logWindow{}
+	if !first.Anchor.Stamp.IsZero() {
+		// SinceTime has one-second resolution, so the window opens at
+		// the top of the anchor's second and relayLogStream drops the
+		// lines inside it the caller already has.
+		since := metav1.NewTime(first.Anchor.Stamp.Truncate(time.Second))
+		window.Since = &since
+	}
+	remaining, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, window)
 	if err != nil {
 		return status.Errorf(codes.Internal, "read log stream: %v", first.SourceErr)
 	}
@@ -494,7 +528,7 @@ func (s *Service) resumeAfterBrokenLogStream(
 		_ = remaining.Close()
 	}()
 
-	outcome, err := relayLogStream(ctx, remaining, stream, first.LinesRead)
+	outcome, err := relayLogStream(ctx, remaining, stream, first.Anchor)
 	if err != nil {
 		return err
 	}
@@ -524,20 +558,48 @@ func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
 	}
 }
 
-// openWorkloadLogs opens the workload container's log byte stream.
-// When a Follow attach is refused — the container terminated between
-// the status read and the attach, which is the whole failure mode of
-// setec#263 — it retries once as a completed-log read, because
-// Kubernetes serves the logs of a terminated container perfectly well.
-// Errors that a retry cannot fix (missing Pod, RBAC denial, a caller
-// that hung up) are returned as-is, and if the retry fails too the
-// original attach error is surfaced because it is the informative one.
-func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string, follow bool) (io.ReadCloser, error) {
-	rc, err := open(ctx, ns, podName, &corev1.PodLogOptions{
-		Follow:    follow,
-		Container: workloadContainerName,
-	})
-	if err == nil || !follow {
+// logWindow selects which part of a container's log a read covers.
+// The zero value is the whole log the kubelet still holds, read to EOF.
+type logWindow struct {
+	// Follow keeps the read open for new lines after the existing ones.
+	Follow bool
+
+	// TailLines, when non-nil, starts the read that many lines from the
+	// end of the log. It is what bounds a reconnect to a long-lived
+	// Sandbox.
+	TailLines *int64
+
+	// Since, when non-nil, starts the read at that instant. Resolution
+	// is one second, which is all PodLogOptions carries.
+	Since *metav1.Time
+}
+
+// options renders the window as the PodLogOptions a GetLogs call takes.
+// Timestamps are always on: they are what lets a resumed read position
+// itself in the log, and relayLogStream strips them before the bytes
+// reach the caller.
+func (w logWindow) options() *corev1.PodLogOptions {
+	return &corev1.PodLogOptions{
+		Container:  workloadContainerName,
+		Follow:     w.Follow,
+		Timestamps: true,
+		TailLines:  w.TailLines,
+		SinceTime:  w.Since,
+	}
+}
+
+// openWorkloadLogs opens the workload container's log byte stream over
+// the given window. When a Follow attach is refused — the container
+// terminated between the status read and the attach, which is the
+// whole failure mode of setec#263 — it retries once as a completed-log
+// read, because Kubernetes serves the logs of a terminated container
+// perfectly well. Errors that a retry cannot fix (missing Pod, RBAC
+// denial, a caller that hung up) are returned as-is, and if the retry
+// fails too the original attach error is surfaced because it is the
+// informative one.
+func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string, w logWindow) (io.ReadCloser, error) {
+	rc, err := open(ctx, ns, podName, w.options())
+	if err == nil || !w.Follow {
 		return rc, err
 	}
 	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) ||
@@ -545,14 +607,13 @@ func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string
 		return nil, err
 	}
 
-	completed, retryErr := open(ctx, ns, podName, &corev1.PodLogOptions{
-		Follow:    false,
-		Container: workloadContainerName,
-	})
+	completed := w
+	completed.Follow = false
+	rc, retryErr := open(ctx, ns, podName, completed.options())
 	if retryErr != nil {
 		return nil, err
 	}
-	return completed, nil
+	return rc, nil
 }
 
 // workloadContainerTerminated reports whether the Pod's workload
@@ -632,12 +693,45 @@ func podLogsAvailable(pod *corev1.Pod) bool {
 	}
 }
 
+// logAnchor marks the last log line a caller has already received, so
+// a second pass over the same log resumes exactly after it. The zero
+// value means nothing has been delivered yet.
+type logAnchor struct {
+	// Stamp is the kubelet timestamp of that line.
+	Stamp time.Time
+	// Count is how many lines carrying exactly Stamp were delivered.
+	// Two lines can share a timestamp, so the instant alone does not
+	// identify a position.
+	Count int
+}
+
+// advance records that a line stamped ts has been delivered.
+func (a *logAnchor) advance(ts time.Time) {
+	if ts.Equal(a.Stamp) {
+		a.Count++
+		return
+	}
+	a.Stamp = ts
+	a.Count = 1
+}
+
+// delivered reports whether a line stamped ts, the n-th one at that
+// instant seen in this pass, was already sent under this anchor.
+func (a logAnchor) delivered(ts time.Time, seenAtStamp int) bool {
+	if a.Stamp.IsZero() {
+		return false
+	}
+	if ts.Before(a.Stamp) {
+		return true
+	}
+	return ts.Equal(a.Stamp) && seenAtStamp <= a.Count
+}
+
 // relayOutcome reports what one pass over a log source achieved.
 type relayOutcome struct {
-	// LinesRead counts the complete lines consumed from the source,
-	// including any the pass was told to skip, so a follow-up pass
-	// over the same log resumes exactly where this one stopped.
-	LinesRead int
+	// Anchor is where the pass stopped, so a follow-up pass over the
+	// same log resumes after the last line the caller received.
+	Anchor logAnchor
 	// SourceErr is non-nil when the log source broke before EOF. It
 	// is reported separately from the returned error because a broken
 	// source is recoverable — the container's completed log still
@@ -645,36 +739,62 @@ type relayOutcome struct {
 	SourceErr error
 }
 
+// splitLogTimestamp splits a kubelet log line into its RFC3339Nano
+// timestamp and the workload's own bytes. A line the kubelet did not
+// stamp is returned whole with ok=false; it is forwarded as-is,
+// because losing output is worse than forwarding a line that a resumed
+// pass cannot position.
+func splitLogTimestamp(line []byte) (time.Time, []byte, bool) {
+	i := bytes.IndexByte(line, ' ')
+	if i <= 0 {
+		return time.Time{}, line, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, string(line[:i]))
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return ts, line[i+1:], true
+}
+
 // relayLogStream reads the Pod log stream line-by-line and forwards
 // each line as a StreamLogsResponse over the gRPC server-streaming
-// channel, skipping the first skipLines lines so a resumed pass does
-// not repeat what the caller already received. A client cancel becomes
-// a clean return (no error and no SourceErr); a failed Send is fatal
-// and returned as Internal; a broken source is reported in the
-// outcome for the caller to recover from.
+// channel. It strips the kubelet timestamp the read always asks for,
+// and drops any line the anchor says the caller already received, so a
+// resumed pass repeats nothing. A client cancel becomes a clean return
+// (no error and no SourceErr); a failed Send is fatal and returned as
+// Internal; a broken source is reported in the outcome for the caller
+// to recover from.
+//
+// One line at a time is the whole buffer: nothing accumulates across
+// the loop, and a single line is capped at maxLogLineBytes, so the
+// memory a stream costs does not grow with how long the Sandbox has
+// been running.
 func relayLogStream(
 	ctx context.Context,
 	r io.Reader,
 	stream setecv1grpc.SandboxService_StreamLogsServer,
-	skipLines int,
+	from logAnchor,
 ) (relayOutcome, error) {
-	out := relayOutcome{LinesRead: skipLines}
+	out := relayOutcome{Anchor: from}
 	scanner := bufio.NewScanner(r)
-	// 1 MiB per line upper bound — matches kubelet's log line limit
-	// and avoids an OOM if a workload ever emits something huge on
-	// a single line.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 
-	seen := 0
+	seenAtStamp := 0
+	var lastStamp time.Time
 	for scanner.Scan() {
-		seen++
-		if seen <= skipLines {
-			continue
+		ts, payload, stamped := splitLogTimestamp(scanner.Bytes())
+		if stamped {
+			if ts.Equal(lastStamp) {
+				seenAtStamp++
+			} else {
+				lastStamp, seenAtStamp = ts, 1
+			}
+			if from.delivered(ts, seenAtStamp) {
+				continue
+			}
 		}
-		out.LinesRead = seen
-		line := append(scanner.Bytes(), '\n')
 		chunk := &setecv1grpc.StreamLogsResponse{
-			Data:   append([]byte(nil), line...),
+			Data:   append(append([]byte(nil), payload...), '\n'),
 			Stream: "stdout",
 		}
 		if err := stream.Send(chunk); err != nil {
@@ -682,6 +802,9 @@ func relayLogStream(
 				return out, nil
 			}
 			return out, status.Errorf(codes.Internal, "send log chunk: %v", err)
+		}
+		if stamped {
+			out.Anchor.advance(ts)
 		}
 	}
 	if err := scanner.Err(); err != nil {
