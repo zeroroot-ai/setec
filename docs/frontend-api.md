@@ -384,7 +384,8 @@ container and forwards each line to the gRPC client as a `LogChunk`:
 ```protobuf
 message StreamLogsRequest {
   string sandbox_id = 1;
-  bool follow = 2;
+  bool   follow     = 2;
+  int64  tail_lines = 3;
 }
 
 message LogChunk {
@@ -397,6 +398,11 @@ Semantics:
 
 - `follow=false` sends every available log byte and closes the stream
   on EOF.
+- `tail_lines`, when positive, starts the stream that many lines from
+  the end. A client that lost its stream to a Sandbox running for weeks
+  reconnects with it and gets a bounded tail plus every new line,
+  instead of the whole history. Zero sends the whole log the kubelet
+  still holds. Negative is `INVALID_ARGUMENT`.
 - `follow=true` keeps the stream open until the workload container
   exits or the client cancels. When the Pod has not yet reached a
   loggable phase, the server polls for up to 30 seconds before
@@ -407,9 +413,15 @@ Semantics:
   terminated container. If the container exits between the status read
   and the attach — the attach is then refused — the server falls back
   to the same completed-log read instead of failing the RPC. A follow
-  stream that breaks mid-flight is resumed from the terminated
-  container's log at the line the caller last received, so partial
-  output is neither lost nor duplicated.
+  stream that breaks mid-flight is resumed from the instant of the last
+  line the caller received, so partial output is neither lost nor
+  duplicated, and the resumed read costs the gap rather than the whole
+  run.
+- The server reads one line at a time, capped at 1 MiB per line, and
+  forwards it at once. Nothing accumulates, so the memory one stream
+  costs does not grow with how long the Sandbox has been running. The
+  server asks the kubelet for timestamps to anchor a resumed read and
+  strips them before the bytes reach the caller.
 - Tenant scope is enforced: a caller whose resolved namespace does not
   match the sandbox's namespace gets `PERMISSION_DENIED`.
 - A missing Sandbox returns `NOT_FOUND`; a Sandbox whose Pod has not

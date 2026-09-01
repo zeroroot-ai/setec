@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -106,6 +107,10 @@ func (r *breakingReader) Read(p []byte) (int, error) {
 func (r *breakingReader) Close() error { return nil }
 
 func nopReadCloser(s string) io.ReadCloser { return io.NopCloser(strings.NewReader(s)) }
+
+// stamped renders one log line the way the kubelet serves it when
+// Timestamps is on, which is how the frontend always reads.
+func stamped(ts, line string) string { return ts + " " + line + "\n" }
 
 // TestStreamLogs_TerminatedContainerDropsFollow asserts that a
 // Follow=true request against a workload container that has already
@@ -240,10 +245,17 @@ func TestStreamLogs_MidStreamTerminationYieldsRemainder(t *testing.T) {
 	}
 	opener := &recordingOpener{results: []openResult{
 		{rc: &breakingReader{
-			rest: "starting\nprobing\n",
-			err:  errForTesting("unexpected EOF: container terminated"),
+			rest: stamped("2026-09-01T10:00:01.100Z", "starting") +
+				stamped("2026-09-01T10:00:01.900Z", "probing"),
+			err: errForTesting("unexpected EOF: container terminated"),
 		}},
-		{rc: nopReadCloser("starting\nprobing\n===GIBSON_TOOL_OUTPUT===\ndone\n")},
+		// The re-read opens at the top of the anchor second, so it
+		// carries both lines the caller already has plus the rest.
+		{rc: nopReadCloser(
+			stamped("2026-09-01T10:00:01.100Z", "starting") +
+				stamped("2026-09-01T10:00:01.900Z", "probing") +
+				stamped("2026-09-01T10:00:02.000Z", "===GIBSON_TOOL_OUTPUT===") +
+				stamped("2026-09-01T10:00:02.500Z", "done"))},
 	}}
 
 	s := &Service{
@@ -263,6 +275,19 @@ func TestStreamLogs_MidStreamTerminationYieldsRemainder(t *testing.T) {
 	want := "starting\nprobing\n===GIBSON_TOOL_OUTPUT===\ndone\n"
 	if got := joinChunks(stream.Chunks()); got != want {
 		t.Fatalf("log output = %q, want %q (no duplicated or dropped lines)", got, want)
+	}
+
+	calls := opener.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("GetLogs calls = %d, want 2 (follow attach then the resumed read)", len(calls))
+	}
+	// The resumed read is anchored on the last delivered line, not on a
+	// count from the start of the log.
+	if calls[1].SinceTime == nil {
+		t.Fatal("the resumed read must carry SinceTime")
+	}
+	if got, want := calls[1].SinceTime.Time.UTC().Format(time.RFC3339), "2026-09-01T10:00:01Z"; got != want {
+		t.Errorf("resumed read SinceTime = %s, want %s", got, want)
 	}
 }
 

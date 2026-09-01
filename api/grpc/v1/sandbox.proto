@@ -221,6 +221,14 @@ message Workspace {
 message StreamLogsRequest {
   string sandbox_id = 1;
   bool follow = 2;
+
+  // tail_lines, when positive, starts the stream that many lines from
+  // the end of the log instead of at the beginning. A client that
+  // reconnects to a long-lived Sandbox sets it, so it receives a
+  // bounded tail plus every new line, instead of replaying weeks of
+  // output. Zero sends the whole log the kubelet still holds.
+  // Negative is INVALID_ARGUMENT.
+  int64 tail_lines = 3;
 }
 
 // StreamLogsResponse is a single-stream log payload. `stream` is "stdout" or
