@@ -49,6 +49,7 @@ on:
       - 'internal/frontend/exec.go'
       - 'charts/setec/**'
       - '.github/workflows/exit-test-session-affinity.yml'
+      - 'hack/kind-chain6.yaml'
   schedule:
     # Daily, so a regression surfaces without waiting for someone to touch the
     # session code. The chain is only closed for as long as this stays green.
@@ -90,6 +91,8 @@ jobs:
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1
         with:
           cluster_name: ${{ env.KIND_CLUSTER }}
+          # Two nodes; see the file for why one is not enough.
+          config: hack/kind-chain6.yaml
           wait: 120s
 
       - name: Build the operator image
