@@ -64,7 +64,8 @@ type SandboxServiceClient interface {
 	// immediately.
 	Wait(ctx context.Context, in *WaitRequest, opts ...grpc.CallOption) (*WaitResponse, error)
 	// Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
-	// NetworkPolicy.
+	// NetworkPolicy. A positive grace_seconds gives the workload that
+	// long between SIGTERM and SIGKILL first.
 	Kill(ctx context.Context, in *KillRequest, opts ...grpc.CallOption) (*KillResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
@@ -254,7 +255,8 @@ type SandboxServiceServer interface {
 	// immediately.
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	// Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
-	// NetworkPolicy.
+	// NetworkPolicy. A positive grace_seconds gives the workload that
+	// long between SIGTERM and SIGKILL first.
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a

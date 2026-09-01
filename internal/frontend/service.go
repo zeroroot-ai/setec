@@ -339,6 +339,15 @@ func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*sete
 
 // Kill deletes the Sandbox CR. Owner-reference GC collects the Pod and
 // any NetworkPolicy.
+//
+// A positive grace_seconds is honored by deleting the Sandbox Pod with
+// that grace period BEFORE the Sandbox object. The order matters: the
+// API server lets a later delete only shorten a grace period already
+// set on an object, never lengthen it. Owner-reference GC and the
+// session teardown finalizer both delete the Pod with no explicit
+// grace, which the API server treats as "keep the pending graceful
+// deletion" once one is under way, so the caller's value is the one
+// the kubelet enforces: SIGTERM now, SIGKILL after grace_seconds.
 func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*setecv1grpc.KillResponse, error) {
 	ns, name, err := parseSandboxID(req.GetSandboxId())
 	if err != nil {
@@ -346,6 +355,21 @@ func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*sete
 	}
 	if err := s.checkTenantNamespace(ctx, ns); err != nil {
 		return nil, err
+	}
+	grace := req.GetGraceSeconds()
+	if grace < 0 {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"grace_seconds must be zero or positive, got %d", grace)
+	}
+
+	if grace > 0 {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: podNameFor(name)},
+		}
+		if err := s.Client.Delete(ctx, pod, client.GracePeriodSeconds(grace)); err != nil &&
+			!apierrors.IsNotFound(err) {
+			return nil, status.Errorf(grpcCodeFor(err), "delete Sandbox Pod with grace: %v", err)
+		}
 	}
 
 	sb := &setecv1alpha1.Sandbox{
@@ -402,7 +426,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 			"StreamLogs: kubernetes clientset is not configured on the frontend")
 	}
 
-	podName := name + "-vm"
+	podName := podNameFor(name)
 	pod, err := s.waitForLoggablePod(ctx, ns, podName, req.GetFollow())
 	if err != nil {
 		return err

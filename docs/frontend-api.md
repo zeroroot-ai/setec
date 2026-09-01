@@ -351,6 +351,31 @@ func main() {
 }
 ```
 
+## Stopping a Sandbox (`Kill`)
+
+`Kill` deletes the Sandbox. Owner-reference GC then removes the Pod and
+the NetworkPolicy.
+
+```protobuf
+message KillRequest {
+  string sandbox_id    = 1;
+  int64  grace_seconds = 2;
+}
+```
+
+- `grace_seconds = 0` (the default) deletes only the Sandbox. The Pod
+  goes with it on the Pod's own `terminationGracePeriodSeconds`, which
+  is the Kubernetes default of 30 seconds.
+- A positive `grace_seconds` deletes the Sandbox Pod with that grace
+  period first, then the Sandbox. The kubelet sends `SIGTERM` to the
+  workload at once and `SIGKILL` after the window, so a long-lived
+  driver gets that long to checkpoint its work. The Pod delete comes
+  first because the API server only ever shortens a grace period an
+  object already carries: the later ownerless-GC delete cannot cut the
+  window short.
+- A negative `grace_seconds` is `INVALID_ARGUMENT`.
+- A Sandbox that is already gone returns success. `Kill` is idempotent.
+
 ## Streaming logs
 
 `StreamLogs` opens the kubelet log stream for the Sandbox's workload

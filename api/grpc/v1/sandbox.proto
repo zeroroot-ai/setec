@@ -40,7 +40,8 @@ service SandboxService {
   rpc Wait(WaitRequest) returns (WaitResponse);
 
   // Kill deletes the Sandbox CR. Owner-reference GC removes the Pod and
-  // NetworkPolicy.
+  // NetworkPolicy. A positive grace_seconds gives the workload that
+  // long between SIGTERM and SIGKILL first.
   rpc Kill(KillRequest) returns (KillResponse);
 
   // Attach resolves a session handle (the sandbox_id returned by
@@ -254,6 +255,15 @@ message WaitResponse {
 // KillRequest deletes a Sandbox.
 message KillRequest {
   string sandbox_id = 1;
+
+  // grace_seconds is how long the workload gets between SIGTERM and
+  // SIGKILL, so a long-lived driver can checkpoint its work before the
+  // microVM goes away. When positive the frontend deletes the Sandbox
+  // Pod with this grace period first, then the Sandbox object; the
+  // kubelet sends SIGTERM at once and SIGKILL after grace_seconds.
+  // Zero keeps the Pod's own terminationGracePeriodSeconds (the
+  // Kubernetes default of 30 s). Negative is INVALID_ARGUMENT.
+  int64 grace_seconds = 2;
 }
 
 // KillResponse is currently empty; a Sandbox that could not be deleted
