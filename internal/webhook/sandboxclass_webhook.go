@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -170,6 +171,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validatePreWarm(class)...)
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
+	allErrs = append(allErrs, validateRequests(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
@@ -350,6 +352,43 @@ func (w *SandboxClassWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		WithDefaulter(w).
 		WithValidator(w).
 		Complete()
+}
+
+// validateRequests checks the class's scheduler reservation
+// (spec.requests). Each set value must be positive, and when the class
+// also states a ceiling (spec.maxResources) the reservation must fit
+// under it: a request no Sandbox in the class may ever reach its limit
+// for is a misconfiguration, not a reservation.
+func validateRequests(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	req := class.Spec.Requests
+	if req == nil {
+		return errs
+	}
+	base := field.NewPath("spec", "requests")
+	maxRes := class.Spec.MaxResources
+
+	if req.CPU != nil {
+		p := base.Child("cpu")
+		switch {
+		case req.CPU.Sign() <= 0:
+			errs = append(errs, field.Invalid(p, req.CPU.String(), "must be positive"))
+		case maxRes != nil && req.CPU.Cmp(*resource.NewQuantity(int64(maxRes.VCPU), resource.DecimalSI)) > 0:
+			errs = append(errs, field.Invalid(p, req.CPU.String(),
+				fmt.Sprintf("exceeds spec.maxResources.vcpu (%d)", maxRes.VCPU)))
+		}
+	}
+	if req.Memory != nil {
+		p := base.Child("memory")
+		switch {
+		case req.Memory.Sign() <= 0:
+			errs = append(errs, field.Invalid(p, req.Memory.String(), "must be positive"))
+		case maxRes != nil && req.Memory.Cmp(maxRes.Memory) > 0:
+			errs = append(errs, field.Invalid(p, req.Memory.String(),
+				fmt.Sprintf("exceeds spec.maxResources.memory (%s)", maxRes.Memory.String())))
+		}
+	}
+	return errs
 }
 
 // validateMaxPauseDuration enforces that spec.maxPauseDuration, when

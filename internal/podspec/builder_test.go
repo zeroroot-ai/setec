@@ -164,7 +164,8 @@ func TestBuild_Success_SmallResources(t *testing.T) {
 	if got := req[corev1.ResourceMemory]; got.Cmp(resource.MustParse("128Mi")) != 0 {
 		t.Errorf("request memory = %s, want 128Mi", got.String())
 	}
-	// requests and limits must be identical — Kata needs a fixed allocation.
+	// With no class reservation, requests and limits are identical
+	// (Guaranteed QoS); see requests_test.go for the split.
 	if diff := cmp.Diff(req, lim); diff != "" {
 		t.Errorf("requests != limits (-req +lim):\n%s", diff)
 	}

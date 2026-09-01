@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -129,6 +130,21 @@ type SandboxClassSpec struct {
 	// beyond whatever ResourceQuota the tenant namespace enforces.
 	// +optional
 	MaxResources *Resources `json:"maxResources,omitempty"`
+
+	// Requests is the scheduler reservation for every Sandbox Pod in
+	// this class, declared separately from the Sandbox's own resources
+	// block, which stays the Pod's limits. A Sandbox that sits idle most
+	// of the time can then reserve a small slice of a node and still
+	// burst to its full budget: an always-on agent member reserves
+	// 250m / 768Mi and runs with a 2 vCPU / 4Gi ceiling.
+	//
+	// Each value is bounded by the Sandbox's limits on the Pod: a
+	// reservation above the budget would make the Pod invalid, so the
+	// controller writes min(request, limit). Unset, or an unset field,
+	// keeps the Phase 1 shape where requests equal limits (Guaranteed
+	// QoS).
+	// +optional
+	Requests *ResourceRequests `json:"requests,omitempty"`
 
 	// AllowedNetworkModes enumerates the Sandbox.network.mode values
 	// tenants may request under this class. Empty list means all modes
@@ -294,6 +310,22 @@ func (s *SessionCheckpointSpec) CheckpointBackend() string {
 		return "s3"
 	}
 	return s.Backend
+}
+
+// ResourceRequests is the scheduler reservation a SandboxClass places
+// on every Sandbox Pod it produces, separate from the Pod's limits (see
+// SandboxClassSpec.Requests). Both fields are optional; a field left
+// unset keeps that resource's request equal to its limit.
+type ResourceRequests struct {
+	// CPU is the CPU reservation, e.g. "250m" or "1". Must be positive
+	// when set.
+	// +optional
+	CPU *resource.Quantity `json:"cpu,omitempty"`
+
+	// Memory is the memory reservation, e.g. "768Mi". Must be positive
+	// when set.
+	// +optional
+	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
 // SandboxClassStatus reflects the observed state of a SandboxClass. Phase 2

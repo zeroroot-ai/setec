@@ -300,6 +300,16 @@ Administrators author classes; tenants reference them by name in
   agent prefetches (kata-fc / kata-qemu only; ignored for gvisor / runc).
 - `spec.defaultResources`, `spec.maxResources` — `{vcpu, memory}`
   blocks that set the default and ceiling for tenant Sandboxes.
+- `spec.requests` — `{cpu, memory}` quantities (optional). The
+  scheduler reservation for every Sandbox Pod in the class, separate
+  from the Sandbox's own `spec.resources`, which stays the Pod's
+  limits. A long-lived Sandbox that idles most of the time reserves a
+  small slice of a node and still bursts to its full budget: an
+  always-on agent member sets `requests: {cpu: 250m, memory: 768Mi}`
+  under a `2 vCPU / 4Gi` Sandbox. The controller bounds each request
+  by the Sandbox's limit for that resource, so a class reservation can
+  only lower what the scheduler sets aside. Unset keeps requests equal
+  to limits (Guaranteed QoS).
 - `spec.allowedNetworkModes` — subset of
   `[external-only, egress-allow-list, none]`. Empty list means all modes
   allowed. The check runs against the **effective** mode, so a Sandbox
@@ -373,6 +383,9 @@ Administrators author classes; tenants reference them by name in
   side-effect of naming it in the defaults block.
 - `spec.vmm` and `spec.runtime.backend` are mutually exclusive; if both
   are provided, admission fails. Migration: set one and delete the other.
+- `spec.requests.cpu` and `spec.requests.memory`, when set, must be
+  positive and must not exceed `spec.maxResources` when the class
+  states a ceiling.
 - `spec.sessionCheckpoint.interval`, when set, must be positive;
   `spec.sessionCheckpoint.backend` must be `s3` (or empty). On the
   Sandbox side, `spec.desiredState: Suspended` is rejected unless the
