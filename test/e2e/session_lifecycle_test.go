@@ -28,7 +28,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -55,43 +54,6 @@ func sessionSpec() setecv1alpha1.SandboxSpec {
 	return spec
 }
 
-// sandboxHostTolerations is the toleration a Sandbox Pod needs in order to
-// land on a node that can actually run a kata microVM.
-//
-// The staging setec-metal Karpenter NodePool taints its nodes
-// `setec.zeroroot.ai/sandbox-host=true:NoSchedule`, so WITHOUT this a session
-// Sandbox sits Pending forever with "untolerated taint" — the only nodes that
-// can host a microVM are the only nodes it cannot be scheduled onto:
-//
-//	0/5 nodes are available: 2 node(s) had untolerated taint(s),
-//	3 node(s) didn't match Pod's node affinity/selector.
-//
-// (run 31918112679, the suites job's first execution). The `roundtrip` job
-// has carried the same toleration inline on its own SandboxClass since
-// setec#115 and is green on the same cluster in the same run, which is what
-// isolates this to the Go suite.
-//
-// Declaring it on the CLASS rather than the Sandbox is the only option:
-// SandboxSpec has no scheduling fields at all, by design — a tenant is not
-// supposed to know about the cluster's taints (see SandboxClassSpec.Tolerations).
-//
-// A toleration for a taint that does not exist is inert, so this is
-// unconditional rather than gated on an environment variable: it costs a kind
-// cluster nothing and cannot be forgotten on a real one.
-//
-// SCOPE: the session classes only. The suite-wide version of this problem —
-// every scenario built on minimalSpec() resolves the live Argo-managed `tool`
-// class, which the suite must not modify — is setec#330, and picking a shape
-// for that is an owner call rather than something to settle here.
-func sandboxHostTolerations() []corev1.Toleration {
-	return []corev1.Toleration{{
-		Key:      "setec.zeroroot.ai/sandbox-host",
-		Operator: corev1.TolerationOpEqual,
-		Value:    "true",
-		Effect:   corev1.TaintEffectNoSchedule,
-	}}
-}
-
 // sessionClassName is the suite-owned SandboxClass the session-lifecycle
 // scenarios pin themselves to.
 //
@@ -111,13 +73,9 @@ func sessionClassName() string { return "e2e-session-" + testNamespace }
 // editing.
 func installSessionClass(t *testing.T) {
 	t.Helper()
-	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: sessionClassName()},
-		Spec: setecv1alpha1.SandboxClassSpec{
-			Runtime:     &setecv1alpha1.SandboxClassRuntime{Backend: kataRuntimeClass},
-			Tolerations: sandboxHostTolerations(),
-		},
-	}
+	cls := newSandboxClass(sessionClassName(), setecv1alpha1.SandboxClassSpec{
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: kataRuntimeClass},
+	})
 	if err := k8sClient.Create(context.Background(), cls); err != nil {
 		t.Fatalf("create session SandboxClass %q: %v", cls.Name, err)
 	}
