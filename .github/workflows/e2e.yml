@@ -837,6 +837,10 @@ jobs:
       # silently breaks S3 auth with an AssumeRoleWithWebIdentity denial.
       E2E_NAMESPACE: setec-e2e-session
       E2E_RELEASE: setec-e2e-session
+      # Separate from E2E_NAMESPACE on purpose: the suite's TestMain CREATES
+      # E2E_NAMESPACE and fails if it already exists, so the pre-warm
+      # placeholder cannot live there.
+      WARM_NAMESPACE: setec-e2e-session-warm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -880,39 +884,118 @@ jobs:
       # Sandbox that never leaves Pending — so it is diagnosed HERE, once,
       # with the right issue number attached, instead of being misfiled
       # against the session code.
-      - name: Preflight — a kata-fc-capable node exists
+      - name: Preflight — kata-fc is installed on this cluster
         run: |
           set -uo pipefail
           if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
             echo "::error::RuntimeClass kata-fc is absent; kata-deploy has not run on this cluster (deploy#1080)"
             exit 1
           fi
-          # Memory checkpointing is a Firecracker snapshot operation, so
-          # kata-qemu cannot serve these scenarios however healthy it looks.
-          capable="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-fc=true \
-            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
-          echo "kata-fc-capable nodes: ${capable}"
-          if [ "${capable}" -lt 1 ]; then
-            echo "--- node runtime labels ---"
-            kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu,katacontainers.io/kata-runtime || true
-            echo "::error::no node carries setec.zeroroot.ai/runtime.kata-fc=true. If a sandbox-host node IS up and kata-deploy has installed the shims, this is the runtime-agent probe bug zeroroot-ai/setec#281 (the probe ignores containerd's \`imports\` array) — NOT a session-checkpoint defect. Confirm setec >= v0.110.2 is the running runtime-agent before filing anything against the session path."
-            exit 1
-          fi
 
       # The namespace is fixed, so a previous run that died between install
       # and cleanup leaves a release in the way. Reap it rather than failing
-      # the install with "cannot re-use a name that is still in use".
+      # the install with "cannot re-use a name that is still in use". Runs
+      # BEFORE the pre-warm so the warm pod lands beside a clean namespace.
       - name: Reap a previous run's leftovers
         run: |
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
+          kubectl delete namespace "${WARM_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
-          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          # Both are CLUSTER-scoped and created by test bodies under t.Cleanup,
+          # which does not run when a job is cancelled (setec#255) — so a leak
+          # here outlives the namespace and is visible cluster-wide.
+          for cls in "e2e-session-checkpoint-${E2E_NAMESPACE}" "e2e-session-${E2E_NAMESPACE}"; do
+            kubectl delete sandboxclass "$cls" --ignore-not-found --wait=false || true
+          done
+
+      # WITHOUT THIS STEP THIS JOB CAN NEVER BE GREEN (setec#296).
+      #
+      # The kata-fc capability assertion used to sit in the preflight above
+      # and exit 1 within seconds when no node carried the label. But the
+      # setec-metal Karpenter NodePool is scale-to-zero by design and nothing
+      # in this job provokes it, so on a quiet cluster — the normal state —
+      # the assertion was guaranteed to fail. Verified 2026-08-15:
+      # `kubectl get nodepool setec-metal` reports 0 nodes. The four
+      # repository variables and the Terraform apply this job waits on would
+      # have been spent to reach a failure in the first 30 seconds, reading
+      # as a session-path defect.
+      #
+      # Modelled on the identical step in `suites` (setec#316): schedule a
+      # placeholder requiring ONLY `setec.zeroroot.ai/sandbox-host`, the label
+      # the NodePool template declares and therefore the only one Karpenter
+      # will provision for — a Sandbox Pod's own required `runtime.<backend>`
+      # affinity names a key the NodePool does not declare and Karpenter
+      # rejects it outright.
+      #
+      # The placeholder STAYS UP for the whole job: the NodePool's
+      # `consolidateAfter: 120s` would otherwise reap the metal node two
+      # minutes after the last sandbox exits, mid-run. `sleep 3000` outstrips
+      # this job's `timeout-minutes: 45`.
+      #
+      # It lives in its own namespace, NOT ${E2E_NAMESPACE}: the suite's
+      # TestMain CREATES that namespace and fails if it already exists.
+      - name: Pre-warm a kata-fc-capable metal node (scale-from-zero)
+        run: |
+          set -euo pipefail
+          kubectl create namespace "${WARM_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl delete pod setec-e2e-session-warm -n "${WARM_NAMESPACE}" --ignore-not-found --wait=true --timeout=2m
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: setec-e2e-session-warm
+            namespace: ${WARM_NAMESPACE}
+          spec:
+            nodeSelector:
+              setec.zeroroot.ai/sandbox-host: "true"
+            tolerations:
+              - key: setec.zeroroot.ai/sandbox-host
+                operator: Equal
+                value: "true"
+                effect: NoSchedule
+            containers:
+              - name: warm
+                image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
+                command: ["sleep", "3000"]
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 32Mi
+            restartPolicy: Never
+          EOF
+
+          echo "waiting for a kata-fc-capable node (metal boot + kata-deploy, up to ~18 min)..."
+          for i in $(seq 1 72); do
+            # BOTH labels, for the reason roundtrip documents (setec#243): the
+            # runtime-agent's capability label can fire before kata is really
+            # installed, and `katacontainers.io/kata-runtime=true` is written
+            # by kata-deploy only once containerd is configured.
+            #
+            # Memory checkpointing is a Firecracker snapshot operation, so
+            # kata-qemu cannot serve these scenarios however healthy it looks;
+            # kata-fc is the label that counts here.
+            n="$(kubectl get nodes \
+              -l setec.zeroroot.ai/runtime.kata-fc=true,katacontainers.io/kata-runtime=true \
+              -o name 2>/dev/null | head -1)"
+            if [ -n "$n" ]; then
+              echo "kata-fc-capable node ready after ${i} polls: ${n}"
+              exit 0
+            fi
+            sleep 15
+          done
+
+          echo "--- node runtime labels ---"
+          kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu,katacontainers.io/kata-runtime -o wide || true
+          kubectl -n "${WARM_NAMESPACE}" describe pod setec-e2e-session-warm || true
+          kubectl get nodeclaims -o wide 2>/dev/null || true
+          echo "::error::no node gained setec.zeroroot.ai/runtime.kata-fc=true within the wait window. If a sandbox-host node IS up and kata-deploy has installed the shims, this is the runtime-agent probe bug zeroroot-ai/setec#281 (the probe ignores containerd's \`imports\` array) — NOT a session-checkpoint defect. Confirm setec >= v0.110.2 is the running runtime-agent before filing anything against the session path."
+          exit 1
 
       - name: Run the session lifecycle scenarios
         env:
@@ -965,8 +1048,12 @@ jobs:
           # this variable; see docs/session-checkpoints.md.
           SETEC_E2E_SESSION_DRAIN: ${{ vars.STAGING_SESSION_DRAIN_CAPACITY }}
         run: |
+          # TestSession_ReattachByHandle is NOT here any more: it needs no
+          # bucket, no IRSA role and no node-agent, so gating it on
+          # STAGING_SESSION_S3_READY meant it ran nowhere at all. It moved to
+          # `suites`, which needs only an ARC runner (setec#296).
           go test -tags=e2e ./test/e2e/... -v -timeout 40m \
-            -run '^(TestSession_ReattachByHandle|TestSessionCheckpoint_.*)$' \
+            -run '^TestSessionCheckpoint_.*$' \
             2>&1 | tee session-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario. Surface every one
@@ -1011,6 +1098,13 @@ jobs:
       # reached that point — a timeout or a cancelled job never gets there,
       # and this namespace is fixed, so the leftovers block the NEXT run
       # rather than expiring with the run id.
+      # `if: always()` does NOT run on a cancelled job (setec#255), so it
+      # cannot be the only thing standing between a cancel and a stranded
+      # ~$4/hr metal node. Two other mechanisms carry that load: the warm
+      # pod's own `sleep 3000` expires 50 minutes in whatever happens to this
+      # job, after which Karpenter consolidates the node 120s later; and the
+      # "Reap a previous run's leftovers" step above deletes WARM_NAMESPACE
+      # before the next run installs anything.
       - name: Clean up
         if: always()
         run: |
@@ -1018,7 +1112,15 @@ jobs:
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false 2>/dev/null || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false \
             || echo "::warning::could not delete ${E2E_NAMESPACE}; the next run reaps it"
-          kubectl delete sandboxclass "e2e-session-checkpoint-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
+          # The placeholder pins the metal node for as long as it exists, so
+          # reaping it is a cost control rather than tidiness.
+          kubectl delete namespace "${WARM_NAMESPACE}" --ignore-not-found --wait=false || true
+          # Both are CLUSTER-scoped and created by test bodies under t.Cleanup,
+          # which does not run when a job is cancelled (setec#255) — so a leak
+          # here outlives the namespace and is visible cluster-wide.
+          for cls in "e2e-session-checkpoint-${E2E_NAMESPACE}" "e2e-session-${E2E_NAMESPACE}"; do
+            kubectl delete sandboxclass "$cls" --ignore-not-found --wait=false || true
+          done
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
@@ -1124,6 +1226,9 @@ jobs:
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
             done
           done
+          # Cluster-scoped and created by a test body under t.Cleanup, which
+          # does not run on a cancelled job (setec#255).
+          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
 
       - name: Pre-warm a kata-fc-capable metal node (scale-from-zero)
         # WITHOUT THIS STEP THE JOB CAN NEVER BE GREEN.
@@ -1149,7 +1254,16 @@ jobs:
         # `consolidateAfter: 120s` would otherwise reap the metal node two
         # minutes after the last sandbox exits, mid-run, and the next scenario
         # would wait out its timeout against a cluster with no metal in it.
-        # `sleep 4200` outstrips this job's `timeout-minutes: 60`.
+        #
+        # 3300s (55m) sits just INSIDE this job's `timeout-minutes: 60`, and
+        # that direction matters. `Cleanup (always)` does not run when the job
+        # is cancelled or times out (setec#255) — observed on run 31918112679,
+        # where the runner was evicted mid-scenario (zeroroot-ai/gitops#532)
+        # and cleanup was `skipped`. The earlier 4200s (70m) OUTLASTED the
+        # timeout, so in exactly that case the placeholder went on pinning a
+        # ~$4/hr m5zn.metal with no job left to use it. A sleep shorter than
+        # the job ceiling makes the expiry itself the backstop, rather than a
+        # cleanup step that is not guaranteed to run.
         #
         # It lives in its own namespace, NOT ${E2E_NAMESPACE}: TestMain
         # CREATES that namespace and fails if it already exists.
@@ -1176,7 +1290,7 @@ jobs:
             containers:
               - name: warm
                 image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
-                command: ["sleep", "4200"]
+                command: ["sleep", "3300"]
                 resources:
                   requests:
                     cpu: 50m
@@ -1251,8 +1365,36 @@ jobs:
           # separately (setec#318).
           # TestEnv_KVMPresent first: it is the guard that keeps an incapable
           # environment from turning everything after it into a green all-skip.
+          #
+          # TestSession_ReattachByHandle is here and NOT in the
+          # session-checkpoint job (setec#296). It is one of the two scenarios
+          # that issue names as never having executed, and it is the one with
+          # NO infrastructure dependency at all: it needs a session-mode
+          # Sandbox with a workspace PVC on kata-fc and an in-process
+          # frontend.Service, which is the same shape as
+          # TestSession_WorkspaceSurvivesPodKill already in this list. It does
+          # not touch S3, the node-agent, or snapshots. Leaving it in the
+          # session-checkpoint job made it hostage to
+          # `vars.STAGING_SESSION_S3_READY`, a variable gated on a Terraform
+          # apply, an IRSA role and a checkpoint bucket it has no use for — so
+          # it ran nowhere. The two TestSessionCheckpoint_* scenarios really do
+          # need that bucket and stay behind the gate.
+          #
+          # TestNodeAgentMTLS_.* are assertions on the material installChart
+          # mints for the snapshots path. That path only executes on an
+          # S3-configured install, i.e. almost never, so the generator would
+          # otherwise rot until the one run a human paid a metal node and a
+          # Terraform apply for.
+          #
+          # The wildcard is deliberate, and it is a correction: this list first
+          # named TestNodeAgentMTLS_LeavesChainToOneCA alone, which left
+          # TestNodeAgentMTLS_SecretNamesTrackTheChart written, committed, and
+          # never executed — the exact defect setec#298 and setec#296 are about,
+          # reintroduced by an enumeration that had to be kept in sync by hand.
+          # Verified against run 31919018724, where only the first of the two
+          # appears in the output.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_WorkspaceSurvivesPodKill)$' \
+            -run '^(TestEnv_KVMPresent|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of
@@ -1266,7 +1408,7 @@ jobs:
           if grep -q -- '--- SKIP' suites-e2e.log; then
             echo "::warning::one or more scenarios SKIPPED — see the job summary; this run did not verify them"
             if grep -q 'snapshots.enabled=false' suites-e2e.log; then
-              echo "::warning::the Phase 3 skips (both ADR-0005 invariants + the warm-start gate) are setec#320: the chart cannot install with snapshots.enabled=true because it mounts a CA secret it never creates. Set SETEC_E2E_SNAPSHOTS=1 here once that lands."
+              echo "::warning::the Phase 3 skips (both ADR-0005 invariants + the warm-start gate) need SETEC_E2E_SNAPSHOTS=1. The chart-install blocker behind that (setec#320) is routed around as of setec#296 — installChart now mints the operator<->node-agent mTLS trio itself — but snapshots also require the node-agent DaemonSet on every node of a SHARED cluster, which is a separate call tracked on setec#320."
             fi
           fi
           exit "$status"
@@ -1289,6 +1431,7 @@ jobs:
           # it exists, so reaping it is a cost control, not tidiness. Karpenter
           # consolidates the node 120s after it goes empty.
           kubectl delete namespace setec-e2e-suites-warm --ignore-not-found --wait=false || true
+          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
               kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true

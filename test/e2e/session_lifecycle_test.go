@@ -45,12 +45,43 @@ var sessionProbeCommand = []string{"/bin/sh", "-c",
 // workspace on the cluster-default StorageClass.
 func sessionSpec() setecv1alpha1.SandboxSpec {
 	spec := minimalSpec(sessionProbeCommand...)
+	spec.SandboxClassName = sessionClassName()
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
 		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
 	}
 	return spec
+}
+
+// sessionClassName is the suite-owned SandboxClass the session-lifecycle
+// scenarios pin themselves to.
+//
+// SandboxClass is CLUSTER-scoped, so the name carries the suite's namespace:
+// a fixed name would make two concurrent e2e runs on one cluster fight over a
+// single object and delete each other's fixture. Same reasoning, and same
+// shape, as checkpointClassName().
+func sessionClassName() string { return "e2e-session-" + testNamespace }
+
+// installSessionClass creates that class and removes it with the test.
+//
+// It exists because the scenarios cannot use the cluster default. The
+// throwaway release installs with sandboxClasses.enabled=false (the chart's
+// cluster-scoped `tool`/`connector` classes cannot be imported into a second
+// release), so an unpinned Sandbox resolves the LIVE Argo-managed `tool`
+// class — which carries no tolerations and which this suite has no business
+// editing.
+func installSessionClass(t *testing.T) {
+	t.Helper()
+	cls := newSandboxClass(sessionClassName(), setecv1alpha1.SandboxClassSpec{
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: kataRuntimeClass},
+	})
+	if err := k8sClient.Create(context.Background(), cls); err != nil {
+		t.Fatalf("create session SandboxClass %q: %v", cls.Name, err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), cls)
+	})
 }
 
 // podLogs returns the workload container logs of the named Pod via
@@ -87,6 +118,7 @@ func waitForLogMarker(t *testing.T, podName, marker string, timeout time.Duratio
 //  4. deleting the Sandbox (explicit teardown) deletes the workspace
 //     PVC, so nothing is reusable across sessions (ADR-0005 inv. 3).
 func TestSession_WorkspaceSurvivesPodKill(t *testing.T) {
+	installSessionClass(t)
 	sb := newSandbox("e2e-session", sessionSpec())
 	createAndCleanup(t, sb)
 
