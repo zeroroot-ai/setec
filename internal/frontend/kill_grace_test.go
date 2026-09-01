@@ -36,6 +36,12 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
+// kindSandbox and kindPod name the two object kinds a Kill deletes.
+const (
+	kindSandbox = "Sandbox"
+	kindPod     = "Pod"
+)
+
 // deleteRecord is one Delete call the frontend made, with the grace
 // period it asked for. A nil grace means the call carried no explicit
 // grace period.
@@ -61,9 +67,9 @@ func recordingDeleteClient(t *testing.T, rec *[]deleteRecord, mu *sync.Mutex, ob
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 				var o client.DeleteOptions
 				o.ApplyOptions(opts)
-				kind := "Sandbox"
+				kind := kindSandbox
 				if _, ok := obj.(*corev1.Pod); ok {
-					kind = "Pod"
+					kind = kindPod
 				}
 				mu.Lock()
 				*rec = append(*rec, deleteRecord{kind: kind, name: obj.GetName(), grace: o.GracePeriodSeconds})
@@ -112,13 +118,13 @@ func TestKill_GraceSecondsDeletesPodWithGraceFirst(t *testing.T) {
 	if len(recs) != 2 {
 		t.Fatalf("Delete calls = %d (%v), want 2: the Pod with grace, then the Sandbox", len(recs), recs)
 	}
-	if recs[0].kind != "Pod" {
+	if recs[0].kind != kindPod {
 		t.Fatalf("first delete = %s, want the Pod (grace must be set before the Sandbox goes)", recs[0].kind)
 	}
 	if recs[0].grace == nil || *recs[0].grace != 45 {
 		t.Fatalf("Pod delete grace = %v, want 45", recs[0].grace)
 	}
-	if recs[1].kind != "Sandbox" {
+	if recs[1].kind != kindSandbox {
 		t.Fatalf("second delete = %s, want the Sandbox", recs[1].kind)
 	}
 
@@ -151,7 +157,7 @@ func TestKill_NoGraceLeavesPodToOwnerGC(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(recs) != 1 || recs[0].kind != "Sandbox" {
+	if len(recs) != 1 || recs[0].kind != kindSandbox {
 		t.Fatalf("Delete calls = %v, want exactly one Sandbox delete", recs)
 	}
 }
