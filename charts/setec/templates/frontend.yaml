@@ -152,17 +152,11 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]
-  # pods/exec (create): SandboxService.Exec runs a command inside an
-  # already-running session's workload container. The exec lands in the
-  # same isolation boundary as the booted workload — same user, same
-  # capabilities, same seccomp profile, same microVM — so it grants the
-  # frontend no reach it did not already have by launching Sandboxes.
+  # Reads stay cluster-wide: the frontend resolves a Sandbox to its Pod
+  # and streams that Pod's log. Neither verb enters a container.
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -178,4 +172,79 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "setec.fullname" . }}-frontend
     namespace: {{ .Values.namespace }}
+---
+{{- /*
+=============================================================================
+Where the frontend is allowed to ENTER a Pod.
+=============================================================================
+
+`SandboxService.Exec` runs a command inside an already-running session's
+workload container, so the frontend needs `pods/exec: create`. That verb
+is a pod-entry grant: the holder steps into a process that already has
+its ServiceAccount token, its mounted Secrets and, on this platform, its
+SPIFFE SVID. No admission policy runs on a subresource, so the binding
+scope is the whole of the control.
+
+Sandbox Pods only ever run in the namespaces named in `sandboxNamespaces`
+— the render fails above when `frontend.sandboxNamespace` is outside that
+list — so the grant is RoleBound into exactly those namespaces and is
+never cluster-wide. A namespace that holds a platform identity is
+therefore out of reach.
+
+Upstream setec v0.113.0 put this rule in the cluster-wide `-frontend`
+ClusterRole above. deploy narrows it here and carries the same split
+upstream (setec#383). It mirrors the operator's own Pod-write split in
+sandbox-namespace-rbac.yaml, including the explicit cluster-wide escape
+hatch for a dynamic Sandbox-namespace scheme.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-exec
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+{{- if .Values.rbac.allowClusterWideSandboxWrite }}
+---
+# EXPLICIT cluster-wide grant, chosen by setting
+# rbac.allowClusterWideSandboxWrite: true. This lets the frontend exec into
+# ANY Pod in the cluster, which reaches every platform identity if the
+# frontend is compromised. Prefer listing sandboxNamespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-exec
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-frontend-exec
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" . }}-frontend
+    namespace: {{ .Values.namespace }}
+{{- else }}
+{{- range $ns := .Values.sandboxNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "setec.fullname" $ }}-frontend-exec
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" $ }}-frontend-exec
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" $ }}-frontend
+    namespace: {{ $.Values.namespace }}
+{{- end }}
+{{- end }}
 {{- end }}
