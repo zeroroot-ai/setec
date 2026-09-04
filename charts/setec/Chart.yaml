@@ -31,3 +31,8 @@ keywords:
 maintainers:
   - name: The Setec Authors
     url: https://github.com/zeroroot-ai/setec
+
+# GHCR anchors a package to the repository named here. Without it the chart
+# package links to whichever repo first pushed it.
+annotations:
+  org.opencontainers.image.source: https://github.com/zeroroot-ai/setec
