@@ -138,3 +138,9 @@ Apache 2.0. Full text in [`LICENSE`](LICENSE).
 ---
 
 The name is a 1990s-movie reference. The goal is not to be cute; it is for hardware-isolated workloads to be boring infrastructure.
+
+## License and history
+
+Apache License 2.0. See [LICENSE](LICENSE). Copyright Zero Root AI.
+
+Issue and pull request numbers cited in comments and documents dated before 2026-09-05 refer to the tracker before the history reset, archived offline. They do not resolve on GitHub.
