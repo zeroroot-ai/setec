@@ -15,6 +15,11 @@
 # Build stage — same toolchain pin as ./Dockerfile (gibson#777).
 # ----------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS builder
+# The golang base image ships GOTOOLCHAIN=local. go.mod names the toolchain
+# (go 1.26.8 after the stdlib fix) and moves faster than the mirrored image tag,
+# so let the Go toolchain download the version go.mod asks for. Same rule as
+# gibson's Dockerfile.
+ENV GOTOOLCHAIN=auto
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -33,6 +38,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 # Payload stage — fetch, verify, extract and prune the kata static release.
 # ----------------------------------------------------------------------------
 FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS payload
+# The golang base image ships GOTOOLCHAIN=local. go.mod names the toolchain
+# (go 1.26.8 after the stdlib fix) and moves faster than the mirrored image tag,
+# so let the Go toolchain download the version go.mod asks for. Same rule as
+# gibson's Dockerfile.
+ENV GOTOOLCHAIN=auto
 # Pinned kata release + digest. To bump: download the new
 # kata-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
 # (and the packer AMI pin if you want the profiles to match).
