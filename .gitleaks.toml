@@ -1,0 +1,22 @@
+# gitleaks configuration for setec. Read by the gitleaks gate in the reusable
+# Go CI (zeroroot-ai/.github, attic#18) and by anyone running `gitleaks dir .`.
+title = "setec secret detection"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures and variable references that are shaped like credentials but are not"
+# Test files and test data carry credential-shaped fixtures on purpose: the
+# redaction, provider-config and secrets packages exist to handle such strings.
+# Non-test code gets no path exemption. A fixture in non-test code carries a
+# same-line `gitleaks:allow` comment instead, so the allow is keyed by content.
+paths = [
+  '''_test\.go$''',
+  '''(^|/)testdata/''',
+  '''\.gitleaks\.toml$''',
+]
+# Shell variable references, e.g. "${STRIPE_SECRET_KEY}", are not secrets.
+regexes = [
+  '''\$\{[A-Z][A-Z0-9_]*\}''',
+]
