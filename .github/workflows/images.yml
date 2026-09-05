@@ -56,7 +56,8 @@ jobs:
   setec:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -76,7 +77,8 @@ jobs:
   setec-node-agent:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -96,7 +98,8 @@ jobs:
   setec-frontend:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -116,7 +119,8 @@ jobs:
   setec-runtime-agent:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -136,7 +140,8 @@ jobs:
   setec-guest-agent:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -156,7 +161,8 @@ jobs:
   setec-installer:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write

@@ -48,7 +48,8 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     uses: ./.github/workflows/images.yml
     permissions:
-      contents: write
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
       packages: write
       id-token: write
       attestations: write
