@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
+// Copyright 2026 Zero Root AI
+
 // ci-sandbox demonstrates running a Node.js test suite from a local project
 // directory inside a Setec-managed Firecracker microVM.
 //
@@ -17,6 +18,7 @@
 // inlines it into the sandbox command as a base64 payload, runs the provided
 // shell command inside the extracted workspace, and exits with the sandbox's
 // exit code.
+
 package main
 
 import (
