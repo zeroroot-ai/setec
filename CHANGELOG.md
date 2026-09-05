@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.113.1](https://github.com/zeroroot-ai/setec/compare/v0.113.0...v0.113.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* **deps:** ast-checks v0.1.2 -&gt; v0.3.0 after the history reset ([#392](https://github.com/zeroroot-ai/setec/issues/392)) ([95ef3d4](https://github.com/zeroroot-ai/setec/commit/95ef3d41b3db41f2a3c0fc8eb4fde0f743aefad8))
+* **deps:** go 1.26.8 to match sdk after its stdlib vulnerability fix ([#396](https://github.com/zeroroot-ai/setec/issues/396)) ([d92233f](https://github.com/zeroroot-ai/setec/commit/d92233f6dd2e774388e2fb07ca687f607b6c55cf))
+* **examples:** pin setec v0.114.0, the pre-reset tags no longer exist ([#399](https://github.com/zeroroot-ai/setec/issues/399)) ([2ba0baf](https://github.com/zeroroot-ai/setec/commit/2ba0bafd082a1819ced0f7e39dd04084ea9f849a))
+* repo-local gitleaks config so test fixtures do not trip the secret gate ([#395](https://github.com/zeroroot-ai/setec/issues/395)) ([9b2d599](https://github.com/zeroroot-ai/setec/commit/9b2d5999cc880f6d18b0011f20f90edf6ee8a233))
+* **rework:** re-pin reusable-image-build to a6f25204, the build job asks contents:read ([#393](https://github.com/zeroroot-ai/setec/issues/393)) ([297d09d](https://github.com/zeroroot-ai/setec/commit/297d09de3029bfc5bd10a6b7d260394ef59882e0))
+
 ## [0.113.0](https://github.com/zeroroot-ai/setec/compare/v0.112.2...v0.113.0) (2026-09-01)
 
 
