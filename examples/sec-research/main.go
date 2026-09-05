@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
+// Copyright 2026 Zero Root AI
+
 // sec-research demonstrates running an AFL++ fuzzer against a local target
 // binary inside a Setec-managed Firecracker microVM. The sandbox is given a
 // hard lifecycle timeout (default 1 hour) and capped CPU/memory; the program
@@ -15,6 +16,7 @@
 //	  --ca=./ca.crt \
 //	  --target=./path/to/target_binary \
 //	  --seed-dir=./seeds
+
 package main
 
 import (

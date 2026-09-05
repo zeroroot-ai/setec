@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
+// Copyright 2026 Zero Root AI
+
 // ai-code-exec demonstrates running LLM-generated Python code inside a
 // Setec-managed Firecracker microVM.
 //
@@ -14,6 +15,7 @@
 // The program reads Python source from stdin, launches a sandbox running
 // `python3 -c <source>`, streams the sandbox's logs to stdout, and exits with
 // the sandbox's exit code.
+
 package main
 
 import (
