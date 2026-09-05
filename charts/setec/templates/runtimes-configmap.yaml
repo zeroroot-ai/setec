@@ -1,0 +1,16 @@
+{{- /* Trigger render-time validation before emitting any runtime manifests. */ -}}
+{{- include "setec.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "setec.fullname" . }}-runtimes
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtimes-config
+data:
+  # runtimes.yaml is consumed by the operator (--runtimes-config) and the
+  # runtime-agent DaemonSet. Its schema matches internal/runtime/config.go:
+  # RuntimeConfig{Runtimes map[string]BackendConfig, Defaults DefaultsConfig}.
+  runtimes.yaml: |
+    {{- include "setec.runtimesConfig" . | nindent 4 }}

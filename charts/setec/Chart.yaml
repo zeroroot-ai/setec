@@ -1,0 +1,38 @@
+apiVersion: v2
+name: setec
+description: |
+  Setec is a Kubernetes-native operator that orchestrates Firecracker microVMs
+  via Kata Containers, exposing a high-level Sandbox custom resource for
+  ephemeral, isolated workload execution.
+type: application
+# version + appVersion are bumped by release-please (extra-files generic
+# updater; the x-release-please-version annotations mark the lines).
+# appVersion keeps the v prefix: image tags are published as vX.Y.Z
+# (setec#131) and the chart defaults every image tag to .Chart.AppVersion.
+version: 0.113.0 # x-release-please-version
+appVersion: "v0.113.0" # x-release-please-version
+# 1.30 is the floor because the Sandbox-namespace host guard is a
+# ValidatingAdmissionPolicy, which reached admissionregistration.k8s.io/v1
+# in 1.30 (setec#159). The guard is what stops a hostNetwork Pod from
+# stepping around the namespace default-deny NetworkPolicy, so it is not
+# an optional extra the chart can render conditionally on the API version.
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/zeroroot-ai/setec
+sources:
+  - https://github.com/zeroroot-ai/setec
+icon: https://raw.githubusercontent.com/zeroroot-ai/setec/main/docs/assets/logo-128.png
+keywords:
+  - microvm
+  - firecracker
+  - kata
+  - sandbox
+  - isolation
+  - operator
+maintainers:
+  - name: The Setec Authors
+    url: https://github.com/zeroroot-ai/setec
+
+# GHCR anchors a package to the repository named here. Without it the chart
+# package links to whichever repo first pushed it.
+annotations:
+  org.opencontainers.image.source: https://github.com/zeroroot-ai/setec

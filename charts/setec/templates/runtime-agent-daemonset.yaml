@@ -1,0 +1,196 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: runtime-agent
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: runtime-agent
+    spec:
+      serviceAccountName: {{ include "setec.fullname" . }}-runtime-agent
+      hostPID: false
+      hostNetwork: false
+      hostIPC: false
+      # Pod-level identity. The image is distroless-nonroot and already
+      # carries USER 65532:65532, so this changes no runtime behaviour —
+      # what it changes is who checks. runAsNonRoot: true makes the kubelet
+      # refuse to start the Pod if a future image (a rebuild on a different
+      # base, a mirror substitution) ships a root entrypoint, instead of
+      # quietly running the agent as root against the API server
+      # (GHSA-p8f8-3qpw-7h93).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # tolerations default to matching every taint: the runtime-agent
+      # needs to run on every node the operator might schedule a Sandbox
+      # onto, and a node it never probed looks uncapable. Values-driven so
+      # a cluster that keeps Sandboxes off, say, control-plane or
+      # infrastructure nodes can stop placing the agent there too — the
+      # capability view only has to cover nodes that can actually host a
+      # Sandbox.
+      tolerations:
+        {{- toYaml .Values.runtimeAgent.tolerations | nindent 8 }}
+      {{- /* The sandbox substrate is x86 only (ADR-0001): every published
+      setec image is single-arch linux/amd64, so the arch selector is
+      hardcoded — an unconstrained DaemonSet ImagePullBackOffs forever on
+      arm64 (Graviton system) nodes and the release never converges
+      (setec#132/#186). Nodes excluded by arch cannot host a Sandbox anyway,
+      so the capability view loses nothing. Extra keys merge from values;
+      kubernetes.io/arch is omitted there so it cannot be overridden or
+      duplicated. */}}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        {{- with omit .Values.runtimeAgent.nodeSelector "kubernetes.io/arch" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: runtime-agent
+          image: "{{ .Values.runtimeAgent.image.repository }}:{{ .Values.runtimeAgent.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.runtimeAgent.image.pullPolicy }}
+          args:
+            - --runtimes-config=/etc/setec/runtimes.yaml
+            - --node-name=$(NODE_NAME)
+            - --metrics-addr=:{{ .Values.runtimeAgent.metricsPort }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.runtimeAgent.metricsPort }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.runtimeAgent.resources | nindent 12 }}
+          securityContext:
+            # Host mounts are read-only but we still drop every capability
+            # we don't need. The probes do not require elevated privileges:
+            # every one of them is an os.Stat against a read-only mount
+            # (see internal/runtimeagent/probe/detector_linux.go), and no
+            # probe opens /dev/kvm or executes a subprocess.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: runtimes-config
+              mountPath: /etc/setec/runtimes.yaml
+              subPath: runtimes.yaml
+              readOnly: true
+            - name: host-dev
+              mountPath: /host/dev
+              readOnly: true
+            - name: host-sys-module
+              mountPath: /host/sys/module
+              readOnly: true
+            - name: host-usr-bin
+              mountPath: /host/usr/bin
+              readOnly: true
+            - name: host-usr-local-bin
+              mountPath: /host/usr/local/bin
+              readOnly: true
+            {{- if .Values.runtimeAgent.mountContainerdConfig }}
+            - name: host-etc-containerd
+              mountPath: /host/etc/containerd
+              readOnly: true
+            {{- end }}
+            {{- if .Values.runtimeAgent.mountK3sContainerdConfig }}
+            - name: host-k3s-containerd
+              mountPath: /host/var/lib/rancher/k3s/agent/etc/containerd
+              readOnly: true
+            {{- end }}
+            {{- range $i, $dir := .Values.runtimeAgent.extraContainerdConfigDirs }}
+            - name: host-extra-containerd-{{ $i }}
+              mountPath: /host{{ $dir }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: runtimes-config
+          configMap:
+            name: {{ include "setec.fullname" . }}-runtimes
+            items:
+              - key: runtimes.yaml
+                path: runtimes.yaml
+        - name: host-dev
+          hostPath:
+            path: /dev
+        - name: host-sys-module
+          hostPath:
+            path: /sys/module
+        - name: host-usr-bin
+          hostPath:
+            path: /usr/bin
+        - name: host-usr-local-bin
+          hostPath:
+            path: /usr/local/bin
+            type: DirectoryOrCreate
+        {{- if .Values.runtimeAgent.mountContainerdConfig }}
+        - name: host-etc-containerd
+          hostPath:
+            path: /etc/containerd
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- /* k3s/RKE2 keep the containerd config outside /etc/containerd.
+        The kata probes read the runtime-handler registrations from it, so a
+        k3s node that does not mount this advertises no kata capability at
+        all (setec#243). DirectoryOrCreate rather than Directory: the value
+        is only turned on for k3s clusters, and a node mid-install may not
+        have rendered the directory yet — a missing path with type Directory
+        would leave the DaemonSet Pod stuck instead of probing. */}}
+        {{- if .Values.runtimeAgent.mountK3sContainerdConfig }}
+        - name: host-k3s-containerd
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/etc/containerd
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- /* containerd's `imports` may name any path, and the probe can only
+        read what is mounted (setec#281). /opt/kata/containerd is the default
+        because that is where kata-deploy 3.28+ writes its drop-in and then
+        imports it from /etc/containerd/config.toml — without this mount the
+        probe sees a config.toml registering only runc and every kata-deploy
+        node is labelled not kata-capable while running kata perfectly.
+        DirectoryOrCreate for the same reason as the k3s mount above: a node
+        without the path must probe, not hang in ContainerCreating. */}}
+        {{- range $i, $dir := .Values.runtimeAgent.extraContainerdConfigDirs }}
+        - name: host-extra-containerd-{{ $i }}
+          hostPath:
+            path: {{ $dir | quote }}
+            type: DirectoryOrCreate
+        {{- end }}
+      terminationGracePeriodSeconds: 10

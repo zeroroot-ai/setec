@@ -1,0 +1,483 @@
+/*
+Copyright 2026 The Setec Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package podspec contains the pure translator that turns a Sandbox custom
+// resource into the corev1.Pod the controller will create. The translator is
+// deliberately side-effect free so that every mapping rule can be verified via
+// table-driven unit tests without a running Kubernetes API server.
+package podspec
+
+import (
+	"errors"
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
+)
+
+const (
+	// PodNameSuffix is appended to the Sandbox name to derive the Pod name
+	// (e.g. Sandbox "foo" → Pod "foo-vm").
+	PodNameSuffix = "-vm"
+
+	// SandboxLabelKey is the label applied to the owned Pod whose value is
+	// the owning Sandbox's name. Callers (e.g. the controller) use this label
+	// for owner-ref indexing and to filter events.
+	SandboxLabelKey = "setec.zeroroot.ai/sandbox"
+
+	// ContainerName is the name of the single workload container inside the
+	// Pod. Kept as a constant so tests and the status reconciler can agree.
+	ContainerName = "workload"
+
+	// sandboxKind is the literal kind used in the generated OwnerReference.
+	// The v1alpha1 types intentionally do not register a String()-like
+	// helper, so we centralize the literal here.
+	sandboxKind = "Sandbox"
+)
+
+// Errors returned by Build for structural problems the OpenAPI schema cannot
+// express (e.g. a caller hand-constructs a Sandbox in Go and skips the API
+// server's validation entirely).
+var (
+	// ErrNilSandbox is returned when Build is invoked with a nil Sandbox.
+	ErrNilSandbox = errors.New("podspec: sandbox is nil")
+
+	// ErrMissingName is returned when Sandbox.metadata.name is empty.
+	ErrMissingName = errors.New("podspec: sandbox.metadata.name is required")
+
+	// ErrMissingImage is returned when Sandbox.spec.image is empty.
+	ErrMissingImage = errors.New("podspec: sandbox.spec.image is required")
+
+	// ErrMissingCommand is returned when Sandbox.spec.command is empty.
+	ErrMissingCommand = errors.New("podspec: sandbox.spec.command is required and must have at least one entry")
+
+	// ErrInvalidVCPU is returned when Sandbox.spec.resources.vcpu is less
+	// than 1. The CRD validation caps the upper bound; we only double-check
+	// the structural floor here.
+	ErrInvalidVCPU = errors.New("podspec: sandbox.spec.resources.vcpu must be >= 1")
+
+	// ErrInvalidMemory is returned when Sandbox.spec.resources.memory is
+	// zero or negative.
+	ErrInvalidMemory = errors.New("podspec: sandbox.spec.resources.memory must be > 0")
+
+	// ErrMissingRuntimeClass is returned when Build is invoked with an empty
+	// runtimeClassName. A Sandbox Pod without a runtime class would fall
+	// through to the default container runtime, defeating the whole point
+	// of Setec.
+	ErrMissingRuntimeClass = errors.New("podspec: runtimeClassName is required")
+)
+
+// BuildOptions carries optional build-time knobs that are additive to
+// the Phase 1 Build signature. Nil / zero-valued fields preserve
+// Phase 1/2 behaviour.
+type BuildOptions struct {
+	// NodeName, when non-empty, is written into Pod.Spec.NodeName so
+	// the scheduler pins the Pod to a specific node. Used by the
+	// snapshot-restore flow which must land on the node holding the
+	// snapshot state files.
+	NodeName string
+
+	// RuntimeSelection, when non-nil, overrides the runtimeClassName
+	// argument and additionally injects NodeAffinity, Overhead, and any
+	// dispatcher-specific pod mutations.  Applied as the last step in
+	// BuildWithOptions so dispatchers see the fully-assembled pod.
+	RuntimeSelection *runtimepkg.Selection
+
+	// ResolverIPs are the DNS servers the Sandbox Pod is configured to
+	// use. They are written into spec.dnsConfig.nameservers with
+	// dnsPolicy None, so the workload resolves names through these
+	// addresses instead of cluster DNS and cannot look up in-cluster
+	// Service names. The controller passes the same list it gives
+	// netpol.Config, so the Pod's resolver and the NetworkPolicy's DNS
+	// rule can never disagree.
+	//
+	// Empty leaves the Pod on the cluster default resolver, which is
+	// only appropriate for tests: the operator refuses to start without
+	// a resolver list.
+	ResolverIPs []string
+
+	// Requests, when non-nil, is the SandboxClass's scheduler
+	// reservation (SandboxClassSpec.Requests). Each set field replaces
+	// the matching request on the workload container, bounded by the
+	// Sandbox's limit for that resource. Nil keeps requests equal to
+	// limits.
+	Requests *setecv1alpha1.ResourceRequests
+}
+
+// Hardening constants applied to every Sandbox Pod.
+const (
+	// sandboxUID and sandboxGID are the unprivileged user and group the
+	// workload container runs as. 65532 is the conventional
+	// "nonroot" ID used by distroless base images.
+	sandboxUID int64 = 65532
+	sandboxGID int64 = 65532
+
+	// scratchVolumeName is the writable scratch mount that makes a
+	// read-only root filesystem usable. Tools that expect to write
+	// temporary files get this instead of a writable root.
+	scratchVolumeName = "scratch"
+
+	// scratchMountPath is where the scratch volume is mounted.
+	scratchMountPath = "/tmp"
+
+	// WorkspaceVolumeName is the Pod volume name for the durable
+	// per-session workspace PVC (session lifecycle only, ADR-0006/0007).
+	WorkspaceVolumeName = "workspace"
+
+	// WorkspaceMountPath is where the session workspace is mounted
+	// inside the microVM. The workload's durable state (worktree,
+	// corpus, findings) lives here and survives VM restart and node
+	// loss because the backing PVC re-attaches.
+	WorkspaceMountPath = "/workspace"
+
+	// WorkspacePVCSuffix is appended to the Sandbox name to derive the
+	// workspace PVC name (e.g. Sandbox "foo" → PVC "foo-workspace").
+	WorkspacePVCSuffix = "-workspace"
+)
+
+// WorkspacePVCName derives the deterministic name of the workspace PVC
+// owned by the named session Sandbox. Centralised so the controller
+// (which creates and deletes the claim) and the builder (which mounts
+// it) can never disagree.
+func WorkspacePVCName(sandboxName string) string {
+	return sandboxName + WorkspacePVCSuffix
+}
+
+// sandboxCapabilities are the Linux capabilities added back after
+// dropping ALL.
+//
+// NET_RAW and NET_ADMIN are required by raw-socket network tooling: with
+// them dropped, half-open port scanning and packet crafting stop working
+// and the product cannot do its job. Per ADR-0052 the containment
+// boundary for untrusted execution is the microVM, not the container
+// capability set, so re-adding these two costs nothing that the guest
+// boundary was not already carrying. Everything else stays dropped.
+var sandboxCapabilities = []corev1.Capability{"NET_RAW", "NET_ADMIN"}
+
+// Build transforms a Sandbox custom resource into the corev1.Pod the
+// controller must create. The function is pure: it performs no I/O, makes no
+// Kubernetes API calls, and does not read or mutate any global state.
+//
+// runtimeClassName is passed as an argument rather than hard-coded so that a
+// cluster operator can rename the RuntimeClass (e.g. "kata-fc" → "kata-qemu")
+// without a code change.
+//
+// The returned Pod has:
+//   - metadata.name = "<sandbox-name>-vm"
+//   - metadata.namespace mirrors the Sandbox namespace
+//   - metadata.labels includes setec.zeroroot.ai/sandbox=<sandbox-name>
+//   - metadata.ownerReferences contains a single controller-owning reference
+//     back to the Sandbox with BlockOwnerDeletion=true
+//   - spec.runtimeClassName = runtimeClassName
+//   - spec.restartPolicy = Never (Sandboxes are single-shot)
+//   - spec.containers has exactly one entry named "workload" whose image,
+//     command, env, and resources mirror the Sandbox spec
+//
+// Build returns a wrapped error if the Sandbox is structurally invalid in
+// ways the OpenAPI schema cannot express. Callers should propagate the error;
+// the controller records it as an Event and requeues.
+//
+// Build is preserved with its Phase 1 signature for back-compat.
+// Phase 3 callers that need node pinning go through BuildWithOptions.
+func Build(sb *setecv1alpha1.Sandbox, runtimeClassName string) (*corev1.Pod, error) {
+	return BuildWithOptions(sb, runtimeClassName, BuildOptions{})
+}
+
+// BuildWithOptions is the extended Phase 3 entry point. Build is a
+// thin wrapper that passes the zero-value options, so existing
+// Phase 1/2 callers are unaffected.
+//
+// When opts.RuntimeSelection is set it is applied LAST so the dispatcher's
+// MutatePod sees the fully-constructed pod. The runtimeClassName argument is
+// used as the initial runtime class; RuntimeSelection.Dispatcher.RuntimeClassName()
+// overrides it when non-empty.
+func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts BuildOptions) (*corev1.Pod, error) {
+	// When a RuntimeSelection is provided and its Dispatcher returns a non-empty
+	// RuntimeClassName, that value takes precedence over the runtimeClassName arg.
+	effectiveRCName := runtimeClassName
+	if opts.RuntimeSelection != nil {
+		if rcn := opts.RuntimeSelection.Dispatcher.RuntimeClassName(); rcn != "" {
+			effectiveRCName = rcn
+		}
+	}
+
+	if err := validate(sb, effectiveRCName); err != nil {
+		return nil, err
+	}
+
+	podName := sb.Name + PodNameSuffix
+
+	labels := map[string]string{
+		SandboxLabelKey: sb.Name,
+	}
+
+	ctrl, bod := true, true
+	ownerRef := metav1.OwnerReference{
+		APIVersion:         setecv1alpha1.GroupVersion.String(),
+		Kind:               sandboxKind,
+		Name:               sb.Name,
+		UID:                sb.UID,
+		Controller:         &ctrl,
+		BlockOwnerDeletion: &bod,
+	}
+
+	container := corev1.Container{
+		Name:      ContainerName,
+		Image:     sb.Spec.Image,
+		Command:   append([]string(nil), sb.Spec.Command...),
+		Env:       append([]corev1.EnvVar(nil), sb.Spec.Env...),
+		Resources: buildResourceRequirements(sb.Spec.Resources, opts.Requests),
+		// A read-only root filesystem needs somewhere to write, or every
+		// tool that touches a temporary file fails.
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      scratchVolumeName,
+			MountPath: scratchMountPath,
+		}},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: new(false),
+			Privileged:               new(false),
+			ReadOnlyRootFilesystem:   new(true),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  append([]corev1.Capability(nil), sandboxCapabilities...),
+			},
+		},
+	}
+
+	rcName := effectiveRCName
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            podName,
+			Namespace:       sb.Namespace,
+			Labels:          labels,
+			OwnerReferences: []metav1.OwnerReference{ownerRef},
+		},
+		Spec: corev1.PodSpec{
+			RuntimeClassName: &rcName,
+			RestartPolicy:    corev1.RestartPolicyNever,
+			Containers:       []corev1.Container{container},
+
+			// A Sandbox never calls the Kubernetes API. Mounting the
+			// namespace's default ServiceAccount token would hand the
+			// workload a cluster credential it has no use for, so the
+			// projection is switched off rather than merely unused.
+			AutomountServiceAccountToken: new(false),
+
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   new(true),
+				RunAsUser:      new(sandboxUID),
+				RunAsGroup:     new(sandboxGID),
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			},
+
+			Volumes: []corev1.Volume{{
+				Name:         scratchVolumeName,
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			}},
+		},
+	}
+
+	// Session lifecycle: mount the durable workspace PVC at /workspace.
+	// The controller creates the claim before the Pod, so the mount can
+	// reference it by its deterministic name. Ephemeral Sandboxes get no
+	// workspace volume — their Pod spec is byte-for-byte what it was
+	// before the lifecycle field existed.
+	if sb.Spec.IsSession() {
+		// A freshly provisioned PVC is root-owned; the workload runs as
+		// the unprivileged sandbox user. FSGroup makes the kubelet chown
+		// the volume on attach so /workspace is writable. Set only for
+		// sessions to keep the ephemeral Pod spec unchanged.
+		pod.Spec.SecurityContext.FSGroup = new(sandboxGID)
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: WorkspaceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: WorkspacePVCName(sb.Name),
+				},
+			},
+		})
+		c := &pod.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name:      WorkspaceVolumeName,
+			MountPath: WorkspaceMountPath,
+		})
+		// Root the session in its durable workspace. This is what makes
+		// SandboxService.Exec land there: the container runtime's exec
+		// primitive takes no working directory, so an exec'd command
+		// inherits the container's — and a session's turns must all
+		// start in the same place their predecessors left work behind.
+		// Ephemeral Sandboxes keep the image's own workdir.
+		c.WorkingDir = WorkspaceMountPath
+	}
+
+	// Resolve names through the operator-configured resolvers rather than
+	// cluster DNS. This is half of the containment pair: the matching
+	// NetworkPolicy permits port 53 only to these same addresses, so the
+	// workload can neither query nor reach cluster DNS and cannot
+	// enumerate in-cluster Services by name.
+	if len(opts.ResolverIPs) > 0 {
+		pod.Spec.DNSPolicy = corev1.DNSNone
+		pod.Spec.DNSConfig = &corev1.PodDNSConfig{
+			Nameservers: append([]string(nil), opts.ResolverIPs...),
+		}
+	}
+
+	if opts.NodeName != "" {
+		pod.Spec.NodeName = opts.NodeName
+	}
+
+	// Apply the RuntimeSelection LAST so the dispatcher's MutatePod sees the
+	// fully-assembled pod (per task-12 requirement: option applied last in pipeline).
+	if opts.RuntimeSelection != nil {
+		if err := applyRuntimeSelection(pod, opts.RuntimeSelection); err != nil {
+			return nil, fmt.Errorf("podspec: apply runtime selection: %w", err)
+		}
+	}
+
+	return pod, nil
+}
+
+// applyRuntimeSelection applies the dispatcher-derived fields to pod:
+//  1. RuntimeClassName is already set above (before MutatePod needs it).
+//  2. NodeAffinity terms from the dispatcher are MERGED into any existing
+//     required affinity terms — not replaced — so caller-provided affinity
+//     is preserved.
+//  3. Overhead from the dispatcher is set when non-empty.
+//  4. MutatePod is called last so dispatchers can see (and depend on) any
+//     of the above values.
+//
+// The params map is extracted from sandbox.Spec if SandboxClass runtime.Params
+// were set; since the builder does not have access to the SandboxClass we
+// pass nil here — callers that need param propagation should invoke
+// sel.Dispatcher.MutatePod directly after BuildWithOptions.
+func applyRuntimeSelection(pod *corev1.Pod, sel *runtimepkg.Selection) error {
+	// Merge NodeAffinity required terms.
+	dispatcherAffinity := sel.Dispatcher.NodeAffinity()
+	if dispatcherAffinity != nil &&
+		dispatcherAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+		if pod.Spec.Affinity == nil {
+			pod.Spec.Affinity = &corev1.Affinity{}
+		}
+		if pod.Spec.Affinity.NodeAffinity == nil {
+			pod.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+		}
+		if pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+			pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+		}
+		// Merge: append dispatcher terms to any existing terms (do not replace).
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
+			pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+			dispatcherAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms...,
+		)
+	}
+
+	// Set Overhead when the dispatcher provides it.  Note: Kubernetes validates
+	// that Pod.Spec.Overhead exactly matches the RuntimeClass's overhead field.
+	// The RuntimeClass must therefore already declare the same overhead values.
+	// In clusters where the RuntimeClass does not define overhead (e.g. dev
+	// envtest environments), callers should pass an empty BackendConfig.DefaultOverhead
+	// so the dispatcher returns nil here.
+	if overhead := sel.Dispatcher.Overhead(); len(overhead) > 0 {
+		pod.Spec.Overhead = overhead.DeepCopy()
+	}
+
+	// MutatePod is called last. The params map is nil here because the builder
+	// does not carry SandboxClass.Spec.Runtime.Params; callers needing param
+	// propagation should set them via a post-build MutatePod call or by passing
+	// them through a future BuildOptions extension.
+	if err := sel.Dispatcher.MutatePod(pod, nil); err != nil {
+		return fmt.Errorf("dispatcher %q MutatePod: %w", sel.Backend, err)
+	}
+
+	return nil
+}
+
+// WithRuntimeSelection returns a BuildOptions with RuntimeSelection set to sel.
+// It is a convenience constructor for callers that use the functional-option
+// style; callers that already have a BuildOptions struct may set the field directly.
+func WithRuntimeSelection(sel *runtimepkg.Selection) BuildOptions {
+	return BuildOptions{RuntimeSelection: sel}
+}
+
+// validate performs the structural checks that the OpenAPI schema cannot
+// express. Returning a structured error keeps Build side-effect free.
+func validate(sb *setecv1alpha1.Sandbox, runtimeClassName string) error {
+	if sb == nil {
+		return ErrNilSandbox
+	}
+	if sb.Name == "" {
+		return ErrMissingName
+	}
+	if runtimeClassName == "" {
+		return ErrMissingRuntimeClass
+	}
+	if sb.Spec.Image == "" {
+		return ErrMissingImage
+	}
+	if len(sb.Spec.Command) == 0 {
+		return ErrMissingCommand
+	}
+	if sb.Spec.Resources.VCPU < 1 {
+		return fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
+	}
+	if sb.Spec.Resources.Memory.Sign() <= 0 {
+		return fmt.Errorf("%w: got %q", ErrInvalidMemory, sb.Spec.Resources.Memory.String())
+	}
+	return nil
+}
+
+// buildResourceRequirements maps the Sandbox resources block to the
+// workload container's limits, and derives its requests. With no class
+// reservation the requests equal the limits, so the kubelet guarantees
+// the microVM exactly what was asked for. A class reservation replaces
+// the request for each resource it names, bounded by that resource's
+// limit: a request above its limit is an invalid Pod, so the
+// reservation can only ever lower what the scheduler sets aside.
+func buildResourceRequirements(r setecv1alpha1.Resources, req *setecv1alpha1.ResourceRequests) corev1.ResourceRequirements {
+	cpu := *resource.NewQuantity(int64(r.VCPU), resource.DecimalSI)
+	mem := r.Memory.DeepCopy()
+
+	limits := corev1.ResourceList{
+		corev1.ResourceCPU:    cpu,
+		corev1.ResourceMemory: mem,
+	}
+	requests := limits.DeepCopy()
+	if req != nil {
+		if req.CPU != nil {
+			requests[corev1.ResourceCPU] = minQuantity(*req.CPU, cpu)
+		}
+		if req.Memory != nil {
+			requests[corev1.ResourceMemory] = minQuantity(*req.Memory, mem)
+		}
+	}
+
+	return corev1.ResourceRequirements{
+		Requests: requests,
+		Limits:   limits,
+	}
+}
+
+// minQuantity returns a copy of the smaller of a and b.
+func minQuantity(a, b resource.Quantity) resource.Quantity {
+	if a.Cmp(b) > 0 {
+		return b.DeepCopy()
+	}
+	return a.DeepCopy()
+}

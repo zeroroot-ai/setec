@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# PrometheusRule CR defining the default Setec alert set. Apply with:
+#
+#   kubectl apply -f alerts.yaml
+#
+# Requires the Prometheus Operator CRDs. Each alert points at the
+# corresponding runbook section in docs/observability.md.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: setec-operator-alerts
+  namespace: setec-system
+  labels:
+    app.kubernetes.io/name: setec
+    app.kubernetes.io/component: alerting-rules
+    prometheus: main
+    role: alert-rules
+spec:
+  groups:
+    - name: setec.availability
+      interval: 30s
+      rules:
+        - alert: SetecOperatorDown
+          expr: absent(up{job=~".*setec.*operator.*"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+            component: operator
+          annotations:
+            summary: "Setec operator is not reporting"
+            description: |
+              No Setec operator pod has been up for 5 minutes. Sandbox
+              reconciliation and admission will drift. Check the deployment
+              in namespace setec-system.
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
+        - alert: SetecNodeAgentDown
+          expr: absent_over_time(up{job=~".*setec.*node-agent.*"}[10m])
+          for: 10m
+          labels:
+            severity: warning
+            component: node-agent
+          annotations:
+            summary: "Setec node-agent missing"
+            description: |
+              No node-agent has reported up in the last 10 minutes, or at
+              least one node-agent pod is absent. Pool management on that
+              node is stalled.
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
+    - name: setec.slo
+      interval: 30s
+      rules:
+        - alert: SetecColdStartSLOBreach
+          expr: setec:sandbox_cold_start_p95 > 1
+          for: 10m
+          labels:
+            severity: warning
+            component: sandbox
+          annotations:
+            summary: "Cold-start P95 above 1s SLO"
+            description: |
+              The 95th-percentile cold-start time for sandbox class
+              {{ $labels.sandbox_class }} has been above one second for ten
+              minutes. Check pool fill and node-level pressure.
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
+        - alert: SetecSnapshotFailureHigh
+          expr: |
+            sum by (operation) (rate(setec_snapshot_duration_seconds_count{operation=~"create|restore"}[10m]))
+              > 0
+            and
+            (
+              sum by (operation) (rate(setec_snapshot_duration_seconds_count{operation=~"create|restore", result="failure"}[10m]))
+              /
+              clamp_min(
+                sum by (operation) (rate(setec_snapshot_duration_seconds_count{operation=~"create|restore"}[10m])),
+                0.0001
+              )
+            ) > 0.05
+          for: 10m
+          labels:
+            severity: critical
+            component: snapshot
+          annotations:
+            summary: "Snapshot {{ $labels.operation }} failure rate above 5%"
+            description: |
+              More than five percent of snapshot {{ $labels.operation }}
+              operations have failed over the last ten minutes. Inspect the
+              node-agent and storage backend logs.
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"
+    - name: setec.pool
+      interval: 30s
+      rules:
+        - alert: SetecPoolUnderfilled
+          expr: |
+            sum by (node, sandbox_class) (setec_prewarm_pool_entries)
+              <
+            on (sandbox_class) group_left() (
+              max by (sandbox_class) (setec_sandbox_class_prewarm_target)
+            )
+          for: 10m
+          labels:
+            severity: warning
+            component: pool
+          annotations:
+            summary: "Pre-warm pool underfilled for {{ $labels.sandbox_class }} on {{ $labels.node }}"
+            description: |
+              The pre-warm pool for sandbox class {{ $labels.sandbox_class }}
+              on node {{ $labels.node }} has fewer entries than its target
+              for ten minutes. Check node-agent logs and storage pressure.
+            runbook_url: "https://github.com/zeroroot-ai/setec/blob/main/docs/observability.md#alerts"

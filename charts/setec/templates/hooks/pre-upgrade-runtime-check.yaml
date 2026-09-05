@@ -1,0 +1,194 @@
+{{- /*
+Helm pre-upgrade warn-only Job that lists existing SandboxClass objects
+and logs a warning for each one referencing a backend (or legacy
+spec.vmm) that is about to be disabled by this upgrade (REQ-4.4).
+
+The Job is warn-only: it always exits 0 and never mutates CRs. Operators
+see warnings in `helm upgrade` output so they can decide whether to
+reconcile classes manually before rolling forward.
+*/ -}}
+{{- $kubectlImage := "" -}}
+{{- if and (hasKey .Values "kubectl") (kindIs "map" .Values.kubectl) -}}
+  {{- if hasKey .Values.kubectl "image" -}}
+    {{- $kubectlImage = .Values.kubectl.image -}}
+  {{- end -}}
+{{- end -}}
+{{- /* Default kubectl image: the org-maintained GHCR mirror. The previous
+default (docker.io/bitnami/kubectl:1.29) was retired from Docker Hub with
+the Bitnami catalog shutdown, which turned this warn-only hook into a
+hard ErrImagePull failure on every upgrade (setec#129). */ -}}
+{{- $kubectlImage = $kubectlImage | default "ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4" -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preupgrade-hook
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preupgrade-hook
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: ["setec.zeroroot.ai"]
+    resources: ["sandboxclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preupgrade-hook
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preupgrade-hook
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+data:
+  # Space-separated list of backend names that are enabled AFTER this upgrade.
+  enabled-backends: {{- range $name, $cfg := .Values.runtimes }}{{- if $cfg.enabled }} {{ $name }}{{- end }}{{- end }}
+  check.sh: |
+    #!/bin/sh
+    set -u
+    enabled="${ENABLED_BACKENDS:-}"
+    echo "pre-upgrade runtime check: enabled backends after upgrade: [${enabled# }]"
+    # List SandboxClass names, then inspect each one.
+    names="$(kubectl get sandboxclasses.setec.zeroroot.ai -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+    if [ -z "${names}" ]; then
+      echo "pre-upgrade runtime check: no SandboxClass objects found; nothing to warn about."
+      exit 0
+    fi
+    warnings=0
+    for name in ${names}; do
+      # Prefer the new spec.runtime.backend field; fall back to the legacy spec.vmm value.
+      backend="$(kubectl get sandboxclass.setec.zeroroot.ai "${name}" -o jsonpath='{.spec.runtime.backend}' 2>/dev/null || true)"
+      if [ -z "${backend}" ]; then
+        vmm="$(kubectl get sandboxclass.setec.zeroroot.ai "${name}" -o jsonpath='{.spec.vmm}' 2>/dev/null || true)"
+        case "${vmm}" in
+          firecracker|Firecracker) backend="kata-fc" ;;
+          qemu|QEMU)               backend="kata-qemu" ;;
+          "")                       backend="" ;;
+          *)                        backend="${vmm}" ;;
+        esac
+      fi
+      if [ -z "${backend}" ]; then
+        continue
+      fi
+      # Check membership in the space-padded enabled list.
+      case " ${enabled} " in
+        *" ${backend} "*)
+          # Backend still enabled — no warning.
+          ;;
+        *)
+          echo "warning: SandboxClass ${name} references backend ${backend} which is being disabled in this upgrade."
+          warnings=$((warnings + 1))
+          ;;
+      esac
+    done
+    if [ "${warnings}" -gt 0 ]; then
+      echo "pre-upgrade runtime check: ${warnings} SandboxClass object(s) reference soon-to-be-disabled backends. Review and re-point them after the upgrade; existing Running Sandboxes are NOT affected by this hook."
+    else
+      echo "pre-upgrade runtime check: all existing SandboxClass objects reference backends that remain enabled."
+    fi
+    # Warn-only — always exit success.
+    exit 0
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preupgrade-hook
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed,before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 60
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: preupgrade-hook
+    spec:
+      serviceAccountName: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runtime-check
+          image: {{ $kubectlImage | quote }}
+          command: ["/bin/sh", "/scripts/check.sh"]
+          env:
+            - name: ENABLED_BACKENDS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+                  key: enabled-backends
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "setec.fullname" . }}-preupgrade-runtime-check
+            items:
+              - key: check.sh
+                path: check.sh
+                mode: 0755

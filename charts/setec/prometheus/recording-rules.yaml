@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# PrometheusRule CR defining recording rules that roll up Setec's raw
+# histograms/counters into stable per-class aggregates. Apply with:
+#
+#   kubectl apply -f recording-rules.yaml
+#
+# Requires the Prometheus Operator CRDs.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: setec-operator-recording
+  namespace: setec-system
+  labels:
+    app.kubernetes.io/name: setec
+    app.kubernetes.io/component: recording-rules
+    prometheus: main
+    role: recording-rules
+spec:
+  groups:
+    - name: setec.sandbox.latency
+      interval: 30s
+      rules:
+        - record: setec:sandbox_cold_start_p50
+          expr: |
+            histogram_quantile(0.5,
+              sum by (sandbox_class, le) (
+                rate(setec_sandbox_cold_start_seconds_bucket[5m])
+              )
+            )
+        - record: setec:sandbox_cold_start_p95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (sandbox_class, le) (
+                rate(setec_sandbox_cold_start_seconds_bucket[5m])
+              )
+            )
+        - record: setec:sandbox_cold_start_p99
+          expr: |
+            histogram_quantile(0.99,
+              sum by (sandbox_class, le) (
+                rate(setec_sandbox_cold_start_seconds_bucket[5m])
+              )
+            )
+    - name: setec.sandbox.errors
+      interval: 30s
+      rules:
+        - record: setec:sandbox_error_rate
+          expr: |
+            sum by (sandbox_class) (rate(setec_sandbox_total{phase="Failed"}[5m]))
+              /
+            clamp_min(
+              sum by (sandbox_class) (rate(setec_sandbox_total[5m])),
+              0.001
+            )
+    - name: setec.snapshot.latency
+      interval: 30s
+      rules:
+        - record: setec:snapshot_duration_p95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (operation, sandbox_class, le) (
+                rate(setec_snapshot_duration_seconds_bucket[5m])
+              )
+            )

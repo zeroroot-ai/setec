@@ -1,0 +1,210 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Operational overview for the Setec operator, webhook, frontend, and node-agent. Ships with the Helm chart under charts/setec/grafana/.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "title": "Setec docs",
+      "type": "link",
+      "url": "https://github.com/zeroroot-ai/setec/tree/main/docs"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active sandboxes",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 100},
+            {"color": "red", "value": 500}
+          ]},
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(setec_sandbox_active{namespace=~\"$namespace\"})",
+          "legendFormat": "active"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sandbox phase transitions (per second)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0},
+      "options": {"legend": {"displayMode": "table", "placement": "right"}},
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (phase) (rate(setec_sandbox_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Cold-start latency (heatmap)",
+      "type": "heatmap",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "options": {"calculate": false, "cellGap": 1, "yAxis": {"unit": "s"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (le) (rate(setec_sandbox_cold_start_seconds_bucket{namespace=~\"$namespace\"}[5m]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cold-start P50 / P95 / P99",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(setec_sandbox_cold_start_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "P50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(setec_sandbox_cold_start_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(setec_sandbox_cold_start_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "P99"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Snapshot duration by operation",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (operation, le) (rate(setec_snapshot_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{operation}} P95"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Pre-warm pool entries per node / class",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node, sandbox_class) (setec_prewarm_pool_entries{namespace=~\"$namespace\"})",
+          "legendFormat": "{{node}} / {{sandbox_class}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Operator + node-agent up-ness",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (pod) (up{namespace=~\"$namespace\", job=~\".*setec.*\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "gRPC frontend request rate",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (grpc_method) (rate(grpc_server_handled_total{namespace=~\"$namespace\", grpc_service=\"setec.v1alpha1.SandboxService\"}[5m]))",
+          "legendFormat": "{{grpc_method}}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["setec", "microvm", "kubernetes"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "current": {"selected": false, "text": "Prometheus", "value": "Prometheus"}
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "query": "label_values(setec_sandbox_active, namespace)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {"selected": false, "text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Setec Operator",
+  "uid": "setec-operator",
+  "version": 1,
+  "weekStart": ""
+}

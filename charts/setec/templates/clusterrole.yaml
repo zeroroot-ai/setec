@@ -1,0 +1,184 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-manager
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # controller-runtime's event recorder writes through the events.k8s.io
+  # broadcaster, not the core group. Without this rule every Sandbox event
+  # is rejected ("events.events.k8s.io is forbidden") and the operator's
+  # own diagnostics never reach `kubectl describe`.
+  - apiGroups:
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # Node reads are cluster-wide; `watch` powers the checkpoint-on-drain
+  # trigger (setec#194): a cordoned node fans out reconciles to the
+  # session Sandboxes running on it.
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # Pod READS are cluster-wide because controller-runtime's cache LISTs and
+  # WATCHes Pods across every namespace. Pod WRITES are not here: they live
+  # in the -sandbox-namespace ClusterRole, bound per namespace. See
+  # templates/sandbox-namespace-rbac.yaml for why that split exists.
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  # Session lifecycle: workspace PVC READS are cluster-wide for the same
+  # controller-runtime cache reason as Pods. Writes live in the
+  # -sandbox-namespace ClusterRole.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+  # watch is not optional alongside list: the manager's cache establishes a
+  # WATCH for every typed object the controller reads, so without it the
+  # RuntimeClass informer retries forever and logs
+  # `Failed to watch *v1.RuntimeClass ... forbidden` on a loop (setec#230).
+  - apiGroups:
+      - node.k8s.io
+    resources:
+      - runtimeclasses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxes
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxes/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxes/status
+    verbs:
+      - get
+      - patch
+      - update
+  # Phase 2: cluster-scoped SandboxClass read.
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxclasses
+    verbs:
+      - get
+      - list
+      - watch
+  # ADR-0005 invariant gate: the class controller stamps the loud
+  # UnverifiedRestoresAllowed condition on the class status.
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - sandboxclasses/status
+    verbs:
+      - get
+      - patch
+      - update
+  # Phase 2: multi-tenancy namespace label lookups.
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  # Phase 2: NetworkPolicy reads are cluster-wide for the same cache
+  # reason as Pods. Writes are in the -sandbox-namespace ClusterRole.
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - get
+      - list
+      - watch
+{{- if .Values.webhook.enabled }}
+  # Phase 2 webhook: read ValidatingWebhookConfiguration for self-inspection.
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - validatingwebhookconfigurations
+    verbs:
+      - get
+      - list
+      - watch
+{{- end }}
+{{- if .Values.snapshots.enabled }}
+  # Phase 3: Snapshot CRD lifecycle.
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - snapshots
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - snapshots/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - setec.zeroroot.ai
+    resources:
+      - snapshots/finalizers
+    verbs:
+      - update
+  # Phase 3: per-tenant quota admission reads ResourceQuotas.
+  - apiGroups:
+      - ""
+    resources:
+      - resourcequotas
+    verbs:
+      - get
+      - list
+      - watch
+{{- end }}

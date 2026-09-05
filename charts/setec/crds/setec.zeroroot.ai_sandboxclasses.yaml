@@ -1,0 +1,577 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: sandboxclasses.setec.zeroroot.ai
+spec:
+  group: setec.zeroroot.ai
+  names:
+    kind: SandboxClass
+    listKind: SandboxClassList
+    plural: sandboxclasses
+    shortNames:
+    - sbxcls
+    singular: sandboxclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vmm
+      name: VMM
+      type: string
+    - jsonPath: .spec.default
+      name: Default
+      type: boolean
+    - jsonPath: .spec.maxResources.vcpu
+      name: Max-VCPU
+      priority: 1
+      type: integer
+    - jsonPath: .spec.maxResources.memory
+      name: Max-Memory
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SandboxClass is a cluster-scoped, administrator-authored resource that
+          publishes a named, pre-approved sandbox configuration. Tenant users
+          reference a SandboxClass by name in their Sandbox manifests; the
+          operator's validating webhook enforces that the Sandbox fits within the
+          class's constraints.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the constraints and defaults of the class.
+            properties:
+              allowedNetworkModes:
+                description: |-
+                  AllowedNetworkModes enumerates the Sandbox.network.mode values
+                  tenants may request under this class. Empty list means all modes
+                  are allowed (back-compat: Phase 1 behavior).
+                items:
+                  description: |-
+                    NetworkMode selects the egress posture applied to a Sandbox microVM.
+
+                    Every mode produces a NetworkPolicy. There is no mode that means "emit no
+                    policy": the operator always writes one, and the reconciler refuses to
+                    start the microVM until it is accepted by the API server.
+                  enum:
+                  - external-only
+                  - egress-allow-list
+                  - none
+                  type: string
+                type: array
+              default:
+                description: |-
+                  Default marks this SandboxClass as the cluster-wide default. Only
+                  one SandboxClass may carry this flag set to true; multiple defaults
+                  produce a startup warning and cause the resolver to reject
+                  defaulting until the ambiguity is resolved.
+                type: boolean
+              defaultEgressAllow:
+                description: |-
+                  DefaultEgressAllow is the class-level egress allowlist applied
+                  when DefaultNetworkMode is "egress-allow-list" and a Sandbox does
+                  not declare its own network block. It lets an administrator open a
+                  small, audited set of destinations (e.g. a package mirror) for
+                  every Sandbox in the class while keeping everything else denied.
+                  Ignored unless DefaultNetworkMode is "egress-allow-list".
+                items:
+                  description: |-
+                    NetworkAllow describes a single permitted egress destination when
+                    NetworkMode is egress-allow-list.
+                  properties:
+                    cidr:
+                      description: |-
+                        CIDR optionally pins this entry to an address block, replacing
+                        resolution of Host for this rule.
+
+                        An explicit pin is a statement about the destination's address
+                        range that DNS cannot improve on, so it wins outright and no
+                        lookup happens. Use it for a destination whose addresses are known
+                        and stable, or one whose name does not resolve from inside the
+                        cluster. When empty, Host is resolved instead.
+                      type: string
+                    host:
+                      description: |-
+                        Host is the DNS name or IP address permitted as an egress target.
+
+                        Kubernetes NetworkPolicy cannot match on a DNS name, so the
+                        operator resolves it and writes the answer into the rule as
+                        ipBlock peers, re-resolving periodically so the rule follows the
+                        name. The declared value is also kept on an annotation as the
+                        human-readable record.
+
+                        A name the operator cannot resolve is DROPPED from the policy, not
+                        widened: the entry contributes no rule and the drop is recorded on
+                        the setec.zeroroot.ai/unresolved-allow annotation. Set CIDR to pin
+                        the destination and skip resolution entirely.
+                      minLength: 1
+                      type: string
+                    port:
+                      description: Port is the destination TCP port permitted for
+                        this host.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                  required:
+                  - host
+                  - port
+                  type: object
+                type: array
+              defaultNetworkMode:
+                allOf:
+                - enum:
+                  - external-only
+                  - egress-allow-list
+                  - none
+                - enum:
+                  - external-only
+                  - egress-allow-list
+                  - none
+                description: |-
+                  DefaultNetworkMode is the egress posture applied to Sandboxes in
+                  this class that do not declare their own spec.network. When unset
+                  the effective mode is "none": a Sandbox that says nothing about
+                  networking is fully isolated (ADR-0052, setec#66). Classes whose
+                  workloads must reach external endpoints set this to
+                  "external-only"; classes whose workloads talk to a small declared
+                  destination set use "egress-allow-list".
+                type: string
+              defaultResources:
+                description: |-
+                  DefaultResources is the resource budget applied to Sandboxes that do
+                  not specify their own. Optional; when nil the Sandbox must declare
+                  its own resources explicitly.
+                properties:
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Memory is the amount of RAM allocated to the microVM, expressed as a
+                      Kubernetes resource.Quantity (e.g. "2Gi", "512Mi").
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  vcpu:
+                    description: VCPU is the number of virtual CPUs to assign to the
+                      microVM.
+                    format: int32
+                    maximum: 32
+                    minimum: 1
+                    type: integer
+                required:
+                - memory
+                - vcpu
+                type: object
+              egressExemptCIDRs:
+                description: |-
+                  EgressExemptCIDRs lists address ranges this class is permitted to
+                  reach even though the operator reserved them cluster-wide via
+                  --reserved-cidrs. Entries are subtracted from the reserved list
+                  before it is rendered into ipBlock.except, so a class may punch a
+                  deliberate, audited hole for a specific in-cluster endpoint (for
+                  example a platform check-in service a connector must reach).
+                  Empty — the expected value for every class that runs tenant
+                  workloads — keeps the full reserved list in force.
+                items:
+                  type: string
+                type: array
+              kernelImage:
+                description: |-
+                  KernelImage is an optional OCI reference to a custom guest kernel
+                  image the node agent pre-pulls and hands to Kata. Empty means the
+                  Kata-packaged kernel for the selected VMM is used.
+                type: string
+              maxPauseDuration:
+                description: |-
+                  MaxPauseDuration bounds how long a Sandbox may remain in
+                  phase=Paused — a paused microVM keeps its full memory
+                  reservation, and this cap bounds that residency. Beyond it the
+                  reconciler transitions the Sandbox to Failed with
+                  reason=PauseTimeoutExceeded and deletes its VM Pod.
+
+                  Sessions in a class with spec.sessionCheckpoint enabled are the
+                  exception (setec#202, ADR-0006): past the cap they suspend
+                  instead — checkpoint retained, microVM released, phase=Suspended
+                  with reason=SuspendedPauseTimeout — and resume when
+                  spec.desiredState returns to Running. The Suspended phase itself
+                  is not bounded by this cap: a suspended session holds no microVM.
+
+                  When unset pauses are unbounded. Must be positive when set (the
+                  webhook rejects zero or negative values; the reconciler treats a
+                  non-positive value as unbounded).
+                type: string
+              maxResources:
+                description: |-
+                  MaxResources is the upper bound tenant Sandboxes may request. The
+                  validating admission webhook rejects any Sandbox requesting more
+                  than these values. Optional; when nil the class imposes no ceiling
+                  beyond whatever ResourceQuota the tenant namespace enforces.
+                properties:
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Memory is the amount of RAM allocated to the microVM, expressed as a
+                      Kubernetes resource.Quantity (e.g. "2Gi", "512Mi").
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  vcpu:
+                    description: VCPU is the number of virtual CPUs to assign to the
+                      microVM.
+                    format: int32
+                    maximum: 32
+                    minimum: 1
+                    type: integer
+                required:
+                - memory
+                - vcpu
+                type: object
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector is injected into every Sandbox Pod produced under this
+                  class. It is additive to any Pod-level selectors the controller sets
+                  for RuntimeClass affinity.
+                type: object
+              preWarmImage:
+                description: |-
+                  PreWarmImage is the OCI reference baked into pre-warmed pool
+                  entries. Sandboxes requesting a different image fall through to
+                  the cold-boot path. The format follows the usual OCI reference
+                  grammar; validation beyond non-empty is a webhook concern so the
+                  CRD schema remains minimal.
+                type: string
+              preWarmPoolSize:
+                description: |-
+                  PreWarmPoolSize declares how many paused microVMs the node-agent
+                  maintains per eligible node for this class. Zero disables the
+                  pool (Phase 1/2 behavior). When non-zero PreWarmImage MUST be
+                  set — the webhook enforces the pairing.
+                format: int32
+                minimum: 0
+                type: integer
+              preWarmTTL:
+                description: |-
+                  PreWarmTTL bounds the age of pool entries. Entries older than
+                  this are recycled (torn down and reprovisioned) to avoid stale
+                  kernel state accumulating in paused VMs. When unset the
+                  node-agent defaults to 24h at runtime.
+                type: string
+              requests:
+                description: |-
+                  Requests is the scheduler reservation for every Sandbox Pod in
+                  this class, declared separately from the Sandbox's own resources
+                  block, which stays the Pod's limits. A Sandbox that sits idle most
+                  of the time can then reserve a small slice of a node and still
+                  burst to its full budget: an always-on agent member reserves
+                  250m / 768Mi and runs with a 2 vCPU / 4Gi ceiling.
+
+                  Each value is bounded by the Sandbox's limits on the Pod: a
+                  reservation above the budget would make the Pod invalid, so the
+                  controller writes min(request, limit). Unset, or an unset field,
+                  keeps the Phase 1 shape where requests equal limits (Guaranteed
+                  QoS).
+                properties:
+                  cpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      CPU is the CPU reservation, e.g. "250m" or "1". Must be positive
+                      when set.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Memory is the memory reservation, e.g. "768Mi". Must be positive
+                      when set.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              rootfsImage:
+                description: |-
+                  RootfsImage is an optional OCI reference to a custom guest rootfs
+                  image. Empty means the Kata-packaged rootfs is used.
+                type: string
+              runtime:
+                description: |-
+                  Runtime selects the isolation backend and optional fallback chain for
+                  Sandboxes in this class. When nil the operator infers the backend from
+                  the legacy VMM field for backwards compatibility.
+                properties:
+                  backend:
+                    description: |-
+                      Backend is the isolation runtime to use for Sandboxes in this class.
+                      Must be one of the four supported backends. When unset the operator
+                      falls back to the cluster default declared in Helm values.
+                    enum:
+                    - kata-fc
+                    - kata-qemu
+                    - gvisor
+                    - runc
+                    type: string
+                  fallback:
+                    description: |-
+                      Fallback is an ordered list of backend names to attempt when no node
+                      advertises the requested Backend. Each entry must be one of the four
+                      supported values. The operator tries each in order; the first backend
+                      with a capable node wins. status.runtime.chosen records the final
+                      selection.
+
+                      When NO candidate has a capable node the operator keeps the requested
+                      Backend, creates the Pod anyway, and holds the Sandbox Pending with
+                      reason AwaitingCapableNode. The unschedulable Pod is what makes a
+                      scale-to-zero node pool provision a node; falling back would not help,
+                      because a fallback with no capable node is exactly as unschedulable as
+                      the primary with no capable node.
+                    items:
+                      type: string
+                    type: array
+                  params:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Params is a map of backend-specific tuning parameters forwarded to the
+                      RuntimeDispatcher. Keys and semantics vary per backend (e.g.
+                      params.vcpus, params.memory for kata-qemu). Unknown keys are ignored
+                      by backends that do not understand them.
+                    type: object
+                type: object
+              runtimeClassName:
+                description: |-
+                  Deprecated: use Runtime.Backend instead.
+                  RuntimeClassName optionally overrides the operator-wide default
+                  RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
+                  controller falls back to its --runtime-class-name flag.
+                type: string
+              sessionCheckpoint:
+                description: |-
+                  SessionCheckpoint enables L2 memory checkpoints for session
+                  Sandboxes of this class (setec#194, ADR-0006/0007): periodic
+                  checkpoints while Running, checkpoint-on-drain when the node is
+                  cordoned or the VM Pod is evicted, and suspend-instead-of-evict
+                  when the sessionIdleTimeout deadline passes — the idle session
+                  checkpoints, releases its microVM, and resumes transparently on
+                  the next reattach, on whichever node the scheduler picks. Nil
+                  disables checkpoints: sessions then survive VM loss only via
+                  their durable workspace, and idle sessions are hard-evicted per
+                  sessionIdleTimeout.
+                properties:
+                  backend:
+                    default: s3
+                    description: |-
+                      Backend names the portable StorageBackend checkpoints are
+                      written to. Only "s3" (any S3-compatible store — real S3,
+                      MinIO, …) is supported. Defaults to "s3".
+                    enum:
+                    - s3
+                    type: string
+                  interval:
+                    description: |-
+                      Interval is the cadence of periodic memory checkpoints while
+                      the session is Running. Because the durable workspace already
+                      provides continuous data safety (ADR-0007), checkpoints serve
+                      process continuity only and SHOULD be infrequent — the trade is
+                      bandwidth/cost against how much process replay a resume loses.
+                      Unset or zero disables periodic checkpoints; checkpoints are
+                      then taken only on suspend and drain.
+                    type: string
+                type: object
+              sessionIdleTimeout:
+                description: |-
+                  SessionIdleTimeout is the idle-eviction threshold for session
+                  Sandboxes in this class (ADR-0006). A Running session whose last
+                  recorded activity — the setec.zeroroot.ai/last-activity
+                  annotation the frontend stamps on Attach and heartbeats while a
+                  client stream is open, falling back to status.startedAt and then
+                  the creation timestamp — is older than this duration is evicted:
+                  the operator marks it Failed with reason=IdleTimeout and deletes
+                  its VM Pod. An actively-used session is therefore never
+                  idle-reaped, because its activity timestamp keeps moving.
+
+                  Only session Sandboxes are subject to this policy; ephemeral
+                  Sandboxes are bounded by spec.lifecycle.timeout instead. Unset,
+                  zero, or negative means sessions in this class are never
+                  idle-evicted. Set it comfortably above one minute — the
+                  frontend's activity heartbeat interval — so an attached client
+                  always refreshes the clock in time.
+                type: string
+              tolerations:
+                description: |-
+                  Tolerations is injected into every Sandbox Pod produced under this
+                  class, additive to any tolerations the controller itself sets. This
+                  lets an administrator target a tainted NodePool (e.g. a Karpenter
+                  pool reserved for sandbox-host nodes via a NoSchedule taint) by
+                  declaring the matching toleration once on the class rather than
+                  requiring every tenant Sandbox to know about the taint.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+              vmm:
+                description: |-
+                  Deprecated: use Runtime.Backend instead.
+                  VMM selects the virtual machine monitor targeted by this class.
+
+                  Optional. It was previously required, which made every class that
+                  states its isolation the current way — through Runtime.Backend —
+                  unadmittable: the API server rejected it with "spec.vmm: Required
+                  value", so the chart's own SandboxClasses could not be applied, no
+                  class resolved, and every Sandbox fell back to deny-all. A field
+                  that is deprecated cannot also be mandatory. When it is empty the
+                  operator reads Runtime.Backend; when both are empty the operator's
+                  configured default backend applies.
+                enum:
+                - firecracker
+                - qemu
+                - cloud-hypervisor
+                type: string
+            type: object
+          status:
+            description: status reflects the observed state of the class.
+            properties:
+              conditions:
+                description: |-
+                  Conditions surface class-level facts the operator wants loudly
+                  visible. Today the only stamped type is
+                  UnverifiedRestoresAllowed: True when the class carries the
+                  setec.zeroroot.ai/allow-unverified-restores="true" dev-mode
+                  annotation AND the cluster-level dev gate label is present, so
+                  the ADR-0005 invariant gate may serve unverified restores for
+                  this class. Anyone auditing the cluster sees the opt-out on the
+                  class itself, not buried in per-sandbox events.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation the operator last
+                  reconciled. Optional; left empty in Phase 2.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

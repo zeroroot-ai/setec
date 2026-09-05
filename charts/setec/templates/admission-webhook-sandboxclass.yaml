@@ -1,0 +1,77 @@
+{{- if .Values.webhook.enabled -}}
+{{- /*
+SandboxClass admission webhooks — a ValidatingWebhookConfiguration and a
+MutatingWebhookConfiguration targeting the operator's built-in webhook
+server. Reuses the existing Service ({fullname}-webhook) and cert source
+managed by the chart's webhook.yaml; no new PKI flow is introduced here.
+
+Paths match controller-runtime's defaulting convention for a resource in
+the setec.zeroroot.ai/v1alpha1 API group:
+  /mutate-setec-zeroroot-ai-v1alpha1-sandboxclass
+  /validate-setec-zeroroot-ai-v1alpha1-sandboxclass
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "setec.fullname" . }}-validating-sandboxclass
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
+  {{- end }}
+webhooks:
+  - name: vsandboxclass.setec.zeroroot.ai
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["setec.zeroroot.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxclasses"]
+        scope: "Cluster"
+    clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+      service:
+        name: {{ include "setec.fullname" . }}-webhook
+        namespace: {{ .Values.namespace }}
+        path: /validate-setec-zeroroot-ai-v1alpha1-sandboxclass
+        port: 443
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "setec.fullname" . }}-mutating-sandboxclass
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
+  {{- end }}
+webhooks:
+  - name: msandboxclass.setec.zeroroot.ai
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: Never
+    rules:
+      - apiGroups: ["setec.zeroroot.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxclasses"]
+        scope: "Cluster"
+    clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+      service:
+        name: {{ include "setec.fullname" . }}-webhook
+        namespace: {{ .Values.namespace }}
+        path: /mutate-setec-zeroroot-ai-v1alpha1-sandboxclass
+        port: 443
+{{- end }}

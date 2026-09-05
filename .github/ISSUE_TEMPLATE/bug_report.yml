@@ -1,0 +1,81 @@
+name: Bug report
+description: Report unexpected behaviour in Setec.
+title: "bug: "
+labels: ["kind/bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please search existing issues first; if you find one that matches, add a comment there instead.
+
+        For security vulnerabilities do **not** use this form. Follow [SECURITY.md](https://github.com/zeroroot-ai/setec/blob/main/SECURITY.md) for private reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the behaviour you observed.
+      placeholder: When I applied this Sandbox manifest, the phase stayed at Pending for 10 minutes...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: The smaller and more self-contained, the better. Include manifests, commands, and any relevant inputs.
+      placeholder: |
+        1. helm install setec ./charts/setec ...
+        2. kubectl apply -f bad-sandbox.yaml
+        3. observe the Sandbox stuck in Pending
+    validations:
+      required: true
+  - type: input
+    id: setec-version
+    attributes:
+      label: Setec version
+      description: Output of `helm list -n setec-system` or the image tag you built from.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: k8s-version
+    attributes:
+      label: Kubernetes version
+      description: Output of `kubectl version --short`.
+      placeholder: v1.30.4
+    validations:
+      required: true
+  - type: input
+    id: kata-version
+    attributes:
+      label: Kata Containers version
+      description: Output of `kata-runtime --version` on a node, or the kata-deploy image tag.
+      placeholder: 3.7.0
+  - type: input
+    id: firecracker-version
+    attributes:
+      label: Firecracker version
+      description: Output of `firecracker --version` on a node.
+      placeholder: 1.7.0
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste operator, node-agent, or workload pod logs. Wrap in a details block if long.
+        Redact secrets before pasting.
+      render: shell
+  - type: checkboxes
+    id: sanity
+    attributes:
+      label: Sanity checks
+      options:
+        - label: I have searched existing issues and did not find a duplicate.
+          required: true
+        - label: I am not reporting a security vulnerability here.
+          required: true

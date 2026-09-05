@@ -1,0 +1,188 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "setec.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        # Distinguish the operator Pod from the other components (runtime-agent,
+        # frontend, node-agent) which all share name/instance selector labels
+        # but carry their own component label. Additive only — not part of the
+        # immutable Deployment selector.
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ include "setec.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: manager
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --metrics-bind-address=:{{ .Values.metricsPort }}
+            - --health-probe-bind-address=:{{ .Values.healthPort }}
+            - --leader-elect={{ .Values.leaderElect }}
+            - --runtimes-config=/etc/setec/runtimes.yaml
+            {{- /* Legacy alias preserved for one release so existing
+                    `--set runtimeClassName=...` overrides keep working. Remove
+                    alongside the deprecated value. */ -}}
+            {{- if .Values.runtimeClassName }}
+            - --runtime-class-name={{ .Values.runtimeClassName }}
+            {{- end }}
+            - --node-selector-label={{ .Values.nodeSelectorLabel }}
+            {{- if .Values.multiTenancy.enabled }}
+            - --multi-tenancy-enabled
+            - --tenant-label-key={{ .Values.multiTenancy.tenantLabelKey }}
+            {{- end }}
+            {{- if and .Values.observability.enabled .Values.observability.otlpEndpoint }}
+            - --otlp-endpoint={{ .Values.observability.otlpEndpoint }}
+            {{- if not .Values.observability.otelTLS.enabled }}
+            - --otel-insecure
+            {{- else if .Values.observability.otelTLS.caSecretName }}
+            - --otel-ca-file=/etc/setec/otel-ca/ca.crt
+            {{- end }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - --webhook-enabled
+            {{- end }}
+            {{- if not .Values.netpol.reservedCIDRs }}
+            {{- fail "netpol.reservedCIDRs must not be empty: an empty reserved list gives every Sandbox unrestricted egress. Narrow it for self-hosted installs, do not clear it." }}
+            {{- end }}
+            {{- if not .Values.netpol.resolvers }}
+            {{- fail "netpol.resolvers must not be empty: Sandboxes resolve names through these addresses instead of cluster DNS." }}
+            {{- end }}
+            - --reserved-cidrs={{ join "," .Values.netpol.reservedCIDRs }}
+            - --sandbox-resolvers={{ join "," .Values.netpol.resolvers }}
+            {{- if .Values.snapshots.enabled }}
+            - --snapshots-enabled
+            - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
+            - --nodeagent-endpoint-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - --nodeagent-spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentServers }}
+            - --nodeagent-spiffe-authorized-id={{ . }}
+            {{- end }}
+            {{- else }}
+            - --nodeagent-tls-cert=/etc/setec/nodeagent-tls/tls.crt
+            - --nodeagent-tls-key=/etc/setec/nodeagent-tls/tls.key
+            - --nodeagent-ca=/etc/setec/nodeagent-ca/ca.crt
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metricsPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.healthPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: runtimes-config
+              mountPath: /etc/setec/runtimes.yaml
+              subPath: runtimes.yaml
+              readOnly: true
+            {{- if .Values.snapshots.enabled }}
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - name: spiffe-workload-api
+              mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
+              readOnly: true
+            {{- else }}
+            - name: nodeagent-tls
+              mountPath: /etc/setec/nodeagent-tls
+              readOnly: true
+            - name: nodeagent-ca
+              mountPath: /etc/setec/nodeagent-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
+            - name: otel-ca
+              mountPath: /etc/setec/otel-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            # controller-runtime's webhook server reads tls.crt/tls.key from
+            # this dir (it does not self-generate). Without it --webhook-enabled
+            # fails closed and rejects every Sandbox. cert-manager (or the e2e
+            # harness) provisions the Secret; see webhook.certSecret.
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: runtimes-config
+          configMap:
+            name: {{ include "setec.fullname" . }}-runtimes
+            items:
+              - key: runtimes.yaml
+                path: runtimes.yaml
+        {{- if .Values.snapshots.enabled }}
+        {{- if eq .Values.credentials.mode "spiffe" }}
+        - name: spiffe-workload-api
+          hostPath:
+            path: {{ dir .Values.credentials.spiffe.socketPath }}
+            type: Directory
+        {{- else }}
+        - name: nodeagent-tls
+          secret:
+            secretName: {{ .Values.snapshots.mTLS.operatorCertSecret }}
+        - name: nodeagent-ca
+          secret:
+            secretName: {{ .Values.snapshots.mTLS.caSecret }}
+        {{- end }}
+        {{- end }}
+        {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
+        - name: otel-ca
+          secret:
+            secretName: {{ .Values.observability.otelTLS.caSecretName }}
+        {{- end }}
+        {{- if .Values.webhook.enabled }}
+        - name: webhook-certs
+          secret:
+            secretName: {{ .Values.webhook.certSecret | default (printf "%s-webhook-cert" (include "setec.fullname" .)) }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30

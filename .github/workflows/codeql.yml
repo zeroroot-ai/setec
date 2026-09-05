@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Epic: cicd-efficiency (board #44), slice S11b, .github#203. Per
+# docs/architecture/CICD-CONTEXT.md decision #9 (scanner cadence ->
+# merge_group gate + weekly deep cron, drop per-PR/push), the trigger moved
+# from `push: [main]` (post-merge-only scan) to `merge_group` (pre-merge
+# authoritative gate) plus the existing weekly cron. merge_group is inert
+# until the merge queue is enabled on setec -- until then this workflow only
+# fires on the weekly schedule, same as before.
+name: CodeQL
+
+on:
+  merge_group:
+  schedule:
+    # Weekly run: Tuesday 08:00 UTC.
+    - cron: "0 8 * * 2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze Go
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          category: /language:go
+          # merge_group's temporary gh-readonly-queue/... ref is deleted as
+          # soon as the queue entry resolves -- often before this step's
+          # SARIF upload call reaches the API, which then 404s with "ref ...
+          # not found" and fails the whole gate on a non-actionable timing
+          # error. Per decision #9 (docs/architecture/CICD-CONTEXT.md),
+          # merge_group is the pre-merge build/extraction gate; the weekly
+          # schedule run is the authoritative alert-publishing run. Only
+          # upload SARIF (and therefore only publish/refresh Security-tab
+          # alerts) on the schedule trigger; merge_group still runs the full
+          # analysis so extraction/query errors still fail the gate.
+          upload: ${{ github.event_name == 'schedule' && 'always' || 'never' }}

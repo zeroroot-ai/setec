@@ -1,0 +1,19 @@
+# CODEOWNERS for Setec.
+#
+# This file is consumed by GitHub to auto-assign reviewers. The placeholder
+# @script-kid-io team should match the GitHub team used by the
+# maintainers listed in MAINTAINERS. Update this file in the same pull request
+# that changes MAINTAINERS so the two stay aligned.
+#
+# Syntax: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: all paths route to the maintainers group.
+*                                       @script-kid-io
+
+# Governance, community, and security documents require maintainer review.
+/CODE_OF_CONDUCT.md                     @script-kid-io
+/CONTRIBUTING.md                        @script-kid-io
+/GOVERNANCE.md                          @script-kid-io
+/MAINTAINERS                            @script-kid-io
+/SECURITY.md                            @script-kid-io
+/.github/                               @script-kid-io

@@ -1,0 +1,34 @@
+{{- if .Values.sandboxClasses.enabled }}
+{{- $defaults := 0 }}
+{{- range .Values.sandboxClasses.classes }}
+{{- if .spec.default }}{{ $defaults = add1 $defaults }}{{ end }}
+{{- end }}
+{{- if gt $defaults 1 }}
+{{- fail "sandboxClasses.classes declares more than one class with spec.default: true; the resolver refuses to default until the ambiguity is resolved." }}
+{{- end }}
+{{- range $class := .Values.sandboxClasses.classes }}
+{{- if not $class.spec.defaultNetworkMode }}
+{{- fail (printf "SandboxClass %q sets no spec.defaultNetworkMode. A Sandbox that declares no spec.network would resolve to deny-all; state the posture explicitly." $class.name) }}
+{{- end }}
+---
+apiVersion: setec.zeroroot.ai/v1alpha1
+kind: SandboxClass
+metadata:
+  name: {{ $class.name }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+  annotations:
+    # A SandboxClass is a CR of a kind this chart's own webhook admits, and
+    # Helm sorts kinds it does not know alphabetically — so on a fresh install
+    # this lands BEFORE the webhook configuration that must admit it and is
+    # refused. Order it behind both barriers: a hook weight for a plain
+    # `helm install`, which has no barrier inside its main phase, and a
+    # sync-wave for Argo, which orders hooks and ordinary resources together.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "20"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "20"
+spec:
+{{- toYaml $class.spec | nindent 2 }}
+{{- end }}
+{{- end }}

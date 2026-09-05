@@ -1,0 +1,129 @@
+{{- /*
+=============================================================================
+Where the operator is allowed to WRITE Pods.
+=============================================================================
+
+The operator's job is to turn a Sandbox object into a Pod, so it must hold
+`pods: create` somewhere. Cluster-wide `pods: create` is, on its own, a
+cluster-admin path: it lets the holder create a Pod in any namespace, mount
+any ServiceAccount token, and schedule with any host mount. That is a very
+large grant to leave standing for a component whose legitimate write scope
+is "the namespaces Sandboxes run in".
+
+So the write verbs are separated from the read verbs. Reads stay
+cluster-wide in the -manager ClusterRole because controller-runtime's cache
+LISTs and WATCHes across all namespaces. Writes are granted by binding the
+-sandbox-namespace ClusterRole below with a RoleBinding — one per namespace
+in .Values.sandboxNamespaces — which confines them to exactly those
+namespaces.
+
+The same list drives the namespace-wide baseline deny policy. Naming a
+namespace here is therefore one decision, not two: it is where Sandboxes
+may run, where the operator may write Pods, and where every Pod is
+default-denied.
+
+There is no silent fallback. If sandboxNamespaces is empty the render
+fails, rather than quietly falling back to the cluster-wide grant, because
+a containment control that switches itself off when unconfigured is not a
+control. An operator who genuinely needs the cluster-wide grant — a
+Sandbox namespace scheme that is dynamic, for instance — sets
+rbac.allowClusterWideSandboxWrite: true and gets it, explicitly and on the
+record.
+*/ -}}
+{{- $clusterWide := .Values.rbac.allowClusterWideSandboxWrite -}}
+{{- if and (not $clusterWide) (empty .Values.sandboxNamespaces) }}
+{{- fail "sandboxNamespaces is empty. It names the namespaces Sandboxes run in: the operator's Pod-write RBAC is bound there, and each one gets the namespace-wide default-deny NetworkPolicy. Leaving it empty would either leave the operator unable to create any Pod, or require cluster-wide pods:create — which is a cluster-admin path. Either list your Sandbox namespaces, or set rbac.allowClusterWideSandboxWrite: true to take the cluster-wide grant deliberately." }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-sandbox-namespace
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  # Pod writes. The operator builds the Sandbox Pod and deletes it on
+  # teardown; it never needs to write a Pod outside a Sandbox namespace.
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+      - patch
+      - update
+  # NetworkPolicy writes: the per-Sandbox policy and the namespace-wide
+  # baseline deny, both written before the Pod exists.
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - create
+      - delete
+      - patch
+      - update
+  # Session lifecycle (ADR-0006/0007): the durable workspace PVC is
+  # created before the session Pod and deleted (wiped) at teardown.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - create
+      - delete
+  # Session checkpoints (setec#194): the per-session checkpoint KEK
+  # Secret is created at session start and deleted at session end
+  # (deleting it crypto-erases every checkpoint it sealed). Secret
+  # READS are here too — not cluster-wide in the -manager role —
+  # because the operator's client bypasses the cache for Secrets, so
+  # it never LISTs or WATCHes them and only ever touches Secrets in
+  # Sandbox namespaces.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - delete
+{{- if $clusterWide }}
+---
+# EXPLICIT cluster-wide grant. Chosen by setting
+# rbac.allowClusterWideSandboxWrite: true. This lets the operator create a
+# Pod in ANY namespace, which is a cluster-admin path if the operator is
+# compromised. Prefer listing sandboxNamespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-sandbox-namespace
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-sandbox-namespace
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+{{- else }}
+{{- range $ns := .Values.sandboxNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "setec.fullname" $ }}-sandbox-namespace
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" $ }}-sandbox-namespace
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.serviceAccountName" $ }}
+    namespace: {{ $.Values.namespace }}
+{{- end }}
+{{- end }}

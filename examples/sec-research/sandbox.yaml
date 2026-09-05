@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Equivalent kubectl-apply form of the sec-research example. Users who keep
+# fuzz targets in-cluster (for example via a shared PersistentVolume) can
+# adopt this manifest directly and drop the programmatic client.
+#
+# Fuzzing is CPU-hungry; set resources accordingly and keep network mode
+# set to "none" unless the target specifically needs it.
+apiVersion: setec.zeroroot.ai/v1alpha1
+kind: Sandbox
+metadata:
+  name: sec-research-sample
+  namespace: default
+spec:
+  image: docker.io/aflplusplus/aflplusplus:latest
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      cd /work
+      # Pre-populate /work with your target binary and seed corpus via an
+      # initContainer or a pre-baked image. Then:
+      timeout 3570s afl-fuzz -i seeds -o findings -- ./target @@
+  resources:
+    vcpu: 2
+    memory: 2Gi
+  network:
+    mode: none
+  lifecycle:
+    timeout: 1h

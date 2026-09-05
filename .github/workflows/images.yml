@@ -1,0 +1,179 @@
+name: images
+
+# Builds + pushes setec, setec-node-agent, setec-frontend,
+# setec-runtime-agent, setec-guest-agent, and setec-installer to GHCR.
+# Adopts the org reusable image-build workflow (slice 1.2, .github#47).
+#
+# All service images share a single Dockerfile; CMD build-arg selects the
+# binary. setec-installer builds from Dockerfile.installer instead: it
+# additionally bundles the pinned kata-containers static release as an
+# immutable payload (ADR-0003, setec#187) and is amd64-only — the kata
+# payload is x86 (ADR-0001) and the chart's installer DaemonSet pins
+# kubernetes.io/arch: amd64.
+# setec-guest-agent is not a runnable service image: it exists so microVM
+# rootfs builders can COPY the static binary out of it (the in-guest half
+# of the entropy reseed on snapshot restore, setec#72).
+# The smoke-test gate and draft GitHub Release creation live in release.yml.
+# Example Dockerfiles under examples/ are NOT published as releases (skipped).
+#
+# Version tags (setec#131): release-please pushes its tags with the default
+# GITHUB_TOKEN, which never fires the `push: tags:` trigger below (GitHub
+# anti-recursion). release-please.yml therefore calls this workflow via
+# workflow_call in the same run and passes the fresh tag as version_tag.
+# The tags trigger + tag_pattern remain for hand-pushed tags (which DO fire).
+#
+# Images are single-arch linux/amd64 ONLY (ADR-0001, setec#186): the sandbox
+# substrate is x86 exclusively, so no multi-arch manifests are published and
+# nothing silently attempts arm64. This supersedes the brief multi-arch
+# window opened for setec#132 — mixed-arch clusters converge via the
+# kubernetes.io/arch=amd64 selectors the chart now hardcodes, not via arm64
+# images. hack/verify-x86-substrate.sh guards these platforms lines;
+# re-adding arm64 requires a new ADR.
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version_tag:
+        required: false
+        type: string
+        default: ""
+        description: Explicit version tag (e.g. v0.106.0) to add to every image.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setec:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec
+      tag_pattern: (v.*)
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=manager
+
+  setec-node-agent:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-node-agent
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-node-agent
+      tag_pattern: (v.*)
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=node-agent
+
+  setec-frontend:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-frontend
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-frontend
+      tag_pattern: (v.*)
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=frontend
+
+  setec-runtime-agent:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-runtime-agent
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-runtime-agent
+      tag_pattern: (v.*)
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=runtime-agent
+
+  setec-guest-agent:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-guest-agent
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-guest-agent
+      tag_pattern: (v.*)
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=setec-guest-agent
+
+  setec-installer:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f0e11905166f5c53dd1a1b9f446e5ea8db643229 # main
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-installer
+      component_path: .
+      dockerfile_path: Dockerfile.installer
+      image_name: ghcr.io/zeroroot-ai/setec-installer
+      tag_pattern: (v.*)
+      # amd64 only: the bundled kata static payload is x86 (ADR-0001).
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}

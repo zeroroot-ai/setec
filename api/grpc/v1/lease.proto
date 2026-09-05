@@ -1,0 +1,141 @@
+// Copyright 2026 The Setec Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+syntax = "proto3";
+
+package setec.v1;
+
+option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1;setecv1grpc";
+
+// LeaseService is the warm-pool lease layer over SandboxService. Where
+// SandboxService.Launch cold-boots a fresh Sandbox per call, LeaseService
+// keeps a pool of pre-warmed Sandboxes per SandboxClass (restored from a
+// Snapshot when the class declares one) so a caller can claim one without
+// paying cold-boot latency.
+//
+// The contract is Lease -> Exec -> Release:
+//   - Lease claims a pre-warmed Sandbox from the pool for a class. Fast:
+//     no cold boot, because the Sandbox is already Running.
+//   - Exec runs a command inside the leased Sandbox (one execution per
+//     lease) and streams its output.
+//   - Release destroys the leased Sandbox (destroy-on-release — a dirty
+//     sandbox is never handed to another caller) and replenishes the pool
+//     back to its warm target.
+//
+// Like SandboxService this is tenant-scoped via mTLS client certificate
+// and carries NO datastore or zeroroot-platform coupling (ADR-0056). It is
+// an additive surface layered on the v1 isolation ABI; the WIRE breaking
+// gate guards its wire stability the same way it guards SandboxService.
+service LeaseService {
+  // Lease claims a pre-warmed Sandbox from the pool for the requested
+  // SandboxClass and returns a lease the caller uses for Exec and Release.
+  // If the pool is empty the call cold-launches a Sandbox on demand (and
+  // the replenish loop refills the pool in the background) unless the
+  // request sets fail_if_empty.
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+
+  // Exec runs a command inside the leased Sandbox and streams stdout/stderr
+  // until the command exits. Exactly one Exec may run per lease; a second
+  // Exec on the same lease returns FailedPrecondition.
+  rpc Exec(ExecRequest) returns (stream ExecResponse);
+
+  // Release destroys the leased Sandbox (destroy-on-release) and triggers
+  // a pool replenish. Releasing an unknown or already-released lease is a
+  // no-op success so clients can call it idempotently in cleanup paths.
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+
+  // PoolStatus reports the warm fill level for a SandboxClass: how many
+  // Sandboxes are ready to lease versus the configured target.
+  rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
+}
+
+// LeaseRequest selects the pool to claim from.
+message LeaseRequest {
+  // Name of the cluster-scoped SandboxClass whose pool to lease from.
+  // The pool for a class is identified by this name; a class without a
+  // registered pool is lazily registered with the cluster-default warm
+  // target on first Lease.
+  string sandbox_class = 1;
+
+  // fail_if_empty, when true, returns ResourceExhausted instead of
+  // cold-launching when the pool has no ready Sandbox. Useful for callers
+  // that only ever want the fast path.
+  bool fail_if_empty = 2;
+}
+
+// LeaseResponse identifies the claimed Sandbox and the lease over it.
+message LeaseResponse {
+  // lease_id is an opaque token scoped to the caller's tenant. Pass it to
+  // Exec and Release.
+  string lease_id = 1;
+
+  // sandbox_id is the <namespace>/<name>/<uid> tuple of the leased
+  // Sandbox, identical in shape to SandboxService ids so callers may also
+  // drive it through SandboxService (e.g. StreamLogs) if they wish.
+  string sandbox_id = 2;
+
+  // warm is true when the lease was satisfied from a pre-warmed pool entry
+  // (the fast path) and false when it was cold-launched on demand.
+  bool warm = 3;
+}
+
+// ExecRequest runs a command inside a leased Sandbox.
+message ExecRequest {
+  // lease_id returned by Lease.
+  string lease_id = 1;
+
+  // command is the entrypoint to execute inside the leased Sandbox. At
+  // least one entry required.
+  repeated string command = 2;
+
+  // env overlays environment variables for this execution. Optional.
+  map<string, string> env = 3;
+}
+
+// ExecResponse is a single chunk of the executing command's output, or
+// the final terminal outcome when `done` is set.
+message ExecResponse {
+  // data is a chunk of stdout/stderr output. Empty on the final message.
+  bytes data = 1;
+
+  // stream is "stdout" or "stderr" for output chunks.
+  string stream = 2;
+
+  // done is set on the final message of the stream. When done is true,
+  // exit_code and reason carry the terminal outcome.
+  bool done = 3;
+  int32 exit_code = 4;
+  string reason = 5;
+}
+
+// ReleaseRequest releases a lease and destroys its Sandbox.
+message ReleaseRequest {
+  string lease_id = 1;
+}
+
+// ReleaseResponse is currently empty; failures surface via gRPC status.
+message ReleaseResponse {}
+
+// PoolStatusRequest selects a class's pool.
+message PoolStatusRequest {
+  string sandbox_class = 1;
+}
+
+// PoolStatusResponse reports the warm fill level for a class.
+message PoolStatusResponse {
+  // ready is the number of pre-warmed Sandboxes currently available to
+  // lease without a cold boot.
+  uint32 ready = 1;
+
+  // target is the configured warm-pool size for the class.
+  uint32 target = 2;
+
+  // leased is the number of Sandboxes currently checked out via Lease and
+  // not yet Released.
+  uint32 leased = 3;
+}

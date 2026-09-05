@@ -1,0 +1,738 @@
+name: go-ci
+
+# Thin caller for the canonical three-tier Go CI (Epic: cicd-efficiency,
+# board #44, slice S11b, .github#203). See docs/architecture/CICD-CONTEXT.md
+# (workspace docs repo) and docs/adr/0060-ci-runner-split-hosted-default-
+# ephemeral-metal.md for the org-wide tiering rationale.
+#
+# Replaces the former all-in-one ci.yml (365 lines), which ran every job on
+# both `pull_request` and `push:main`, double-firing full suites. setec is a
+# PUBLIC Apache-2.0 repo whose only zeroroot-ai Go dependency is the public
+# ast-checks module, so it needs no private-module git auth: both reusable
+# calls below pass `private-modules: false` and no `gh-pat` secret.
+#
+#   pull_request -> fast tier:  quick contributor signal. The reusable's fast
+#                                tier gives mod-tidy drift check, go vet, go
+#                                build, and a plain `go test` (no race). setec
+#                                keeps its own cheap native guards alongside
+#                                it: lint (Makefile-pinned golangci-lint + buf
+#                                lint), proto-breaking, generated-file drift
+#                                (manifests/proto), helm-lint, a no-push
+#                                docker build (compile-validity, not a deploy
+#                                step), the binary flag smoke test, the
+#                                markdown link check, the marker/insecure-
+#                                flag/unimplemented greps, and the 3
+#                                examples-build jobs (separate Go modules
+#                                under examples/, unreachable by the
+#                                reusable, which only knows the root module).
+#
+#   merge_group  -> heavy tier: the ONE authoritative gate before landing.
+#                                The reusable's heavy tier gives `go test
+#                                -race ./...` and govulncheck (root module,
+#                                MEDIUM+ severity). setec adds its own
+#                                envtest suite (`make test` -- real
+#                                apiserver via KUBEBUILDER_ASSETS, produces a
+#                                coverage artifact; NOT equivalent to the
+#                                reusable's plain `go test`) and the 3
+#                                examples-govulncheck jobs (moved from the
+#                                now-deleted security.yaml -- those are
+#                                separate Go modules the reusable can't
+#                                reach, and per decision 9, scanner cadence
+#                                belongs on merge_group).
+#
+# merge_group is inert until the merge queue is enabled on setec -- wiring it
+# now is intentionally a no-op until then.
+#
+# setec keeps its own Makefile-pinned golangci-lint (`make lint`) instead of
+# delegating to the reusable's built-in golangci-lint-action step: the
+# reusable pins golangci-lint-action to a fixed version, which can silently
+# diverge from the repo's Makefile-pinned version and trail go.mod's
+# toolchain target -- the "v2 trap" gibson was already bitten by once
+# (sdk#355/adk#154). Passing `skip-lint: true` avoids double-running
+# golangci-lint under two different pins.
+#
+# security.yaml is DELETED by this change: its root-module govulncheck is
+# now covered by the `heavy` job's reusable call; its three example-module
+# govulncheck invocations moved into the examples-govulncheck job below
+# (pinned to the same govulncheck version the reusable installs, v1.1.4, so
+# a single PR/queue-run sees one consistent scanner version rather than
+# `@latest` drifting mid-flight).
+
+on:
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: go-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- fast tier (pull_request): reusable mod-tidy/vet/build/test ----
+  fast:
+    if: github.event_name == 'pull_request'
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@258c4622d85f14eaf0f00574cbaa100bb6417be7 # v2
+    with:
+      tier: fast
+      private-modules: false
+      skip-lint: true # setec runs its own pinned golangci-lint below (make lint)
+
+  # ---- heavy tier (merge_group): reusable race test + govulncheck ----
+  heavy:
+    if: github.event_name == 'merge_group'
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@258c4622d85f14eaf0f00574cbaa100bb6417be7 # v2
+    with:
+      tier: heavy
+      private-modules: false
+
+  # ---- setec-specific lint (fast tier / pull_request) ----
+  lint:
+    name: Lint (golangci-lint + buf)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify lint config
+        run: make lint-config
+
+      - name: Run linter
+        run: make lint
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+
+      - name: Run buf lint
+        run: buf lint
+
+  # ---- proto WIRE-breaking gate (fast tier / pull_request) ----
+  proto-breaking:
+    name: Proto WIRE-breaking gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history so buf can diff the proto against the merge base.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+
+      - name: Buf breaking (WIRE) vs main
+        # The setec.v1 SandboxService ABI is wire-stable. This gate rejects
+        # any change that breaks an existing wire encoding (changed field
+        # numbers/types, removed fields). Additive fields, renames, and doc
+        # edits pass.
+        run: |
+          git fetch origin "${GITHUB_BASE_REF:-main}" --depth=1 || true
+          base="origin/${GITHUB_BASE_REF:-main}"
+          if git rev-parse --verify "$base" >/dev/null 2>&1; then
+            buf breaking --against ".git#ref=$base"
+          else
+            echo "No base ref to diff against; skipping breaking check."
+          fi
+
+  # ---- envtest suite (heavy tier / merge_group) ----
+  # `make test` runs unit + envtest (real apiserver via KUBEBUILDER_ASSETS,
+  # installed transitively by the Makefile target) and produces cover.out.
+  # This is NOT equivalent to the reusable's plain `go test`: it needs the
+  # envtest control-plane binaries and emits a coverage artifact. It is
+  # setec's authoritative test suite (closest to integration), so it belongs
+  # in the merge_group-only tier alongside the reusable's `-race` run rather
+  # than duplicating a lighter variant on pull_request.
+  test:
+    name: Unit + envtest
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Wrapped in the org flake-quarantine action (retry-3x + machine-
+      # readable flake event, uploaded as the flake-log-test artifact for
+      # the weekly org flake report — .github#241). A pass on attempt >1 is
+      # recorded as a flake instead of silently green; a fail on all
+      # attempts still fails the job. cover.out is regenerated by the last
+      # attempt, so the coverage upload below is unaffected.
+      - name: Run tests (flake-quarantined)
+        uses: zeroroot-ai/.github/actions/flake-quarantine@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+        with:
+          cmd: make test
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: cover.out
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---- generated-file drift gates (fast tier / pull_request) ----
+  manifests-up-to-date:
+    name: Manifests up-to-date
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Regenerate manifests and deepcopy
+        run: make manifests generate
+
+      - name: Verify no uncommitted changes
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Generated files are out of date."
+            echo "::error::Run 'make manifests generate' locally and commit the result."
+            exit 1
+          fi
+
+  proto-up-to-date:
+    name: Proto up-to-date
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Regenerate proto stubs
+        run: make proto
+
+      - name: Verify no uncommitted changes
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Generated proto files are out of date."
+            echo "::error::Run 'make proto' locally and commit the result."
+            exit 1
+          fi
+
+  # ---- helm chart gates (fast tier / pull_request) ----
+  helm-lint:
+    name: Helm lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v3.16.1
+
+      - name: Helm lint (strict)
+        run: helm lint charts/setec --strict
+
+      - name: Helm template (render check, default values)
+        # Ensures every template renders without error given the two
+        # settings the chart deliberately ships unset so a genuinely
+        # unconfigured install fails loudly rather than rendering an
+        # insecure default (README "Sandbox egress posture"): a webhook
+        # CA source, and the Sandbox namespace list. Every other value
+        # here is the chart default.
+        run: |
+          helm template setec charts/setec \
+            --set sandboxNamespaces={sandbox-workloads} \
+            --set webhook.certManager.enabled=true >/dev/null
+
+      - name: Helm containment-control assertions
+        # A render that merely succeeds does not prove the controls are in
+        # the output. This asserts the objects that provide containment are
+        # actually there and still say what they are supposed to say --
+        # the regression it catches is a chart that installs cleanly and
+        # enforces nothing.
+        # Invoked directly rather than via `make helm-verify`: this job has
+        # no Go toolchain, and the Makefile shells out to `go env` while it
+        # parses.
+        run: ./hack/verify-chart-security.sh charts/setec
+
+      - name: Helm credential-mode assertions (setec#183)
+        # Renders both credential modes and asserts the install-wide
+        # switch holds: file mode (default) keeps the Secret-mounted
+        # posture with no SPIFFE leakage, spiffe mode flips the frontend,
+        # the node-agent AND the operator's node-agent dialer together,
+        # and an empty authorized-ID list fails the render instead of
+        # becoming a startup error.
+        run: ./hack/verify-chart-credentials.sh charts/setec
+
+      - name: Idle-footprint drift check self-test
+        # hack/measure-idle-footprint.sh decides whether a long-lived
+        # Sandbox held its memory. The soak itself needs a cluster and
+        # hours, but its arithmetic does not: the self-test feeds the
+        # check a steady series and a leaking one, so a change that
+        # makes the check unable to fail is caught here.
+        run: ./hack/measure-idle-footprint.sh --self-test
+
+      - name: x86-substrate assertions (ADR-0001)
+        # The sandbox substrate is x86 only (setec#186): image publishing
+        # must stay single-arch linux/amd64 and the node-facing DaemonSets
+        # and Karpenter NodePool must keep their kubernetes.io/arch=amd64
+        # gating. This fails the build if either is reintroduced.
+        run: ./hack/verify-x86-substrate.sh charts/setec
+
+      - name: Helm template (Phase 3 enabled)
+        # Catches regressions in Phase 3 chart extensions without
+        # requiring a live cluster. mTLS is mandatory so the tls
+        # Secret names are supplied explicitly; sandboxNamespaces and a
+        # webhook CA source are required the same way as above.
+        run: |
+          helm template setec charts/setec \
+            --set snapshots.enabled=true \
+            --set nodeAgent.enabled=true \
+            --set webhook.enabled=true \
+            --set webhook.certManager.enabled=true \
+            --set snapshots.mTLS.caProvided=true \
+            --set sandboxNamespaces={sandbox-workloads} >/dev/null
+
+          # The chart does not create snapshots.mTLS.caSecret (setec#320), so
+          # rendering this path asserts caProvided=true — i.e. "an operator has
+          # supplied the CA out of band". Without it the chart now refuses to
+          # render rather than producing a release whose pods wedge on a missing
+          # non-optional Secret. Assert that refusal too, so the guard itself
+          # cannot rot into a no-op.
+          if helm template setec charts/setec \
+               --set snapshots.enabled=true \
+               --set nodeAgent.enabled=true \
+               --set webhook.enabled=true \
+               --set webhook.certManager.enabled=true \
+               --set sandboxNamespaces={sandbox-workloads} >/dev/null 2>&1; then
+            echo "::error::snapshots.enabled=true rendered without snapshots.mTLS.caProvided; the chart mounts a CA Secret it does not create (setec#320) and must refuse"
+            exit 1
+          fi
+
+      - name: Helm template (frontend enabled with mTLS)
+        # The frontend requires both TLS Secret names; without them the
+        # chart refuses to render. This gate exercises that path.
+        # sandboxNamespaces and a webhook CA source are required the
+        # same way as the default-values render check above.
+        run: |
+          helm template setec charts/setec \
+            --set frontend.enabled=true \
+            --set frontend.tlsCertSecretName=frontend-tls \
+            --set frontend.tlsClientCASecretName=frontend-ca \
+            --set webhook.certManager.enabled=true \
+            --set sandboxNamespaces={sandbox-workloads} >/dev/null
+
+  # ---- docker build validity (fast tier / pull_request) ----
+  # Expensive (image build) but no push and no deploy -- a compile-validity
+  # signal, not a scanner or authoritative suite. Kept on pull_request to
+  # match today's behaviour rather than moved to merge_group.
+  docker-build:
+    name: Docker build (no push)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build image (linux/amd64, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: false
+          tags: setec:ci-local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---- cheap guard checks (fast tier / pull_request) ----
+  flag-smoke-test:
+    name: Binary flag smoke test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binaries
+        run: |
+          go build -o bin/manager ./cmd
+          go build -o bin/node-agent ./cmd/node-agent
+          go build -o bin/frontend ./cmd/frontend
+
+      - name: Smoke-test manager --help
+        # Catches flag-parsing regressions (Phase 3 adds snapshots-enabled
+        # and the nodeagent-tls-* triple). --help is a pure dry-run, no
+        # side effects.
+        run: |
+          ./bin/manager --help 2>&1 | tee manager-help.txt
+          grep -q -- '--snapshots-enabled' manager-help.txt
+          grep -q -- '--nodeagent-tls-cert' manager-help.txt
+          grep -q -- '--kata-socket-pattern' manager-help.txt
+
+      - name: Smoke-test node-agent --help
+        run: |
+          ./bin/node-agent --help 2>&1 | tee node-agent-help.txt
+          grep -q -- '-grpc-listen-addr' node-agent-help.txt
+          grep -q -- '-snapshot-root' node-agent-help.txt
+          grep -q -- '-snapshot-backend' node-agent-help.txt
+
+  link-check:
+    name: Markdown link check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          # Fail the build on broken internal links; external links remain
+          # warn-only for v0.1.0 so transient upstream outages do not block
+          # contributor PRs.
+          args: >-
+            --no-progress
+            --accept 200,204,206,429
+            --offline
+            './**/*.md'
+          fail: true
+
+  no-marker-in-source:
+    name: No TODO/FIXME/XXX/HACK markers in production source
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Grep Go sources for markers
+        # Excludes vendor/bin dirs; uses grep exit 1 as the fail signal
+        # and inverts it so this step succeeds only when no matches.
+        run: |
+          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.go" --exclude-dir=vendor --exclude-dir=bin . ; then
+            echo "::error::production Go sources contain TODO/FIXME/XXX/HACK markers; resolve or delete each one"
+            exit 1
+          fi
+
+      - name: Grep markdown docs for markers
+        # docs/launch/ is allowed (release-tracking files track future work)
+        # but every other .md must be marker-free.
+        run: |
+          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.md" --exclude-dir=docs/launch . ; then
+            echo "::error::markdown docs outside docs/launch/ contain TODO/FIXME/XXX/HACK markers"
+            exit 1
+          fi
+
+  no-insecure-flag-in-chart:
+    name: Chart templates are mTLS-only
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Grep chart for insecure flags
+        run: |
+          if grep -rE "auth-disabled|insecure-grpc" charts/setec/ ; then
+            echo "::error::chart templates/values still reference insecure flags; mTLS is mandatory"
+            exit 1
+          fi
+
+  no-unimplemented-in-frontend:
+    name: Frontend has no codes.Unimplemented
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Grep internal/frontend for Unimplemented
+        run: |
+          if grep -rn "codes.Unimplemented" internal/frontend/ ; then
+            echo "::error::internal/frontend still returns codes.Unimplemented; implement or delete the RPC"
+            exit 1
+          fi
+
+  # ---- examples (separate Go modules under examples/, unreachable by the
+  # reusable, which only knows the root module) ----
+  examples-build:
+    name: Examples build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - ai-code-exec
+          - ci-sandbox
+          - sec-research
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The committed go.mod pins a released setec tag (replace directives are
+      # forbidden by no-monorepo-shortcuts, #122). Apply an ephemeral replace
+      # here so the example is still validated against THIS PR's tree, not the
+      # last release. Never committed — the guard job checks out clean files.
+      - name: Point ${{ matrix.example }} at the PR tree
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          go mod edit -replace github.com/zeroroot-ai/setec=../..
+          go mod tidy
+
+      - name: Build ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: go build ./...
+
+  # ---- examples govulncheck (heavy tier / merge_group) ----
+  # Moved from the now-deleted security.yaml: that workflow's root-module
+  # govulncheck is superseded by the `heavy` job's reusable call above; these
+  # three example-module scans are preserved here (the reusable only reaches
+  # the root module). Scanner cadence -> merge_group per decision 9. Pinned
+  # to the same govulncheck version the reusable installs (v1.1.4) instead
+  # of the old `@latest`, so one PR/queue run sees one consistent version.
+  examples-govulncheck:
+    name: Examples govulncheck
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - ai-code-exec
+          - ci-sandbox
+          - sec-research
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      # Same ephemeral replace as examples-build: scan the example against the
+      # tree that is about to merge, not the last released setec tag.
+      - name: Point ${{ matrix.example }} at the merge tree
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          go mod edit -replace github.com/zeroroot-ai/setec=../..
+          go mod tidy
+
+      - name: run govulncheck on examples/${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: govulncheck ./...
+
+  # ---------------------------------------------------------------------------
+  # Gates moved in from their own workflow files so `ci-required` can cover them.
+  # ---------------------------------------------------------------------------
+  # `needs:` cannot cross workflow files, so every gate that the single required
+  # context must cover has to be defined here. Moving a job between files does
+  # NOT rename its check run: a check-run's context is the JOB name (or
+  # `<caller-job> / <reusable-job>` for a reusable call) and the workflow file
+  # name is not part of it. So `policy-guards / vault-auth-method-deny-list` --
+  # the context named in setec-required-checks, and the one empirically verified
+  # to report correctly under merge_group org-wide -- still reports under
+  # exactly that name. Do not rename these job ids.
+
+  # ---- from policy-guards.yml ----
+  # Behaviour change, deliberate: the old file carried
+  # `types: [opened, edited, synchronize, reopened, ready_for_review]`, copied
+  # from the pr-title-lint template. These guards read SOURCE, not PR metadata,
+  # so re-running them when a description is edited was waste, and
+  # `ready_for_review` is moot under a no-drafts policy (AGENTS.md ss4).
+  policy-guards:
+    name: policy-guards
+    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@9519931cc943fbaa76178b602e6c3ee35976fac0 # main
+  no-monorepo-shortcuts:
+    uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+  runs-on-lint:
+    uses: zeroroot-ai/.github/.github/workflows/runs-on-lint.yml@ad9d609dd4188b28b7f17b091fab797c8e3627c9 # main
+
+  # ---- from no-secrets-in-snapshot.yml ----
+  # Gains the merge_group lane by moving here, which is the point: it was
+  # `pull_request` + `push:main`, and a push-to-main run has nothing left to
+  # block. Pre-merge is where a scan gate has to be able to say no. The job is
+  # self-contained (unit tests + two self-tests + an optional artifact scan),
+  # so it needs no e2e snapshot to be present and behaves identically in the
+  # queue.
+  scan-gate:
+    name: no-secrets-in-snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit-test the secret detector
+        run: go test ./internal/snapshot/secretscan/... ./cmd/setec-snapshot-scan/...
+
+      - name: Build the snapshot scan gate
+        run: go build -o bin/setec-snapshot-scan ./cmd/setec-snapshot-scan
+
+      - name: Self-test — a leaky artifact MUST be rejected
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          printf 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIabc1234567890abcdEXAMPLEKEY12\n' > "$tmp/memory.bin"
+          if bin/setec-snapshot-scan "$tmp"; then
+            echo "::error::scan gate PASSED a known-leaky artifact — the gate is broken"
+            exit 1
+          fi
+          echo "scan gate correctly rejected the leaky fixture"
+
+      - name: Self-test — a clean artifact MUST pass
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          printf 'PORT=8080\nLOG_LEVEL=info\nbenign state\n' > "$tmp/state.bin"
+          bin/setec-snapshot-scan "$tmp"
+          echo "scan gate correctly accepted the clean fixture"
+
+      - name: Scan produced snapshot artifacts (if any)
+        run: |
+          set -euo pipefail
+          dir="${SETEC_SNAPSHOT_ARTIFACTS:-./.snapshot-artifacts}"
+          if [ -d "$dir" ]; then
+            echo "scanning snapshot artifacts under $dir"
+            bin/setec-snapshot-scan "$dir"
+          else
+            echo "no snapshot-artifact directory at $dir; nothing further to scan"
+          fi
+
+  # ---- the aggregator's own regression suite ----
+  # ci-required is the one thing standing between a red gate and main, so its
+  # logic is mutation-tested rather than asserted, and the suite is itself one
+  # of ci-required's dependencies.
+  ci-required-selftest:
+    name: ci-required-selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Mutation-test the aggregation logic
+        run: bash scripts/__tests__/ci-required-gate.test.sh
+
+      - name: Every gate job is covered by ci-required's needs
+        run: bash scripts/check-ci-required-coverage.sh .github/workflows/go-ci.yml
+
+  # ---- THE required status check ----
+  # setec-required-checks gated on two contexts while twenty jobs ran, so
+  # `Unit + envtest`, `Proto WIRE-breaking gate`, `Manifests up-to-date`,
+  # `Helm lint` and the rest could each report red without stopping a merge.
+  # Widening that list is not the fix: it lives in zeroroot-ai/.github
+  # (`rulesets/repo/setec.json`), a different repo from the workflows it names,
+  # so it falls behind on the first gate anyone adds. One context that `needs:`
+  # everything keeps both halves in this file.
+  #
+  # `if: always()` is mandatory, not stylistic: GitHub skips a `needs:` job
+  # whenever ANY dependency is skipped, and these gates are lane-split by design
+  # (most are pull_request-only, `heavy`/`test`/`examples-govulncheck` are
+  # merge_group-only), so without it this job would vanish on every run. An
+  # ABSENT required context does not fail the PR — it freezes merge-queue entry,
+  # which is strictly worse than a red check (.github#202).
+  #
+  # `${{ toJSON(needs) }}` rather than a hand-written job list: the script then
+  # cannot skip a dependency that IS listed here. The opposite risk — a gate job
+  # never listed here at all — is what ci-required-selftest's coverage check is
+  # for. See scripts/ci-required-gate.sh for the rest of the reasoning.
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - fast
+      - heavy
+      - lint
+      - proto-breaking
+      - test
+      - manifests-up-to-date
+      - proto-up-to-date
+      - helm-lint
+      - docker-build
+      - flag-smoke-test
+      - link-check
+      - no-marker-in-source
+      - no-insecure-flag-in-chart
+      - no-unimplemented-in-frontend
+      - examples-build
+      - examples-govulncheck
+      - policy-guards
+      - no-monorepo-shortcuts
+      - runs-on-lint
+      - scan-gate
+      - ci-required-selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Evaluate every gate result
+        env:
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        run: bash scripts/ci-required-gate.sh

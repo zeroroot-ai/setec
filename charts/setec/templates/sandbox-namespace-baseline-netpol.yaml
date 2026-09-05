@@ -1,0 +1,56 @@
+{{- range $ns := .Values.sandboxNamespaces }}
+{{- if eq $ns $.Values.namespace }}
+{{- fail (printf "sandboxNamespaces contains %q, which is the namespace this chart installs its own components into. The baseline policy denies all traffic for every Pod in the namespaces it names, so listing the operator's own namespace would cut off the operator, the frontend and the node agents. Give Sandboxes a namespace of their own." $ns) }}
+{{- end }}
+---
+# Namespace-wide default-deny for {{ $ns }}.
+#
+# WHAT THIS SELECTS, AND WHY IT IS podSelector: {}
+#
+# Every policy the operator generates per Sandbox selects on the
+# setec.zeroroot.ai/sandbox label, whose value is the Sandbox name. That
+# confines Pods the operator built from a Sandbox object. A Pod written
+# into this namespace by any other route carries no such label, is
+# selected by no policy, and is therefore unrestricted — Kubernetes
+# treats an unselected Pod as allow-all, not deny-all. A selector keyed
+# on that label can only ever confine workloads that cooperate by
+# wearing it, which is the wrong shape for a containment control.
+#
+# podSelector: {} selects every Pod in the namespace, present and
+# future, whatever it is labelled. NetworkPolicies union, so this
+# subtracts nothing from a Sandbox that has its own policy: a Sandbox
+# under external-only still reaches the internet. What it removes is the
+# unselected state itself.
+#
+# WHAT IT DOES NOT DO
+#
+# It does not stop such a Pod from being created — that is RBAC, not
+# NetworkPolicy. It does not apply to a Pod with hostNetwork: true,
+# which runs in the node's network namespace and is outside
+# NetworkPolicy enforcement; that case needs Pod Security Admission on
+# the namespace, which this chart does not own. And like every policy
+# here it is inert unless the cluster's CNI enforces NetworkPolicy.
+#
+# NO EXEMPTION SELECTOR IS OFFERED, deliberately. Any label an exempt
+# Pod could wear, a Pod written by an adversary could wear too. A
+# namespace listed here is a Sandbox-only namespace; infrastructure that
+# needs ordinary egress belongs in a different one.
+#
+# The operator applies the same policy at reconcile time (see
+# --namespace-baseline-deny), so namespaces created after install are
+# covered too. This template exists so the policy is in place before the
+# first Sandbox is ever reconciled.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: setec-sandbox-baseline-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+    setec.zeroroot.ai/managed-by: setec-operator
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}

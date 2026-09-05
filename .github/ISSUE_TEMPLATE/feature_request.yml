@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose an enhancement or new capability for Setec.
+title: "feat: "
+labels: ["kind/feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening a feature request, please check the [documentation](https://github.com/zeroroot-ai/setec/tree/main/docs) and existing issues. For larger proposals, see the spec-workflow reference in [CONTRIBUTING.md](https://github.com/zeroroot-ai/setec/blob/main/CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What can you not do today, or what is painful? Describe the user impact.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: A rough sketch of the behaviour you would like. Concrete API or CLI examples help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why you set them aside.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, references, related issues, or constraints that shape the design.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I am willing to contribute this feature or help with design.
+        - label: I understand that non-trivial changes may need a design document under `.spec-workflow/`.

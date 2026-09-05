@@ -1,0 +1,84 @@
+# Publish charts/setec as a versioned, signed OCI artifact.
+#
+# setec is a vendor-neutral OSS sandbox operator, and it is installed two ways:
+# on its own by anyone who wants microVM-isolated workloads, and as a dependency
+# of the gibson platform chart. Both need the SAME published artifact — a chart
+# that only exists inside another repo's vendor directory is a fork waiting to
+# happen, which is exactly what it became before this workflow existed.
+#
+# Fires on a release (the release-please tag) and on manual dispatch.
+name: publish-chart
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Chart version to publish (e.g. 0.113.1)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write  # OIDC — cosign keyless signing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="${{ github.event.inputs.version }}"
+          fi
+          [ -n "$v" ] || { echo "::error::empty version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: helm registry login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: cosign login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package, push, sign, verify
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          helm package charts/setec --version "$ver" --app-version "v$ver"
+          helm push "setec-$ver.tgz" oci://ghcr.io/zeroroot-ai/charts 2>&1 | tee /tmp/push.log
+          digest="$(awk '/^Digest: /{print $2}' /tmp/push.log)"
+          [ -n "$digest" ] || { echo "::error::no digest from helm push"; exit 1; }
+
+          cosign sign --yes "ghcr.io/zeroroot-ai/charts/setec@$digest"
+
+          # Verify against THIS repo's workflow identity. Deriving it from
+          # github.repository rather than hardcoding keeps it correct if the
+          # repo is ever renamed or moved.
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/publish-chart\.yml@" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "ghcr.io/zeroroot-ai/charts/setec@$digest"
+
+          # Prove the published artifact pulls and renders, not just that it pushed.
+          mkdir -p /tmp/pulled
+          helm pull "oci://ghcr.io/zeroroot-ai/charts/setec" --version "$ver" --destination /tmp/pulled
+          helm template setec "/tmp/pulled/setec-$ver.tgz" \
+            --set webhook.certManager.enabled=true \
+            --set webhook.certManager.issuerRef.name=probe \
+            --set 'sandboxNamespaces={probe}' >/dev/null
+          echo "✓ setec:$ver @ $digest — pushed, signed, verified, pulls and renders clean"

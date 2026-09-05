@@ -1,0 +1,19 @@
+# Baked by zeroroot-ai/setec packer/eks-kata-fc-ami.
+# Provisions the containerd devmapper thin-pool from local NVMe instance
+# store before containerd starts. Idempotent across reboots; rebuilds the
+# pool (and clears stale snapshotter state) after a stop/start wiped the
+# instance store. A node either boots kata-fc-capable or fails loudly here.
+[Unit]
+Description=Setec containerd devmapper thin-pool (local NVMe instance store)
+DefaultDependencies=no
+After=local-fs.target
+Before=containerd.service
+ConditionPathExists=/usr/local/sbin/setec-thinpool.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/setec-thinpool.sh
+
+[Install]
+WantedBy=multi-user.target

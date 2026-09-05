@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Equivalent kubectl-apply form of the ci-sandbox example. The client program
+# builds and injects the project tarball programmatically; this manifest is
+# for users who prefer to manage test runs as declarative Sandbox resources
+# (for example from a GitOps repository).
+apiVersion: setec.zeroroot.ai/v1alpha1
+kind: Sandbox
+metadata:
+  name: ci-sandbox-sample
+  namespace: default
+spec:
+  image: docker.io/library/node:20-slim
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      cd /workspace
+      npm ci
+      npm test
+  resources:
+    vcpu: 2
+    memory: 2Gi
+  lifecycle:
+    timeout: 30m

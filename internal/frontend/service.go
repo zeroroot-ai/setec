@@ -1,0 +1,856 @@
+/*
+Copyright 2026 The Setec Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package frontend
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
+	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// waitPollInterval is how often Wait polls the Sandbox's status. Keeping
+// it short (500ms) means callers see terminal phases quickly; it is
+// bounded by context so a client that Cancels gets the Cancel promptly.
+const waitPollInterval = 500 * time.Millisecond
+
+// streamLogsPodPollInterval is how often StreamLogs polls for the Pod
+// to reach a phase where log bytes are available. Kept aligned with
+// waitPollInterval so the operator event cadence is consistent.
+const streamLogsPodPollInterval = 1 * time.Second
+
+// streamLogsPodPollTimeout bounds the Follow=true wait for the Pod to
+// become loggable. 30s matches the Requirement 2.5 budget.
+const streamLogsPodPollTimeout = 30 * time.Second
+
+// workloadContainerName is the name the podspec builder assigns to the
+// workload container. Duplicated here (rather than imported) to keep
+// the frontend free of a dependency on the podspec package.
+const workloadContainerName = "workload"
+
+// maxLogLineBytes caps one log line. It matches the kubelet's own log
+// line limit and is what keeps a workload that emits something huge on
+// a single line from growing the frontend's buffer without bound.
+const maxLogLineBytes = 1024 * 1024
+
+// TenantResolver maps a TenantID to the Kubernetes namespace the
+// frontend should operate against. Implementations typically list
+// namespaces with the tenant label and return the first match.
+type TenantResolver interface {
+	NamespaceFor(ctx context.Context, t tenancy.TenantID) (string, error)
+}
+
+// Service is the SandboxService implementation backed by a
+// controller-runtime client. It enforces tenant scoping on every RPC:
+// no matter what sandbox_id a caller passes, the service confirms the
+// CR is in the caller's tenant namespace before acting.
+type Service struct {
+	setecv1grpc.UnimplementedSandboxServiceServer
+
+	// Client is the controller-runtime client used for CR operations.
+	// Required.
+	Client client.Client
+
+	// Clientset is the client-go clientset used for operations that
+	// controller-runtime's cached client does not surface well
+	// (notably Pods/log streaming). Required for StreamLogs; other
+	// RPCs degrade gracefully when nil.
+	Clientset kubernetes.Interface
+
+	// TenantResolver maps a tenant identity to its namespace. Required
+	// unless AuthDisabled is true.
+	TenantResolver TenantResolver
+
+	// AuthDisabled, when true, skips TLS peer cert extraction and uses
+	// DefaultNamespace for every call. Exists SOLELY for unit-test
+	// convenience — the production frontend binary never sets this
+	// field and no command-line flag exposes it. Setting it in
+	// production would have no effect because the gRPC server refuses
+	// to start without TLS certs.
+	AuthDisabled bool
+
+	// DefaultNamespace is the namespace used when AuthDisabled is true.
+	// Unit-test-only, same as AuthDisabled above.
+	DefaultNamespace string
+
+	// RESTConfig is the client-go REST config Exec opens pods/exec
+	// streams with. Required for Exec; every other RPC ignores it. A
+	// frontend started without one refuses Exec loudly rather than
+	// failing commands that never ran.
+	RESTConfig *rest.Config
+
+	// execer overrides the exec transport. Unexported and nil in
+	// production, where RESTConfig serves every exec; tests set it
+	// because no fake clientset can carry a pods/exec upgrade.
+	execer containerExecutor
+
+	// execReadyTimeout overrides how long Exec waits for a session's
+	// microVM to reach Running (including a resume). Zero means
+	// defaultExecReadyTimeout. Unexported: tests shrink it, production
+	// takes the default.
+	execReadyTimeout time.Duration
+
+	// logOpener overrides how container log streams are opened. It is
+	// unexported and left nil in production, where Clientset serves
+	// every open; tests set it because the fake clientset can never
+	// refuse an attach, which is precisely the failure the fallback
+	// path exists for.
+	logOpener podLogOpener
+}
+
+// resolveNamespace returns the namespace for the caller. mTLS-authenticated
+// path extracts tenant from peer cert and delegates to TenantResolver;
+// insecure path returns DefaultNamespace.
+func (s *Service) resolveNamespace(ctx context.Context) (string, error) {
+	if s.AuthDisabled {
+		if s.DefaultNamespace == "" {
+			return "", status.Error(codes.FailedPrecondition,
+				"AuthDisabled set but DefaultNamespace empty")
+		}
+		return s.DefaultNamespace, nil
+	}
+	tid, err := TenantFromContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if s.TenantResolver == nil {
+		return "", status.Error(codes.FailedPrecondition, "TenantResolver not configured")
+	}
+	ns, err := s.TenantResolver.NamespaceFor(ctx, tid)
+	if err != nil {
+		return "", status.Errorf(codes.PermissionDenied,
+			"tenant %q has no accessible namespace: %v", tid, err)
+	}
+	return ns, nil
+}
+
+// parseSandboxID splits a sandbox_id of the form <namespace>/<name>/<uid>
+// into its components. Returns InvalidArgument if the id shape is wrong.
+func parseSandboxID(id string) (ns, name string, err error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 {
+		return "", "", status.Errorf(codes.InvalidArgument,
+			"sandbox_id %q must be <namespace>/<name>/<uid>", id)
+	}
+	return parts[0], parts[1], nil
+}
+
+// Launch translates LaunchRequest into a Sandbox CR create.
+func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*setecv1grpc.LaunchResponse, error) {
+	ns, err := s.resolveNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.GetImage() == "" {
+		return nil, status.Error(codes.InvalidArgument, "image is required")
+	}
+	if len(req.GetCommand()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "command must have at least one entry")
+	}
+
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "sbx-",
+			Namespace:    ns,
+		},
+		Spec: setecv1alpha1.SandboxSpec{
+			SandboxClassName: req.GetSandboxClass(),
+			Image:            req.GetImage(),
+			Command:          append([]string(nil), req.GetCommand()...),
+		},
+	}
+
+	if r := req.GetResources(); r != nil {
+		sb.Spec.Resources = setecv1alpha1.Resources{
+			VCPU: int32(r.GetVcpu()),
+		}
+		if mem := r.GetMemory(); mem != "" {
+			q, err := resource.ParseQuantity(mem)
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument,
+					"resources.memory %q: %v", mem, err)
+			}
+			sb.Spec.Resources.Memory = q
+		}
+	}
+	if n := req.GetNetwork(); n != nil {
+		sb.Spec.Network = &setecv1alpha1.Network{
+			Mode: setecv1alpha1.NetworkMode(n.GetMode()),
+		}
+		for _, a := range n.GetAllow() {
+			sb.Spec.Network.Allow = append(sb.Spec.Network.Allow, setecv1alpha1.NetworkAllow{
+				Host: a.GetHost(),
+				Port: int32(a.GetPort()),
+			})
+		}
+	}
+	if lc := req.GetLifecycle(); lc != nil {
+		spec, err := lifecycleFromRequest(lc)
+		if err != nil {
+			return nil, err
+		}
+		sb.Spec.Lifecycle = spec
+	}
+	for k, v := range req.GetEnv() {
+		sb.Spec.Env = append(sb.Spec.Env, corev1.EnvVar{Name: k, Value: v})
+	}
+
+	if err := s.Client.Create(ctx, sb); err != nil {
+		return nil, status.Errorf(grpcCodeFor(err),
+			"create Sandbox: %v", err)
+	}
+
+	return &setecv1grpc.LaunchResponse{
+		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
+		Name:      sb.Name,
+		Namespace: sb.Namespace,
+		// Read back from the created object, not the request, so any
+		// admission-time defaulting of the class is what gets reported.
+		SandboxClass: sb.Spec.SandboxClassName,
+	}, nil
+}
+
+// lifecycleFromRequest maps the wire Lifecycle message onto the CRD
+// Lifecycle spec, validating the timeout duration, the mode enum, and
+// the workspace quantities. A nil result (with nil error) means the
+// request carried an empty Lifecycle message and the CR field stays
+// unset — preserving pre-lifecycle ephemeral semantics exactly.
+func lifecycleFromRequest(lc *setecv1grpc.Lifecycle) (*setecv1alpha1.Lifecycle, error) {
+	out := &setecv1alpha1.Lifecycle{}
+	set := false
+
+	if t := lc.GetTimeout(); t != "" {
+		d, err := time.ParseDuration(t)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"lifecycle.timeout %q: %v", t, err)
+		}
+		out.Timeout = &metav1.Duration{Duration: d}
+		set = true
+	}
+
+	switch mode := lc.GetMode(); mode {
+	case "":
+		// Unset: the CRD default (ephemeral) applies.
+	case string(setecv1alpha1.LifecycleModeEphemeral), string(setecv1alpha1.LifecycleModeSession):
+		out.Mode = setecv1alpha1.LifecycleMode(mode)
+		set = true
+	default:
+		return nil, status.Errorf(codes.InvalidArgument,
+			"lifecycle.mode %q: must be %q or %q",
+			mode, setecv1alpha1.LifecycleModeEphemeral, setecv1alpha1.LifecycleModeSession)
+	}
+
+	if ws := lc.GetWorkspace(); ws != nil {
+		if out.Mode != setecv1alpha1.LifecycleModeSession {
+			return nil, status.Error(codes.InvalidArgument,
+				`lifecycle.workspace requires lifecycle.mode "session"`)
+		}
+		w := &setecv1alpha1.WorkspaceSpec{}
+		if s := ws.GetSize(); s != "" {
+			q, err := resource.ParseQuantity(s)
+			if err != nil {
+				return nil, status.Errorf(codes.InvalidArgument,
+					"lifecycle.workspace.size %q: %v", s, err)
+			}
+			w.Size = &q
+		}
+		if sc := ws.GetStorageClassName(); sc != "" {
+			w.StorageClassName = &sc
+		}
+		out.Workspace = w
+		set = true
+	}
+
+	if !set {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// Wait polls the Sandbox until it reaches a terminal phase and returns.
+// The caller's context controls the timeout; no server-side deadline.
+func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*setecv1grpc.WaitResponse, error) {
+	ns, name, err := parseSandboxID(req.GetSandboxId())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+		return nil, err
+	}
+
+	for {
+		sb := &setecv1alpha1.Sandbox{}
+		if err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sb); err != nil {
+			return nil, status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
+		}
+		if isTerminal(sb.Status.Phase) {
+			resp := &setecv1grpc.WaitResponse{
+				Phase:  string(sb.Status.Phase),
+				Reason: sb.Status.Reason,
+			}
+			if sb.Status.ExitCode != nil {
+				resp.ExitCode = *sb.Status.ExitCode
+			}
+			// Report the backend the operator actually selected
+			// (status.runtime.chosen). Left empty when the Sandbox
+			// terminated before a backend was ever resolved.
+			if rt := sb.Status.Runtime; rt != nil {
+				resp.Runtime = rt.Chosen
+			}
+			return resp, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		case <-time.After(waitPollInterval):
+		}
+	}
+}
+
+// Kill deletes the Sandbox CR. Owner-reference GC collects the Pod and
+// any NetworkPolicy.
+//
+// A positive grace_seconds is honored by deleting the Sandbox Pod with
+// that grace period BEFORE the Sandbox object. The order matters: the
+// API server lets a later delete only shorten a grace period already
+// set on an object, never lengthen it. Owner-reference GC and the
+// session teardown finalizer both delete the Pod with no explicit
+// grace, which the API server treats as "keep the pending graceful
+// deletion" once one is under way, so the caller's value is the one
+// the kubelet enforces: SIGTERM now, SIGKILL after grace_seconds.
+func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*setecv1grpc.KillResponse, error) {
+	ns, name, err := parseSandboxID(req.GetSandboxId())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+		return nil, err
+	}
+	grace := req.GetGraceSeconds()
+	if grace < 0 {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"grace_seconds must be zero or positive, got %d", grace)
+	}
+
+	if grace > 0 {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: podNameFor(name)},
+		}
+		if err := s.Client.Delete(ctx, pod, client.GracePeriodSeconds(grace)); err != nil &&
+			!apierrors.IsNotFound(err) {
+			return nil, status.Errorf(grpcCodeFor(err), "delete Sandbox Pod with grace: %v", err)
+		}
+	}
+
+	sb := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+	}
+	if err := s.Client.Delete(ctx, sb); err != nil {
+		if apierrors.IsNotFound(err) {
+			return &setecv1grpc.KillResponse{}, nil
+		}
+		return nil, status.Errorf(grpcCodeFor(err), "delete Sandbox: %v", err)
+	}
+	return &setecv1grpc.KillResponse{}, nil
+}
+
+// StreamLogs streams the Pod's workload-container log bytes to the
+// gRPC client. Tenant scope is enforced up-front; the Sandbox and its
+// owned Pod must both live in the caller's resolved namespace.
+//
+// Follow semantics match the underlying kubectl-style GetLogs call:
+// when Follow is false the server sends every available log byte and
+// closes cleanly on EOF; when Follow is true the server keeps the
+// stream open until either the underlying container exits, the client
+// cancels, or streamLogsPodPollTimeout elapses waiting for the Pod to
+// reach a loggable phase.
+//
+// tail_lines bounds where the stream starts. A client reconnecting to
+// a Sandbox that has been up for weeks sets it and receives that many
+// trailing lines plus every new one, instead of the whole history.
+func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1grpc.SandboxService_StreamLogsServer) error {
+	ctx := stream.Context()
+
+	ns, name, err := parseSandboxID(req.GetSandboxId())
+	if err != nil {
+		return err
+	}
+	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+		return err
+	}
+	tail := req.GetTailLines()
+	if tail < 0 {
+		return status.Errorf(codes.InvalidArgument,
+			"tail_lines must be zero or positive, got %d", tail)
+	}
+
+	// Resolve the Sandbox so we can surface NotFound distinctly from
+	// Pod-not-yet-created (which is FailedPrecondition).
+	sb := &setecv1alpha1.Sandbox{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sb); err != nil {
+		return status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
+	}
+
+	// An open client stream is caller activity: while it lives the
+	// session's last-activity annotation is heartbeaten so the operator
+	// never idle-evicts a session someone is watching (ADR-0006), and
+	// the final stamp on disconnect starts the idle clock there.
+	if sb.Spec.IsSession() {
+		stopHeartbeat := s.keepSessionActive(ctx, ns, name)
+		defer stopHeartbeat()
+	}
+
+	if s.Clientset == nil {
+		return status.Error(codes.FailedPrecondition,
+			"StreamLogs: kubernetes clientset is not configured on the frontend")
+	}
+
+	podName := podNameFor(name)
+	pod, err := s.waitForLoggablePod(ctx, ns, podName, req.GetFollow())
+	if err != nil {
+		return err
+	}
+
+	// A run-to-completion Sandbox commonly finishes before its caller
+	// attaches. There is nothing left to follow at that point, and a
+	// Follow attach against a dead container is refused by the kubelet
+	// — which used to lose the workload's entire output (setec#263).
+	// Serve the captured log instead.
+	follow := req.GetFollow() && !workloadContainerTerminated(pod)
+
+	window := logWindow{Follow: follow}
+	if tail > 0 {
+		window.TailLines = &tail
+	}
+
+	logStream, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, window)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			// Client hung up before the stream opened; no error
+			// surfaced because this is a normal shutdown shape.
+			return nil
+		}
+		if apierrors.IsNotFound(err) {
+			return status.Errorf(codes.FailedPrecondition,
+				"Pod %q not found; wait for the Sandbox to reach Running before streaming logs",
+				podName)
+		}
+		if apierrors.IsForbidden(err) {
+			return status.Errorf(codes.PermissionDenied, "get logs: %v", err)
+		}
+		return status.Errorf(codes.Internal, "open log stream: %v", err)
+	}
+	defer func() {
+		_ = logStream.Close()
+	}()
+
+	outcome, err := relayLogStream(ctx, logStream, stream, logAnchor{})
+	if err != nil {
+		return err
+	}
+	if outcome.SourceErr == nil {
+		return nil
+	}
+	return s.resumeAfterBrokenLogStream(ctx, ns, podName, stream, outcome)
+}
+
+// resumeAfterBrokenLogStream recovers the tail of a log stream that
+// broke before EOF — the shape a container termination takes when it
+// lands mid-follow. It re-reads the log from the instant of the last
+// line the caller received and emits only what follows it, so partial
+// output is never lost and never duplicated. If the re-read is
+// impossible the original source failure is surfaced.
+//
+// The re-read is anchored on that instant rather than on a count of
+// lines from the start of the log. A Sandbox that has run for weeks
+// has a log the kubelet has already rotated, which makes any position
+// counted from the beginning wrong, and re-reading it whole to throw
+// most of it away is work proportional to the run, not to the gap.
+func (s *Service) resumeAfterBrokenLogStream(
+	ctx context.Context,
+	ns, podName string,
+	stream setecv1grpc.SandboxService_StreamLogsServer,
+	first relayOutcome,
+) error {
+	if ctx.Err() != nil {
+		// The caller is gone; a broken read is the expected shape.
+		return nil
+	}
+	window := logWindow{}
+	if !first.Anchor.Stamp.IsZero() {
+		// SinceTime has one-second resolution, so the window opens at
+		// the top of the anchor's second and relayLogStream drops the
+		// lines inside it the caller already has.
+		since := metav1.NewTime(first.Anchor.Stamp.Truncate(time.Second))
+		window.Since = &since
+	}
+	remaining, err := openWorkloadLogs(ctx, s.podLogOpener(), ns, podName, window)
+	if err != nil {
+		return status.Errorf(codes.Internal, "read log stream: %v", first.SourceErr)
+	}
+	defer func() {
+		_ = remaining.Close()
+	}()
+
+	outcome, err := relayLogStream(ctx, remaining, stream, first.Anchor)
+	if err != nil {
+		return err
+	}
+	if outcome.SourceErr != nil {
+		return status.Errorf(codes.Internal, "read log stream: %v", outcome.SourceErr)
+	}
+	return nil
+}
+
+// podLogOpener returns the seam StreamLogs opens container logs
+// through. Production wiring goes to the clientset; tests substitute a
+// stub because the fake clientset can never fail an attach.
+func (s *Service) podLogOpener() podLogOpener {
+	if s.logOpener != nil {
+		return s.logOpener
+	}
+	return clientsetLogOpener(s.Clientset)
+}
+
+// podLogOpener opens a byte stream of a Pod container's logs.
+type podLogOpener func(ctx context.Context, ns, podName string, opts *corev1.PodLogOptions) (io.ReadCloser, error)
+
+// clientsetLogOpener adapts a Kubernetes clientset to podLogOpener.
+func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
+	return func(ctx context.Context, ns, podName string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+		return cs.CoreV1().Pods(ns).GetLogs(podName, opts).Stream(ctx)
+	}
+}
+
+// logWindow selects which part of a container's log a read covers.
+// The zero value is the whole log the kubelet still holds, read to EOF.
+type logWindow struct {
+	// Follow keeps the read open for new lines after the existing ones.
+	Follow bool
+
+	// TailLines, when non-nil, starts the read that many lines from the
+	// end of the log. It is what bounds a reconnect to a long-lived
+	// Sandbox.
+	TailLines *int64
+
+	// Since, when non-nil, starts the read at that instant. Resolution
+	// is one second, which is all PodLogOptions carries.
+	Since *metav1.Time
+}
+
+// options renders the window as the PodLogOptions a GetLogs call takes.
+// Timestamps are always on: they are what lets a resumed read position
+// itself in the log, and relayLogStream strips them before the bytes
+// reach the caller.
+func (w logWindow) options() *corev1.PodLogOptions {
+	return &corev1.PodLogOptions{
+		Container:  workloadContainerName,
+		Follow:     w.Follow,
+		Timestamps: true,
+		TailLines:  w.TailLines,
+		SinceTime:  w.Since,
+	}
+}
+
+// openWorkloadLogs opens the workload container's log byte stream over
+// the given window. When a Follow attach is refused — the container
+// terminated between the status read and the attach, which is the
+// whole failure mode of setec#263 — it retries once as a completed-log
+// read, because Kubernetes serves the logs of a terminated container
+// perfectly well. Errors that a retry cannot fix (missing Pod, RBAC
+// denial, a caller that hung up) are returned as-is, and if the retry
+// fails too the original attach error is surfaced because it is the
+// informative one.
+func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string, w logWindow) (io.ReadCloser, error) {
+	rc, err := open(ctx, ns, podName, w.options())
+	if err == nil || !w.Follow {
+		return rc, err
+	}
+	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) ||
+		errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return nil, err
+	}
+
+	completed := w
+	completed.Follow = false
+	rc, retryErr := open(ctx, ns, podName, completed.options())
+	if retryErr != nil {
+		return nil, err
+	}
+	return rc, nil
+}
+
+// workloadContainerTerminated reports whether the Pod's workload
+// container has already exited, so following it would attach to
+// nothing. A Pod can still report Running while its single workload
+// container has terminated, so the container status is authoritative;
+// a terminal Pod phase without container statuses counts as
+// terminated.
+func workloadContainerTerminated(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == workloadContainerName {
+			return cs.State.Terminated != nil
+		}
+	}
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+// waitForLoggablePod polls the Pod until it reaches a phase where the
+// kubelet exposes container log bytes (Running, Succeeded, or Failed),
+// and returns that Pod so the caller can decide whether following it
+// still makes sense. When follow is false and the Pod already exists
+// in any phase the call returns immediately so callers can fetch
+// terminal logs of an already-exited Sandbox. When follow is true and
+// the Pod has yet to progress past Pending the call waits up to
+// streamLogsPodPollTimeout and returns FailedPrecondition on timeout
+// so the client sees a clean remediation path.
+func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, follow bool) (*corev1.Pod, error) {
+	deadline := time.Now().Add(streamLogsPodPollTimeout)
+	ticker := time.NewTicker(streamLogsPodPollInterval)
+	defer ticker.Stop()
+
+	for {
+		pod := &corev1.Pod{}
+		err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: podName}, pod)
+		switch {
+		case apierrors.IsNotFound(err):
+			if !follow {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Pod %q not yet created; wait for the Sandbox to reach Running", podName)
+			}
+		case err != nil:
+			return nil, status.Errorf(grpcCodeFor(err), "get Pod: %v", err)
+		default:
+			if podLogsAvailable(pod) {
+				return pod, nil
+			}
+			if !follow {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"Pod %q is in phase %q; no logs available", podName, pod.Status.Phase)
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"timed out waiting for Pod %q to reach a loggable phase", podName)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// podLogsAvailable reports whether the kubelet is willing to serve log
+// bytes for the Pod. Running, Succeeded, and Failed all satisfy this;
+// Pending and Unknown do not.
+func podLogsAvailable(pod *corev1.Pod) bool {
+	switch pod.Status.Phase {
+	case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// logAnchor marks the last log line a caller has already received, so
+// a second pass over the same log resumes exactly after it. The zero
+// value means nothing has been delivered yet.
+type logAnchor struct {
+	// Stamp is the kubelet timestamp of that line.
+	Stamp time.Time
+	// Count is how many lines carrying exactly Stamp were delivered.
+	// Two lines can share a timestamp, so the instant alone does not
+	// identify a position.
+	Count int
+}
+
+// advance records that a line stamped ts has been delivered.
+func (a *logAnchor) advance(ts time.Time) {
+	if ts.Equal(a.Stamp) {
+		a.Count++
+		return
+	}
+	a.Stamp = ts
+	a.Count = 1
+}
+
+// delivered reports whether a line stamped ts, the n-th one at that
+// instant seen in this pass, was already sent under this anchor.
+func (a logAnchor) delivered(ts time.Time, seenAtStamp int) bool {
+	if a.Stamp.IsZero() {
+		return false
+	}
+	if ts.Before(a.Stamp) {
+		return true
+	}
+	return ts.Equal(a.Stamp) && seenAtStamp <= a.Count
+}
+
+// relayOutcome reports what one pass over a log source achieved.
+type relayOutcome struct {
+	// Anchor is where the pass stopped, so a follow-up pass over the
+	// same log resumes after the last line the caller received.
+	Anchor logAnchor
+	// SourceErr is non-nil when the log source broke before EOF. It
+	// is reported separately from the returned error because a broken
+	// source is recoverable — the container's completed log still
+	// holds the bytes — whereas a failed Send is not.
+	SourceErr error
+}
+
+// splitLogTimestamp splits a kubelet log line into its RFC3339Nano
+// timestamp and the workload's own bytes. A line the kubelet did not
+// stamp is returned whole with ok=false; it is forwarded as-is,
+// because losing output is worse than forwarding a line that a resumed
+// pass cannot position.
+func splitLogTimestamp(line []byte) (time.Time, []byte, bool) {
+	i := bytes.IndexByte(line, ' ')
+	if i <= 0 {
+		return time.Time{}, line, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, string(line[:i]))
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return ts, line[i+1:], true
+}
+
+// relayLogStream reads the Pod log stream line-by-line and forwards
+// each line as a StreamLogsResponse over the gRPC server-streaming
+// channel. It strips the kubelet timestamp the read always asks for,
+// and drops any line the anchor says the caller already received, so a
+// resumed pass repeats nothing. A client cancel becomes a clean return
+// (no error and no SourceErr); a failed Send is fatal and returned as
+// Internal; a broken source is reported in the outcome for the caller
+// to recover from.
+//
+// One line at a time is the whole buffer: nothing accumulates across
+// the loop, and a single line is capped at maxLogLineBytes, so the
+// memory a stream costs does not grow with how long the Sandbox has
+// been running.
+func relayLogStream(
+	ctx context.Context,
+	r io.Reader,
+	stream setecv1grpc.SandboxService_StreamLogsServer,
+	from logAnchor,
+) (relayOutcome, error) {
+	out := relayOutcome{Anchor: from}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
+
+	seenAtStamp := 0
+	var lastStamp time.Time
+	for scanner.Scan() {
+		ts, payload, stamped := splitLogTimestamp(scanner.Bytes())
+		if stamped {
+			if ts.Equal(lastStamp) {
+				seenAtStamp++
+			} else {
+				lastStamp, seenAtStamp = ts, 1
+			}
+			if from.delivered(ts, seenAtStamp) {
+				continue
+			}
+		}
+		chunk := &setecv1grpc.StreamLogsResponse{
+			Data:   append(append([]byte(nil), payload...), '\n'),
+			Stream: "stdout",
+		}
+		if err := stream.Send(chunk); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				return out, nil
+			}
+			return out, status.Errorf(codes.Internal, "send log chunk: %v", err)
+		}
+		if stamped {
+			out.Anchor.advance(ts)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return out, nil
+		}
+		out.SourceErr = err
+	}
+	return out, nil
+}
+
+// checkTenantNamespace is the tenant-scope guard. It verifies the
+// requested namespace is the caller's resolved namespace.
+func (s *Service) checkTenantNamespace(ctx context.Context, ns string) error {
+	mine, err := s.resolveNamespace(ctx)
+	if err != nil {
+		return err
+	}
+	if mine != ns {
+		return status.Errorf(codes.PermissionDenied,
+			"tenant does not own namespace %q", ns)
+	}
+	return nil
+}
+
+// isTerminal mirrors the controller's isTerminalPhase; duplicated here
+// to avoid importing the controller package from the frontend (keeps
+// dependencies acyclic).
+func isTerminal(p setecv1alpha1.SandboxPhase) bool {
+	return p == setecv1alpha1.SandboxPhaseCompleted || p == setecv1alpha1.SandboxPhaseFailed
+}
+
+// grpcCodeFor maps K8s API errors to sensible gRPC status codes.
+func grpcCodeFor(err error) codes.Code {
+	switch {
+	case apierrors.IsNotFound(err):
+		return codes.NotFound
+	case apierrors.IsAlreadyExists(err):
+		return codes.AlreadyExists
+	case apierrors.IsForbidden(err):
+		return codes.PermissionDenied
+	case apierrors.IsConflict(err):
+		return codes.Aborted
+	case apierrors.IsInvalid(err):
+		return codes.InvalidArgument
+	default:
+		return codes.Internal
+	}
+}
