@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.0](https://github.com/zeroroot-ai/setec/compare/v0.113.0...v0.114.0) (2026-09-05)
+
+
+### Features
+
+* **chart:** publish charts/setec as a signed OCI artifact ([#388](https://github.com/zeroroot-ai/setec/issues/388)) ([cb0f556](https://github.com/zeroroot-ai/setec/commit/cb0f556e836c6f7a0a09e488e41da2e5e5ceace0))
+
+
+### Bug Fixes
+
+* **chart:** split pods/exec into its own role, and order SandboxClass behind the webhook ([#386](https://github.com/zeroroot-ai/setec/issues/386)) ([db3b74a](https://github.com/zeroroot-ai/setec/commit/db3b74a36edb8eec9b4f71c8963cac68dd6757a9))
+
 ## [0.113.0](https://github.com/zeroroot-ai/setec/compare/v0.112.2...v0.113.0) (2026-09-01)
 
 
