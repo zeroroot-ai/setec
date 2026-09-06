@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+rules:
+  # The runtime-agent reads the node it runs on and writes the
+  # setec.zeroroot.ai/runtime.<backend>=true|false labels the operator's
+  # node affinity selects on, plus the setec.zeroroot.ai/runtime-probe
+  # annotation carrying the probe detail.
+  #
+  # RBAC cannot restrict WHICH labels a client may set, nor WHICH node it
+  # may set them on: neither key scoping nor "the object named by the
+  # caller's own node" is representable in the RBAC policy language. A
+  # DaemonSet also shares one ServiceAccount across every node, so there is
+  # no per-node credential to bind resourceNames to.
+  #
+  # The narrowing therefore lives in admission, not here. The
+  # ValidatingAdmissionPolicy in runtime-agent-node-guard.yaml holds this
+  # ServiceAccount to the setec.zeroroot.ai/runtime.* label prefix and the
+  # one probe annotation, rejects any other change to the object, and —
+  # on clusters that bind node identity into ServiceAccount tokens —
+  # rejects a write aimed at a node other than the agent's own.
+  #
+  # nodes/status is deliberately NOT granted (GHSA-p8f8-3qpw-7h93). The
+  # agent used to publish its probe detail as a SetecRuntimes node
+  # condition, which required nodes/status: patch cluster-wide — a verb
+  # whose holder can rewrite any node's allocatable capacity and readiness
+  # conditions, on every node, and so degrade or halt scheduling
+  # cluster-wide. Nothing read the condition back. The detail is an
+  # annotation now and the grant is gone.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+  # Emit events on nodes for probe failures.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-runtime-agent
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" . }}-runtime-agent
+    namespace: {{ .Values.namespace }}

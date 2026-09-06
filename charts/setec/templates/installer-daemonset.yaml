@@ -1,0 +1,105 @@
+{{- if .Values.installer.enabled }}
+{{- include "setec.validateInstaller" . -}}
+# Portable node installer (ADR-0003, issue #187). Converges any x86
+# KVM-capable node to boot kata-fc Firecracker microVMs: stock Kata
+# payload from the image, devmapper thin-pool with boot ordering,
+# containerd registration. Idempotent and ownership-aware — see
+# internal/installer for the convergence contract.
+#
+# THREAT MODEL / WHY PRIVILEGED IS ACCEPTABLE HERE. This pod writes the
+# host's /opt, /etc/systemd and containerd config, and restarts
+# containerd — that IS the product, exactly like kata-deploy. Two things
+# bound the blast radius:
+#   1. No Kubernetes credentials: no ServiceAccount is mounted
+#      (automountServiceAccountToken: false) and no RBAC object exists
+#      for it, so a compromise of this pod is a compromise of ONE node,
+#      never of the cluster API.
+#   2. hostNetwork stays off; only hostPID (needed so systemd inside the
+#      chroot recognises the host's PID 1) and the / hostPath mount are
+#      granted.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "setec.fullname" . }}-installer
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: installer
+spec:
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: installer
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: installer
+    spec:
+      # No API access by design: the RuntimeClass is rendered by the
+      # chart and node labels are owned by the runtime-agent.
+      automountServiceAccountToken: false
+      hostPID: true
+      hostNetwork: false
+      hostIPC: false
+      nodeSelector:
+        {{- toYaml .Values.installer.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.installer.tolerations | nindent 8 }}
+      containers:
+        - name: installer
+          image: "{{ .Values.installer.image.repository }}:{{ .Values.installer.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.installer.image.pullPolicy }}
+          args:
+            - --host-root=/host
+            - --payload-dir=/opt/kata
+            - --pool-name={{ .Values.installer.thinpool.poolName }}
+            - --thinpool-mode={{ .Values.installer.thinpool.mode }}
+            - --loop-dir={{ .Values.installer.thinpool.loopDir }}
+            - --loop-data-gb={{ int .Values.installer.thinpool.loopDataSizeGB }}
+            - --loop-meta-gb={{ int .Values.installer.thinpool.loopMetaSizeGB }}
+            {{- if .Values.installer.thinpool.dataDevice }}
+            - --data-device={{ .Values.installer.thinpool.dataDevice }}
+            {{- end }}
+            {{- if .Values.installer.thinpool.metadataDevice }}
+            - --metadata-device={{ .Values.installer.thinpool.metadataDevice }}
+            {{- end }}
+            - --verify-interval={{ .Values.installer.verifyInterval }}
+            - --health-addr=:{{ .Values.installer.healthPort }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.installer.healthPort }}
+              protocol: TCP
+          # Readiness only, no liveness: a node that cannot converge
+          # surfaces as a NotReady installer pod (visible, debuggable)
+          # rather than a restart loop that hides the log.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            {{- toYaml .Values.installer.resources | nindent 12 }}
+          securityContext:
+            # Privileged + root: writes host files, creates loop/dm
+            # devices, restarts containerd. See the threat-model comment
+            # at the top of this file.
+            privileged: true
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              # HostToContainer so mounts that appear on the host after
+              # pod start (the freshly attached loop devices, dm nodes)
+              # propagate into the installer's view.
+              mountPropagation: HostToContainer
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+      terminationGracePeriodSeconds: 30
+{{- end }}

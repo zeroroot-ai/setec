@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Configures the "Generate release notes" button on the Releases page.
+# When a new release is drafted, GitHub walks the commits/PRs since the
+# previous tag and groups them into the categories below based on the
+# PR labels. Entries without any matching label drop into "Other changes"
+# at the bottom. Entries whose labels are all in `exclude.labels` are
+# dropped entirely.
+#
+# Label taxonomy is maintained in the repo's label settings; dependabot
+# tags its PRs with `dependencies` automatically.
+#
+# Docs: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes#configuring-automatically-generated-release-notes
+
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+    authors:
+      - dependabot
+
+  categories:
+    - title: "⚠️ Breaking Changes"
+      labels:
+        - breaking-change
+    - title: "🚨 Security"
+      labels:
+        - security
+    - title: "✨ Features"
+      labels:
+        - enhancement
+    - title: "🐛 Bug Fixes"
+      labels:
+        - bug
+    - title: "🧰 Helm Chart"
+      labels:
+        - helm
+    - title: "📦 Dependencies"
+      labels:
+        - dependencies
+    - title: "📚 Documentation"
+      labels:
+        - documentation
+    - title: "🧪 Tests"
+      labels:
+        - tests
+    - title: "🔧 CI / Tooling"
+      labels:
+        - ci
+        - release
+    - title: "🔀 Other Changes"
+      labels:
+        - "*"

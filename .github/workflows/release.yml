@@ -1,0 +1,72 @@
+# Tag-driven release workflow for Setec.
+#
+# Image builds have moved to images.yml (org reusable, slice 1.2, .github#47).
+# This workflow handles the v0.1.0 smoke-test gate and the draft GitHub Release.
+#
+# Triggers on semver-shaped tag pushes (v* — including pre-releases like
+# v0.1.0-alpha.1).
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # Pre-build gate: for exact v0.1.0 tags only, refuse the release until
+  # docs/launch/v0.1.0-smoke-test-result.md has been filled in by the
+  # maintainer. The file exists in the repo as a template; the gate
+  # fails the release when the Phase 1/Phase 2 sections still contain
+  # "FAILED" or "TBD", which is the hand-filled maintainer output.
+  smoke-test-result-gate:
+    name: v0.1.0 smoke-test result gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.ref == 'refs/tags/v0.1.0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify smoke-test result file exists
+        run: |
+          if [ ! -f docs/launch/v0.1.0-smoke-test-result.md ]; then
+            echo "::error::docs/launch/v0.1.0-smoke-test-result.md is missing; fill it in before tagging"
+            exit 1
+          fi
+
+      - name: Verify no FAILED or TBD in Phase 1/Phase 2 sections
+        # Heuristic check: the template contains "TBD" and "FAILED"
+        # placeholders that the maintainer replaces with real outcomes.
+        # Any remaining FAILED in Phase 1/2 blocks the release; any
+        # remaining TBD means the smoke test wasn't run.
+        run: |
+          if grep -E "FAILED|TBD" docs/launch/v0.1.0-smoke-test-result.md ; then
+            echo "::error::docs/launch/v0.1.0-smoke-test-result.md still contains FAILED or TBD; run the smoke test and record real outcomes"
+            exit 1
+          fi
+
+  draft-release:
+    name: Create draft GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [smoke-test-result-gate]
+    if: always() && (needs.smoke-test-result-gate.result == 'success' || needs.smoke-test-result-gate.result == 'skipped')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Create or update draft GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true

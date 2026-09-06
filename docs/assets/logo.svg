@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Setec logo.
+
+  Design rationale:
+    * A geometric uppercase "S" built from two interlocking bracket strokes.
+    * The two brackets suggest containment (an inner face enclosed on both
+      sides) without being literal about padlocks, VHS tapes, or anything.
+    * Monochrome base (near-black) plus a single warm accent used sparingly
+      on the inner bracket to give the mark a focal point.
+    * ViewBox 256x256 so it scales without fuss; stroke widths are kept
+      round so the mark survives downrastering to 32x32.
+    * Hand-authored: every coordinate is intentional and readable. Not a
+      Figma export.
+
+  Colors:
+    ink      #101216  : primary strokes and wordmark
+    accent   #F25C54  : single accent applied to inner bracket notch
+    paper    #FAFAFA  : background so the logo renders on light and dark
+                        surfaces without touching up
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256" height="256"
+     role="img" aria-label="Setec">
+  <title>Setec</title>
+
+  <!-- Background chip. Square with gently rounded corners. -->
+  <rect x="0" y="0" width="256" height="256" rx="32" ry="32" fill="#FAFAFA"/>
+
+  <!--
+    Outer bracket: the left half of the "S". Two horizontal arms hug
+    the top and bottom; a vertical spine ties them on the left. This is
+    the "upper" half of the S-curve plus its return.
+  -->
+  <g fill="none" stroke="#101216" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter">
+    <!-- Top arm, travels right from the left spine -->
+    <path d="M 56 72 L 184 72"/>
+    <!-- Left spine, descends from the top arm to the middle -->
+    <path d="M 56 72 L 56 136"/>
+    <!-- Middle crossbar (shared edge with the inner bracket) -->
+    <path d="M 56 136 L 168 136"/>
+  </g>
+
+  <!--
+    Inner bracket: the right half of the "S". Mirror image of the outer.
+    The small "notch" where the two brackets meet is the containment motif.
+  -->
+  <g fill="none" stroke="#101216" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter">
+    <!-- Middle crossbar continuation -->
+    <path d="M 88 136 L 200 136"/>
+    <!-- Right spine, descends from the crossbar to the bottom arm -->
+    <path d="M 200 136 L 200 200"/>
+    <!-- Bottom arm, travels left -->
+    <path d="M 200 200 L 72 200"/>
+  </g>
+
+  <!--
+    Accent mark: a short vertical stroke inside the notch where the
+    two brackets interlock. This is the only place the accent color
+    appears, so it reads as a focal point even at 32x32.
+  -->
+  <rect x="118" y="120" width="20" height="32" fill="#F25C54"/>
+</svg>

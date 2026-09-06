@@ -1,0 +1,29 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: setec
+Upstream-Contact: security@setec.zeroroot.ai
+Source: https://github.com/zeroroot-ai/setec
+
+# Binary brand assets: SVG, PNG, ICO. REUSE expects copyright/license
+# information for every file; PNG/ICO cannot carry SPDX comments, so
+# they inherit Apache-2.0 via this manifest.
+
+Files: docs/assets/logo.svg docs/assets/logo-*.png docs/assets/favicon.ico docs/assets/social-preview.png
+Copyright: 2026 The Setec Authors
+License: Apache-2.0
+
+# Top-level LICENSE is the canonical text. REUSE requires the license
+# file to live under LICENSES/ using the SPDX short identifier.
+Files: LICENSE
+Copyright: 2026 The Setec Authors
+License: Apache-2.0
+
+# Go sum files are machine-generated lockfiles. They have no author
+# and no creative content but REUSE still wants them accounted for.
+Files: go.sum examples/*/go.sum
+Copyright: 2026 The Setec Authors
+License: Apache-2.0
+
+# Helm chart metadata and lock files.
+Files: charts/setec/Chart.yaml charts/setec/values.yaml charts/setec/templates/* charts/setec/crds/* charts/setec/grafana/* charts/setec/prometheus/*
+Copyright: 2026 The Setec Authors
+License: Apache-2.0

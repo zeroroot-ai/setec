@@ -1,0 +1,33 @@
+{{- if and .Values.nodeAgent.enabled .Values.snapshots.enabled }}
+# Headless Service selecting the node-agent DaemonSet pods. The
+# operator dials individual nodes via DNS names of the form
+# <pod-name>.<service>.<namespace>.svc.cluster.local:50052. Since the
+# DaemonSet uses the node name in its Pod naming scheme via the
+# downward API (NODE_NAME), this renders a stable per-node endpoint
+# pattern suitable for the --nodeagent-endpoint-pattern flag.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "setec.fullname" . }}-node-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+spec:
+  # ClusterIP: None makes this a headless Service; DNS returns the
+  # per-pod addresses so the operator's endpoint pattern resolves to
+  # the node-agent running on the specific node.
+  clusterIP: None
+  selector:
+    {{- include "setec.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+  ports:
+    - name: grpc
+      port: 50052
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

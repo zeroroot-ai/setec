@@ -1,0 +1,250 @@
+{{- if .Values.frontend.enabled -}}
+{{- if eq .Values.credentials.mode "file" -}}
+{{- if not .Values.frontend.tlsCertSecretName -}}
+{{- fail "frontend.tlsCertSecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS." -}}
+{{- end -}}
+{{- if not .Values.frontend.tlsClientCASecretName -}}
+{{- fail "frontend.tlsClientCASecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS (client-cert verification)." -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.frontend.sandboxNamespace .Values.frontend.tenantNamespaceLabel -}}
+{{- fail "frontend.sandboxNamespace and frontend.tenantNamespaceLabel are mutually exclusive: Sandboxes either all share one fixed namespace or are routed to a per-tenant namespace by label, never both (setec#158)." -}}
+{{- end -}}
+{{- if and .Values.frontend.sandboxNamespace (not .Values.rbac.allowClusterWideSandboxWrite) (not (has .Values.frontend.sandboxNamespace .Values.sandboxNamespaces)) -}}
+{{- fail (printf "frontend.sandboxNamespace %q must be listed in sandboxNamespaces: that list is where the operator's Pod-write RBAC is bound and where the default-deny NetworkPolicy is installed, so a namespace outside it can hold Sandbox CRs but never run one." .Values.frontend.sandboxNamespace) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      serviceAccountName: {{ include "setec.fullname" . }}-frontend
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          args:
+            - --listen-addr={{ .Values.frontend.listenAddr }}
+            - --metrics-addr=:{{ .Values.frontend.metricsPort }}
+            {{- with .Values.frontend.sandboxNamespace }}
+            - --sandbox-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.frontend.tenantNamespaceLabel }}
+            - --tenant-namespace-label={{ . }}
+            {{- end }}
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            {{- range .Values.credentials.spiffe.authorizedIDs.frontendClients }}
+            - --spiffe-authorized-id={{ . }}
+            {{- end }}
+            {{- else }}
+            - --tls-cert=/etc/setec/tls/tls.crt
+            - --tls-key=/etc/setec/tls/tls.key
+            - --tls-client-ca=/etc/setec/tls-ca/ca.crt
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.frontend.metricsPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            {{- if eq .Values.credentials.mode "spiffe" }}
+            - name: spiffe-workload-api
+              mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
+              readOnly: true
+            {{- else }}
+            - name: tls
+              mountPath: /etc/setec/tls
+              readOnly: true
+            - name: tls-ca
+              mountPath: /etc/setec/tls-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if eq .Values.credentials.mode "spiffe" }}
+        {{- /* The socket's directory, not the socket file: the SPIRE agent
+        recreates the socket on restart, and a hostPath to the file would
+        pin the old inode. Directory (not DirectoryOrCreate) so a node
+        without a Workload API fails Pod creation loudly instead of
+        booting a frontend that can never fetch an SVID. */}}
+        - name: spiffe-workload-api
+          hostPath:
+            path: {{ dir .Values.credentials.spiffe.socketPath }}
+            type: Directory
+        {{- else }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.frontend.tlsCertSecretName }}
+        - name: tls-ca
+          secret:
+            secretName: {{ .Values.frontend.tlsClientCASecretName }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  selector:
+    {{- include "setec.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: grpc
+      port: {{ .Values.frontend.servicePort }}
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.frontend.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  # patch: the frontend stamps the last-activity annotation on session
+  # Sandboxes (Attach + stream heartbeats) so the operator's idle
+  # eviction can tell an active session from an abandoned one, and
+  # flips spec.desiredState to Running when an Exec arrives for a
+  # paused or suspended session (ADR-0008 auto-resume). Both are
+  # narrow merge patches; the frontend never writes status.
+  - apiGroups: ["setec.zeroroot.ai"]
+    resources: [sandboxes]
+    verbs: [create, delete, get, list, patch, watch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  # Reads stay cluster-wide: the frontend resolves a Sandbox to its Pod
+  # and streams that Pod's log. Neither verb enters a container.
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-frontend
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" . }}-frontend
+    namespace: {{ .Values.namespace }}
+---
+{{- /*
+=============================================================================
+Where the frontend is allowed to ENTER a Pod.
+=============================================================================
+
+`SandboxService.Exec` runs a command inside an already-running session's
+workload container, so the frontend needs `pods/exec: create`. That verb
+is a pod-entry grant: the holder steps into a process that already has
+its ServiceAccount token, its mounted Secrets and, on this platform, its
+SPIFFE SVID. No admission policy runs on a subresource, so the binding
+scope is the whole of the control.
+
+Sandbox Pods only ever run in the namespaces named in `sandboxNamespaces`
+— the render fails above when `frontend.sandboxNamespace` is outside that
+list — so the grant is RoleBound into exactly those namespaces and is
+never cluster-wide. A namespace that holds a platform identity is
+therefore out of reach.
+
+Upstream setec v0.113.0 put this rule in the cluster-wide `-frontend`
+ClusterRole above. deploy narrows it here and carries the same split
+upstream (setec#383). It mirrors the operator's own Pod-write split in
+sandbox-namespace-rbac.yaml, including the explicit cluster-wide escape
+hatch for a dynamic Sandbox-namespace scheme.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-exec
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+{{- if .Values.rbac.allowClusterWideSandboxWrite }}
+---
+# EXPLICIT cluster-wide grant, chosen by setting
+# rbac.allowClusterWideSandboxWrite: true. This lets the frontend exec into
+# ANY Pod in the cluster, which reaches every platform identity if the
+# frontend is compromised. Prefer listing sandboxNamespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-exec
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" . }}-frontend-exec
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" . }}-frontend
+    namespace: {{ .Values.namespace }}
+{{- else }}
+{{- range $ns := .Values.sandboxNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "setec.fullname" $ }}-frontend-exec
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "setec.fullname" $ }}-frontend-exec
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.fullname" $ }}-frontend
+    namespace: {{ $.Values.namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

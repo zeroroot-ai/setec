@@ -1,0 +1,131 @@
+# Setec chart overlay for the local single-node k3s dev cluster.
+#
+# Every override below is annotated with the reason for the deviation from
+# the chart's defaults. Production deployments use SPIRE for TLS material,
+# multi-node sandbox pools with taints, and a real LoadBalancer/Ingress —
+# none of which apply on a single-node dev box.
+
+# Run images built from the WORKING TREE, not GHCR release tags. The only
+# published release (0.0.1) predates this chart and crashes on flags the chart
+# now passes (e.g. the manager rejects --runtimes-config), and the runtime-agent
+# image was never published at all. So build locally and import into k3s:
+#   for c in manager frontend node-agent runtime-agent; do
+#     img=ghcr.io/zeroroot-ai/setec${c:+-$c}; [ "$c" = manager ] && img=ghcr.io/zeroroot-ai/setec
+#     docker build --build-arg CMD=$c -t $img:dev .
+#   done
+#   docker save ...:dev | sudo k3s ctr -n k8s.io images import -
+# pullPolicy: Never forces the locally-loaded image and fails loud
+# (ErrImageNeverPull) if an import was missed — never silently pulls a
+# stale/absent :dev from GHCR.
+image:
+  tag: "dev"
+  pullPolicy: Never
+
+frontend:
+  # The chart defaults frontend.enabled to false (production deployments
+  # may run the operator without exposing a gRPC API). Dev always wants
+  # the frontend — it's the Setec product surface.
+  enabled: true
+  image:
+    tag: "dev"
+    pullPolicy: Never
+  # Dev TLS material delivered via Secrets created by 40-install-setec.sh
+  # from the dev PKI under ../pki/. Production delivers via SPIRE.
+  tlsCertSecretName: setec-frontend-tls
+  tlsClientCASecretName: setec-frontend-ca
+
+  # Single-node dev sizing — keep memory low so the node has headroom for
+  # operator + sandbox workloads on the same host.
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Standard listen + service ports. NodePort exposure is bolted on via a
+  # sibling Service (manifests/setec-nodeport.yaml) because the chart does
+  # not template a NodePort field today.
+  listenAddr: ":50051"
+  servicePort: 50051
+
+operator:
+  # Single-node dev: the operator co-locates with the sandbox workloads on
+  # the only node (no taint isolation). Production uses a separate system
+  # pool with sandbox-pool taint tolerations.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+nodeAgent:
+  # Dev cluster runs node-agent everywhere (DaemonSet default). No phase-2
+  # thin-pool config needed for the local smoke; defaults are fine.
+  enabled: true
+  image:
+    tag: "dev"
+    pullPolicy: Never
+
+# The node-level runtime-agent DaemonSet was added to the chart after 0.0.1 and
+# has no published image, so it must also run the working-tree build.
+runtimeAgent:
+  image:
+    tag: "dev"
+    pullPolicy: Never
+  # This cluster is k3s, so the containerd runtime-handler registrations the
+  # kata probes verify live under /var/lib/rancher/k3s/agent/etc/containerd
+  # (written by 20-install-kata.sh), not /etc/containerd. Without this mount
+  # the agent cannot see them and publishes no kata capability labels
+  # (setec#243).
+  mountK3sContainerdConfig: true
+
+# The portable installer DaemonSet (ADR-0003) is the chart's DEFAULT
+# node-prep path, but this dev cluster's node prep is kata-deploy-owned
+# (20-install-kata.sh) — the installer would detect that and stand down
+# anyway, but running it here would also require building + importing its
+# payload-carrying image (Dockerfile.installer) like every other :dev
+# image. Keep it off; the installer path is exercised by
+# test/e2e/installer_test.go (SETEC_E2E_INSTALLER=1) with the working-tree
+# image:
+#   docker build -f Dockerfile.installer -t ghcr.io/zeroroot-ai/setec-installer:dev .
+#   docker save ghcr.io/zeroroot-ai/setec-installer:dev | sudo k3s ctr -n k8s.io images import -
+installer:
+  enabled: false
+
+# The dev cluster installs its isolation backends OUT OF BAND, before this
+# chart: kata-deploy (20-install-kata.sh) owns the kata-fc + kata-qemu
+# RuntimeClasses, and 21-install-gvisor.sh owns the gvisor RuntimeClass. So
+# every backend is `enabled: true` (the operator + admission webhook accept
+# SandboxClasses that reference them) but `install: false` (the chart does
+# NOT render the RuntimeClass object — otherwise Helm refuses the install
+# with "RuntimeClass kata-fc ... cannot be imported into the current release",
+# since kata-deploy already owns it). runc stays disabled (it's only set up by
+# the opt-in `up-all` target's 22-install-runc-profile.sh).
+runtimes:
+  kata-fc:
+    enabled: true
+    install: false
+    # The operator stamps Sandbox VM pods with this overhead, and the K8s
+    # RuntimeClass admission controller requires it to EQUAL the RuntimeClass's
+    # own overhead exactly. Because this cluster uses kata-deploy's kata-fc
+    # RuntimeClass (install:false), it must match kata-deploy's podFixed
+    # (cpu 250m / memory 130Mi) — the chart default (128Mi) is rejected with
+    # "Pod's Overhead doesn't match RuntimeClass's defined Overhead".
+    defaultOverhead:
+      cpu: 250m
+      memory: 130Mi
+  kata-qemu:
+    enabled: true
+    install: false
+    # kata-deploy's kata-qemu RuntimeClass podFixed is cpu 250m / memory 160Mi.
+    defaultOverhead:
+      cpu: 250m
+      memory: 160Mi
+  gvisor:
+    enabled: true
+    install: false

@@ -1,0 +1,59 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.SDK_FANOUT_APP_ID }}
+          private-key: ${{ secrets.SDK_FANOUT_APP_PRIVATE_KEY }}
+          owner: zeroroot-ai
+          repositories: setec
+
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Publish version-tagged images in the SAME run that cut the release
+  # (setec#131). release-please pushes its tag with the default GITHUB_TOKEN,
+  # and GitHub deliberately does not fire `on: push: tags:` workflows from
+  # GITHUB_TOKEN pushes (anti-recursion) — so images.yml's tag trigger never
+  # saw a release and ghcr only ever carried main/latest/sha-* tags, while
+  # the Helm chart defaults image tags to .Chart.AppVersion. Chaining via
+  # workflow_call avoids the trigger problem without needing a repo PAT
+  # (setec has none); same pattern as gibson's publish-authz-registry.
+  release-images:
+    name: release-images
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/images.yml
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      version_tag: ${{ needs.release-please.outputs.tag_name }}

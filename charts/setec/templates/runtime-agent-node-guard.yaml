@@ -1,0 +1,147 @@
+{{- if .Values.runtimeAgent.nodeGuard.enabled }}
+# Node-write guard for the runtime-agent ServiceAccount
+# (GHSA-p8f8-3qpw-7h93).
+#
+# WHY RBAC IS NOT ENOUGH
+#
+# The agent has to write two things onto a Node: the
+# setec.zeroroot.ai/runtime.<backend> labels the operator's node affinity
+# selects on, and the setec.zeroroot.ai/runtime-probe annotation carrying
+# the probe detail. The smallest RBAC rule that permits either is
+# `nodes: patch`, and RBAC has no way to say WHICH keys or WHICH node —
+# resourceNames cannot express "the node this Pod runs on", and a
+# DaemonSet shares one ServiceAccount across every node, so there is no
+# per-node credential to scope. `nodes: patch` therefore hands every agent
+# in the cluster the ability to rewrite any node's spec (taints,
+# unschedulable) and any node's labels — including the very capability
+# labels the operator trusts to decide where a Sandbox runs, and which it
+# has no independent way to verify.
+#
+# WHAT THIS POLICY ADDS
+#
+# Admission can express what RBAC cannot: it sees the old object and the
+# new one, and it sees who is asking. The two validations below hold the
+# agent to the keys it is supposed to own, and to the node it is supposed
+# to own them on.
+#
+# matchConditions scopes every rule to the runtime-agent's ServiceAccount.
+# Nothing here constrains the kubelet, the cloud controller manager, the
+# cluster autoscaler or an administrator; a policy that did would be an
+# outage, not a control.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent-node-guard
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["nodes"]
+  matchConditions:
+    # has() before the comparison is not defensive noise: a matchCondition
+    # that ERRORS is resolved by failurePolicy, and failurePolicy here is
+    # Fail. An expression that could error on an unexpected request shape
+    # would therefore reject Node updates from the kubelet — every node in
+    # the cluster, immediately. The guard makes the condition total.
+    - name: only-the-runtime-agent
+      expression: >-
+        has(request.userInfo) && has(request.userInfo.username)
+        && request.userInfo.username ==
+        'system:serviceaccount:{{ .Values.namespace }}:{{ include "setec.fullname" . }}-runtime-agent'
+  variables:
+    - name: setecLabel
+      expression: "'setec.zeroroot.ai/runtime.'"
+    - name: probeAnnotation
+      expression: "'setec.zeroroot.ai/runtime-probe'"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: newLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: newAnnotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+  validations:
+    # 1. Only the agent's own keys may differ.
+    #
+    # Both directions are checked. Scanning only the new object would miss
+    # a DELETED key, and deleting kubernetes.io/hostname or a topology
+    # label is as disruptive as forging one.
+    - expression: >-
+        variables.newLabels.all(k, k.startsWith(variables.setecLabel)
+          || (k in variables.oldLabels && variables.oldLabels[k] == variables.newLabels[k]))
+        && variables.oldLabels.all(k, k.startsWith(variables.setecLabel)
+          || (k in variables.newLabels && variables.newLabels[k] == variables.oldLabels[k]))
+        && variables.newAnnotations.all(k, k == variables.probeAnnotation
+          || (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k]))
+        && variables.oldAnnotations.all(k, k == variables.probeAnnotation
+          || (k in variables.newAnnotations && variables.newAnnotations[k] == variables.oldAnnotations[k]))
+        && object.spec == oldObject.spec
+      reason: Forbidden
+      message: >-
+        the Setec runtime-agent may only add, change or remove Node labels
+        prefixed setec.zeroroot.ai/runtime. and the
+        setec.zeroroot.ai/runtime-probe annotation. Every other label,
+        annotation and the whole of spec must be left as it was.
+    # 2. The agent may only write the node it runs on.
+    #
+    # authentication.kubernetes.io/node-name is added to the request's user
+    # info by the API server when the ServiceAccount token carries a node
+    # binding (Kubernetes 1.31+, ServiceAccountTokenPodNodeInfo). It comes
+    # from the token, not from anything the Pod can set, so an agent cannot
+    # claim to be on a node it is not.
+    #
+    {{- if .Values.runtimeAgent.nodeGuard.requireNodeIdentity }}
+    # requireNodeIdentity is on: a request that carries no node claim is
+    # REJECTED. Correct, and it costs nothing on a cluster that binds node
+    # identity into its tokens — verify that before turning this on, or
+    # every probe write fails.
+    - expression: >-
+        has(request.userInfo.extra)
+        && 'authentication.kubernetes.io/node-name' in request.userInfo.extra
+        && request.userInfo.extra['authentication.kubernetes.io/node-name'].all(n,
+          n == object.metadata.name)
+      reason: Forbidden
+      message: >-
+        the Setec runtime-agent may only write the Node it runs on, and this
+        request carried no verifiable node identity. runtimeAgent.nodeGuard.requireNodeIdentity
+        is set, so a request the API server cannot bind to a node is rejected.
+    {{- else }}
+    # requireNodeIdentity is off (the default): the claim is enforced when
+    # the cluster supplies it and skipped when it does not, so installing
+    # this chart on a cluster that predates the feature does not break the
+    # agent. On such a cluster validation 1 still holds — an agent is
+    # confined to the setec keys, just not to one node's copy of them.
+    # Turn requireNodeIdentity on once every node is on 1.31+.
+    - expression: >-
+        !has(request.userInfo.extra)
+        || !('authentication.kubernetes.io/node-name' in request.userInfo.extra)
+        || request.userInfo.extra['authentication.kubernetes.io/node-name'].all(n,
+          n == object.metadata.name)
+      reason: Forbidden
+      message: >-
+        the Setec runtime-agent may only write the Node it runs on. This request
+        came from an agent whose token is bound to a different node.
+    {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-runtime-agent-node-guard
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-agent
+spec:
+  policyName: {{ include "setec.fullname" . }}-runtime-agent-node-guard
+  validationActions:
+    - Deny
+  # No matchResources narrowing: Nodes are cluster-scoped, and the policy's
+  # matchConditions already restricts it to one ServiceAccount.
+  matchResources: {}
+{{- end }}

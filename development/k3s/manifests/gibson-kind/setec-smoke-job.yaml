@@ -1,0 +1,150 @@
+# Cross-cluster smoke Job: runs inside the Kind 'gibson' cluster, dials the
+# Setec frontend on the k3s cluster at host.docker.internal:30051, launches a
+# trivial sandbox, asserts exit code 0.
+#
+# Requires: extraHosts: host-gateway in the Kind cluster config (see README).
+# Requires: Secret setec-client-tls applied to the gibson namespace
+#           (produced by 65-smoke-cross-cluster.sh from the dev PKI).
+#
+# The Go source is mounted from a ConfigMap and built via `go run` inside the
+# job pod. Self-contained — no remote module dependency at runtime aside from
+# fetching github.com/zeroroot-ai/setec for the gRPC client stubs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: setec-smoke-source
+  namespace: gibson
+data:
+  go.mod: |
+    module setec-smoke
+
+    go 1.25
+
+    require (
+        github.com/zeroroot-ai/setec v0.0.2
+        google.golang.org/grpc v1.72.2
+    )
+  main.go: |
+    package main
+
+    import (
+        "context"
+        "crypto/tls"
+        "crypto/x509"
+        "fmt"
+        "io"
+        "log"
+        "os"
+        "time"
+
+        sandboxv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
+        "google.golang.org/grpc"
+        "google.golang.org/grpc/credentials"
+    )
+
+    // Setec frontend address. Override via SETEC_ADDR env var. Default is the
+    // host LAN IP on port 30051 (the NodePort the dev k3s cluster exposes).
+    // The LAN IP is reachable from Kind Pods without any Kind cluster config
+    // changes, whereas host.docker.internal requires `extraHosts: host-gateway`
+    // in the Kind cluster config — we avoid that by taking the LAN route.
+    var addr = os.Getenv("SETEC_ADDR")
+
+    func main() {
+        if addr == "" {
+            log.Fatal("SETEC_ADDR not set")
+        }
+        ca, err := os.ReadFile("/etc/setec-tls/ca.crt")
+        if err != nil { log.Fatalf("read ca: %v", err) }
+        cert, err := tls.LoadX509KeyPair("/etc/setec-tls/client.crt", "/etc/setec-tls/client.key")
+        if err != nil { log.Fatalf("load client cert: %v", err) }
+        pool := x509.NewCertPool()
+        if !pool.AppendCertsFromPEM(ca) { log.Fatal("ca append") }
+
+        creds := credentials.NewTLS(&tls.Config{
+            Certificates: []tls.Certificate{cert},
+            RootCAs:      pool,
+            ServerName:   "setec-frontend.setec-system.svc",
+            MinVersion:   tls.VersionTLS12,
+        })
+
+        ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+        defer cancel()
+
+        conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
+        if err != nil { log.Fatalf("dial %s: %v", addr, err) }
+        defer conn.Close()
+        cli := sandboxv1.NewSandboxServiceClient(conn)
+
+        launch, err := cli.Launch(ctx, &sandboxv1.LaunchRequest{
+            Image:     "alpine:3",
+            Command:   []string{"echo", "smoke from kind"},
+            Resources: &sandboxv1.Resources{Vcpu: 1, Memory: "128Mi"},
+        })
+        if err != nil { log.Fatalf("launch: %v", err) }
+        sid := launch.GetSandboxId()
+        fmt.Printf("launched sandbox %s\n", sid)
+
+        // Stream logs concurrently so we capture stdout
+        logsDone := make(chan struct{})
+        go func() {
+            defer close(logsDone)
+            stream, err := cli.StreamLogs(ctx, &sandboxv1.StreamLogsRequest{SandboxId: sid, Follow: true})
+            if err != nil { log.Printf("stream logs: %v", err); return }
+            for {
+                chunk, err := stream.Recv()
+                if err == io.EOF { return }
+                if err != nil { log.Printf("recv: %v", err); return }
+                os.Stdout.Write(chunk.GetData())
+            }
+        }()
+
+        wait, err := cli.Wait(ctx, &sandboxv1.WaitRequest{SandboxId: sid})
+        if err != nil { log.Fatalf("wait: %v", err) }
+        <-logsDone
+        if wait.GetExitCode() != 0 {
+            log.Fatalf("non-zero exit: %d (%s)", wait.GetExitCode(), wait.GetReason())
+        }
+        fmt.Println("PASS: cross-cluster mTLS gRPC + sandbox lifecycle verified")
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setec-smoke-cross-cluster
+  namespace: gibson
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: smoke
+          image: golang:1.25-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              apk add --no-cache git ca-certificates >/dev/null
+              mkdir -p /work && cd /work
+              cp /src/go.mod /src/main.go .
+              go mod tidy
+              go run main.go
+          volumeMounts:
+            - name: src
+              mountPath: /src
+            - name: tls
+              mountPath: /etc/setec-tls
+              readOnly: true
+          env:
+            - name: GOPROXY
+              value: "https://proxy.golang.org,direct"
+            - name: SETEC_ADDR
+              value: "__SETEC_ADDR__"  # substituted by 65-smoke-cross-cluster.sh
+      volumes:
+        - name: src
+          configMap:
+            name: setec-smoke-source
+        - name: tls
+          secret:
+            secretName: setec-client-tls

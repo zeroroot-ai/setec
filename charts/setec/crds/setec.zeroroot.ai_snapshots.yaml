@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: snapshots.setec.zeroroot.ai
+spec:
+  group: setec.zeroroot.ai
+  names:
+    kind: Snapshot
+    listKind: SnapshotList
+    plural: snapshots
+    shortNames:
+    - snap
+    singular: snapshot
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.sandboxClass
+      name: Class
+      type: string
+    - jsonPath: .spec.size
+      name: Size
+      type: integer
+    - jsonPath: .spec.node
+      name: Node
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Snapshot is the Schema for the snapshots API. A Snapshot is a
+          namespaced representation of a saved microVM state (CPU state,
+          memory, and associated metadata). Snapshots are produced by the
+          operator + node-agent at the user's request (via
+          Sandbox.spec.snapshot.create=true) and consumed by later Sandboxes
+          via spec.snapshotRef.name. Snapshots are node-local: they cannot be
+          restored across nodes without a future cross-node migration backend.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of the Snapshot.
+            properties:
+              imageRef:
+                description: |-
+                  ImageRef is the OCI reference the source Sandbox was running at
+                  snapshot time. The restore-target Sandbox's image MUST match
+                  (empty image on the Sandbox is allowed — the snapshot's image is
+                  used verbatim).
+                minLength: 1
+                type: string
+              kernelVersion:
+                description: |-
+                  KernelVersion is the guest kernel version used by the source
+                  sandbox at snapshot time. Mismatches between snapshot and
+                  restore-target kernels cause the Validator to reject the restore.
+                type: string
+              node:
+                description: |-
+                  Node is the name of the node holding the state files. Sandboxes
+                  restoring from this snapshot are pinned to this node via
+                  Pod.Spec.NodeName.
+                minLength: 1
+                type: string
+              sandboxClass:
+                description: |-
+                  SandboxClass is the name of the SandboxClass this snapshot is
+                  compatible with. A Sandbox restoring from this snapshot MUST
+                  reference the same class; the snapshot.Validator enforces the
+                  match.
+                minLength: 1
+                type: string
+              sha256:
+                description: |-
+                  SHA256 is the hex-encoded SHA256 digest of the persisted state
+                  file, written alongside the state on disk and verified on
+                  restore. Populated by the operator; must not be edited.
+                type: string
+              size:
+                description: |-
+                  Size is the size in bytes of the persisted snapshot state
+                  (state.bin + memory.bin). Populated by the operator at creation.
+                format: int64
+                minimum: 0
+                type: integer
+              sourceSandbox:
+                description: |-
+                  SourceSandbox is the name of the Sandbox the snapshot was taken
+                  from. May be empty for pool-origin snapshots that were never tied
+                  to a user Sandbox.
+                type: string
+              storageBackend:
+                description: |-
+                  StorageBackend names the backend that wrote the state files
+                  (e.g. "local-disk"). Phase 3 ships only local-disk; future phases
+                  may add object-store etc.
+                minLength: 1
+                type: string
+              storageRef:
+                description: |-
+                  StorageRef is the opaque backend reference the node-agent uses to
+                  locate the state files. For local-disk this is the snapshot ID
+                  under the configured snapshot root. Users SHOULD treat this as
+                  opaque.
+                minLength: 1
+                type: string
+              ttl:
+                description: |-
+                  TTL optionally bounds the lifetime of the snapshot. Once the
+                  snapshot is older than TTL AND no Sandbox references it, the
+                  SnapshotReconciler deletes it. When unset, snapshots live until
+                  explicitly deleted or garbage-collected by namespace deletion.
+                type: string
+              vmm:
+                description: |-
+                  VMM is the virtual machine monitor the snapshot is compatible
+                  with. Cross-VMM restore is not supported.
+                enum:
+                - firecracker
+                - qemu
+                - cloud-hypervisor
+                type: string
+            required:
+            - imageRef
+            - node
+            - sandboxClass
+            - storageBackend
+            - storageRef
+            - vmm
+            type: object
+          status:
+            description: status reflects the observed state of the Snapshot.
+            properties:
+              lastTransitionTime:
+                description: |-
+                  LastTransitionTime is the timestamp of the most recent phase
+                  change.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Creating
+                - Ready
+                - Failed
+                - Terminating
+                type: string
+              reason:
+                description: |-
+                  Reason is a short, machine-readable explanation for the current
+                  phase (e.g. "InsufficientStorage", "NodeAgentUnreachable",
+                  "NameConflict").
+                type: string
+              referenceCount:
+                description: |-
+                  ReferenceCount is the number of Sandboxes currently pointing at
+                  this Snapshot via spec.snapshotRef, observed by the
+                  SnapshotReconciler via a field indexer. The finalizer is kept
+                  while ReferenceCount > 0.
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

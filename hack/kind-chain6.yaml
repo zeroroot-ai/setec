@@ -1,0 +1,20 @@
+# kind topology for the chain-6 exit test (.github/workflows/exit-test-session-affinity.yml).
+#
+# Two nodes, not one. A Sandbox requests a whole CPU (spec.resources.vcpu is
+# an integer with a floor of 1, and the pod builder turns it into a 1-CPU
+# request and limit). On a single-node cluster that CPU has to come from
+# what is left after the control plane, CoreDNS, kindnet and the operator
+# took theirs, and on a 2-vCPU hosted runner that is less than one:
+#
+#   0/1 nodes are available: 1 Insufficient cpu.
+#
+# That is what kept blocker 6 red from 2026-08-30 to 2026-09-01, on every
+# daily run, while the session code was fine. A worker node runs only
+# kubelet, kube-proxy and kindnet, so it has almost the whole host free and
+# the Sandbox lands there on a 2-core and a 4-core runner alike. kind sizes
+# each node from the host, so the worker costs nothing extra.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker

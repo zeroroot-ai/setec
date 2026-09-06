@@ -1,0 +1,338 @@
+// Copyright 2026 The Setec Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+syntax = "proto3";
+
+package setec.v1;
+
+import "api/grpc/v1/sandbox.proto";
+
+option go_package = "github.com/zeroroot-ai/setec/api/grpc/v1;setecv1grpc";
+
+// NodeAgentService is the internal gRPC surface the Setec operator
+// calls on each node-agent DaemonSet pod to drive snapshot, restore,
+// pause, and resume operations synchronously. It is NEVER exposed
+// outside the cluster; authentication is mTLS with a shared CA
+// provisioned at chart install time.
+service NodeAgentService {
+  // CreateSnapshot pauses the target microVM, persists its state
+  // (CPU + memory) via the configured storage backend, and returns
+  // the resulting storage reference and digest. The node-agent
+  // resumes the VM locally unless the caller sends a subsequent
+  // PauseSandbox (the Coordinator decides based on
+  // Sandbox.spec.snapshot.afterCreate).
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+
+  // RestoreSandbox loads a previously-persisted snapshot into a new
+  // Firecracker microVM attached to the caller-provided Kata socket.
+  // Called after the Pod has been scheduled and Kata has set up the
+  // surrounding sandbox container.
+  rpc RestoreSandbox(RestoreSandboxRequest) returns (RestoreSandboxResponse);
+
+  // PauseSandbox issues the Firecracker PATCH /vm state=Paused call
+  // against the target microVM without persisting state.
+  rpc PauseSandbox(PauseSandboxRequest) returns (PauseSandboxResponse);
+
+  // ResumeSandbox is the inverse of PauseSandbox.
+  rpc ResumeSandbox(ResumeSandboxRequest) returns (ResumeSandboxResponse);
+
+  // QueryPool returns the current set of pre-warmed pool entries the
+  // node has available for the given SandboxClass. The operator uses
+  // this to pick a pool-hosting node at scheduling time. Empty result
+  // means the operator falls back to cold boot.
+  rpc QueryPool(QueryPoolRequest) returns (QueryPoolResponse);
+
+  // ClaimPoolEntry atomically removes a matching pre-warmed pool
+  // entry and restores its paused-VM state into the caller-provided
+  // Kata Firecracker socket (ADR-0004 declarative warm-start). The
+  // claimed entry is consumed regardless of restore outcome —
+  // ADR-0005 forbids restoring the same snapshot state twice. A
+  // response with claimed=false (pool empty or no image match) or
+  // claimed=true/success=false (restore failed) tells the operator to
+  // fall back to cold boot; neither is an RPC error.
+  rpc ClaimPoolEntry(ClaimPoolEntryRequest) returns (ClaimPoolEntryResponse);
+
+  // DeleteSnapshot securely erases the persisted state files and
+  // returns success. Called by the SnapshotReconciler when a
+  // Snapshot CR is being deleted (TTL elapsed, user kubectl
+  // delete, or namespace teardown).
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+}
+
+// CreateSnapshotRequest identifies the sandbox to snapshot and where
+// the resulting state should be written.
+message CreateSnapshotRequest {
+  // sandbox_id is the composite <namespace>/<name>/<uid> tuple used
+  // elsewhere in the Setec API. Present primarily for observability;
+  // the node-agent's actual dispatch key is source_kata_socket.
+  string sandbox_id = 1;
+
+  // snapshot_id is the opaque identifier the storage backend uses to
+  // namespace the persisted state files (e.g. the Snapshot CR's
+  // namespace/name, or a UUID). Guaranteed unique per snapshot.
+  string snapshot_id = 2;
+
+  // storage_backend names the StorageBackend implementation to route
+  // to. Phase 3 ships only "local-disk".
+  string storage_backend = 3;
+
+  // source_kata_socket is the absolute path to the Firecracker API
+  // socket Kata has exposed for the source microVM, usually under
+  // /run/kata-containers/<sandbox-id>/firecracker.socket. The
+  // operator resolves the placeholder and passes the concrete path.
+  string source_kata_socket = 4;
+
+  // session_kek is the per-session key-encryption key session
+  // checkpoints seal their DEKs with (setec#194, ADR-0007). The
+  // operator reads it from the session's Kubernetes Secret and
+  // forwards it over this mutually-authenticated mTLS channel; the
+  // node-agent holds it in memory for the duration of the RPC only.
+  // Cluster-scoped (unlike the node-local keyfile) so WHICHEVER node
+  // resumes the session can unseal the checkpoint, and deleting the
+  // Secret at session end crypto-erases every checkpoint it sealed.
+  // Only valid with storage_backend "s3"; empty for every other
+  // backend.
+  bytes session_kek = 5;
+}
+
+// CreateSnapshotResponse carries the backend ref for the persisted
+// state plus integrity metadata the operator writes into the Snapshot
+// CR.
+message CreateSnapshotResponse {
+  string storage_ref = 1;
+  int64 size_bytes = 2;
+  string sha256 = 3;
+}
+
+// RestoreSandboxRequest identifies a snapshot to load into a fresh
+// Firecracker VM attached to the caller-provided Kata socket.
+message RestoreSandboxRequest {
+  string snapshot_id = 1;
+  string storage_ref = 2;
+  string storage_backend = 3;
+
+  // kata_socket_target is the Firecracker API socket the target Pod's
+  // Kata sandbox has exposed. The node-agent speaks to this socket to
+  // instantiate the restored VM.
+  string kata_socket_target = 4;
+
+  // resources optionally overrides the VM resource shape during
+  // restore. When zero-valued the shape baked into the snapshot is
+  // used as-is.
+  Resources resources = 5;
+
+  // sandbox_id is the composite <namespace>/<name> of the Sandbox the
+  // restore targets. Used as the ownership key for the node-local
+  // vsock-CID uniqueness registry (ADR-0005 invariant 2): two
+  // Sandboxes restored from the same snapshot state would otherwise
+  // share the snapshotted guest CID undetected.
+  string sandbox_id = 6;
+
+  // pod_ip is the CNI-assigned IP of the Sandbox's Pod. The restored
+  // guest carries the snapshot-time network state in memory; the
+  // node-agent directs the in-guest agent to reconcile its primary
+  // interface to this address and fails the restore closed when the
+  // guest cannot confirm it (ADR-0005 invariant 2).
+  string pod_ip = 7;
+
+  // hostname is the fresh hostname the restored guest must adopt
+  // (derived from the Sandbox name). Part of the per-restore
+  // uniquification set together with machine-id and boot-id.
+  string hostname = 8;
+
+  // session_kek mirrors CreateSnapshotRequest.session_kek: the
+  // per-session key-encryption key needed to unseal a session
+  // checkpoint's DEK. Required (and only valid) when storage_backend
+  // is "s3". This is what lets a checkpoint written by a drained or
+  // dead node restore on a different node (setec#194).
+  bytes session_kek = 9;
+}
+
+// RestoreSandboxResponse reports success/failure of the restore.
+message RestoreSandboxResponse {
+  bool success = 1;
+  string error = 2;
+
+  // entropy_reseeded reports whether the restored guest's CSPRNG was
+  // actively reseeded over vsock and the guest acknowledged the fresh
+  // entropy (setec#72). When the node-agent runs with entropy reseed
+  // enforcement (the default), success=true implies
+  // entropy_reseeded=true; false alongside success=true can only
+  // happen when the operator explicitly opted out
+  // (--entropy-reseed=off), leaving only the passive virtio-rng
+  // mechanism.
+  bool entropy_reseeded = 3;
+
+  // uniquified reports whether the restored guest verifiably applied
+  // its per-restore identity (fresh machine-id, boot-id, hostname,
+  // CNI-assigned Pod IP) and its vsock CID was confirmed unique on
+  // the node (ADR-0005 invariant 2, setec#189). When the node-agent
+  // runs with restore uniquification enforcement (the default),
+  // success=true implies uniquified=true; false alongside
+  // success=true can only happen when the operator explicitly opted
+  // out (--restore-uniquify=off).
+  bool uniquified = 4;
+
+  // encrypted_at_rest reports whether the restored state was read
+  // through the sealed-DEK encrypted storage path (ADR-0005
+  // invariant 5). Production wires the EncryptedBackend as the ONLY
+  // persistence path, so this is true on every production restore;
+  // false means the node served the state from an unencrypted
+  // backend and the operator-side invariant gate must refuse the
+  // restore outside dev.
+  bool encrypted_at_rest = 5;
+}
+
+// PauseSandboxRequest / PauseSandboxResponse wrap a direct
+// Firecracker PATCH /vm state=Paused.
+message PauseSandboxRequest {
+  string sandbox_id = 1;
+  string kata_socket_target = 2;
+}
+
+message PauseSandboxResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ResumeSandboxRequest / ResumeSandboxResponse wrap the resume
+// counterpart.
+message ResumeSandboxRequest {
+  string sandbox_id = 1;
+  string kata_socket_target = 2;
+}
+
+message ResumeSandboxResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// QueryPoolRequest asks the node-agent to report pre-warm pool entries
+// compatible with the given class (optionally filtered by image).
+message QueryPoolRequest {
+  string sandbox_class = 1;
+
+  // image_ref, when set, restricts the response to entries whose
+  // underlying image matches. Empty means any image for the class.
+  string image_ref = 2;
+}
+
+// QueryPoolResponse enumerates the pool entries currently available on
+// the node. The operator treats the list as a snapshot — an entry
+// reported here may still race to Claim with another operator.
+message QueryPoolResponse {
+  repeated PoolEntry entries = 1;
+}
+
+// PoolEntry is a single paused microVM the node has ready for an
+// on-demand restore.
+message PoolEntry {
+  string entry_id = 1;
+  string image_ref = 2;
+  bool available = 3;
+  int64 age_seconds = 4;
+}
+
+// ClaimPoolEntryRequest identifies the class (and optionally image)
+// an ephemeral Sandbox wants a warm start for, plus the Firecracker
+// socket of the Sandbox's freshly-created kata-fc Pod that the pool
+// state should be restored into.
+message ClaimPoolEntryRequest {
+  // sandbox_class is the SandboxClass the pool entry must belong to.
+  string sandbox_class = 1;
+
+  // image_ref, when set, requires the claimed entry's baked image to
+  // match. Empty accepts any entry for the class.
+  string image_ref = 2;
+
+  // kata_socket_target is the Firecracker API socket the target Pod's
+  // Kata sandbox has exposed; the restored VM state lands here.
+  string kata_socket_target = 3;
+
+  // sandbox_id is the composite <namespace>/<name> of the requesting
+  // Sandbox. Also the ownership key for the node-local vsock-CID
+  // uniqueness registry (ADR-0005 invariant 2).
+  string sandbox_id = 4;
+
+  // pod_ip is the CNI-assigned IP of the Sandbox's Pod; the restored
+  // guest must observe it (see RestoreSandboxRequest.pod_ip).
+  string pod_ip = 5;
+
+  // hostname is the fresh hostname the restored guest must adopt
+  // (see RestoreSandboxRequest.hostname).
+  string hostname = 6;
+}
+
+// ClaimPoolEntryResponse reports the claim + restore outcome.
+message ClaimPoolEntryResponse {
+  // claimed is false when no compatible entry existed. The caller
+  // falls back to cold boot; this is not an error.
+  bool claimed = 1;
+
+  // success reports the restore outcome for a claimed entry. A
+  // claimed entry that failed to restore is torn down node-side; the
+  // caller falls back to cold boot.
+  bool success = 2;
+
+  // entry_id identifies the consumed entry (empty when claimed=false).
+  string entry_id = 3;
+
+  string error = 4;
+
+  // entropy_reseeded mirrors RestoreSandboxResponse.entropy_reseeded:
+  // the restored guest's CSPRNG verifiably received fresh entropy
+  // (setec#72) before the warm start was reported successful.
+  bool entropy_reseeded = 5;
+
+  // uniquified mirrors RestoreSandboxResponse.uniquified: the
+  // restored guest verifiably applied its per-restore identity and
+  // its vsock CID was confirmed unique on the node (ADR-0005
+  // invariant 2, setec#189).
+  bool uniquified = 6;
+
+  // provenance_verified reports that the claimed entry's template
+  // provenance record was read, claims the class-image boot path
+  // (never a used sandbox), and was cryptographically bound into the
+  // entry's sealed DEK (the seal's AAD covers the provenance, so a
+  // tampered or foreign record makes the DEK unopenable) — ADR-0005
+  // invariants 1 and 4, setec#190. Always true on a successful claim
+  // because the decrypt path IS the verification; reported explicitly
+  // so the operator-side invariant gate never has to infer it.
+  bool provenance_verified = 7;
+
+  // encrypted_at_rest mirrors RestoreSandboxResponse.encrypted_at_rest
+  // (ADR-0005 invariant 5): pool entry state is only ever persisted
+  // through the per-entry sealed-DEK path, so a successful claim
+  // implies true.
+  bool encrypted_at_rest = 8;
+
+  // clean_base_verified reports that the claimed entry carried a
+  // recorded secret-scan verdict — produced at bake time over the
+  // exact plaintext state/memory pair, cryptographically bound into
+  // the entry's sealed DEK alongside the provenance record — that is
+  // clean, and that the digests it names match the artifacts this
+  // restore decrypted. It is the independent per-restore evidence for
+  // ADR-0005 invariant 1 (setec#206), decoupled from the provenance
+  // record that carries invariant 4: the operator-side invariant gate
+  // consumes this signal directly and fails closed when it is absent,
+  // so entries baked without a verdict are refused and rebuilt.
+  bool clean_base_verified = 9;
+}
+
+// DeleteSnapshotRequest / DeleteSnapshotResponse wrap a
+// Storage.Delete call on the node.
+message DeleteSnapshotRequest {
+  string snapshot_id = 1;
+  string storage_ref = 2;
+  string storage_backend = 3;
+}
+
+message DeleteSnapshotResponse {
+  bool success = 1;
+  string error = 2;
+}

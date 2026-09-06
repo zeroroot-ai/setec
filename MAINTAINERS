@@ -1,0 +1,14 @@
+# Setec Maintainers
+#
+# Format: Name | GitHub handle | Role | Email (optional)
+#
+# Roles:
+#   lead       - Lead maintainer (BDF-Now; see GOVERNANCE.md)
+#   maintainer - Maintainer with merge rights and release authority
+#   reviewer   - Trusted reviewer without merge rights
+#   emeritus   - Former maintainer, credited but inactive
+#
+# This list is authoritative. The GOVERNANCE.md document explains how entries
+# are added or removed.
+
+GitLab Administrator | @script-kid-io | lead | conduct@setec.zeroroot.ai

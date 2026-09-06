@@ -1,0 +1,285 @@
+# CHAIN 6 EXIT TEST — "two tool calls in one session reach the same microVM
+# and see the same worktree."
+#
+# This workflow is the thing that closes chain 6. Merged code does not close it
+# and neither does a unit test against a fake: the property is that a SECOND
+# command lands in the SAME live sandbox and reads what the FIRST wrote to
+# /workspace. Only a real sandbox shows that.
+#
+# WHY IT RUNS ON A GITHUB-HOSTED RUNNER AND NOT ON METAL
+#
+# Staging and prod are torn down, and setec's `suites` e2e schedules onto an
+# in-cluster ARC scale-set that lives in staging — so the existing e2e cannot
+# run at all right now. An exit test that cannot run is not an exit test.
+#
+# So this stands up kind on ubuntu-latest and runs the sandbox on the `runc`
+# backend, which needs no KVM. That is sound rather than a shortcut: Exec is
+# implemented over the Kubernetes pods/exec subresource
+# (internal/frontend/exec.go), which is backend-agnostic — for kata-fc the
+# kubelet routes through the Kata shim, for runc it is an ordinary container
+# exec. Session affinity and workspace persistence are properties of the
+# session lifecycle and the PVC, not of the isolation backend.
+#
+# WHAT THIS DOES NOT PROVE
+#
+# Isolation. A runc sandbox is not isolated, and this test makes no claim that
+# it is — TestRuntimeBackends_* and the invariant gates cover that, on metal.
+# Chain 6 asks whether a session keeps its worktree. This answers exactly that
+# and nothing more. Do not cite a green run here as evidence of containment.
+#
+# WHY THE FILENAME MATTERS
+#
+# The launch board resolves each blocker to a workflow FILE
+# (zeroroot-ai/.github `data/launch-blockers.tsv` names
+# `exit-test-session-affinity.yml`) and reports NOT_BUILT when it cannot find
+# it. This file used to be called `chain-6-session-affinity-exit.yml`, so the
+# board read NOT_BUILT while the test was green on a daily schedule — the work
+# was done and invisible. Keep this name in step with the TSV; renaming it
+# silently un-closes the blocker on the board.
+#
+# Refs: gibson#1183, gibson#1450, setec#239
+name: exit-test-session-affinity
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'test/e2e/chain6_session_affinity_test.go'
+      - 'test/e2e/suite_test.go'
+      - 'internal/frontend/exec.go'
+      - 'charts/setec/**'
+      - '.github/workflows/exit-test-session-affinity.yml'
+      - 'hack/kind-chain6.yaml'
+  schedule:
+    # Daily, so a regression surfaces without waiting for someone to touch the
+    # session code. The chain is only closed for as long as this stays green.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exit-test-session-affinity-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KIND_CLUSTER: chain6
+  E2E_NAMESPACE: chain6-exit
+  E2E_RELEASE: chain6-exit
+  IMAGE_TAG: chain6-local
+
+jobs:
+  exit-test:
+    name: chain-6 exit test (kind + runc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+
+      - name: Install helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Create the kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          # Two nodes; see the file for why one is not enough.
+          config: hack/kind-chain6.yaml
+          wait: 120s
+
+      - name: Build the operator image
+        # ONE image. The frontend is driven IN-PROCESS by the test
+        # (frontend.Service against the live cluster), the same way
+        # session_reattach_test.go drives Attach — so there is no frontend
+        # Deployment and no mTLS plumbing. The runtime-agent is not built
+        # either; see the node-capability step below for why it is not needed.
+        run: |
+          set -euo pipefail
+          make docker-build IMG="setec:${IMAGE_TAG}"
+
+      - name: Load the image into kind
+        run: |
+          set -euo pipefail
+          kind load docker-image "setec:${IMAGE_TAG}" --name "${KIND_CLUSTER}"
+
+      - name: Create the runc RuntimeClass
+        # The suite's preflight requires the RuntimeClass named by
+        # SETEC_E2E_RUNTIMECLASS to already exist — on metal kata-deploy
+        # provisions it, here we create it. kind's containerd ships the `runc`
+        # handler by default, so no node preparation is needed.
+        run: |
+          set -euo pipefail
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: node.k8s.io/v1
+          kind: RuntimeClass
+          metadata:
+            name: runc
+          handler: runc
+          EOF
+          kubectl get runtimeclass runc
+
+      - name: Advertise the runc capability on the node
+        # The operator will not place a Sandbox on a backend unless SOME node
+        # advertises setec.zeroroot.ai/runtime.<backend>=true
+        # (sandbox_controller.go, capability detection). On a real cluster the
+        # runtime-agent DaemonSet probes each node and writes that label.
+        #
+        # Here the label is applied directly and the DaemonSet is pinned to an
+        # unmatched nodeSelector, so it renders with ZERO desired pods. The
+        # selector VALUE is the string "absent", not `true`: helm --set types
+        # a bare true as a boolean, and server-side apply then rejects the
+        # DaemonSet with ".spec.template.spec.nodeSelector.<k>: expected
+        # string, got true". That
+        # removes a whole image from this workflow, and the agent has nothing
+        # to discover anyway: kind's containerd ships the runc handler, so the
+        # capability is a known fact rather than something to probe for.
+        run: |
+          set -euo pipefail
+          kubectl label nodes --all setec.zeroroot.ai/runtime.runc=true --overwrite
+          kubectl get nodes -L setec.zeroroot.ai/runtime.runc
+
+      - name: Consent to dev runtimes
+        # The SandboxClass admission webhook rejects a runc class unless the
+        # namespace carries this label. The webhook is disabled for this run
+        # (SETEC_E2E_WEBHOOK=0), but the label is set anyway so the run does
+        # not depend on the webhook staying off.
+        run: |
+          set -euo pipefail
+          kubectl label namespace default setec.zeroroot.ai/allow-dev-runtimes=true --overwrite
+
+      - name: Run the chain-6 exit test
+        env:
+          # Throwaway kind cluster: naming a context would be pointless, so
+          # consent is given explicitly (setec#298).
+          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
+          # Preflight looks for this RuntimeClass; the sandbox runs on this
+          # backend. Both are runc here — no KVM on a hosted runner.
+          SETEC_E2E_RUNTIMECLASS: runc
+          SETEC_E2E_BACKEND: runc
+          SETEC_E2E_IMAGE_REPO: setec
+          SETEC_E2E_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          SETEC_E2E_IMAGE_PULL_POLICY: Never
+          # The webhook is cluster-scoped with failurePolicy=Fail. On a
+          # throwaway cluster that is pure risk for no coverage — this test
+          # asserts session affinity, not admission.
+          SETEC_E2E_WEBHOOK: "0"
+          # Enable the runc backend and let the chart leave the RuntimeClass
+          # alone (we created it above, exactly as the metal path leaves
+          # kata-deploy's alone).
+          #
+          # defaults.runtime.backend MUST move with it: the chart validates
+          # that its default backend is one of the enabled ones and refuses to
+          # render otherwise ("defaults.runtime.backend=\"kata-fc\" is not
+          # enabled"). That guard is right — a default pointing at a disabled
+          # backend would fail at dispatch instead of at install.
+          SETEC_E2E_EXTRA_SET: >-
+            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
+        run: |
+          # `set +e` is REQUIRED and is not a style choice. GitHub runs `run:`
+          # with `bash -e {0}`, so errexit is already on before this script's
+          # first line: a failing `go test` aborts the step immediately and
+          # every line below — the step summary and the SKIP guard — is
+          # skipped. Turning it off here is what makes the exit status
+          # something this script decides rather than something bash decides
+          # for it.
+          set +e
+          set -uo pipefail
+          go test -tags=e2e ./test/e2e/... -v -timeout 25m \
+            -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6.log
+          status="${PIPESTATUS[0]}"
+          {
+            echo "### Chain 6 exit test"
+            echo ''
+            grep -E '^(=== RUN|--- (PASS|FAIL|SKIP)|.*CHAIN 6)' chain6.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A SKIP is not a pass. Chain 6 is closed only by an assertion that
+          # actually executed, so a skipped run fails the gate loudly rather
+          # than reporting green on coverage it does not have.
+          if grep -q -- '--- SKIP' chain6.log; then
+            echo "::error::the exit test SKIPPED — chain 6 is NOT closed by this run"
+            exit 1
+          fi
+          exit "$status"
+
+      - name: FAILING FIXTURE — with affinity broken, the exit test must FAIL
+        # The guard on the guard. Everything above proves the assertions pass
+        # when the property holds; nothing above proves they would notice if it
+        # did not. This run deletes the session Pod between the two commands,
+        # so the session is genuinely broken, and REQUIRES a non-zero exit.
+        #
+        # Same shape as exit-test-backup-restore.yml's --skip-unseal-capture
+        # run. If this step's `go test` ever PASSES, the exit test is not
+        # asserting what it claims and the job fails here.
+        env:
+          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+          # Its own release and namespace: TestMain uninstalls on the way out,
+          # but distinct names keep the two runs' diagnostics unambiguous.
+          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}-fixture
+          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}-fixture
+          SETEC_E2E_RUNTIMECLASS: runc
+          SETEC_E2E_BACKEND: runc
+          SETEC_E2E_IMAGE_REPO: setec
+          SETEC_E2E_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          SETEC_E2E_IMAGE_PULL_POLICY: Never
+          SETEC_E2E_WEBHOOK: "0"
+          SETEC_E2E_CHAIN6_BREAK: relaunch
+          SETEC_E2E_EXTRA_SET: >-
+            defaults.runtime.backend=runc,runtimes.runc.enabled=true,runtimes.runc.install=false,runtimes.runc.devOnly=false,runtimes.kata-fc.enabled=false,runtimeAgent.nodeSelector.chain6-agent-disabled=absent
+        run: |
+          # `set +e` — see the primary run. It matters MORE here: this step
+          # expects `go test` to fail, so under the runner's default errexit
+          # the step aborted on the very outcome it exists to require, and a
+          # correctly-failing fixture was reported as a broken workflow
+          # (observed on run 32166512990).
+          set +e
+          set -uo pipefail
+          go test -tags=e2e ./test/e2e/... -v -timeout 25m \
+            -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
+          status="${PIPESTATUS[0]}"
+          {
+            echo "### Chain 6 failing fixture (affinity broken on purpose)"
+            echo ''
+            grep -E '^(--- (PASS|FAIL|SKIP)|.*FIXTURE:|.*CHAIN 6)' chain6-fixture.log || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A SKIP here is as bad as a pass: it means the break never ran.
+          if grep -q -- '--- SKIP' chain6-fixture.log; then
+            echo "::error::the fixture SKIPPED — it proves nothing about whether the exit test can fail"
+            exit 1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the exit test PASSED with session affinity deliberately broken. It is not asserting what it claims — chain 6 is NOT closed."
+            exit 1
+          fi
+          echo "fixture failed as required (go test exit ${status}) — the exit test can detect a broken session"
+
+      - name: Collect diagnostics
+        if: failure()
+        # BOTH namespaces. The fixture run has its own, and a fixture step
+        # that fails while diagnostics only dump the primary namespace prints
+        # "No resources found" for the run that actually broke.
+        #
+        # TestMain uninstalls and deletes its namespace on the way out, so for
+        # a step that got past install there may be nothing left to dump —
+        # cluster-scoped objects and the node state are still worth having.
+        run: |
+          set -uo pipefail
+          kubectl get runtimeclass,sandboxclasses -o wide || true
+          kubectl get nodes -L setec.zeroroot.ai/runtime.runc || true
+          for ns in "${E2E_NAMESPACE}" "${E2E_NAMESPACE}-fixture"; do
+            echo "::group::diagnostics for namespace ${ns}"
+            kubectl get sandboxes,pods,pvc -n "$ns" -o wide || true
+            kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -60 || true
+            kubectl logs -n "$ns" -l app.kubernetes.io/name=setec --tail=300 --all-containers || true
+            kubectl describe pod -n "$ns" -l setec.zeroroot.ai/sandbox || true
+            echo "::endgroup::"
+          done

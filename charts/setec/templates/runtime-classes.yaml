@@ -1,0 +1,61 @@
+{{- /*
+One node.k8s.io/v1 RuntimeClass per enabled backend where install=true.
+When install=false we assume an external process (kata-deploy, cluster
+installer, custom Helm chart) owns the RuntimeClass lifecycle and skip
+rendering so Helm never fights for ownership.
+
+Handler names come from the setec.runtimeHandler helper:
+  kata-fc     -> "kata-fc"   (kata-containers Firecracker handler)
+  kata-qemu   -> "kata-qemu" (kata-containers QEMU handler)
+  gvisor      -> "runsc"     (gvisor containerd handler)
+  runc        -> "runc"      (upstream runc handler)
+*/ -}}
+{{- range $name, $cfg := .Values.runtimes }}
+{{- if and $cfg.enabled $cfg.install }}
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ $cfg.runtimeClassName | default $name }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: runtime-class
+    setec.zeroroot.ai/runtime: {{ $name | quote }}
+handler: {{ include "setec.runtimeHandler" $name }}
+{{- with $cfg.defaultOverhead }}
+{{- /* Kubernetes' RuntimeClass admission controller REJECTS a Pod that
+carries spec.overhead when its RuntimeClass defines none — and the
+operator stamps every Sandbox Pod with the backend's defaultOverhead. So
+a chart-managed RuntimeClass must publish that same overhead, or no
+Sandbox can ever be admitted on the default (installer) node-prep path.
+Keeping the two in lockstep here is what makes install=true self-
+consistent; out-of-band RuntimeClasses (install=false, e.g. kata-deploy)
+must instead have defaultOverhead edited to match them (see
+development/k3s/values-local.yaml). */}}
+overhead:
+  podFixed:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+scheduling:
+  nodeSelector:
+    setec.zeroroot.ai/runtime.{{ $name }}: "true"
+{{- /* The RuntimeClass admission controller injects scheduling.tolerations
+into every Pod that names this class, exactly as it does nodeSelector above.
+That makes this the right home for them: "to run this runtime you must be able
+to land on the nodes that host it" is a property of the RUNTIME, not of each
+SandboxClass. Setting it here covers every class at once — including the
+per-run classes an e2e harness creates, which no chart value can reach.
+
+Required whenever the runtime's nodes are tainted, which is the norm: KVM-
+capable metal is expensive, so operators reserve it with a NoSchedule taint
+(this chart's own karpenter.taints defaults to kata=true:NoSchedule). Without a
+matching toleration the nodeSelector steers the Pod at a node it is then
+forbidden to land on, and the Sandbox waits forever. */}}
+{{- with $cfg.scheduling }}
+{{- with .tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

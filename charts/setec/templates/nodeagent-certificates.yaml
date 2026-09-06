@@ -1,0 +1,48 @@
+{{- if and .Values.snapshots.enabled .Values.snapshots.mTLS.certManager.enabled }}
+{{- if .Values.snapshots.mTLS.insecure }}
+{{- fail "snapshots.mTLS.insecure cannot be true while snapshots.mTLS.certManager.enabled is true" }}
+{{- end }}
+# Phase 3 Certificate resources for the operator<->node-agent mTLS
+# channel. cert-manager issues three secrets from a single shared
+# Issuer: a CA secret used to verify peers, a server cert for the
+# node-agent, and a client cert for the operator.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "setec.fullname" . }}-nodeagent-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.snapshots.mTLS.nodeAgentCertSecret }}
+  duration: 8760h # 1 year
+  renewBefore: 720h # 30 days
+  commonName: {{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc
+  dnsNames:
+    - {{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc
+    - {{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc.cluster.local
+    - "*.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc"
+    - "*.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc.cluster.local"
+  issuerRef:
+    {{- toYaml .Values.snapshots.mTLS.certManager.issuerRef | nindent 4 }}
+  usages:
+    - server auth
+    - client auth
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "setec.fullname" . }}-operator-client
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.snapshots.mTLS.operatorCertSecret }}
+  duration: 8760h
+  renewBefore: 720h
+  commonName: setec-operator
+  issuerRef:
+    {{- toYaml .Values.snapshots.mTLS.certManager.issuerRef | nindent 4 }}
+  usages:
+    - client auth
+{{- end }}

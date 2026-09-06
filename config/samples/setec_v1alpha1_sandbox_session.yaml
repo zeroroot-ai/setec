@@ -1,0 +1,23 @@
+# A session-lifecycle Sandbox (ADR-0006): long-lived, ends only on
+# explicit teardown, and owns a durable /workspace PVC (ADR-0007) that
+# survives VM restart and node loss. Deleting the Sandbox wipes and
+# deletes the workspace. Point storageClassName at a StorageClass whose
+# CSI driver encrypts volumes for at-rest encryption.
+apiVersion: setec.zeroroot.ai/v1alpha1
+kind: Sandbox
+metadata:
+  name: sandbox-session-sample
+spec:
+  image: docker.io/library/busybox:1.36
+  command:
+    - /bin/sh
+    - -c
+    - "touch /workspace/alive && sleep infinity"
+  resources:
+    vcpu: 1
+    memory: 512Mi
+  lifecycle:
+    mode: session
+    workspace:
+      size: 10Gi
+      # storageClassName: encrypted-gp3

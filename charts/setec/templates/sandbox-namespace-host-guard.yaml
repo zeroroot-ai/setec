@@ -1,0 +1,154 @@
+{{- if and .Values.sandboxNamespaces .Values.sandboxHostGuard.enabled }}
+# Host-access guard for Sandbox namespaces (setec#159).
+#
+# WHY THIS EXISTS
+#
+# The namespace-wide default-deny NetworkPolicy in
+# sandbox-namespace-baseline-netpol.yaml confines every Pod in a Sandbox
+# namespace — except one. A Pod with hostNetwork: true runs in the node's
+# own network namespace, where NetworkPolicy is not enforced at all, so it
+# reads as "unrestricted" no matter what policy selects it. The same
+# reasoning covers the other host-sharing fields: hostPID and hostIPC put
+# the Pod in the node's process and IPC namespaces, a hostPath volume
+# hands it the node filesystem, and a hostPort publishes it on the node
+# address where no ingress rule applies. Each one steps around the
+# namespace boundary rather than through it, so the netpol baseline is
+# only load-bearing once they are denied.
+#
+# WHY NOT POD SECURITY ADMISSION
+#
+# PSA `baseline` denies exactly this set — and also denies adding
+# capabilities outside the container-runtime default set. Sandbox Pods add
+# NET_ADMIN (see internal/podspec/builder.go: raw-socket network tooling
+# genuinely needs it, and per ADR-0052 the containment boundary for
+# untrusted execution is the microVM, not the container capability set).
+# Labelling a Sandbox namespace `pod-security.kubernetes.io/enforce=baseline`
+# would therefore reject the operator's own Pods. This policy applies the
+# host-access half of baseline without the capability rule, which is the
+# part Setec cannot adopt.
+#
+# WHY A POLICY AND NOT RBAC
+#
+# RBAC answers "who may create a Pod here", not "what may that Pod ask
+# for". A principal that legitimately holds pods:create in a Sandbox
+# namespace — the operator itself, a CI identity, a mis-scoped
+# RoleBinding — can otherwise ask for hostNetwork and land outside every
+# control in this chart. ValidatingAdmissionPolicy is in-tree CEL
+# (admissionregistration.k8s.io/v1, GA in Kubernetes 1.30), so this adds
+# no controller, no webhook and no new failure domain: the API server
+# evaluates it, and there is no endpoint whose outage turns the check off.
+#
+# failurePolicy: Fail is deliberate. A policy the API server cannot
+# evaluate must reject the write, not admit it unchecked.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "setec.fullname" . }}-sandbox-host-guard
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    setec.zeroroot.ai/managed-by: setec-operator
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    # Every field below is `omitempty` in the Pod schema, so the false /
+    # absent case really is absent from the object CEL sees. Each guard is
+    # written `!has(x) || x == false` for that reason: a bare `x == false`
+    # errors on an unset field and, with failurePolicy Fail, would reject
+    # every ordinary Pod in the namespace.
+    - expression: "!has(object.spec.hostNetwork) || object.spec.hostNetwork == false"
+      reason: Forbidden
+      message: >-
+        hostNetwork is not permitted in a Setec Sandbox namespace: a Pod in the
+        node network namespace is outside NetworkPolicy enforcement, which
+        voids the namespace-wide default-deny policy this namespace relies on.
+    - expression: "!has(object.spec.hostPID) || object.spec.hostPID == false"
+      reason: Forbidden
+      message: >-
+        hostPID is not permitted in a Setec Sandbox namespace: it exposes every
+        process on the node to the Pod.
+    - expression: "!has(object.spec.hostIPC) || object.spec.hostIPC == false"
+      reason: Forbidden
+      message: >-
+        hostIPC is not permitted in a Setec Sandbox namespace: it shares the
+        node IPC namespace with the Pod.
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath))"
+      reason: Forbidden
+      message: >-
+        hostPath volumes are not permitted in a Setec Sandbox namespace: they
+        mount the node filesystem into a workload the namespace exists to
+        confine.
+    # hostPort publishes the Pod on the node address. Ingress to that
+    # address is not subject to the namespace's NetworkPolicy, so it is the
+    # same bypass as hostNetwork in the inbound direction.
+    - expression: >-
+        (!has(object.spec.containers) || object.spec.containers.all(c,
+          !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+        && (!has(object.spec.initContainers) || object.spec.initContainers.all(c,
+          !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+        && (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.all(c,
+          !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+      reason: Forbidden
+      message: >-
+        hostPort is not permitted in a Setec Sandbox namespace: it publishes the
+        Pod on the node address, where the namespace's ingress policy does not
+        apply.
+    # A privileged container holds the node. Sandbox Pods never request it
+    # — internal/podspec/builder.go sets allowPrivilegeEscalation: false and
+    # drops ALL capabilities before adding back NET_RAW/NET_ADMIN — so this
+    # denies only Pods that arrived by some other route.
+    - expression: >-
+        (!has(object.spec.containers) || object.spec.containers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.privileged)
+          || c.securityContext.privileged == false))
+        && (!has(object.spec.initContainers) || object.spec.initContainers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.privileged)
+          || c.securityContext.privileged == false))
+        && (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.privileged)
+          || c.securityContext.privileged == false))
+      reason: Forbidden
+      message: >-
+        privileged containers are not permitted in a Setec Sandbox namespace:
+        a privileged container holds the node, which is the outcome the
+        Sandbox boundary exists to prevent.
+---
+# The binding is what scopes the policy to Sandbox namespaces. The policy
+# itself matches Pods cluster-wide so that a second binding could reuse it,
+# but only the namespaces named in .Values.sandboxNamespaces are selected
+# here.
+#
+# kubernetes.io/metadata.name is set on every Namespace by the API server
+# (NamespaceDefaultLabelName, GA since 1.22) and is not writable to a value
+# other than the namespace's own name, so selecting on it cannot be spoofed
+# by relabelling a namespace.
+#
+# validationActions: [Deny] — the policy rejects the request. Audit is
+# deliberately not added: an annotation on an admitted host-network Pod is
+# not containment.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-sandbox-host-guard
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    setec.zeroroot.ai/managed-by: setec-operator
+spec:
+  policyName: {{ include "setec.fullname" . }}-sandbox-host-guard
+  validationActions:
+    - Deny
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+            {{- range $ns := .Values.sandboxNamespaces }}
+            - {{ $ns | quote }}
+            {{- end }}
+{{- end }}

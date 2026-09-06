@@ -1,0 +1,28 @@
+# NodePort wrapper for the Setec frontend, applied alongside the Helm
+# release in dev only. The Setec chart does not yet template a NodePort
+# (only ClusterIP); we bolt this on as a sibling Service so the chart
+# stays clean while still giving the Kind 'gibson' cluster a way to dial
+# the frontend at host.docker.internal:30051.
+#
+# Selector matches whatever pods the chart's frontend Deployment labels
+# its pods with — adjust if the chart changes its label scheme.
+apiVersion: v1
+kind: Service
+metadata:
+  name: setec-frontend-nodeport
+  namespace: setec-system
+  labels:
+    app.kubernetes.io/name: setec
+    app.kubernetes.io/component: frontend-nodeport
+    setec.zeroroot.ai/dev-only: "true"
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: setec
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      nodePort: 30051
+      protocol: TCP

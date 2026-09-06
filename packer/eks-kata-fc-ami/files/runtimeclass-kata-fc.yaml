@@ -1,0 +1,27 @@
+# Static kata-fc RuntimeClass for nodes baked by packer/eks-kata-fc-ami.
+# Baked onto the AMI at /etc/setec/manifests/runtimeclass-kata-fc.yaml for
+# reference; apply it ONCE per cluster (it is cluster-scoped):
+#
+#   kubectl apply -f runtimeclass-kata-fc.yaml
+#
+# When the Setec chart manages RuntimeClasses instead, set
+# runtimes.kata-fc.install=true and skip this file — but note the chart's
+# RuntimeClass carries no overhead block; this manifest pins the
+# kata-deploy-parity podFixed overhead so scheduler accounting matches what
+# a kata-deploy cluster would see.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata-fc
+  labels:
+    setec.zeroroot.ai/runtime: kata-fc
+    app.kubernetes.io/managed-by: packer-eks-kata-fc-ami
+handler: kata-fc
+overhead:
+  # kata-deploy parity: Firecracker VMM + kata shim fixed footprint.
+  podFixed:
+    memory: "130Mi"
+    cpu: "250m"
+scheduling:
+  nodeSelector:
+    setec.zeroroot.ai/runtime.kata-fc: "true"

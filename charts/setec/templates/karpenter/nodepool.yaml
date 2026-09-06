@@ -1,0 +1,58 @@
+{{- /*
+Karpenter NodePool that provisions x86 bare-metal nodes from the baked
+kata-fc AMI ON DEMAND and scales to zero when no kata Sandbox is running.
+The sandbox substrate is x86 only (ADR-0001), so the arch requirement is
+hardcoded to amd64 — Sandbox Pods carry a kubernetes.io/arch=amd64
+affinity, and an arm64 pool could never satisfy them.
+Rendered only when karpenter.enabled=true; requires the Karpenter v1 CRDs
+(karpenter.sh/v1).
+
+Scale-to-zero is the cost lever: there is no node floor — a pending Sandbox
+pod (RuntimeClass kata-fc nodeSelector + SandboxClass toleration) triggers
+provisioning, and WhenEmpty consolidation reclaims the metal after
+consolidateAfter of idleness. Karpenter picks the cheapest eligible type
+from instanceTypes automatically.
+*/ -}}
+{{- if .Values.karpenter.enabled }}
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Values.karpenter.nodePoolName }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: karpenter-nodepool
+spec:
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: {{ .Values.karpenter.consolidateAfter }}
+  {{- with .Values.karpenter.limits }}
+  limits:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml .Values.karpenter.nodeLabels | nindent 8 }}
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ .Values.karpenter.nodeClassName }}
+      expireAfter: {{ .Values.karpenter.expireAfter }}
+      {{- with .Values.karpenter.taints }}
+      taints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            {{- toYaml .Values.karpenter.instanceTypes | nindent 12 }}
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            {{- toYaml .Values.karpenter.capacityTypes | nindent 12 }}
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+{{- end }}

@@ -1,0 +1,78 @@
+{{- if .Values.webhook.enabled -}}
+{{- if and (not .Values.webhook.certManager.enabled) (not .Values.webhook.caBundle) }}
+{{- fail "webhook.enabled is true but no CA source is configured: webhook.certManager.enabled is false and webhook.caBundle is empty. The rendered ValidatingWebhookConfiguration would carry no caBundle, so the API server cannot verify the webhook's serving certificate; with failurePolicy Fail every Sandbox and SandboxClass write is then rejected, and the class-level guardrails the webhook enforces never take effect. Either set webhook.certManager.enabled=true with an issuerRef, or supply webhook.caBundle (base64 PEM) alongside a Secret holding the serving cert." }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "setec.fullname" . }}-webhook
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  selector:
+    {{- include "setec.selectorLabels" . | nindent 4 }}
+    # Scope to the operator Pod only — the webhook server runs there. Without
+    # this, the selectorLabels (name+instance) also match the runtime-agent /
+    # frontend / node-agent Pods, so the Service load-balances admission
+    # requests onto Pods that don't serve :9443 → intermittent 502s.
+    app.kubernetes.io/component: operator
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: 9443
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "setec.fullname" . }}-validating-webhook
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Values.namespace }}/{{ include "setec.fullname" . }}-webhook-cert"
+  {{- end }}
+webhooks:
+  - name: vsandbox.setec.zeroroot.ai
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    rules:
+      - apiGroups: ["setec.zeroroot.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxes"]
+        scope: "Namespaced"
+    clientConfig:
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      # Without cert-manager (which injects the CA via the annotation above),
+      # the API server needs the CA that signed the webhook serving cert to
+      # verify the TLS connection. Supplied as base64-encoded PEM.
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+      service:
+        name: {{ include "setec.fullname" . }}-webhook
+        namespace: {{ .Values.namespace }}
+        path: /validate-setec-zeroroot-ai-v1alpha1-sandbox
+        port: 443
+{{- if .Values.webhook.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "setec.fullname" . }}-webhook-cert
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "setec.fullname" . }}-webhook-cert
+  dnsNames:
+    - "{{ include "setec.fullname" . }}-webhook.{{ .Values.namespace }}.svc"
+    - "{{ include "setec.fullname" . }}-webhook.{{ .Values.namespace }}.svc.cluster.local"
+  issuerRef:
+    kind: {{ .Values.webhook.certManager.issuerRef.kind }}
+    name: {{ .Values.webhook.certManager.issuerRef.name }}
+{{- end }}
+{{- end }}

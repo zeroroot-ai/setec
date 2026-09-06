@@ -1,0 +1,13 @@
+# Spec: security-hardening Requirement 5.
+# Asserts go.mod has a `toolchain` directive so the Go-CVE policy and
+# CI builds use a known-stable toolchain. Catches accidental drops of
+# the toolchain pin during go.mod edits.
+repos:
+  - repo: local
+    hooks:
+      - id: go-toolchain-pinned
+        name: go.mod has toolchain directive
+        entry: bash -c 'grep -q "^toolchain " go.mod || (echo "go.mod missing toolchain directive (spec: security-hardening R5)"; exit 1)'
+        language: system
+        files: ^go\.mod$
+        pass_filenames: false

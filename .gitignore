@@ -1,0 +1,48 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/*
+Dockerfile.cross
+
+# Example program binaries (named after their directory).
+examples/*/ai-code-exec
+examples/*/ci-sandbox
+examples/*/sec-research
+
+# Compiled cmd/ binaries that land at the repo root when someone runs
+# `go build ./cmd/<name>` without -o. Named after the cmd/ subdirectory.
+/runtime-agent
+/setec-operator
+/setec-node-agent
+/setec-frontend
+/setec-pool-vm
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Kubernetes Generated files - skip generated files, except for vendored files
+!vendor/**/zz_generated.*
+
+# editor and IDE paraphernalia
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Kubeconfig might contain secrets
+*.kubeconfig
+
+# Local agent worktrees — an unignored embedded git repo gets staged by a
+# routine `git add -A` and commits as a gitlink clones cannot resolve.
+# deploy and dashboard already ignore this path (zeroroot-ai/gitops#455).
+.worktrees/

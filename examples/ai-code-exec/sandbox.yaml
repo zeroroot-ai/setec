@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Equivalent kubectl-apply form of the example. The client program above
+# launches the same workload programmatically via the gRPC frontend; this
+# manifest is for users who prefer `kubectl apply`.
+apiVersion: setec.zeroroot.ai/v1alpha1
+kind: Sandbox
+metadata:
+  name: ai-code-exec-sample
+  namespace: default
+spec:
+  image: docker.io/library/python:3.12-slim
+  command:
+    - python3
+    - -c
+    - |
+      # Replace this body with LLM-generated code.
+      print("hello from an LLM-generated Python block")
+  resources:
+    vcpu: 1
+    memory: 512Mi
+  lifecycle:
+    timeout: 5m
