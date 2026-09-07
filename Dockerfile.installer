@@ -44,10 +44,18 @@ FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9
 # gibson's Dockerfile.
 ENV GOTOOLCHAIN=auto
 # Pinned kata release + digest. To bump: download the new
-# kata-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
-# (and the packer AMI pin if you want the profiles to match).
-ARG KATA_VERSION=3.32.0
-ARG KATA_SHA256=1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01
+# kata-go-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
+# (and the packer AMI pin, which must match: same payload on every node).
+#
+# Since kata 4.0 the release ships two tarballs. kata-static-<ver> carries
+# only the Rust runtime (runtime-rs), which has no Firecracker hypervisor.
+# The Go shim (containerd-shim-kata-v2), Firecracker and the jailer live in
+# kata-go-static-<ver>. Upstream calls the Go runtime deprecated but still
+# ships it with fixes (4.1.0 is built with Go 1.25.13). Owner decision
+# 2026-09-07: setec stays on the Firecracker path and takes the go-static
+# payload (docs/code-scanning-dismissals.md, Entry 9).
+ARG KATA_VERSION=4.1.0
+ARG KATA_SHA256=8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55
 
 RUN set -eux; \
     apt-get update; \
@@ -56,7 +64,7 @@ RUN set -eux; \
 
 RUN set -eux; \
     curl -fsSL --retry 3 -o /tmp/kata.tar.zst \
-      "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.zst"; \
+      "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-go-static-${KATA_VERSION}-amd64.tar.zst"; \
     echo "${KATA_SHA256}  /tmp/kata.tar.zst" | sha256sum -c -; \
     mkdir -p /payload; \
     # Extract only what the kata-fc handler needs. The full tarball also

@@ -16,7 +16,7 @@ set -eo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${ROOT}/kubeconfig"
 
-KATA_VERSION="${KATA_VERSION:-3.32.0}"
+KATA_VERSION="${KATA_VERSION:-4.1.0}"
 KATA_CACHE="${KATA_CACHE:-${ROOT}/.cache/kata-containers-${KATA_VERSION}}"
 CHART_PATH="${KATA_CACHE}/tools/packaging/kata-deploy/helm-chart/kata-deploy"
 
@@ -161,16 +161,14 @@ else
     kubectl -n kube-system delete pods -l name=kata-deploy --ignore-not-found=true --wait=false 2>/dev/null || true
 fi
 
-# The kata-deploy chart depends on node-feature-discovery. helm dependency
-# build requires the subchart's source repo to be registered first.
-if ! helm repo list 2>/dev/null | awk '{print $2}' | grep -q '^https://kubernetes-sigs.github.io/node-feature-discovery/charts$'; then
-    green "Registering node-feature-discovery helm repo"
-    helm repo add nfd https://kubernetes-sigs.github.io/node-feature-discovery/charts
+# Since kata 4.x the chart vendors its node-feature-discovery dependency as
+# charts/node-feature-discovery-<ver>.tgz and its Chart.yaml says not to run
+# `helm dependency update/build` (the remote archive name breaks Helm 4
+# resolution). Assert the vendored subchart is there instead.
+if ! ls "${CHART_PATH}"/charts/node-feature-discovery-*.tgz >/dev/null 2>&1; then
+    red "FAIL: ${CHART_PATH}/charts has no vendored node-feature-discovery tarball — chart layout changed upstream?"
+    exit 1
 fi
-helm repo update nfd >/dev/null 2>&1 || true
-
-green "helm dependency build (fetches node-feature-discovery subchart)"
-helm dependency build "${CHART_PATH}"
 
 green "helm upgrade --install kata-deploy (k3s distribution)"
 helm upgrade --install kata-deploy "${CHART_PATH}" \

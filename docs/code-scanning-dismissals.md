@@ -253,6 +253,9 @@ and must not be dismissed, and the fix is an owner decision.
 **Reverses if** the owner accepts the deprecated Go runtime tarball, or
 upstream ships Firecracker support in runtime-rs.
 
+**Reversed on 2026-09-07 by Entry 9.** The owner accepted the go-static
+tarball the same day.
+
 ### Entry 7 — CodeQL alerts #23 and #24, dismissed as false positives (setec#21)
 
 **#24 `go/disabled-certificate-check`, `internal/credentials/credentials.go`.**
@@ -290,12 +293,50 @@ upload exists, one workflow_call away), the rest as won't fix.
 
 **Reverses if** the reusable workflow needs fewer permissions.
 
+### Entry 9 — kata payload moved to 4.1.0 go-static (owner decision 2026-09-07)
+
+Not a dismissal. Owner decision 2026-09-07, option 2 of three: take the
+`kata-go-static-4.1.0-amd64.tar.zst` payload, which still carries the Go
+shim (`containerd-shim-kata-v2`), Firecracker and the jailer, so the
+`kata-fc` path is unchanged. Alternatives declined: stay on 3.32.0 with the
+20 findings open, or build the 3.32.0 shim from source (a kata fork to
+maintain, and the ADR-0003 stock-release property lost).
+
+What moved, in lockstep as before: `Dockerfile.installer` (tarball name and
+pin), `packer/eks-kata-fc-ami/*` (same), `development/k3s/scripts/20-install-kata.sh`
+(chart tag; the 4.x chart vendors node-feature-discovery, so the script no
+longer runs `helm dependency build`), the installer unit-test fixture.
+
+What 4.1.0 clears, verified against upstream `src/runtime/go.mod` at the
+4.1.0 tag: the shim is built with Go 1.25.13 and pins containerd v1.7.33,
+runc v1.3.6, x/mod v0.40.0, x/net v0.56.0, x/text v0.39.0 and mongo-driver
+v1.17.7. That covers 18 of the 20 findings open on 2026-09-07, including
+CVE-2026-53488 and CVE-2026-41579, the two that involve malicious images.
+
+What it does not clear, same source: grpc stays at v1.82.1 (GHSA-hrxh-6v49-42gf
+wants v1.83.1) and cilium/ebpf stays at v0.17.3 (wants v0.22.0). Both remain
+Class B findings and stay open, not dismissed, until upstream moves them.
+
+The go-static tarball is 1.2 GB against 924 MB for kata-static. The installer
+image still extracts only the kata-fc set, so the image size is unchanged in
+kind. Upstream calls the Go runtime deprecated; it still receives fixes, and
+this entry is the record that the substrate now sits on that path.
+
+**Reverses if** upstream ships Firecracker support in runtime-rs, or stops
+publishing the go-static tarball.
+
+**Not verified here:** no kind or k3s run in this change. The installer image
+build asserts the payload shape on the PR, and the e2e suite on `main` is the
+runtime proof. The k3s dev path is bumped on the chart's own evidence (the
+4.1.0 chart still defines the `fc` shim with the devmapper snapshotter) and
+has not been exercised.
+
 ## Re-audit procedure
 
 ```sh
 # Ground truth for the payload, without building the image:
 curl -fsSL -o kata.tar.zst \
-  "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-amd64.tar.zst"
+  "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-go-static-${VER}-amd64.tar.zst"
 mkdir -p x && tar --zstd -xf kata.tar.zst -C x ./opt/kata/bin/containerd-shim-kata-v2
 trivy rootfs --scanners vuln x
 
