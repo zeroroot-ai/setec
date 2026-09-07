@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.3](https://github.com/zeroroot-ai/setec/compare/v0.114.2...v0.114.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* **build:** build on the Go that go.mod names, GOTOOLCHAIN=local ([#31](https://github.com/zeroroot-ai/setec/issues/31)) ([c8641d8](https://github.com/zeroroot-ai/setec/commit/c8641d815d8eb038f99fa118cdf18f773fd5292b))
+
 ## [0.114.2](https://github.com/zeroroot-ai/setec/compare/v0.114.1...v0.114.2) (2026-09-07)
 
 
