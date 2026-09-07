@@ -14,7 +14,7 @@
 # ----------------------------------------------------------------------------
 # Build stage — same toolchain pin as ./Dockerfile (gibson#777).
 # ----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6 AS builder
 # The golang base image ships GOTOOLCHAIN=local. go.mod names the toolchain
 # (go 1.26.8 after the stdlib fix) and moves faster than the mirrored image tag,
 # so let the Go toolchain download the version go.mod asks for. Same rule as
@@ -37,7 +37,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 # ----------------------------------------------------------------------------
 # Payload stage — fetch, verify, extract and prune the kata static release.
 # ----------------------------------------------------------------------------
-FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS payload
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6 AS payload
 # The golang base image ships GOTOOLCHAIN=local. go.mod names the toolchain
 # (go 1.26.8 after the stdlib fix) and moves faster than the mirrored image tag,
 # so let the Go toolchain download the version go.mod asks for. Same rule as
