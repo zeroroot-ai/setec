@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.1](https://github.com/zeroroot-ai/setec/compare/v0.114.0...v0.114.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **ci:** scope the publish-chart token to the job and record the digest triage ([#24](https://github.com/zeroroot-ai/setec/issues/24)) ([f9f4673](https://github.com/zeroroot-ai/setec/commit/f9f4673bf878e26f7a9091e703505efc626faf00)), closes [#21](https://github.com/zeroroot-ai/setec/issues/21)
+
 ## [0.113.0](https://github.com/zeroroot-ai/setec/compare/v0.112.2...v0.113.0) (2026-09-01)
 
 
