@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.2](https://github.com/zeroroot-ai/setec/compare/v0.114.1...v0.114.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* **installer:** move the kata payload to 4.1.0 go-static (Go shim + Firecracker) ([#27](https://github.com/zeroroot-ai/setec/issues/27)) ([35fe57b](https://github.com/zeroroot-ai/setec/commit/35fe57b04233dda46571c939aa558bb7aad2210b))
+
 ## [0.114.1](https://github.com/zeroroot-ai/setec/compare/v0.114.0...v0.114.1) (2026-09-07)
 
 
