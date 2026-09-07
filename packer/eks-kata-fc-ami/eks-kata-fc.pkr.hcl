@@ -54,14 +54,14 @@ variable "k8s_version" {
 
 variable "kata_version" {
   type        = string
-  default     = "3.32.0"
+  default     = "4.1.0"
   description = "Pinned kata-containers release. The static tarball bundles the Firecracker VMM, guest kernel, and rootfs images."
 }
 
 variable "kata_sha256" {
   type        = string
-  default     = "1449ecea50bd91fa73a94648db195d18950fe869ba4b1f12d05f55f1fa7c1b01"
-  description = "Pinned sha256 of kata-static-<kata_version>-amd64.tar.zst. REQUIRED — kata >= 3.28.0 publishes no .sha256sum sidecars, so the bake fails without a pin. Keep in lockstep with the Dockerfile.installer KATA_SHA256 pin so the AMI and the installer DaemonSet lay down the same payload. Bumping kata_version requires updating this pin."
+  default     = "8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55"
+  description = "Pinned sha256 of kata-go-static-<kata_version>-amd64.tar.zst (the Go shim + Firecracker tarball; since kata 4.x kata-static-<ver> carries only runtime-rs, which has no Firecracker). REQUIRED — kata >= 3.28.0 publishes no .sha256sum sidecars, so the bake fails without a pin. Keep in lockstep with the Dockerfile.installer KATA_SHA256 pin so the AMI and the installer DaemonSet lay down the same payload. Bumping kata_version requires updating this pin."
 }
 
 variable "build_instance_type" {

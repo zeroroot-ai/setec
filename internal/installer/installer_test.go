@@ -83,7 +83,7 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	}
 
 	// Kata payload tree.
-	mustWrite(t, filepath.Join(payload, "VERSION"), "3.32.0\n")
+	mustWrite(t, filepath.Join(payload, "VERSION"), "4.1.0\n")
 	for _, rel := range []string{
 		"bin/containerd-shim-kata-v2",
 		"bin/firecracker",

@@ -23,7 +23,7 @@ NVMe instance store).
 
 | Piece | Where | Why |
 |---|---|---|
-| kata-containers static release (pinned by version AND sha256, includes Firecracker + jailer + guest kernel/rootfs) | `/opt/kata` | the VMM stack |
+| kata-containers go-static release (pinned by version AND sha256, includes the Go shim + Firecracker + jailer + guest kernel/rootfs) | `/opt/kata` | the VMM stack |
 | `containerd-shim-kata-fc-v2` symlink | `/usr/local/bin` | kata-deploy-parity shim resolution for `runtime_type = "io.containerd.kata-fc.v2"` |
 | static containerd drop-in: kata-fc handler + devmapper snapshotter | `/etc/containerd/config.d/99-setec-kata-fc.toml` | the nodeadm-rendered containerd config imports `config.d/*.toml` at every boot — zero runtime rewrites. The config **schema version (2 vs 3) is detected once at bake time** from the base image's containerd |
 | boot-time thin-pool provisioner | `setec-thinpool.service` → `/usr/local/sbin/setec-thinpool.sh` | builds an LVM thin-pool (`setec-thinpool`) from unused NVMe **instance-store** devices, idempotent across reboots; rebuilds + clears stale devmapper snapshotter state after a stop/start wiped the ephemeral disks. Ordered `Before=containerd.service`, and containerd `Requires=` it |
@@ -58,8 +58,8 @@ baking only writes files; KVM is not needed until a node runs microVMs.
 |---|---|---|
 | `region` | `us-east-1` | build region |
 | `k8s_version` | `1.33` | selects the EKS-optimized AL2023 x86_64 base via SSM |
-| `kata_version` | `3.32.0` | pinned kata static release (bundles Firecracker) |
-| `kata_sha256` | sha256 of `kata-static-3.32.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
+| `kata_version` | `4.1.0` | pinned kata go-static release (the tarball that still bundles the Go shim and Firecracker since the 4.x split) |
+| `kata_sha256` | sha256 of `kata-go-static-4.1.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
 | `build_instance_type` | `m7i.xlarge` | any x86_64 type works |
 | `ami_name_prefix` | `setec-kata-fc` | AMI selectors should match `setec-kata-fc-*` |
 | `root_volume_size_gb` | `100` | EBS root (images via overlayfs, kata guest artifacts) |
@@ -112,7 +112,7 @@ dmsetup info setec-thinpool
 ## Upgrades
 
 Never mutate a running node. Bump `kata_version` **and** `kata_sha256`
-(compute `sha256sum` of the new `kata-static-<ver>-amd64.tar.zst`; update
+(compute `sha256sum` of the new `kata-go-static-<ver>-amd64.tar.zst`; update
 the `Dockerfile.installer` pin in the same change), rebuild, and roll nodes
 onto the new AMI (Karpenter drift or a node-group AMI update). That is the
 whole point.

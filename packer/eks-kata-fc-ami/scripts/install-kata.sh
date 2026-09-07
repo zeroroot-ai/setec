@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# install-kata.sh — bake the pinned kata-containers static release (which
-# bundles the Firecracker VMM, guest kernel, and rootfs/initrd images) into
-# /opt/kata, kata-deploy-style, with NO kata-deploy DaemonSet.
+# install-kata.sh — bake the pinned kata-containers go-static release (which
+# bundles the Go shim, the Firecracker VMM, guest kernel, and rootfs/initrd
+# images) into /opt/kata, kata-deploy-style, with NO kata-deploy DaemonSet.
+#
+# Since kata 4.0 the release ships two tarballs: kata-static-<ver> carries
+# only the Rust runtime (no Firecracker); kata-go-static-<ver> carries the Go
+# shim, Firecracker and the jailer. setec takes go-static (owner decision
+# 2026-09-07, docs/code-scanning-dismissals.md Entry 9).
 #
 # kata >= 3.28.0 publishes zstd-compressed release tarballs
-# (kata-static-<version>-<arch>.tar.zst) and NO .sha256sum sidecar files
+# (kata-go-static-<version>-<arch>.tar.zst) and NO .sha256sum sidecar files
 # (setec#198), so the sha256 pin is mandatory — the same
 # fetch/verify/extract approach as Dockerfile.installer, which pins the
 # identical digest so the AMI and the installer DaemonSet lay down the
@@ -13,12 +18,12 @@
 # Runs as root inside the Packer build instance.
 set -euo pipefail
 
-: "${KATA_VERSION:?KATA_VERSION must be set (e.g. 3.28.0)}"
-: "${KATA_SHA256:?KATA_SHA256 must be set — kata >= 3.28.0 releases carry no .sha256sum sidecars, so an unpinned bake cannot be verified. Pin the sha256 of kata-static-${KATA_VERSION}-amd64.tar.zst (keep in lockstep with Dockerfile.installer).}"
+: "${KATA_VERSION:?KATA_VERSION must be set (e.g. 4.1.0)}"
+: "${KATA_SHA256:?KATA_SHA256 must be set — kata >= 3.28.0 releases carry no .sha256sum sidecars, so an unpinned bake cannot be verified. Pin the sha256 of kata-go-static-${KATA_VERSION}-amd64.tar.zst (keep in lockstep with Dockerfile.installer).}"
 
 # x86 only (ADR-0001).
 ARCH=amd64
-TARBALL="kata-static-${KATA_VERSION}-${ARCH}.tar.zst"
+TARBALL="kata-go-static-${KATA_VERSION}-${ARCH}.tar.zst"
 URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${TARBALL}"
 
 echo ">>> installing zstd"
