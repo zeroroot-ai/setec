@@ -92,7 +92,7 @@ runtimeAgent:
 # image. Keep it off; the installer path is exercised by
 # test/e2e/installer_test.go (SETEC_E2E_INSTALLER=1) with the working-tree
 # image:
-#   docker build -f Dockerfile.installer -t ghcr.io/zeroroot-ai/setec-installer:dev .
+#   make installer-image   # docker build -f Dockerfile.installer with the kata pin from kata.env
 #   docker save ghcr.io/zeroroot-ai/setec-installer:dev | sudo k3s ctr -n k8s.io images import -
 installer:
   enabled: false

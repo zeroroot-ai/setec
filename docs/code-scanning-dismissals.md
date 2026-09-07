@@ -347,3 +347,18 @@ grep -cF '<exact symbol from the GO-YYYY-NNNN advisory>' syms.txt
 
 A dismissal without a symbol count from a real `nm` dump, plus a non-zero
 control symbol proving the dump resolved, does not go in this file.
+
+### Entry 10 — kata.env is the only kata pin (setec#26, epic zeroroot-ai/.github#20)
+
+Not a dismissal. Recorded because every earlier kata entry names "the
+`Dockerfile.installer` pin" and "the packer pin" as two things to keep in
+lockstep by hand. Since this entry there is one pin: `KATA_VERSION` and
+`KATA_SHA256` in `kata.env` at the repo root. `images.yml` reads it and passes
+both as build args (the Dockerfile ARGs have no default), the dev k3s script
+sources it, and `packer/eks-kata-fc-ami/bake.sh` passes it as `-var`.
+`scripts/check-kata-pin.sh` runs on every PR and in the merge queue and fails
+when any of the three names a literal again; its `--selftest` proves each
+rule fires. `zeroroot-ai/.github` `version-links.yaml` declares the link with
+kata-containers/kata-containers as the upstream to watch, so a new kata
+release shows up in the org's version-drift tracker instead of in a Trivy
+digest months later.

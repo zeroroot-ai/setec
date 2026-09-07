@@ -45,19 +45,26 @@ FROM ghcr.io/zeroroot-ai/mirror/golang:1.26.8@sha256:9d2f36f06329b2a141b9db99ffa
 # toolchain, so the pinned base is the toolchain that built the binary.
 ARG GOTOOLCHAIN=local
 ENV GOTOOLCHAIN=${GOTOOLCHAIN}
-# Pinned kata release + digest. To bump: download the new
-# kata-go-static-<ver>-amd64.tar.zst, compute sha256sum, update BOTH args
-# (and the packer AMI pin, which must match: same payload on every node).
+# Pinned kata release + digest. Both come from kata.env at the repo root,
+# the one place the pin is edited (setec#26). The ARGs carry NO default on
+# purpose: a build that forgets them fails at the gate below instead of
+# fetching a version this file never named. images.yml reads kata.env and
+# passes both as build args; locally `make installer-image` does the same.
 #
 # Since kata 4.0 the release ships two tarballs. kata-static-<ver> carries
 # only the Rust runtime (runtime-rs), which has no Firecracker hypervisor.
 # The Go shim (containerd-shim-kata-v2), Firecracker and the jailer live in
 # kata-go-static-<ver>. Upstream calls the Go runtime deprecated but still
-# ships it with fixes (4.1.0 is built with Go 1.25.13). Owner decision
-# 2026-09-07: setec stays on the Firecracker path and takes the go-static
-# payload (docs/code-scanning-dismissals.md, Entry 9).
-ARG KATA_VERSION=4.1.0
-ARG KATA_SHA256=8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55
+# ships it with fixes. Owner decision 2026-09-07: setec stays on the
+# Firecracker path and takes the go-static payload
+# (docs/code-scanning-dismissals.md, Entry 9).
+ARG KATA_VERSION
+ARG KATA_SHA256
+
+# Pin gate: both build args must be set (kata.env is the source).
+RUN set -eu; \
+    test -n "${KATA_VERSION}" || { echo "KATA_VERSION build arg is empty: pass it from kata.env" >&2; exit 1; }; \
+    test -n "${KATA_SHA256}" || { echo "KATA_SHA256 build arg is empty: pass it from kata.env" >&2; exit 1; }
 
 RUN set -eux; \
     apt-get update; \

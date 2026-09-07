@@ -16,7 +16,12 @@ set -eo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${ROOT}/kubeconfig"
 
-KATA_VERSION="${KATA_VERSION:-4.1.0}"
+# The kata release comes from kata.env at the repo root, the one place the
+# pin is edited (setec#26). No default here: the file is the source.
+REPO_ROOT="$(cd "${ROOT}/../.." && pwd)"
+# shellcheck source=../../../kata.env
+. "${REPO_ROOT}/kata.env"
+: "${KATA_VERSION:?kata.env did not set KATA_VERSION}"
 KATA_CACHE="${KATA_CACHE:-${ROOT}/.cache/kata-containers-${KATA_VERSION}}"
 CHART_PATH="${KATA_CACHE}/tools/packaging/kata-deploy/helm-chart/kata-deploy"
 

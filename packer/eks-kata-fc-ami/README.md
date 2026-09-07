@@ -46,9 +46,7 @@ root; only `kata-fc` pods hit devmapper (per-runtime `snapshotter` field).
 
 ```bash
 cd packer/eks-kata-fc-ami
-packer init .
-packer validate .
-packer build -var 'region=us-east-1' .
+./bake.sh -var 'region=us-east-1'   # packer init + validate + build with the kata pin from ../../kata.env
 ```
 
 The build instance is a cheap non-metal x86 type (`m7i.xlarge` default) —
@@ -58,8 +56,8 @@ baking only writes files; KVM is not needed until a node runs microVMs.
 |---|---|---|
 | `region` | `us-east-1` | build region |
 | `k8s_version` | `1.33` | selects the EKS-optimized AL2023 x86_64 base via SSM |
-| `kata_version` | `4.1.0` | pinned kata go-static release (the tarball that still bundles the Go shim and Firecracker since the 4.x split) |
-| `kata_sha256` | sha256 of `kata-go-static-4.1.0-amd64.tar.zst` | **required** — kata >= 3.28.0 releases carry no `.sha256sum` sidecars. Kept in lockstep with the `Dockerfile.installer` pin so AMI and installer lay down the same payload. Bump together with `kata_version` |
+| `kata_version` | none, from `kata.env` | pinned kata go-static release (the tarball that still bundles the Go shim and Firecracker since the 4.x split). `bake.sh` passes it from `kata.env` at the repo root, the one place the pin is edited (setec#26) |
+| `kata_sha256` | none, from `kata.env` | sha256 of `kata-go-static-<kata_version>-amd64.tar.zst`. **required**: kata releases since 3.28 carry no `.sha256sum` sidecars. Same file as `kata_version`, so the AMI and the installer lay down the same payload |
 | `build_instance_type` | `m7i.xlarge` | any x86_64 type works |
 | `ami_name_prefix` | `setec-kata-fc` | AMI selectors should match `setec-kata-fc-*` |
 | `root_volume_size_gb` | `100` | EBS root (images via overlayfs, kata guest artifacts) |
@@ -111,8 +109,10 @@ dmsetup info setec-thinpool
 
 ## Upgrades
 
-Never mutate a running node. Bump `kata_version` **and** `kata_sha256`
-(compute `sha256sum` of the new `kata-go-static-<ver>-amd64.tar.zst`; update
-the `Dockerfile.installer` pin in the same change), rebuild, and roll nodes
-onto the new AMI (Karpenter drift or a node-group AMI update). That is the
-whole point.
+Never mutate a running node. Edit `KATA_VERSION` **and** `KATA_SHA256` in
+`kata.env` at the repo root (compute `sha256sum` of the new
+`kata-go-static-<ver>-amd64.tar.zst`). The installer image, the dev k3s
+script and this bake all read that file, and CI fails when any of them names
+a version of its own (`scripts/check-kata-pin.sh`). Then rebuild with
+`./bake.sh` and roll nodes onto the new AMI (Karpenter drift or a node-group
+AMI update). That is the whole point.
