@@ -43,7 +43,7 @@ make down
 
 `scripts/10-install-k3s.sh` installs k3s as a single-node systemd unit with Traefik disabled (we ship our own ingress nothing for this dev cluster) and exports a kubeconfig at `kubeconfig/`, with the API server URL rewritten to your host's primary LAN IP so the kubeconfig works from the Kind cluster's container network too.
 
-`scripts/20-install-kata.sh` installs `kata-deploy` (Helm) into `kube-system`, waits for the DaemonSet, and verifies the `kata-fc` RuntimeClass appears.
+`scripts/20-install-kata.sh` installs `kata-deploy` (Helm) into `kube-system`, waits for the DaemonSet, and verifies the `kata-fc` RuntimeClass appears. The kata release it installs comes from `kata.env` at the repo root, the one place the pin is edited (setec#26).
 
 `make smoke-kata` runs a one-shot Pod with `runtimeClassName: kata-fc` and asserts the kernel string differs from the host kernel — proving real microVM boot, not silent runc fallback.
 

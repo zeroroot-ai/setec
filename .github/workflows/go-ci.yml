@@ -468,6 +468,22 @@ jobs:
             exit 1
           fi
 
+  kata-pin:
+    name: kata.env is the only kata pin
+    # Runs on both lanes: it is a content guard with no build, so the
+    # merge_group lane costs seconds and a queued PR cannot slip a literal in.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Mutation-test the guard
+        run: bash scripts/check-kata-pin.sh --selftest
+
+      - name: Guard the tree
+        run: bash scripts/check-kata-pin.sh
+
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
     if: github.event_name == 'pull_request'
@@ -717,6 +733,7 @@ jobs:
       - flag-smoke-test
       - link-check
       - no-marker-in-source
+      - kata-pin
       - no-insecure-flag-in-chart
       - no-unimplemented-in-frontend
       - examples-build

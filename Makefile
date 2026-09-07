@@ -193,6 +193,17 @@ image: docker-build ## Uniform-contract alias for docker-build (RESTRUCTURE-QUAL
 docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
+.PHONY: installer-image
+installer-image: ## Build the setec-installer image with the kata pin from kata.env (setec#26).
+	$(CONTAINER_TOOL) build -f Dockerfile.installer \
+	  $$(grep -vE '^\s*(#|$$)' kata.env | sed 's/^/--build-arg /') \
+	  -t ghcr.io/zeroroot-ai/setec-installer:dev .
+
+.PHONY: check-kata-pin
+check-kata-pin: ## Fail if any consumer names a kata version of its own (kata.env is the source).
+	bash scripts/check-kata-pin.sh --selftest
+	bash scripts/check-kata-pin.sh
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
@@ -268,7 +279,7 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials ## Run the local gate (tests + credential guard — run 'make lint' separately).
+check: test guard-credentials check-kata-pin ## Run the local gate (tests, credential guard, kata pin guard — run 'make lint' separately).
 
 ##@ Deployment
 

@@ -53,6 +53,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # kata.env at the repo root is the one place the kata release is pinned
+  # (setec#26). This job reads it once; setec-installer passes the two
+  # values as build args, because Dockerfile.installer's ARGs carry no
+  # default on purpose. scripts/check-kata-pin.sh keeps it that way.
+  kata-pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      sha256: ${{ steps.read.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Guard the pin and read kata.env
+        id: read
+        run: |
+          set -euo pipefail
+          bash scripts/check-kata-pin.sh
+          . ./kata.env
+          echo "version=${KATA_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${KATA_SHA256}" >> "$GITHUB_OUTPUT"
+
   setec:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
@@ -174,6 +195,7 @@ jobs:
         CMD=setec-guest-agent
 
   setec-installer:
+    needs: kata-pin
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
@@ -195,3 +217,6 @@ jobs:
       # amd64 only: the bundled kata static payload is x86 (ADR-0001).
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        KATA_VERSION=${{ needs.kata-pin.outputs.version }}
+        KATA_SHA256=${{ needs.kata-pin.outputs.sha256 }}
