@@ -229,6 +229,67 @@ vendored dependency graph and its Go toolchain. kata 3.32.0 is built with
 
 Tracked as upstream dependency debt in setec#285. Re-audit on every kata pin bump.
 
+### Entry 6 — kata 4.1.0 evaluated on 2026-09-07, not taken (setec#21)
+
+Not a dismissal. The 20 open Trivy findings on the shim on 2026-09-07 all have
+a fixed version, and kata 4.1.0 (2026-08-21) clears 18 of them: it builds
+with Go 1.25.13 and pins containerd v1.7.33, runc v1.3.6, x/mod v0.40.0,
+x/net v0.56.0, x/text v0.39.0 and mongo-driver v1.17.7. Two would remain
+(grpc wants v1.83.1, 4.1.0 pins v1.82.1; cilium/ebpf wants v0.22.0, 4.1.0
+pins v0.17.3).
+
+The pin still stays on 3.32.0, for the reason Entry 2 gives and one new
+fact. In 4.x the release tarballs are split. `kata-static-4.1.0-amd64.tar.zst`
+carries only `shim-v2-rust` and no Firecracker. The Go shim
+(`containerd-shim-kata-v2`) and the Firecracker and jailer binaries live in
+a second tarball, `kata-go-static-4.1.0-amd64.tar.zst` (1.2 GB), which is
+the deprecated Go runtime. Moving to it is a substrate decision: it changes
+the payload contract in `Dockerfile.installer`, the packer bake, and the k3s
+dev path (the 4.x kata-deploy chart installs runtime-rs, which has no
+Firecracker hypervisor, so `kata-fc` would not appear). No 3.x release newer
+than 3.32.0 exists. **These 20 alerts stay open on purpose**: they have a fix
+and must not be dismissed, and the fix is an owner decision.
+
+**Reverses if** the owner accepts the deprecated Go runtime tarball, or
+upstream ships Firecracker support in runtime-rs.
+
+### Entry 7 — CodeQL alerts #23 and #24, dismissed as false positives (setec#21)
+
+**#24 `go/disabled-certificate-check`, `internal/credentials/credentials.go`.**
+`InsecureSkipVerify` is set only when the peer certificate carries no name
+that Go's hostname check could use. Verification is not dropped, it is
+replaced: `authorizeUnnamedPeer` parses the presented chain, verifies it
+against the source's trust anchors with `x509.Certificate.Verify` and
+`ExtKeyUsageServerAuth`, and then asks the source to authorize the verified
+identity. Go offers no other way to keep chain verification and skip only
+the name check. CodeQL flags the field, not the replacement.
+
+**#23 `go/weak-sensitive-data-hashing`, `internal/snapshot/secretscan/scanner.go`.**
+`Version()` hashes the builtin detector rule names and regex patterns with
+SHA-256 to derive a detector-set version string. No credential is hashed.
+CodeQL matched the word "password" in a rule name.
+
+**Reverses if** a name-bearing certificate contract replaces the unnamed
+peer path, or `Version()` starts hashing anything but rule definitions.
+
+### Entry 8 — Scorecard Token-Permissions alerts #2 to #17, dismissed (setec#21)
+
+Scorecard scores every job-level `contents: write`, `packages: write` and
+`security-events: write` as 0 and cannot see inside a `workflow_call`. The
+grants in `images.yml` and `release-please.yml` are exactly the set the org
+reusable image workflow declares (`packages: write` and `id-token: write` to
+push and sign, `attestations: write` for the SBOM attestation,
+`security-events: write` to upload the Trivy SARIF, `actions: read` for the
+upload). `release.yml` needs `contents: write` to create the draft release
+and `release-please.yml` needs it to open the release PR. Nothing can be
+removed without breaking the job. The one fixable finding, the top-level
+`packages: write` in `publish-chart.yml` (#18), was moved to the job.
+
+Dismissal reasons: `security-events: write` as false positive (the SARIF
+upload exists, one workflow_call away), the rest as won't fix.
+
+**Reverses if** the reusable workflow needs fewer permissions.
+
 ## Re-audit procedure
 
 ```sh
