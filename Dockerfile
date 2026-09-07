@@ -22,12 +22,13 @@
 # so multi-arch builds (linux/amd64,linux/arm64 — setec#132) never emulate
 # the Go toolchain. The distroless runtime stage below is a multi-arch
 # index, and it has no RUN steps, so no QEMU is needed anywhere.
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.6@sha256:640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205 AS builder
-# The golang base image ships GOTOOLCHAIN=local. go.mod names the toolchain
-# (go 1.26.8 after the stdlib fix) and moves faster than the mirrored image tag,
-# so let the Go toolchain download the version go.mod asks for. Same rule as
-# gibson's Dockerfile.
-ENV GOTOOLCHAIN=auto
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.8@sha256:9d2f36f06329b2a141b9db99ffa32765cf695ee57b813ca29e245e8670bcbfff AS builder
+# The builder image carries exactly the Go that go.mod names, and the org
+# guard (check-go-toolchain.sh, .github#22) fails a PR where they differ.
+# GOTOOLCHAIN=local makes a mismatch fail the build instead of downloading a
+# toolchain, so the pinned base is the toolchain that built the binary.
+ARG GOTOOLCHAIN=local
+ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 ARG TARGETOS
 ARG TARGETARCH
 ARG CMD=manager

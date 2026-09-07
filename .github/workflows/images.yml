@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -69,13 +69,16 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -90,13 +93,16 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-node-agent
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -111,13 +117,16 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-frontend
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -132,13 +141,16 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-runtime-agent
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -153,13 +165,16 @@ jobs:
       dockerfile_path: Dockerfile
       image_name: ghcr.io/zeroroot-ai/setec-guest-agent
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=setec-guest-agent
 
   setec-installer:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@cf1c48774b57e552ccdd17a2a4bba3f782587dbe # main, .github recreated 2026-09-06
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f760edb01410e83c4e262218b80f64d939fe80f3 # main, 2026-09-07: .github#22 go toolchain guard
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -174,6 +189,9 @@ jobs:
       dockerfile_path: Dockerfile.installer
       image_name: ghcr.io/zeroroot-ai/setec-installer
       tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
       # amd64 only: the bundled kata static payload is x86 (ADR-0001).
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
