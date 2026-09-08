@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.114.5](https://github.com/zeroroot-ai/setec/compare/v0.114.4...v0.114.5) (2026-09-08)
+
+
+### Bug Fixes
+
+* **refs:** replace dead repo links and workstation paths with durable ones ([#37](https://github.com/zeroroot-ai/setec/issues/37)) ([c06432c](https://github.com/zeroroot-ai/setec/commit/c06432cc3a14fb2f9ff68f0740fffba3fa6f12d6))
+
 ## [0.114.4](https://github.com/zeroroot-ai/setec/compare/v0.114.3...v0.114.4) (2026-09-07)
 
 
