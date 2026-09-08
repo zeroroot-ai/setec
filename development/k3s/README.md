@@ -64,7 +64,7 @@ It then materialises the TLS Secret and runs `helm upgrade --install setec ../..
 The Gibson Kind cluster needs to dial `host.docker.internal:30051` to reach Setec on k3s. This requires `extraHosts: host-gateway` in the Kind cluster config. The change is one line:
 
 ```yaml
-# enterprise/deploy/helm/gibson/kind-config.yaml
+# helm/kind-config.yaml in the zeroroot-ai/charts repo
 nodes:
   - role: control-plane
     extraHosts:                         # <-- add this block
@@ -75,8 +75,9 @@ nodes:
 Apply by re-creating the cluster:
 
 ```bash
+# Run from a checkout of zeroroot-ai/charts.
 kind delete cluster --name=gibson
-make -C enterprise/deploy/helm/gibson kind-create
+kind create cluster --config helm/kind-config.yaml --name gibson
 ```
 
 > **CLAUDE.md compliance:** this patch is documented but not auto-applied. GitOps-driven; you apply it.
@@ -85,12 +86,12 @@ After the Kind cluster has `host-gateway`, `make smoke-cross-cluster` applies th
 
 ### Phase 4 — Gibson integration
 
-`make smoke-integration` pulls the published `gibson-executor` image, imports it into k3s containerd, applies the Gibson chart values overlay (`enterprise/deploy/helm/gibson/values-sandboxed-tools.yaml`), waits for the daemon to restart with the new config, invokes the `hello` tool against the daemon's tool-call gRPC, and asserts the response. The Sandbox CR lifecycle in `gibson-dev` namespace is verified, and the Jaeger trace ID is printed for manual verification of the `harness.CallToolProto → setec.launch → setec.wait` span tree.
+`make smoke-integration` pulls the published `gibson-executor` image, imports it into k3s containerd, applies the smoke Job in `manifests/gibson-kind/`, and asserts the response the `hello` tool returns over the tool-call gRPC. The Gibson daemon must already run with sandboxed tool execution enabled and its tenant set; the Gibson chart in the `zeroroot-ai/charts` repo carries those values. The Sandbox CR lifecycle in `gibson-dev` namespace is verified, and the Jaeger trace ID is printed for manual verification of the `harness.CallToolProto → setec.launch → setec.wait` span tree.
 
 ## What lives where
 
 ```
-opensource/setec/development/k3s/
+development/k3s/
 ├── Makefile                         # one-command-per-phase entry points
 ├── README.md                        # this file
 ├── .gitignore                       # excludes pki/ and *.generated.yaml

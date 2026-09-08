@@ -1,7 +1,7 @@
 # End-to-end round-trip smoke of THIS PR's setec build, shadow-installed
 # into a throwaway namespace in staging EKS
-# (Epic: cicd-efficiency, board #44 / zeroroot-ai/deploy#1067 / ADR-0060 /
-# zeroroot-ai/setec#113).
+# (The cicd-efficiency epic: build the images on a GitHub-hosted runner and
+# shadow-install the PR's own chart into a throwaway namespace.)
 #
 # Replaces the old self-hosted `setec-bare-metal` model, which installed
 # kata-deploy + the setec chart FROM THE PR'S OWN WORKING TREE into a
@@ -14,8 +14,8 @@
 # setec-metal Karpenter NodePool. The KVM requirement is satisfied by the
 # setec sandbox-host node that Karpenter provisions on demand for the
 # shadow release's own sandbox pods (kata RuntimeClass + node selector);
-# the runner pod itself needs only the RBAC in gitops
-# envs/staging/manifests/arc-runners/rbac.yaml.
+# the runner pod itself needs only the RBAC the ARC runner ServiceAccount
+# already carries in the cluster's Argo tree in the hosted repo.
 #
 # PARITY MODEL (zeroroot-ai/setec#113 — option A, namespace-scoped shadow
 # install): the `roundtrip` job helm-installs the PR's OWN chart (from the
@@ -43,12 +43,12 @@
 #     (create is first-writer-wins) but it can mask a pod-spec regression;
 #     revisit namespace-scoped watches when that flip happens.
 #
-# ⚠ RBAC PREREQUISITE (zeroroot-ai/gitops#320): the shadow install needs an
-# install-grade grant (namespaces, helm release secrets, workloads, the
-# chart's release-prefixed ClusterRole/Binding) that is meaningfully larger
-# than the round-trip-only grant currently in gitops
-# envs/staging/manifests/arc-runners/rbac.yaml. The job fails fast with a
-# pointer to that issue until the grant lands.
+# ⚠ RBAC PREREQUISITE: the shadow install needs an install-grade grant
+# (namespaces, helm release secrets, workloads, the chart's release-prefixed
+# ClusterRole/Binding) that is meaningfully larger than the round-trip-only
+# grant the ARC runner ServiceAccount carries today. That grant lives in the
+# cluster's Argo tree in the hosted repo, not here. The job fails fast until
+# it lands.
 #
 # ⚠ PREREQUISITE GAP (deploy#1080): staging's gitops overlay currently
 # ships `setec.enabled: false` / `frontend.enabled: false` (envs/staging/
@@ -215,13 +215,13 @@ jobs:
           # grant (see the RBAC PREREQUISITE header note). Probe the
           # signature verb so a missing grant fails loud and early.
           kubectl auth can-i create namespaces >/dev/null 2>&1 || {
-            echo "::error::arc-runner-sa lacks install-grade RBAC for the shadow install — see zeroroot-ai/gitops#320 (envs/staging/manifests/arc-runners/rbac.yaml)"
+            echo "::error::arc-runner-sa lacks install-grade RBAC for the shadow install — it needs create on namespaces, helm release Secrets, workloads and the chart's release-prefixed ClusterRole/Binding. Grant it in the cluster's Argo tree in the hosted repo."
             exit 1
           }
           # Teardown is not optional either: a run that can install but not
           # delete leaks its namespace and every workload in it.
           kubectl auth can-i delete namespaces >/dev/null 2>&1 || {
-            echo "::error::arc-runner-sa cannot delete namespaces — the shadow install would leak setec-e2e-${{ github.run_id }} (see zeroroot-ai/gitops envs/staging/manifests/arc-runners/rbac.yaml)"
+            echo "::error::arc-runner-sa cannot delete namespaces — the shadow install would leak setec-e2e-${{ github.run_id }}. Grant the delete verb on namespaces in the cluster's Argo tree in the hosted repo."
             exit 1
           }
 
@@ -246,7 +246,7 @@ jobs:
           set -uo pipefail
           if ! ns_list="$(kubectl get namespaces \
                 -o go-template='{{range .items}}{{.metadata.name}} {{.metadata.creationTimestamp}}{{"\n"}}{{end}}' 2>&1)"; then
-            echo "::warning::cannot list namespaces, stale setec-e2e-* sweep skipped — arc-runner-setec-installer needs the list verb on namespaces (zeroroot-ai/gitops envs/staging/manifests/arc-runners/rbac.yaml). Detail: ${ns_list}"
+            echo "::warning::cannot list namespaces, stale setec-e2e-* sweep skipped — arc-runner-setec-installer needs the list verb on namespaces, granted in the cluster's Argo tree in the hosted repo. Detail: ${ns_list}"
             exit 0
           fi
 
@@ -869,7 +869,7 @@ jobs:
             fi
           done
           if [ "$missing" -ne 0 ]; then
-            echo "::error::apply eks/gibson in zeroroot-ai/deploy (module.s3 setec_checkpoints + module.iam_irsa setec_node_agent), then set the variables from its outputs: s3_bucket_names[\"setec_checkpoints\"] and iam_role_arns[\"setec_node_agent\"]"
+            echo "::error::apply the bootstrap/eks/gibson Terraform stack (module.s3 setec_checkpoints + module.iam_irsa setec_node_agent), then set the variables from its outputs: s3_bucket_names[\"setec_checkpoints\"] and iam_role_arns[\"setec_node_agent\"]"
             exit 1
           fi
         env:
@@ -1258,7 +1258,7 @@ jobs:
         # 3300s (55m) sits just INSIDE this job's `timeout-minutes: 60`, and
         # that direction matters. `Cleanup (always)` does not run when the job
         # is cancelled or times out (setec#255) — observed on run 31918112679,
-        # where the runner was evicted mid-scenario (zeroroot-ai/gitops#532)
+        # where the runner was evicted mid-scenario
         # and cleanup was `skipped`. The earlier 4200s (70m) OUTLASTED the
         # timeout, so in exactly that case the placeholder went on pinning a
         # ~$4/hr m5zn.metal with no job left to use it. A sleep shorter than

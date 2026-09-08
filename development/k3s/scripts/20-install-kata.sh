@@ -146,7 +146,7 @@ else
     # Now wrap the generated config.toml with the imports line prepended.
     sudo sh -c "
         {
-            printf '# Managed by opensource/setec/development/k3s/scripts/20-install-kata.sh (Phase A).\n'
+            printf '# Managed by zeroroot-ai/setec development/k3s/scripts/20-install-kata.sh (Phase A).\n'
             printf '# imports enabled so kata-deploy pre-install check passes; after kata-deploy\n'
             printf '# writes its drop-in, this template is rewritten by Phase B at end of script.\n'
             printf '%s\n\n' '${IMPORTS_LINE}'
@@ -248,7 +248,7 @@ if [[ ${ALREADY_INLINED} -eq 0 ]]; then
     # then the kata runtime registrations appended inline.
     sudo sh -c "
         {
-            printf '# Managed by opensource/setec/development/k3s/scripts/20-install-kata.sh (Phase B).\n'
+            printf '# Managed by zeroroot-ai/setec development/k3s/scripts/20-install-kata.sh (Phase B).\n'
             printf '# Kata runtimes inlined — imports mechanism wipes CRI via containerd merge bug.\n'
             grep -v '^imports = ' '${K3S_CONFIG}'
             printf '\n# ── kata runtime registrations (inlined from kata-deploy.toml) ──\n'
