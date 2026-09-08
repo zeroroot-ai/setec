@@ -48,8 +48,8 @@ root and the channel cannot verify even once caSecret exists).
 This file does NOT fix that. It is the suite's own way around it, and it
 exists because the chart fix cannot be exercised from here: adding an Issuer
 to the chart needs `create issuers.cert-manager.io` on the ARC runner's
-ServiceAccount, which it does not have and which only a zeroroot-ai/gitops
-change can grant. What the runner CAN do is create Secrets in the namespace it
+ServiceAccount, which it does not have and which only a change to the
+cluster's Argo GitOps tree can grant. What the runner CAN do is create Secrets in the namespace it
 owns — so the suite mints one CA, issues both leaves from it, and installs
 with certManager.enabled=false. Same trust root, no cert-manager, no new RBAC.
 

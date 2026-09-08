@@ -105,7 +105,7 @@ fi
 # 7. Invoke the nmap tool via CallToolProto. This reuses the hello-toolrunner
 #    smoke Job pattern but with tool_name=nmap and the expected ExecuteResponse
 #    carrying a DiscoveryResult. The Job is applied from a manifest that
-#    mirrors opensource/setec/development/k3s/manifests/gibson-kind/
+#    mirrors development/k3s/manifests/gibson-kind/
 #    hello-toolrunner-smoke.yaml with tool_name=nmap.
 #
 # NOTE: implementing the nmap-smoke Job is left for the follow-up e2e pass —

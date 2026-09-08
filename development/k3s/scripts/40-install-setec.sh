@@ -12,7 +12,7 @@
 set -eo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SETEC_REPO_ROOT="$(cd "${ROOT}/../.." && pwd)"  # opensource/setec/
+SETEC_REPO_ROOT="$(cd "${ROOT}/../.." && pwd)"  # the setec repo root
 PKI="${ROOT}/pki"
 export KUBECONFIG="${ROOT}/kubeconfig"
 

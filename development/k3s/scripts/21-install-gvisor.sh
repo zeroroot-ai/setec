@@ -224,7 +224,7 @@ if [[ ${needs_containerd_update} -eq 1 ]]; then
         # No template yet — create one from the live config plus our stanza.
         sudo sh -c "
             {
-                printf '# Managed by opensource/setec/development/k3s/scripts/21-install-gvisor.sh.\n'
+                printf '# Managed by zeroroot-ai/setec development/k3s/scripts/21-install-gvisor.sh.\n'
                 cat '${K3S_CONFIG}'
                 printf '%s\n' '${RUNSC_STANZA}'
             } > '${K3S_TMPL}'

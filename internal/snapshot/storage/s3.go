@@ -318,8 +318,8 @@ func errHeadForbidden(err error) error {
 //
 // A plain DeleteObject on a VERSIONED bucket deletes nothing: it writes a
 // delete marker and the previous version survives until a lifecycle rule
-// reaps it. Every platform bucket in zeroroot-ai/deploy's eks/gibson is
-// versioned, and that is a sane default generally.
+// reaps it. Every platform bucket the `bootstrap/eks/gibson` Terraform
+// stack creates is versioned, and that is a sane default generally.
 //
 // For the sealed DEK that is the difference between crypto-erase and the
 // appearance of one — S3DEKStore.Destroy is what ADR-0005 invariant 5 leans
