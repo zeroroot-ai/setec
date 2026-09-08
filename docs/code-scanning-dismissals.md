@@ -183,51 +183,42 @@ symbol table. Same evidence and same reversal condition as Entry 4.
 
 ## Residual open findings — NOT dismissed
 
-**15 findings remain open on `trivy-setec-installer`, all in
-`/opt/kata/bin/containerd-shim-kata-v2`, and all are Class B.**
+**2 findings remain open on `trivy-setec-installer`, both in
+`/opt/kata/bin/containerd-shim-kata-v2`, and both are Class B.**
 
-They are **deliberately left open**. For each one, `go tool nm` confirms the
+This is the residual set as measured on 2026-09-08, against the payload
+`kata.env` pins today: kata 4.1.0, `KATA_SHA256`
+`8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55`. Entry 9
+cleared 18 of the 20 findings the earlier 3.32.0 payload carried. These two are
+what it did not clear.
+
+| Alert | CVE | Sev | Package | Installed | Fixed in | Linked? |
+|---|---|---|---|---|---|---|
+| 34 | CVE-2026-84304 | HIGH | `google.golang.org/grpc` | v1.82.1 | 1.83.1 | yes (server transport, Entry 11) |
+| 25 | CVE-2026-10722 | LOW | `github.com/cilium/ebpf` | v0.17.3 | 0.22.0 | yes (1,156 syms, Entry 11) |
+
+They are **deliberately left open**. For each one `go tool nm` confirms the
 vulnerable package *is* linked into the shipped binary. Linked is not the same
-as reachable from untrusted input — but under the Class-B bar above, "I could
-not prove it reachable" is not a dismissal reason. Proving the negative would
-need symbol-level dataflow analysis of upstream kata's shim, which this repo has
-not done.
+as reachable from untrusted input. Under the Class-B bar above, "I could not
+prove it reachable" is not a dismissal reason. Entry 11 carries the symbol
+counts and the control symbol.
 
-| CVE | Sev | Package | Fixed in | Linked? |
-|---|---|---|---|---|
-| CVE-2026-53488 | HIGH | `containerd/containerd` v1.7.32 | 1.7.33 | yes (6,495 syms) |
-| CVE-2026-47262 | MED | `containerd/containerd` v1.7.32 | 1.7.33 | yes |
-| CVE-2026-41579 | MED | `opencontainers/runc` v1.2.8 | 1.3.6 | yes (384 syms) |
-| CVE-2026-46600 | HIGH | `golang.org/x/net` v0.55.0 | 0.56.0 | yes (871 syms, http2) |
-| CVE-2026-56852 | HIGH | `golang.org/x/text` v0.37.0 | 0.39.0 | yes (417 syms) |
-| GHSA-hrxh-6v49-42gf | HIGH | `google.golang.org/grpc` v1.79.3 | 1.82.1 | yes (4,282 syms) |
-| CVE-2026-2303 | MED | `go.mongodb.org/mongo-driver` v1.14.0 | 1.17.7 | yes (2,393 syms) |
-| CVE-2026-33818 | HIGH | stdlib `encoding/asn1` | 1.25.13 | yes (232 syms) |
-| CVE-2026-39821 | HIGH | stdlib `x/net/idna` | 1.25.13 | yes (80 syms) |
-| CVE-2026-56853 | HIGH | stdlib `net/http` HTTP/2 | 1.25.13 | yes (19 syms) |
-| CVE-2026-56858 | HIGH | stdlib `html/template` | 1.25.13 | yes (398 syms) |
-| CVE-2026-56859 | HIGH | stdlib `encoding/xml` | 1.25.13 | yes (304 syms) |
-| CVE-2026-56860 | HIGH | stdlib `net/url` | 1.25.13 | yes (123 syms) |
-| CVE-2026-56862 | HIGH | stdlib `crypto/tls` | 1.25.13 | yes (1,376 syms) |
-| CVE-2026-42505 | MED | stdlib `crypto/tls` ECH | 1.25.12 | yes |
+**setec cannot fix either one directly.** Both live in upstream kata's vendored
+dependency graph. kata 4.1.0 (2026-08-21) is the newest kata release, and its
+`src/runtime/go.mod` at that tag still pins `google.golang.org/grpc v1.82.1`
+and `github.com/cilium/ebpf v0.17.3`. No kata release fixes either finding
+today. The only levers are:
 
-Two of these deserve naming because they involve **malicious container images**,
-which is precisely setec's threat model rather than an incidental risk:
-CVE-2026-53488 (host-root command execution via unvalidated image config labels)
-and CVE-2026-41579 (host filesystem integrity compromised by malicious images).
+1. Bump `KATA_VERSION` and `KATA_SHA256` in `kata.env` the moment upstream
+   publishes a release with refreshed vendored deps. This is the expected path.
+   `zeroroot-ai/.github` `version-links.yaml` watches kata releases, so a new
+   one surfaces in the org version-drift tracker (Entry 10).
+2. Build the shim from source against patched deps, which would abandon the
+   stock-static-release property ADR-0003 exists to preserve. That is an
+   architecture decision, not a triage decision.
 
-**setec cannot fix any of these directly.** They live in upstream kata's
-vendored dependency graph and its Go toolchain. kata 3.32.0 is built with
-**Go 1.25.11**; nine of the fifteen need **Go 1.25.13**. The only levers are:
-
-1. Bump the kata pin the moment upstream publishes a release built on
-   Go 1.25.13+ with refreshed vendored deps. This is the expected path and
-   clears most of the table in one move.
-2. Build the shim from source against a patched toolchain — which would
-   abandon the stock-static-release property ADR-0003 exists to preserve, and
-   is an architecture decision, not a triage decision.
-
-Tracked as upstream dependency debt in setec#285. Re-audit on every kata pin bump.
+Tracked as upstream dependency debt on the repo's standing code-scanning digest
+issue. Re-audit on every kata pin bump, with the procedure below.
 
 ### Entry 6 — kata 4.1.0 evaluated on 2026-09-07, not taken (setec#21)
 
@@ -362,3 +353,56 @@ rule fires. `zeroroot-ai/.github` `version-links.yaml` declares the link with
 kata-containers/kata-containers as the upstream to watch, so a new kata
 release shows up in the org's version-drift tracker instead of in a Trivy
 digest months later.
+
+### Entry 11 — the two residual shim findings re-audited on kata 4.1.0 (setec#35)
+
+Not a dismissal. This is the symbol record behind the two findings the
+"Residual open findings" section lists. It exists because that section was
+written for the kata 3.32.0 payload, and Entry 9 cleared 18 of those 20
+findings without restating what was left.
+
+Re-audit run on 2026-09-08 with the procedure above, against the pinned tarball
+`kata-go-static-4.1.0-amd64.tar.zst` (sha256
+`8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55`, the
+`KATA_SHA256` in `kata.env`). `go tool nm` on the extracted
+`/opt/kata/bin/containerd-shim-kata-v2` resolves **50,693 symbols**.
+
+**Alert 34, CVE-2026-84304, HIGH. `google.golang.org/grpc` v1.82.1, fixed in
+1.83.1.** A peer that fragments HTTP/2 DATA frames can exhaust the memory of a
+gRPC **server**. The vulnerable server transport is linked:
+
+| Symbol | Count |
+|---|---|
+| `google.golang.org/grpc/internal/transport.(*recvBuffer).put` | 1 |
+| `google.golang.org/grpc/internal/transport.NewServerTransport` | 6 |
+| `google.golang.org/grpc/internal/transport.(*http2Server)` | 59 |
+| `google.golang.org/grpc.(*Server).Serve` | 6 |
+| `google.golang.org/grpc.NewServer` | 0 |
+| `google.golang.org/grpc.NewClient` | 3 |
+| `google.golang.org/grpc/internal/transport.(*http2Client)` | 54 |
+
+`(*recvBuffer).put` is the accumulation point the advisory names, and it is
+present. `grpc.NewServer` resolves 0 because the shim reaches the server
+transport through a different constructor, not because the server half is
+absent: `NewServerTransport`, `(*http2Server)` and `(*Server).Serve` all
+resolve. Control symbol `github.com/containerd/ttrpc.(*Server).Serve` resolves
+**3**, which proves the dump reads real symbols and the one zero is a genuine
+absence.
+
+**Alert 25, CVE-2026-10722, LOW. `github.com/cilium/ebpf` v0.17.3, fixed in
+0.22.0.** An integer overflow in `btf.loadRawSpec` while it parses BTF data.
+The package is linked: the `github.com/cilium/ebpf` prefix resolves **1,156
+symbols**, and the exact symbol the advisory names,
+`github.com/cilium/ebpf/btf.loadRawSpec`, resolves **1**. The advisory scopes
+the input to local BTF data, so the untrusted-input path is much weaker than
+alert 34. The Class-B bar is linkage, not narrative, so it stays open too.
+
+**Neither alert is dismissed on GitHub.** kata 4.1.0 (2026-08-21) is the newest
+kata release. Its `src/runtime/go.mod` at the 4.1.0 tag pins
+`google.golang.org/grpc v1.82.1` and `github.com/cilium/ebpf v0.17.3`, the
+exact versions both advisories name. No kata release fixes either finding, so
+there is nothing to bump to.
+
+**Reverses if** upstream kata publishes a release that pins
+`google.golang.org/grpc` 1.83.1 or later, or `github.com/cilium/ebpf` 0.22.0 or
+later. Move the pin in `kata.env` and re-run the procedure above.
