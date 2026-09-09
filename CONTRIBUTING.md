@@ -126,8 +126,7 @@ We do not require a CLA.
 ## Proposing larger changes
 
 Anything beyond a small fix or documentation tweak starts with a
-specification, not code. Setec uses a lightweight
-[spec-workflow](https://github.com/zeroroot-ai/setec/tree/main/.spec-workflow)
+specification, not code. Setec uses a lightweight `.spec-workflow`
 directory pattern:
 
 1. Open an issue describing the problem.

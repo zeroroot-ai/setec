@@ -96,7 +96,7 @@ Build instructions and the on-node verification checklist (including the
 
 The chart can render a Karpenter `EC2NodeClass` + `NodePool` (Karpenter >=
 1.0, installed out of band) that provision the cheapest x86 bare metal
-(`c6id.metal` / `m6id.metal`) from the [baked kata-fc AMI](#baked-x86-metal-ami-for-kata-fc-recommended)
+(`c6id.metal` / `m6id.metal`) from the [baked kata-fc AMI](#baked-x86-metal-ami-for-kata-fc-optional-profile)
 **on demand** and **scale to zero** when no kata Sandbox is running:
 
 ```bash

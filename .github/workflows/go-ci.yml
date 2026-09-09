@@ -419,28 +419,6 @@ jobs:
           grep -q -- '-snapshot-root' node-agent-help.txt
           grep -q -- '-snapshot-backend' node-agent-help.txt
 
-  link-check:
-    name: Markdown link check
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Run lychee
-        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
-        with:
-          # Fail the build on broken internal links; external links remain
-          # warn-only for v0.1.0 so transient upstream outages do not block
-          # contributor PRs.
-          args: >-
-            --no-progress
-            --accept 200,204,206,429
-            --offline
-            './**/*.md'
-          fail: true
-
   no-marker-in-source:
     name: No TODO/FIXME/XXX/HACK markers in production source
     if: github.event_name == 'pull_request'
@@ -731,7 +709,6 @@ jobs:
       - helm-lint
       - docker-build
       - flag-smoke-test
-      - link-check
       - no-marker-in-source
       - kata-pin
       - no-insecure-flag-in-chart

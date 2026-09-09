@@ -1,0 +1,40 @@
+# Caller workflow for the two org tree guards. Copy to
+# .github/workflows/tree-guards.yml in any repository.
+#
+#   brand-guard  fails on a retired brand string anywhere in the tracked tree
+#   link-check   fails on a broken link in any Markdown file
+#
+# Both reusables live in zeroroot-ai/.github. Neither needs a secret: the
+# checkout uses the calling repository's own GITHUB_TOKEN, and the scanners
+# travel with the composite actions.
+#
+# The merge_group trigger is not optional on a repository with a merge queue. A
+# required status check that never runs on merge_group stalls the queue until
+# it times out, and every check in rulesets/repo/<repo>.json is required in
+# both lanes.
+#
+# Per-repo exemptions:
+#   .brand-guard-allow  repo-relative paths under a `# why:` comment
+#   .lychee.toml        adds to the org link policy, never replaces it
+
+name: tree-guards
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tree-guards-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  brand-guard:
+    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@main
+
+  link-check:
+    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@main
