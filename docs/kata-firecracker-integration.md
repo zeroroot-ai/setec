@@ -93,12 +93,12 @@ run the node-agent unprivileged.
 ## Upstream references
 
 - Firecracker snapshot documentation:
-  https://firecracker-microvm.github.io/doc/snapshotting/snapshot-support/
+  https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md
 - Kata Containers runtime:
   https://katacontainers.io/
 - Firecracker REST API reference (the OpenAPI spec Setec's client
   targets):
-  https://firecracker-microvm.github.io/doc/api_requests/
+  https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/swagger/firecracker.yaml
 
 When Kata's snapshot support matures, Setec will contribute the
 feature-detection logic upstream rather than maintain it as a fork.

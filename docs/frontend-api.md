@@ -506,7 +506,7 @@ and `setec_lease_pool_leased{namespace,sandbox_class}` gauges.
 >
 > To run successive commands *inside one live microVM* — sharing a durable
 > `/workspace` across turns — use `SandboxService.Exec` against a session
-> Sandbox instead (see [Exec](#exec) above and ADR-0008). Leases are a
+> Sandbox instead (see [Session exec](#session-exec-exec) above and ADR-0008). Leases are a
 > fast-start mechanism; sessions are a state mechanism. The two verbs
 > share a name and nothing else.
 
