@@ -140,6 +140,12 @@ WORKDIR /
 COPY --from=builder /out/installer /entrypoint
 COPY --from=payload /payload/opt/kata /opt/kata
 
+# Apache-2.0 §4(a) requires that every recipient of a distribution gets a
+# copy of the License, and a published image is a distribution. /licenses
+# is the OCI convention. Last in the stage, so it cannot bust the cache
+# of the layers above it.
+COPY LICENSE /licenses/LICENSE
+
 # Root on purpose: the installer writes /opt/kata, /etc/systemd and
 # /etc/containerd ON THE HOST through the hostPath mount, and restarts
 # containerd. The DaemonSet pod is privileged by design (see the chart's

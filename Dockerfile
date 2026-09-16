@@ -71,6 +71,12 @@ WORKDIR /
 
 COPY --from=builder /out/${CMD} /entrypoint
 
+# Apache-2.0 §4(a) requires that every recipient of a distribution gets a
+# copy of the License, and a published image is a distribution. /licenses
+# is the OCI convention. Last in the stage, so it cannot bust the cache
+# of the layers above it.
+COPY LICENSE /licenses/LICENSE
+
 # Run as the distroless "nonroot" user/group (65532:65532).
 USER 65532:65532
 

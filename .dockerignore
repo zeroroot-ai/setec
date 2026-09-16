@@ -13,3 +13,7 @@
 # Re-include go:embed assets (the installer's boot-time thin-pool
 # provisioner script — internal/installer/thinpool.go embeds it).
 !internal/installer/payload/*.sh
+
+# Re-include the license text. `**` above hides it, and both Dockerfiles
+# copy it into /licenses so the published images carry it (Apache-2.0 §4(a)).
+!LICENSE
