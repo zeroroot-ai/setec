@@ -75,7 +75,7 @@ jobs:
           echo "sha256=${KATA_SHA256}" >> "$GITHUB_OUTPUT"
 
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -99,7 +99,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -123,7 +123,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -147,7 +147,7 @@ jobs:
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -171,7 +171,7 @@ jobs:
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -196,7 +196,7 @@ jobs:
 
   setec-installer:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@625c0b92ef329bfe40f11f639ee6136c8706538b # main, 2026-09-16: licence label, not NOASSERTION (.github#80)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@d33b5cc18ac03d012f37f6e54984ed5f994da41b # main, 2026-09-16: arm the image-licence guard (.github#82)
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
