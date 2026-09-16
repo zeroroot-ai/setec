@@ -75,7 +75,7 @@ jobs:
           echo "sha256=${KATA_SHA256}" >> "$GITHUB_OUTPUT"
 
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -99,7 +99,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -123,7 +123,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -147,7 +147,7 @@ jobs:
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -171,7 +171,7 @@ jobs:
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -196,7 +196,7 @@ jobs:
 
   setec-installer:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@0fed78673650eb244156e92f3a37ab7411e39750 # main, 2026-09-16: arm the pre-push vulnerability gate (.github#85)
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read

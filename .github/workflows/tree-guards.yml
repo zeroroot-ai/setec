@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   brand-guard:
-    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@3fa85079d3b73fc8d56bb04482a7d94cf4ef1d38 # main, 2026-09-15: pin the org tree guards (.github#66)
+    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
 
   link-check:
-    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@3fa85079d3b73fc8d56bb04482a7d94cf4ef1d38 # main, 2026-09-15: pin the org tree guards (.github#66)
+    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@271a10c5de3fd796ef375da9658b569ab17d1ad5 # v0.2.0
