@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   brand-guard:
-    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@e55c31f0bb5fe175e4b7f9cb4407be9f292885ce # v0.3.0
+    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@017f26148bffdc5d382a265edd863e8a647e7830 # v0.4.0
 
   link-check:
-    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@e55c31f0bb5fe175e4b7f9cb4407be9f292885ce # v0.3.0
+    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@017f26148bffdc5d382a265edd863e8a647e7830 # v0.4.0
