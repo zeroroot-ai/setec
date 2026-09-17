@@ -53,7 +53,7 @@ On any x86 KVM-capable node pool the chart's portable installer DaemonSet
 AWS-specific setup, so a `.metal` x86 pool needs nothing beyond the chart
 install. The **Packer-baked immutable AMI** in
 [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md) is the
-optional EKS optimisation profile: it pre-bakes the same components
+optional EKS optimization profile: it pre-bakes the same components
 so a node boots already capable — faster node-ready for
 Karpenter scale-from-zero, and a node either boots capable or fails
 loudly at boot:
@@ -82,11 +82,11 @@ Chart settings when running on baked nodes: keep
 `runtimes.kata-fc.enabled=true` and set `runtimes.kata-fc.install=false`,
 then `kubectl apply -f` the baked RuntimeClass manifest once per cluster.
 The reason is ownership, not content: with `install=false` the chart
-renders no RuntimeClass and the operator stamps no overhead (setec#78),
+renders no RuntimeClass and the operator stamps no overhead,
 so the class must come from the node image's static manifest. (The
 chart-rendered variant no longer omits `overhead.podFixed` — since
 v0.109.0 an `install=true` RuntimeClass publishes the backend's
-`defaultOverhead`, see setec#169 — but on baked nodes the chart is not
+`defaultOverhead` — but on baked nodes the chart is not
 the owner, so that variant is not in play.)
 Build instructions and the on-node verification checklist (including the
 `ctr plugins ls` devmapper check and a guest-kernel smoke pod) live in the

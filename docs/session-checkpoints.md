@@ -1,6 +1,6 @@
 # Session checkpoints on real infrastructure
 
-How to run the session-lifecycle e2e (setec#192 / #193 / #194) against a
+How to run the session-lifecycle e2e against a
 real cluster and a real object store, and what each scenario costs.
 
 The suite is `test/e2e/session_reattach_test.go` and
@@ -15,7 +15,7 @@ in `.github/workflows/e2e.yml`, because they do not need the same things.
 | `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | `session-checkpoint` | `vars.STAGING_SESSION_S3_READY` |
 | `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | `session-checkpoint` | + `vars.STAGING_SESSION_DRAIN_CAPACITY` |
 
-`TestSession_ReattachByHandle` sits in `suites` deliberately (setec#296). It
+`TestSession_ReattachByHandle` sits in `suites` deliberately. It
 needs a session-mode Sandbox with a workspace PVC and an in-process
 `frontend.Service` — no bucket, no IRSA role, no node-agent — so gating it
 on `STAGING_SESSION_S3_READY`, a variable that waits on a Terraform apply
@@ -66,7 +66,7 @@ bucket.
 ## Bucket and IAM prerequisites
 
 Three properties of S3 bite this path specifically. All three are settled in
-code now (setec#297), but the deployment side still has to hold up its end.
+code now, but the deployment side still has to hold up its end.
 
 ### `s3:ListBucket` is not optional, and not for listing
 
@@ -91,7 +91,7 @@ is — a plain `DeleteObject` writes a delete marker and removes nothing.
 `S3DEKStore.Destroy` now deletes **every version** of the sealed DEK, so the
 erasure ADR-0005 invariant 5 relies on is real rather than nominal.
 
-That is defence in depth, not the primary control: the sealed DEK is useless
+That is defense in depth, not the primary control: the sealed DEK is useless
 without the per-session KEK, which lives in a Kubernetes Secret and never
 enters the bucket, so deleting that Secret remains a true crypto-erase. The
 version delete matters on any store where the KEK Secret is *not* the only
@@ -118,8 +118,8 @@ Two mitigations, and you want both:
   `s3:AbortMultipartUpload`; without them the sweep logs and continues rather
   than blocking startup.
 - An `abort_incomplete_multipart_upload` lifecycle rule on the bucket, which
-  catches uploads the agent never comes back to sweep. `deploy#1555` sets this
-  on the staging bucket; **a self-hosted MinIO has no such rule by default**,
+  catches uploads the agent never comes back to sweep. The staging bucket
+  has this rule; **a self-hosted MinIO has no such rule by default**,
   so an on-prem install has to add one.
 
 Note that omitting `s3:AbortMultipartUpload` from a "Put/Get/Delete"
@@ -156,7 +156,7 @@ automatic capability probe:
 2. Wait for the second node to join and to carry
    `setec.zeroroot.ai/runtime.kata-fc=true`. Both the label AND
    `katacontainers.io/kata-runtime=true` matter: the capability label
-   alone can appear before kata is actually installed (setec#243).
+   alone can appear before kata is actually installed.
 3. Run with `SETEC_E2E_SESSION_DRAIN=1`, or set the repository variable
    `STAGING_SESSION_DRAIN_CAPACITY` and dispatch the `e2e` workflow.
 4. **Revert the ceiling PR.** Consolidation reclaims the node once it is
@@ -171,9 +171,10 @@ was paid for; a silent skip there would mean full cost and zero coverage.
 Attribute the failure before filing it against the session path.
 
 - **Sandbox stuck Pending, no node has `runtime.kata-fc=true`** — the
-  runtime-agent's node probe, not the session code. setec#281 is the
-  known instance (the probe did not follow containerd's `imports` array).
-  The CI job checks this in preflight and fails with that pointer.
+  runtime-agent's node probe, not the session code. The known instance
+  was a probe that did not follow containerd's `imports` array.
+  The CI job checks this in preflight and fails with a message that
+  names the probe bug.
 - **`AccessDenied` in the node-agent log** — IAM or KMS, not the
   checkpoint code. The bucket's default encryption is SSE-KMS, so the role
   needs a KMS grant as well as the S3 statement; without it every

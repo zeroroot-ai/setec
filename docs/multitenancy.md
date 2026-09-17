@@ -106,7 +106,7 @@ annotation as the human-readable record of what was asked for.
 
 **A name that does not resolve is dropped, not widened.** The entry
 contributes no rule and the drop is recorded on
-`setec.zeroroot.ai/unresolved-allow`. Before setec#130 an entry for
+`setec.zeroroot.ai/unresolved-allow`. Before this rule, an entry for
 `api.example.com:443` was written as `0.0.0.0/0` on port 443 — the port
 enforced and the destination not — which is an allow-list in name only.
 A previously-good answer keeps being used for
@@ -146,7 +146,7 @@ rendered, and recorded on the `setec.zeroroot.ai/suppressed-allow`
 annotation.
 
 **Self-hosted installs must retune the reserved list.** If your
-authorised scope is private address space, the default reserved list
+authorized scope is private address space, the default reserved list
 denies exactly what you meant to permit. Narrow `--reserved-cidrs` to
 your own control-plane ranges rather than clearing it.
 
@@ -178,7 +178,7 @@ spec:
 ```
 
 `podSelector: {}` selects every Pod present and future, whatever it is
-labelled. NetworkPolicies union, so this subtracts nothing from a
+labeled. NetworkPolicies union, so this subtracts nothing from a
 Sandbox that has its own policy — a Sandbox under `external-only` still
 reaches the internet. What it removes is the unselected state itself.
 

@@ -47,7 +47,7 @@ rsvg-convert -w 512 -h 512 logo.svg -o logo-512.png
 
 ## Design notes
 
-The mark is a geometric uppercase "S" assembled from two interlocking bracket strokes. The brackets face each other, and the notch where they meet carries the only accent colour in the palette. The mark deliberately avoids literal references to the 1992 film that inspired the project name; the containment motif reads on its own.
+The mark is a geometric uppercase "S" assembled from two interlocking bracket strokes. The brackets face each other, and the notch where they meet carries the only accent color in the palette. The mark deliberately avoids literal references to the 1992 film that inspired the project name; the containment motif reads on its own.
 
 Palette:
 

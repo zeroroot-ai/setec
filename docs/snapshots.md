@@ -265,8 +265,8 @@ spec:
 
 With `sessionCheckpoint` set, a session Sandbox gets:
 
-- **Suspend-on-idle** — the `sessionIdleTimeout` deadline (setec#193's
-  idle signal) checkpoints the VM and releases it (`phase: Suspended`,
+- **Suspend-on-idle** — the `sessionIdleTimeout` deadline (the idle
+  signal) checkpoints the VM and releases it (`phase: Suspended`,
   reason `SuspendedIdle`) instead of hard-failing it. A reattach (the
   frontend's `Attach` stamps the last-activity annotation) or an
   explicit `desiredState: Running` resumes it transparently — on

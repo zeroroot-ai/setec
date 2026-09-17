@@ -50,7 +50,7 @@ production I/O, dedicate two block devices per node and set
 `installer.thinpool.mode=device` with
 `installer.thinpool.dataDevice` / `installer.thinpool.metadataDevice`.
 The EKS baked-AMI + Karpenter profile (`karpenter.enabled=true`,
-`packer/eks-kata-fc-ami/`) remains an optional optimisation that pre-bakes
+`packer/eks-kata-fc-ami/`) remains an optional optimization that pre-bakes
 the same components for faster node-ready — never a requirement, and the
 default installer path references nothing AWS-specific.
 
@@ -246,7 +246,7 @@ narrowed on three axes:
   `kata_runtime_available` and `kata_capable_nodes` booleans. Port-forward
   the health port (default `8081`) and curl `/readyz` to inspect.
 - If Pods stay `Pending`, check the Node labels Kata-capable Nodes are
-  labelled with (default: `katacontainers.io/kata-runtime`) and confirm
+  labeled with (default: `katacontainers.io/kata-runtime`) and confirm
   `kata-deploy` has completed rolling out.
 
 ## Phase 2: Multi-tenancy, Observability, Webhook, Node-Agent, Frontend
@@ -290,7 +290,7 @@ verify the expected new manifests appear via `helm template`.
   `setec.zeroroot.ai/tenant`), and `frontend.sandboxNamespace` instead places
   every tenant's Sandboxes in one fixed shared namespace, which must be
   listed in `sandboxNamespaces`. The two are mutually exclusive; setting
-  both fails the render (setec#158).
+  both fails the render.
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and
@@ -311,7 +311,7 @@ link-local (including the cloud instance-metadata address), CGNAT,
 loopback and multicast — but the chart cannot discover the ranges your
 own control plane sits on.
 
-**Self-hosted installs must retune it.** If the authorised scope for your
+**Self-hosted installs must retune it.** If the authorized scope for your
 workloads is private address space, this default denies exactly what you
 meant to permit. Narrow the list to your own control-plane ranges rather
 than clearing it.
@@ -325,7 +325,7 @@ enumerate in-cluster Services by name.
 required (an empty list fails the render). It does two things:
 
 1. Renders a **namespace-wide** deny-all `NetworkPolicy` — `podSelector:
-   {}`, every Pod, not only labelled Sandbox Pods. The per-Sandbox
+   {}`, every Pod, not only labeled Sandbox Pods. The per-Sandbox
    policies select on `setec.zeroroot.ai/sandbox`, so they confine Pods
    the operator built; a Pod created in the namespace by any other route
    is selected by no policy and is therefore unrestricted. This is what
@@ -385,7 +385,7 @@ The chart renders three mTLS surfaces: the frontend gRPC server, the
 node-agent snapshot gRPC server, and the operator's node-agent dialer.
 `credentials.mode` selects how all three obtain and verify identities —
 one install-wide switch, so a values file cannot produce a frontend on
-SPIFFE with a node-agent still on files (setec#183).
+SPIFFE with a node-agent still on files.
 
 **`file` (default).** Secret-mounted certificates. A chart install that
 specifies nothing renders exactly what it rendered before the switch

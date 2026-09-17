@@ -44,7 +44,7 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
 
 - **Lifecycle** — a Sandbox is **ephemeral** (run-to-completion, auto-destroy,
   stateless; snapshot fast-start) or **session** (long-lived, reattach by
-  handle, durable workspace, explicit teardown). setec#150 (ADR-0006).
+  handle, durable workspace, explicit teardown). See ADR-0006.
 - **Session survival (L2)** — a session always has a **durable workspace**
   (never lose corpus/findings) plus **memory checkpoints** for suspend-idle and
   resume-on-node-loss (process continues). Isolation: **one session per VM,

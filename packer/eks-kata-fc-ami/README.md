@@ -4,7 +4,7 @@
 > is the chart's portable installer DaemonSet (`installer.enabled=true`),
 > which converges any x86 KVM-capable node with no AWS dependency. This
 > AMI pre-bakes the same components for faster node-ready on EKS +
-> Karpenter (`karpenter.enabled=true`) — an optimisation, never a
+> Karpenter (`karpenter.enabled=true`) — an optimization, never a
 > requirement.
 
 Bakes an **immutable** x86_64 EKS node AMI that boots ready to run `kata-fc`
