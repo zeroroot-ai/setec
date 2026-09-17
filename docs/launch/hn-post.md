@@ -9,7 +9,7 @@ Draft for Hacker News. Three title candidates, picked one.
 2. Show HN: Setec - microVM isolation as a Kubernetes primitive
 3. Show HN: Setec - self-hostable sandboxing for AI code execution, CI, and fuzzing
 
-Candidate 1 leads with the concrete technical artefact (CRD + Firecracker), which tends to perform better than abstract category framing. Candidate 2 is shorter but slightly vaguer. Candidate 3 foregrounds the use cases, which is useful for non-Kubernetes readers but buries the architectural story.
+Candidate 1 leads with the concrete technical artifact (CRD + Firecracker), which tends to perform better than abstract category framing. Candidate 2 is shorter but slightly vaguer. Candidate 3 foregrounds the use cases, which is useful for non-Kubernetes readers but buries the architectural story.
 
 ## Body
 

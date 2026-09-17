@@ -38,7 +38,7 @@ On startup the agent:
 1. Verifies `/dev/kvm` is present. Exits non-zero if not.
 2. Calls `dmsetup status <pool>`. If the pool already exists, the
    agent treats Ensure as a no-op; it never reconfigures an existing
-   pool to avoid destructive behaviour on rolling restart.
+   pool to avoid destructive behavior on rolling restart.
 3. If the pool is absent, calls `blockdev --getsz` on the data device
    to derive the sector count and runs `dmsetup create` with a
    standard thin-pool table. Containerd must be configured to use

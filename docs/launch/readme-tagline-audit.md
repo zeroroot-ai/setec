@@ -7,13 +7,13 @@ Decision notes on the wording that sits directly under the logo at the top of `R
 
 | # | Tagline                                                               | Notes                                                                                        |
 |---|-----------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| 1 | microVM isolation as a Kubernetes primitive                           | Short, abstract, optimises for the Kubernetes reader.                                        |
+| 1 | microVM isolation as a Kubernetes primitive                           | Short, abstract, optimizes for the Kubernetes reader.                                        |
 | 2 | Firecracker microVMs on demand, via a single Kubernetes CRD           | Concrete, mentions Firecracker and CRD in the same breath.                                   |
 | 3 | Kubernetes-native Firecracker microVMs for sandboxing untrusted code  | Leads with the use case. Slightly long at 73 chars.                                          |
 | 4 | Hardware-isolated workloads, Kubernetes-shaped                        | Poetic but drops the word microVM.                                                           |
 | 5 | A Kubernetes operator for Firecracker microVMs                        | Accurate and boring. Good for project directories and listing pages.                         |
 
-**Chosen:** candidate 1, "microVM isolation as a Kubernetes primitive". It is short enough to live cleanly under a centred logo, concedes nothing about the technical substrate ("Kubernetes primitive" is the exact positioning we want), and leaves the concrete details for the paragraph that immediately follows.
+**Chosen:** candidate 1, "microVM isolation as a Kubernetes primitive". It is short enough to live cleanly under a centered logo, concedes nothing about the technical substrate ("Kubernetes primitive" is the exact positioning we want), and leaves the concrete details for the paragraph that immediately follows.
 
 Candidate 2 is the fallback if reviewer feedback says "primitive" reads as too academic.
 
@@ -60,7 +60,7 @@ Trade-off: punchier on first read, but buries the snapshot + pool story. Accepta
 
 ## Sneakers reference
 
-Rule: one brief mention per document, as colour. Preferred location in the README: the very end of the Community / Footer block, never the tagline or the 30-second pitch.
+Rule: one brief mention per document, as color. Preferred location in the README: the very end of the Community / Footer block, never the tagline or the 30-second pitch.
 
 Form it should take:
 

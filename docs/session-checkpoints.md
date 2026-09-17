@@ -91,7 +91,7 @@ is — a plain `DeleteObject` writes a delete marker and removes nothing.
 `S3DEKStore.Destroy` now deletes **every version** of the sealed DEK, so the
 erasure ADR-0005 invariant 5 relies on is real rather than nominal.
 
-That is defence in depth, not the primary control: the sealed DEK is useless
+That is defense in depth, not the primary control: the sealed DEK is useless
 without the per-session KEK, which lives in a Kubernetes Secret and never
 enters the bucket, so deleting that Secret remains a true crypto-erase. The
 version delete matters on any store where the KEK Secret is *not* the only

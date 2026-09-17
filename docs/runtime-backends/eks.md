@@ -53,7 +53,7 @@ On any x86 KVM-capable node pool the chart's portable installer DaemonSet
 AWS-specific setup, so a `.metal` x86 pool needs nothing beyond the chart
 install. The **Packer-baked immutable AMI** in
 [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md) is the
-optional EKS optimisation profile: it pre-bakes the same components
+optional EKS optimization profile: it pre-bakes the same components
 so a node boots already capable — faster node-ready for
 Karpenter scale-from-zero, and a node either boots capable or fails
 loudly at boot:

@@ -103,7 +103,7 @@ space. A cluster operator adds their Service and Pod CIDRs.
 Two consequences worth stating plainly:
 
 - **Self-hosted installs must retune the reserved list.** If the
-  authorised scope for your workloads *is* private address space, the
+  authorized scope for your workloads *is* private address space, the
   default reserved list denies exactly what you meant to allow. Narrow
   `--reserved-cidrs` to your own control-plane ranges rather than
   clearing it; an empty list is rejected at startup.

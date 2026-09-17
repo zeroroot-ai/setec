@@ -9,7 +9,7 @@ Fuzz a potentially-hostile target binary inside a Firecracker microVM, managed b
 - Dial the Setec gRPC frontend with mTLS.
 - `Launch` a sandbox with constrained resources (2 vCPU, 2GiB memory by default) and a hard 1-hour lifecycle timeout.
 - The sandbox runs AFL++ against the target, bounded by an internal `timeout` so the fuzzer exits cleanly before the lifecycle kills it.
-- After the fuzzer returns, the harness dumps any crash artefacts to stdout, base64-encoded, so a client script can pick them up from the log stream.
+- After the fuzzer returns, the harness dumps any crash artifacts to stdout, base64-encoded, so a client script can pick them up from the log stream.
 
 This is the "run a CPU-hungry, potentially-misbehaving tool without hurting anything" pattern.
 

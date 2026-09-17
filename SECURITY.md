@@ -23,7 +23,7 @@ on our side, not a decision.
 
 This repository is the sandbox operator
 
- Kata/Firecracker microVMs used as an untrusted-code execution boundary.:**A sandbox escape is the highest severity we recognise.** Any path from inside a guest to the host, to the node, or to another sandbox is critical regardless of how difficult it is to reach.
+ Kata/Firecracker microVMs used as an untrusted-code execution boundary.:**A sandbox escape is the highest severity we recognize.** Any path from inside a guest to the host, to the node, or to another sandbox is critical regardless of how difficult it is to reach.
 
 ## Out of scope
 

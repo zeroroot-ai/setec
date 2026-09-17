@@ -52,7 +52,7 @@ kubectl get runtimeclass kata-fc
 
 If Kata is already installed out of band (`kata-deploy`, a baked node image), the installer detects the foreign `kata-fc` registration and stands down; set `runtimes.kata-fc.install=false` so the chart does not fight for the `RuntimeClass` either.
 
-**kata-qemu** (the upstream `kata-deploy` installer lays down Kata binaries on every labelled node and registers both `RuntimeClasses`; the Setec installer covers `kata-fc` only):
+**kata-qemu** (the upstream `kata-deploy` installer lays down Kata binaries on every labeled node and registers both `RuntimeClasses`; the Setec installer covers `kata-fc` only):
 
 ```bash
 kubectl apply -k "github.com/kata-containers/kata-containers/tools/packaging/kata-deploy/kata-deploy/base?ref=main"
