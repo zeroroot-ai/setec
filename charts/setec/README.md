@@ -290,7 +290,7 @@ verify the expected new manifests appear via `helm template`.
   `setec.zeroroot.ai/tenant`), and `frontend.sandboxNamespace` instead places
   every tenant's Sandboxes in one fixed shared namespace, which must be
   listed in `sandboxNamespaces`. The two are mutually exclusive; setting
-  both fails the render (setec#158).
+  both fails the render.
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and
@@ -385,7 +385,7 @@ The chart renders three mTLS surfaces: the frontend gRPC server, the
 node-agent snapshot gRPC server, and the operator's node-agent dialer.
 `credentials.mode` selects how all three obtain and verify identities —
 one install-wide switch, so a values file cannot produce a frontend on
-SPIFFE with a node-agent still on files (setec#183).
+SPIFFE with a node-agent still on files.
 
 **`file` (default).** Secret-mounted certificates. A chart install that
 specifies nothing renders exactly what it rendered before the switch

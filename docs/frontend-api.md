@@ -241,7 +241,7 @@ booting a frontend that can never fetch an SVID. See the chart README
 SPIFFE mode is server-side only today. The snapshot dialer and tracing
 exporter still use file credentials, and asking for client credentials
 from a SPIFFE-configured frontend is an error rather than a silent
-downgrade (setec#174).
+downgrade.
 
 ### Startup log line
 
@@ -522,4 +522,4 @@ enforces per-tenant request rate limits.
 - JWT auth is not implemented; mTLS is the only supported authentication
   mechanism.
 - SPIFFE mode covers the frontend's server surface only. The node-agent
-  (setec#173) and the outbound dialers (setec#174) remain file-based.
+  and the outbound dialers remain file-based.

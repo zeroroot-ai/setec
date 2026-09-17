@@ -106,7 +106,7 @@ annotation as the human-readable record of what was asked for.
 
 **A name that does not resolve is dropped, not widened.** The entry
 contributes no rule and the drop is recorded on
-`setec.zeroroot.ai/unresolved-allow`. Before setec#130 an entry for
+`setec.zeroroot.ai/unresolved-allow`. Before this rule, an entry for
 `api.example.com:443` was written as `0.0.0.0/0` on port 443 — the port
 enforced and the destination not — which is an allow-list in name only.
 A previously-good answer keeps being used for

@@ -94,7 +94,7 @@ OS package layer is also 0 in every image (distroless-static-debian12).
 
 ## Dismissals
 
-### Entry 1 — 47 findings removed by deletion, not dismissal (setec#284)
+### Entry 1 — 47 findings removed by deletion, not dismissal
 
 Not a dismissal. Recorded because it is the largest single reduction and sets
 the precedent for how this repo triages.
@@ -119,7 +119,7 @@ re-adding either fails the image build rather than silently re-importing 47 CVEs
 on a node. The AMI bake path (`packer/`) extracts the full tarball independently
 and is unaffected.
 
-### Entry 2 — kata payload bumped 3.28.0 → 3.32.0 (setec#284)
+### Entry 2 — kata payload bumped 3.28.0 → 3.32.0
 
 Not a dismissal. The pin had drifted three releases behind. Moving it to the
 newest 3.x release took the shim from **47 findings (1 CRITICAL, 29 HIGH) to
@@ -135,7 +135,7 @@ but it rewrites the runtime in Rust ("runtime-rs"), makes that the default, and
 Cloud Hypervisor, Dragonball). The Go runtime setec depends on is *deprecated*
 in 4.0.0. Adopting it for a 6-finding delta would move setec's entire substrate
 onto a deprecated upstream path, and no e2e microVM boot validation is currently
-available to prove the FC path still works. Tracked in setec#286.
+available to prove the FC path still works.
 
 ### Entry 3 — CVE-2026-39822, `os.Root` symlink traversal (stdlib)
 
