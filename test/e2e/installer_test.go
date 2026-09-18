@@ -91,7 +91,7 @@ func TestInstaller_Converges(t *testing.T) {
 
 	// DaemonSet fully Ready: every targeted node converged or stood down
 	// (the readiness probe only passes on a deliberate outcome).
-	dsName := helmReleaseName + "-installer"
+	dsName := chartFullname + "-installer"
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		var ds appsv1.DaemonSet

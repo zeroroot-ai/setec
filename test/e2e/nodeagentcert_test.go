@@ -351,9 +351,9 @@ func parseLeaf(certPEM []byte) (*x509.Certificate, error) {
 // the operator Deployment, and a Pod whose Secret volume does not resolve
 // never becomes Ready.
 //
-// fullname is the chart's `setec.fullname`, which for every release this
-// suite creates is the release name (the release name contains the chart
-// name "setec", so the helper returns it unchanged).
+// fullname is the chart's `setec.fullname` for the release (chartFullname
+// in the suite): the release name when it contains "setec", otherwise the
+// release name with "-setec" appended.
 func createNodeAgentMTLSSecrets(ctx context.Context, fullname, namespace string) error {
 	m, err := generateNodeAgentMTLS(fullname, namespace)
 	if err != nil {
