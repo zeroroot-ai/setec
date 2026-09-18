@@ -91,8 +91,8 @@ func TestGenerateForClass_DefaultExternalOnly(t *testing.T) {
 	if pub.To[0].IPBlock.CIDR != AllCIDR {
 		t.Errorf("public rule CIDR = %q, want %q", pub.To[0].IPBlock.CIDR, AllCIDR)
 	}
-	if len(pub.To[0].IPBlock.Except) != len(testReserved) {
-		t.Errorf("except = %v, want all %d reserved ranges", pub.To[0].IPBlock.Except, len(testReserved))
+	if len(pub.To[0].IPBlock.Except) != len(testReservedIPv4) {
+		t.Errorf("except = %v, want all %d IPv4 reserved ranges", pub.To[0].IPBlock.Except, len(testReservedIPv4))
 	}
 }
 

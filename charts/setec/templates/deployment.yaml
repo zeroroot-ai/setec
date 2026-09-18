@@ -61,6 +61,18 @@ spec:
             {{- if not .Values.netpol.reservedCIDRs }}
             {{- fail "netpol.reservedCIDRs must not be empty: an empty reserved list gives every Sandbox unrestricted egress. Narrow it for self-hosted installs, do not clear it." }}
             {{- end }}
+            {{- /* A reserved prefix only subtracts from an egress block of its
+                   own address family. An allow-list entry can name a literal
+                   IPv6 host or an IPv6 CIDR, so a list with one family missing
+                   leaves every block of the other family unrestricted. The
+                   operator refuses the same list at startup. */}}
+            {{- $reserved := join "," .Values.netpol.reservedCIDRs }}
+            {{- if not (regexMatch "(^|,)[0-9]+\\." $reserved) }}
+            {{- fail "netpol.reservedCIDRs must hold at least one IPv4 prefix: nothing else subtracts from an IPv4 egress block." }}
+            {{- end }}
+            {{- if not (regexMatch "(^|,)[0-9a-fA-F:]*:" $reserved) }}
+            {{- fail "netpol.reservedCIDRs must hold at least one IPv6 prefix (for example fc00::/7): nothing else subtracts from an IPv6 egress block." }}
+            {{- end }}
             {{- if not .Values.netpol.resolvers }}
             {{- fail "netpol.resolvers must not be empty: Sandboxes resolve names through these addresses instead of cluster DNS." }}
             {{- end }}

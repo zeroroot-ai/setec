@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"testing"
 
@@ -32,7 +33,17 @@ var testReserved = []string{
 	"100.64.0.0/10",
 	"127.0.0.0/8",
 	"224.0.0.0/4",
+	"::1/128",
+	"fc00::/7",
+	"fe80::/10",
+	"ff00::/8",
 }
+
+// testReservedIPv4 is the IPv4 half of testReserved. It is what an
+// external-only rule subtracts from 0.0.0.0/0: a reserved prefix only
+// subtracts from a base block of its own family, so the IPv6 entries
+// never appear under an IPv4 base.
+var testReservedIPv4 = testReserved[:7]
 
 var testResolvers = []string{"1.1.1.1", "8.8.8.8"}
 
@@ -54,6 +65,19 @@ var testHostAddrs = map[string][]string{
 	// Resolves into a reserved range on purpose: the rule must be
 	// suppressed rather than written with an ipBlock that grants nothing.
 	"internal.example.com": {"10.20.30.40"},
+	// Resolves to the AWS IPv6 instance-metadata address, inside
+	// fc00::/7. The IPv6 half of the reserved list is what suppresses it.
+	"metadata6.example.com": {"fd00:ec2::254"},
+	// Resolves into 2001:db8::/32 (documentation space), outside every
+	// reserved range in either family.
+	"api6.example.com": {"2001:db8::10"},
+}
+
+// hostPrefix renders one resolved address as the single-host prefix the
+// resolver produces, /32 or /128 by family.
+func hostPrefix(addr string) string {
+	a := netip.MustParseAddr(addr)
+	return netip.PrefixFrom(a, a.BitLen()).String()
 }
 
 // stubResolver is a HostResolver backed by testHostAddrs. It performs no
@@ -67,7 +91,7 @@ func (stubResolver) Resolve(_ context.Context, host string) ([]string, error) {
 	}
 	out := make([]string, 0, len(addrs))
 	for _, a := range addrs {
-		out = append(out, a+"/32")
+		out = append(out, hostPrefix(a))
 	}
 	return out, nil
 }
@@ -78,7 +102,7 @@ func hostCIDRs(host string) []string {
 	addrs := testHostAddrs[host]
 	out := make([]string, 0, len(addrs))
 	for _, a := range addrs {
-		out = append(out, a+"/32")
+		out = append(out, hostPrefix(a))
 	}
 	return out
 }
@@ -272,7 +296,7 @@ func TestGenerate_ExternalOnlyShape(t *testing.T) {
 					To: []networkingv1.NetworkPolicyPeer{{
 						IPBlock: &networkingv1.IPBlock{
 							CIDR:   "0.0.0.0/0",
-							Except: testReserved,
+							Except: testReservedIPv4,
 						},
 					}},
 					// No Ports: arbitrary destination ports are the point.
@@ -532,6 +556,8 @@ func TestConfigValidate(t *testing.T) {
 		"valid":              {testCfg(), nil},
 		"no reserved cidrs":  {Config{ResolverIPs: testResolvers}, ErrNoReservedCIDRs},
 		"no resolvers":       {Config{ReservedCIDRs: testReserved}, ErrNoResolvers},
+		"no ipv6 reserved":   {Config{ReservedCIDRs: []string{"10.0.0.0/8", "169.254.0.0/16"}, ResolverIPs: testResolvers}, ErrNoReservedIPv6},
+		"no ipv4 reserved":   {Config{ReservedCIDRs: []string{"fc00::/7", "fe80::/10"}, ResolverIPs: testResolvers}, ErrNoReservedIPv4},
 		"bad reserved cidr":  {Config{ReservedCIDRs: []string{"not-a-cidr"}, ResolverIPs: testResolvers}, ErrInvalidCIDR},
 		"bad resolver":       {Config{ReservedCIDRs: testReserved, ResolverIPs: []string{"nope"}}, ErrInvalidResolver},
 		"resolver with mask": {Config{ReservedCIDRs: testReserved, ResolverIPs: []string{"1.1.1.1/32"}}, ErrInvalidResolver},
@@ -708,5 +734,122 @@ func TestDependsOnDNS(t *testing.T) {
 				t.Errorf("DependsOnDNS() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// --- IPv6 reserved ranges (GHSA-qwgf-q723-rpjf) ---------------------------
+
+// TestGenerate_IPv6HostInsideReservedIsSuppressed is the regression test
+// for the IPv4-only reserved list. A host that resolves to the AWS IPv6
+// instance-metadata address fd00:ec2::254 sits inside fc00::/7, so the
+// rule is suppressed and recorded, the same as an IPv4 host inside
+// 10.0.0.0/8. A literal IPv6 host and an IPv6 CIDR take the same path.
+func TestGenerate_IPv6HostInsideReservedIsSuppressed(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]setecv1alpha1.NetworkAllow{
+		"resolved name": {Host: "metadata6.example.com", Port: 80},
+		"literal host":  {Host: "fd00:ec2::254", Port: 80},
+		"cidr":          {Host: "metadata6.example.com", Port: 80, CIDR: "fd00:ec2::/64"},
+	}
+	for name, allow := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList, allow))
+			if err != nil {
+				t.Fatalf("Generate() err: %v", err)
+			}
+			if len(got.Spec.Egress) != 1 {
+				t.Fatalf("egress rules = %d, want 1 (DNS only); got %+v", len(got.Spec.Egress), got.Spec.Egress)
+			}
+			if want := allow.Host + ":80"; got.Annotations[AnnotationSuppressed] != want {
+				t.Errorf("%s = %q, want %q", AnnotationSuppressed, got.Annotations[AnnotationSuppressed], want)
+			}
+		})
+	}
+}
+
+// TestGenerate_IPv6HostOutsideReservedIsGranted locks in that the IPv6
+// half of the reserved list does not deny IPv6 outright: an address
+// outside every reserved range is written as a /128 peer.
+func TestGenerate_IPv6HostOutsideReservedIsGranted(t *testing.T) {
+	t.Parallel()
+
+	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api6.example.com", Port: 443}))
+	if err != nil {
+		t.Fatalf("Generate() err: %v", err)
+	}
+	if len(got.Spec.Egress) != 2 {
+		t.Fatalf("egress rules = %d, want 2 (DNS + entry)", len(got.Spec.Egress))
+	}
+	if want := "2001:db8::10/128"; got.Spec.Egress[1].To[0].IPBlock.CIDR != want {
+		t.Errorf("peer CIDR = %q, want %q", got.Spec.Egress[1].To[0].IPBlock.CIDR, want)
+	}
+	if _, ok := got.Annotations[AnnotationSuppressed]; ok {
+		t.Errorf("entry outside the reserved list must not be suppressed: %v", got.Annotations)
+	}
+}
+
+// TestExceptFor_NoReservedInFamilyIsCovered locks in the fail-closed
+// branch: a base block whose family has no reserved prefix is reported
+// as covered, so it is suppressed rather than granted whole. This is the
+// path a class exemption that strips every IPv6 entry would otherwise
+// reopen.
+func TestExceptFor_NoReservedInFamilyIsCovered(t *testing.T) {
+	t.Parallel()
+
+	ipv4Only := []string{"10.0.0.0/8", "169.254.0.0/16"}
+	except, covered, err := exceptFor("2001:db8::10/128", ipv4Only)
+	if err != nil {
+		t.Fatalf("exceptFor() err: %v", err)
+	}
+	if !covered || len(except) != 0 {
+		t.Fatalf("IPv6 base with IPv4-only reserved: covered=%v except=%v, want covered with no except", covered, except)
+	}
+
+	// The symmetric case: an IPv4 base with an IPv6-only list.
+	_, covered, err = exceptFor(AllCIDR, []string{"fc00::/7"})
+	if err != nil {
+		t.Fatalf("exceptFor() err: %v", err)
+	}
+	if !covered {
+		t.Fatal("IPv4 base with IPv6-only reserved must be covered")
+	}
+
+	// With the family present, an outside address is granted as before.
+	_, covered, err = exceptFor("2001:db8::10/128", testReserved)
+	if err != nil {
+		t.Fatalf("exceptFor() err: %v", err)
+	}
+	if covered {
+		t.Fatal("2001:db8::10/128 is outside every reserved range and must not be covered")
+	}
+}
+
+// TestGenerate_ClassExemptionCannotStripAFamily proves the per-class
+// exemption path stays closed: a class that exempts every IPv6 reserved
+// entry leaves an IPv6 destination suppressed, not granted.
+func TestGenerate_ClassExemptionCannotStripAFamily(t *testing.T) {
+	t.Parallel()
+
+	class := &setecv1alpha1.SandboxClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "wide"},
+		Spec: setecv1alpha1.SandboxClassSpec{
+			DefaultNetworkMode: setecv1alpha1.NetworkModeEgressAllowList,
+			EgressExemptCIDRs:  []string{"::1/128", "fc00::/7", "fe80::/10", "ff00::/8"},
+		},
+	}
+	got, err := testCfg().GenerateForClass(t.Context(),
+		sb(setecv1alpha1.NetworkModeEgressAllowList,
+			setecv1alpha1.NetworkAllow{Host: "metadata6.example.com", Port: 80}), class)
+	if err != nil {
+		t.Fatalf("GenerateForClass() err: %v", err)
+	}
+	if len(got.Spec.Egress) != 1 {
+		t.Fatalf("egress rules = %d, want 1 (DNS only); got %+v", len(got.Spec.Egress), got.Spec.Egress)
+	}
+	if want := "metadata6.example.com:80"; got.Annotations[AnnotationSuppressed] != want {
+		t.Errorf("%s = %q, want %q", AnnotationSuppressed, got.Annotations[AnnotationSuppressed], want)
 	}
 }
