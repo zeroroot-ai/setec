@@ -365,7 +365,7 @@ func TestStatContextCanceled(t *testing.T) {
 	}
 }
 
-// TestStatInvalidID covers the validateSnapshotID error branch on
+// TestStatInvalidID covers the ValidateSnapshotID error branch on
 // Stat.
 func TestStatInvalidID(t *testing.T) {
 	b := newBackend(t)
@@ -374,7 +374,7 @@ func TestStatInvalidID(t *testing.T) {
 	}
 }
 
-// TestOpenInvalidID covers the validateSnapshotID error branch on
+// TestOpenInvalidID covers the ValidateSnapshotID error branch on
 // Open.
 func TestOpenInvalidID(t *testing.T) {
 	b := newBackend(t)
@@ -383,7 +383,7 @@ func TestOpenInvalidID(t *testing.T) {
 	}
 }
 
-// TestDeleteInvalidID covers the validateSnapshotID error branch on
+// TestDeleteInvalidID covers the ValidateSnapshotID error branch on
 // Delete.
 func TestDeleteInvalidID(t *testing.T) {
 	b := newBackend(t)

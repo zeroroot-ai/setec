@@ -69,9 +69,12 @@ func (b *LocalDiskBackend) statfs(path string, stat *syscall.Statfs_t) error {
 	return syscall.Statfs(path, stat)
 }
 
-// validateSnapshotID rejects obviously-unsafe identifiers to keep the
-// local-disk layout predictable and prevent path traversal attacks.
-func validateSnapshotID(id string) error {
+// ValidateSnapshotID rejects unsafe identifiers. It keeps the
+// local-disk layout predictable and blocks path traversal. Every
+// caller that joins a snapshot id onto a filesystem path must call
+// it before the join, including the node-agent gRPC server, which
+// writes plaintext temp files under a privileged hostPath.
+func ValidateSnapshotID(id string) error {
 	if id == "" {
 		return errors.New("storage: snapshotID must be non-empty")
 	}
@@ -115,7 +118,7 @@ func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io
 	if err := ctx.Err(); err != nil {
 		return 0, "", err
 	}
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
 	}
 	if err := b.checkFillThreshold(); err != nil {
@@ -173,7 +176,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
 	}
 	statePath := b.statePath(storageRef)
@@ -226,7 +229,7 @@ func (b *LocalDiskBackend) Delete(ctx context.Context, storageRef string) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
 	}
 
@@ -292,7 +295,7 @@ func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (int64, 
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return 0, false, err
 	}
 	info, err := os.Stat(b.statePath(storageRef))

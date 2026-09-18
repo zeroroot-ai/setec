@@ -102,7 +102,7 @@ func (d *DirDEKStore) path(snapshotID string) string {
 
 // Put implements SealedDEKStore with O_EXCL create semantics.
 func (d *DirDEKStore) Put(_ context.Context, snapshotID string, sealed []byte) error {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(d.Dir, 0o700); err != nil {
@@ -131,7 +131,7 @@ func (d *DirDEKStore) Put(_ context.Context, snapshotID string, sealed []byte) e
 
 // Get implements SealedDEKStore.
 func (d *DirDEKStore) Get(_ context.Context, snapshotID string) ([]byte, error) {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return nil, err
 	}
 	sealed, err := os.ReadFile(d.path(snapshotID))
@@ -146,7 +146,7 @@ func (d *DirDEKStore) Get(_ context.Context, snapshotID string) ([]byte, error) 
 
 // Destroy implements SealedDEKStore: zero-overwrite, fsync, unlink.
 func (d *DirDEKStore) Destroy(_ context.Context, snapshotID string) error {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return err
 	}
 	return atrest.Shred(d.path(snapshotID))
@@ -204,7 +204,7 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 	if err := ctx.Err(); err != nil {
 		return 0, "", err
 	}
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
 	}
 	kek, err := b.KEK.KEK(ctx)
@@ -253,7 +253,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
 	}
 	kek, err := b.KEK.KEK(ctx)
@@ -295,7 +295,7 @@ func (b *EncryptedBackend) Delete(ctx context.Context, storageRef string) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
 	}
 	keyErr := b.DEKs.Destroy(ctx, storageRef)

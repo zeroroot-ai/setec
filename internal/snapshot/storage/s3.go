@@ -136,7 +136,7 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	if err := ctx.Err(); err != nil {
 		return 0, "", err
 	}
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
 	}
 	exists, err := b.exists(ctx, b.stateKey(snapshotID))
@@ -185,7 +185,7 @@ func (b *S3Backend) Open(ctx context.Context, storageRef string) (io.ReadCloser,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
 	}
 	shaOut, err := b.Client.GetObject(ctx, &s3.GetObjectInput{
@@ -235,7 +235,7 @@ func (b *S3Backend) Delete(ctx context.Context, storageRef string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
 	}
 	exists, err := b.exists(ctx, b.stateKey(storageRef))
@@ -258,7 +258,7 @@ func (b *S3Backend) Stat(ctx context.Context, storageRef string) (int64, bool, e
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
-	if err := validateSnapshotID(storageRef); err != nil {
+	if err := ValidateSnapshotID(storageRef); err != nil {
 		return 0, false, err
 	}
 	head, err := b.Client.HeadObject(ctx, &s3.HeadObjectInput{
@@ -473,7 +473,7 @@ type S3DEKStore struct {
 // Put writes the sealed DEK, refusing to overwrite an existing one
 // (never replace key material — mirrors DirDEKStore's O_EXCL).
 func (s *S3DEKStore) Put(ctx context.Context, snapshotID string, sealed []byte) error {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return err
 	}
 	exists, err := s.Backend.exists(ctx, s.Backend.dekKey(snapshotID))
@@ -495,7 +495,7 @@ func (s *S3DEKStore) Put(ctx context.Context, snapshotID string, sealed []byte) 
 
 // Get reads the sealed DEK; a missing blob returns ErrNotFound.
 func (s *S3DEKStore) Get(ctx context.Context, snapshotID string) ([]byte, error) {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return nil, err
 	}
 	out, err := s.Backend.Client.GetObject(ctx, &s3.GetObjectInput{
@@ -519,7 +519,7 @@ func (s *S3DEKStore) Get(ctx context.Context, snapshotID string) ([]byte, error)
 // already gone) returns os.ErrNotExist, matching DirDEKStore so the
 // EncryptedBackend's idempotent-delete contract holds unchanged.
 func (s *S3DEKStore) Destroy(ctx context.Context, snapshotID string) error {
-	if err := validateSnapshotID(snapshotID); err != nil {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return err
 	}
 	exists, err := s.Backend.exists(ctx, s.Backend.dekKey(snapshotID))
