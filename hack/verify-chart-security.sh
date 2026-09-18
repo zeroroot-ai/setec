@@ -407,6 +407,85 @@ else
 	pass "an IPv6-only reserved list fails the render"
 fi
 
+# ---------------------------------------------------------------------------
+# Frontend pods/exec is bound per Sandbox namespace, never cluster-wide
+# (setec#6).
+#
+# pods/exec is a pod-entry grant: the holder steps into a process that
+# already holds its ServiceAccount token, its Secrets and its SPIFFE SVID.
+# No admission policy runs on a subresource, so the binding scope is the
+# whole of the control. The grant must reach the frontend only through a
+# RoleBinding in each sandboxNamespaces entry, and through a
+# ClusterRoleBinding only under the explicit rbac.allowClusterWideSandboxWrite
+# toggle. This check is structural: it walks every document and refuses any
+# ClusterRoleBinding whose roleRef names a ClusterRole that grants pods/exec.
+# ---------------------------------------------------------------------------
+note "frontend pods/exec bound per Sandbox namespace (setec#6)"
+
+# rbac_index <stripped-render> — one line per RBAC document:
+#   <kind> <name> <namespace-or-> <roleRef-name-or-> <exec|->
+rbac_index() {
+	awk '
+	function flush() {
+		if (kind != "") printf "%s %s %s %s %s\n", kind, name, ns, ref, (exec ? "exec" : "-")
+		kind = ""; name = ""; ns = "-"; ref = "-"; exec = 0; sect = ""
+	}
+	/^---/ { flush(); next }
+	/^kind:/ { kind = $2; next }
+	/^metadata:/ { sect = "meta"; next }
+	/^roleRef:/ { sect = "ref"; next }
+	/^[a-zA-Z]/ { sect = "" }
+	/^  name:/ { if (sect == "meta") name = $2; else if (sect == "ref") ref = $2; next }
+	/^  namespace:/ { if (sect == "meta") ns = $2; next }
+	/pods\/exec/ { exec = 1 }
+	END { flush() }
+	' "$1" | grep -E '^(ClusterRole|ClusterRoleBinding|Role|RoleBinding) '
+}
+
+# assert_no_clusterwide_exec <stripped-render> <description>
+# Fails when any ClusterRoleBinding references a ClusterRole that grants
+# pods/exec, whatever either object is called.
+assert_no_clusterwide_exec() {
+	local file="$1" desc="$2" index exec_roles role
+	index="$(rbac_index "$file")"
+	exec_roles="$(printf '%s\n' "$index" | awk '$1 == "ClusterRole" && $5 == "exec" { print $2 }')"
+	for role in $exec_roles; do
+		if printf '%s\n' "$index" | awk -v r="$role" '$1 == "ClusterRoleBinding" && $4 == r { found = 1 } END { exit !found }'; then
+			fail "$desc — ClusterRoleBinding grants pods/exec through ClusterRole $role"
+			return
+		fi
+	done
+	pass "$desc"
+}
+
+render "$workdir/fe-rbac.yaml" "${FE_TLS[@]}" --show-only templates/frontend.yaml
+strip_comments "$workdir/fe-rbac.yaml" "$workdir/fe-rbac.stripped.yaml"
+assert_no_clusterwide_exec "$workdir/fe-rbac.stripped.yaml" "no ClusterRoleBinding grants pods/exec by default"
+if rbac_index "$workdir/fe-rbac.stripped.yaml" | grep -q "^ClusterRole setec-frontend-exec - - exec$"; then
+	pass "pods/exec lives in its own ClusterRole"
+else
+	fail "pods/exec must live in ClusterRole setec-frontend-exec and nowhere else"
+fi
+for ns in "$NS_A" "$NS_B"; do
+	if rbac_index "$workdir/fe-rbac.stripped.yaml" | grep -q "^RoleBinding setec-frontend-exec $ns setec-frontend-exec"; then
+		pass "pods/exec is RoleBound into $ns"
+	else
+		fail "pods/exec must be RoleBound into $ns"
+	fi
+done
+
+# The cluster-wide form must exist only under the explicit toggle, so the
+# toggle is proven wired and the default is proven to be the narrow one.
+render "$workdir/fe-rbac-wide.yaml" "${FE_TLS[@]}" \
+	--set rbac.allowClusterWideSandboxWrite=true \
+	--show-only templates/frontend.yaml
+strip_comments "$workdir/fe-rbac-wide.yaml" "$workdir/fe-rbac-wide.stripped.yaml"
+if rbac_index "$workdir/fe-rbac-wide.stripped.yaml" | grep -q "^ClusterRoleBinding setec-frontend-exec - setec-frontend-exec"; then
+	pass "rbac.allowClusterWideSandboxWrite=true binds pods/exec cluster-wide, on the record"
+else
+	fail "rbac.allowClusterWideSandboxWrite=true must bind pods/exec with a ClusterRoleBinding"
+fi
+
 # --- RuntimeClass scheduling.tolerations ------------------------------------
 # The RuntimeClass admission controller injects scheduling.tolerations into
 # every Pod naming the class, which is the ONLY path that reaches the per-run
