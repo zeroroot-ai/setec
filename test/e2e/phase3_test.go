@@ -35,6 +35,7 @@ import (
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,22 +44,23 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
-// phase3Enabled reports whether the chart was installed with
-// snapshots.enabled=true. The check inspects the operator Deployment
-// args via kubectl — a heavier but reliable signal than reading the
-// chart values.
+// phase3Enabled reports whether the release runs with snapshots.enabled=true,
+// read from the operator Deployment's args.
+//
+// It used to select the Deployment with `-l app.kubernetes.io/component=
+// manager`. The chart puts the component label on the operator's Pod
+// template only (as `operator`), never on the Deployment, so that selector
+// matched nothing and this returned false on every install. Every Phase 3
+// scenario skipped, snapshots on or off. The Deployment is read by name
+// now, and a release whose operator Deployment cannot be read fails the
+// scenario instead of skipping it.
 func phase3Enabled(t *testing.T) bool {
 	t.Helper()
-	out, err := exec.Command("kubectl",
-		"-n", testNamespace,
-		"get", "deploy",
-		"-l", "app.kubernetes.io/component=manager",
-		"-o", "jsonpath={.items[0].spec.template.spec.containers[0].args}",
-	).CombinedOutput()
+	dep, err := operatorDeployment(context.Background())
 	if err != nil {
-		return false
+		t.Fatalf("read the operator Deployment: %v", err)
 	}
-	return strings.Contains(string(out), "--snapshots-enabled")
+	return operatorHasArg(dep.Spec.Template.Spec, snapshotsEnabledArg)
 }
 
 // TestPhase3_SnapshotRoundtrip creates a Sandbox that writes a marker
@@ -401,21 +403,122 @@ func TestPhase3_StorageFillProtection(t *testing.T) {
 	// fill behaviour.
 }
 
-// TestPhase3_UpgradeFromPhase2 installs the Phase 2 chart, creates a
-// Sandbox without snapshot fields, upgrades the chart with
-// snapshots.enabled=true, and asserts back-compat. Deferred: the
-// current harness keeps the install pinned for the whole suite.
+// TestPhase3_UpgradeFromPhase2 drives the Phase 2 to Phase 3 upgrade on the
+// suite's own release: a `helm upgrade` that turns snapshots.enabled on over
+// a release that already has a Sandbox running. It asserts the three things
+// that can go wrong across that boundary (setec#15):
+//
+//   - the Sandbox created before the upgrade keeps running afterwards, on
+//     the same Pod, and is neither recreated nor orphaned;
+//   - the operator rolls out with --snapshots-enabled, and every operator
+//     Pod stays Ready with no container restart for a full window;
+//   - a Sandbox with the pre-upgrade spec shape is admitted and reconciled
+//     to completion by the post-upgrade operator, so nothing the wider
+//     Phase 3 admission surface adds rejects a Phase 2 spec.
+//
+// The release is rolled back to its pre-upgrade revision in t.Cleanup, so
+// the scenarios after this one see the install shape the workflow chose.
+//
+// The node-agent DaemonSet stays out. The suite installs it only under
+// SETEC_E2E_S3, and a snapshot write needs it. This scenario proves the
+// upgrade boundary. TestPhase3_SnapshotRoundtrip proves the snapshot path
+// on a snapshots-enabled install.
 func TestPhase3_UpgradeFromPhase2(t *testing.T) {
-	// Upgrade-path scenarios are exercised on the bare-metal runner by
-	// the pre-release smoke-test harness documented in
-	// docs/dev-smoke-test.md. The previous deferred-follow-up skip has
-	// been removed; the test body is left minimal because the harness
-	// performs the reinstall/upgrade steps outside of go test.
 	if !envtestOK(t) {
-		// Harness guard: upgrade semantics are verified only when a
-		// real cluster is reachable. No cluster ⇒ no meaningful test.
-		t.Skip("requires a running cluster for the upgrade harness")
+		t.Skip("requires a running cluster")
 	}
+	if phase3Enabled(t) {
+		t.Skip("the release already runs with snapshots.enabled=true, so there is no Phase 2 state to upgrade from; run without SETEC_E2E_SNAPSHOTS to exercise this path")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	ns := "p3-upgrade"
+	createTenantNamespace(ctx, t, ns)
+
+	// A Phase 2 shape Sandbox, running before the upgrade. It sleeps long
+	// enough to outlive two operator rollouts.
+	before := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "pre-upgrade"},
+		Spec:       minimalSpec("/bin/sh", "-c", "sleep 900"),
+	}
+	if err := k8sClient.Create(ctx, before); err != nil {
+		t.Fatalf("create pre-upgrade sandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), before) })
+	waitForPhaseCtx(ctx, t, ns, before.Name, setecv1alpha1.SandboxPhaseRunning, defaultWait)
+	podBefore := getPod(ctx, t, ns, before.Name+"-vm")
+
+	// The upgrade. The operator mounts the node-agent mTLS trio once
+	// snapshots are on, and the chart creates none of it (setec#320), so
+	// mint it first exactly as installChart does on a snapshots install.
+	if err := createNodeAgentMTLSSecrets(ctx, helmReleaseName, testNamespace); err != nil {
+		t.Fatalf("mint node-agent mTLS secrets: %v", err)
+	}
+	revision := helmRevision(t)
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		helmRun(t, "rollback", helmReleaseName, fmt.Sprint(revision), "--namespace", testNamespace)
+		if err := waitForOperatorRollout(c, false); err != nil {
+			t.Errorf("operator did not roll back to the pre-upgrade shape: %v", err)
+		}
+		for _, name := range []string{nodeAgentCASecret, nodeAgentServerSecret, operatorClientSecret} {
+			_ = k8sClient.Delete(c, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace}})
+		}
+	})
+	helmRun(t, "upgrade", helmReleaseName, chartPath,
+		"--namespace", testNamespace,
+		// Every install-time value stays as installChart set it. Only the
+		// snapshots subtree changes, which is the whole Phase 2 to Phase 3
+		// delta.
+		"--reuse-values",
+		"--set", "snapshots.enabled=true",
+		"--set", "snapshots.mTLS.caProvided=true",
+	)
+	if err := waitForOperatorRollout(ctx, true); err != nil {
+		dumpInstallFailureState()
+		t.Fatalf("operator did not roll out with %s: %v", snapshotsEnabledArg, err)
+	}
+
+	// 1. The pre-upgrade Sandbox is the same object, on the same Pod, and
+	//    still Running.
+	after := &setecv1alpha1.Sandbox{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: before.Name}, after); err != nil {
+		t.Fatalf("get pre-upgrade sandbox after the upgrade: %v", err)
+	}
+	if after.UID != before.UID {
+		t.Fatalf("pre-upgrade sandbox was replaced across the upgrade: uid %s -> %s", before.UID, after.UID)
+	}
+	if after.Status.Phase != setecv1alpha1.SandboxPhaseRunning {
+		t.Fatalf("pre-upgrade sandbox is %q after the upgrade, want Running (reason=%q)", after.Status.Phase, after.Status.Reason)
+	}
+	podAfter := getPod(ctx, t, ns, before.Name+"-vm")
+	if podAfter.UID != podBefore.UID {
+		t.Fatalf("pre-upgrade sandbox Pod was recreated across the upgrade: uid %s -> %s", podBefore.UID, podAfter.UID)
+	}
+
+	// 2. A Phase 2 shape spec is still admitted and reconciled by the
+	//    post-upgrade operator.
+	post := &setecv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "post-upgrade"},
+		Spec:       minimalSpec("/bin/true"),
+	}
+	if err := k8sClient.Create(ctx, post); err != nil {
+		t.Fatalf("post-upgrade operator rejected a Phase 2 shape Sandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), post) })
+	waitForPhaseCtx(ctx, t, ns, post.Name, setecv1alpha1.SandboxPhaseCompleted, defaultWait)
+}
+
+// getPod reads one Pod or fails the test.
+func getPod(ctx context.Context, t *testing.T, ns, name string) *corev1.Pod {
+	t.Helper()
+	pod := &corev1.Pod{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, pod); err != nil {
+		t.Fatalf("get pod %s/%s: %v", ns, name, err)
+	}
+	return pod
 }
 
 // waitForPhaseCtx polls every 2s until the Sandbox reaches the given phase

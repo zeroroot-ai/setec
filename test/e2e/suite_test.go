@@ -36,6 +36,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -810,6 +812,163 @@ func installChart() error {
 		}
 	}
 	return nil
+}
+
+// snapshotsEnabledArg is the operator flag the chart renders under
+// snapshots.enabled=true. Its presence on the operator Deployment is what
+// "Phase 3 is on" means to this suite.
+const snapshotsEnabledArg = "--snapshots-enabled"
+
+// operatorDeployment reads the operator Deployment of the suite's release.
+// The chart names it after the release: the release name contains the chart
+// name, so setec.fullname is the release name unchanged.
+func operatorDeployment(ctx context.Context) (*appsv1.Deployment, error) {
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Namespace: testNamespace, Name: helmReleaseName}
+	if err := k8sClient.Get(ctx, key, dep); err != nil {
+		return nil, fmt.Errorf("get operator Deployment %s: %w", key, err)
+	}
+	return dep, nil
+}
+
+// operatorHasArg reports whether the manager container of a Pod spec
+// carries the flag.
+func operatorHasArg(spec corev1.PodSpec, flag string) bool {
+	for _, c := range spec.Containers {
+		if c.Name != "manager" {
+			continue
+		}
+		for _, a := range c.Args {
+			if a == flag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// operatorRolloutStable is how long the operator must hold a complete,
+// Ready, restart-free rollout before waitForOperatorRollout accepts it.
+// A restart loop shows up as a restart count, not as a missing Ready
+// condition, so one green sample is not enough.
+const operatorRolloutStable = 30 * time.Second
+
+// waitForOperatorRollout blocks until the operator Deployment has rolled
+// out with snapshotsEnabledArg present (snapshots=true) or absent
+// (snapshots=false), every replica is updated and available, and every
+// operator Pod is Ready with zero container restarts, and that state has
+// held for operatorRolloutStable. It returns the last unmet condition on
+// timeout.
+func waitForOperatorRollout(ctx context.Context, snapshots bool) error {
+	var stableSince time.Time
+	var last string
+	for {
+		unmet := operatorRolloutUnmet(ctx, snapshots)
+		switch {
+		case unmet != "":
+			stableSince = time.Time{}
+			last = unmet
+		case stableSince.IsZero():
+			stableSince = time.Now()
+		case time.Since(stableSince) >= operatorRolloutStable:
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if last == "" {
+				last = "rollout was complete but did not hold for " + operatorRolloutStable.String()
+			}
+			return fmt.Errorf("operator rollout (snapshots=%t): %s: %w", snapshots, last, ctx.Err())
+		case <-time.After(defaultPoll):
+		}
+	}
+}
+
+// operatorRolloutUnmet returns the first rollout condition that does not
+// hold, or "" when the rollout is complete and healthy right now.
+func operatorRolloutUnmet(ctx context.Context, snapshots bool) string {
+	dep, err := operatorDeployment(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	if operatorHasArg(dep.Spec.Template.Spec, snapshotsEnabledArg) != snapshots {
+		return fmt.Sprintf("Deployment template has %s=%t, want %t", snapshotsEnabledArg, !snapshots, snapshots)
+	}
+	want := int32(1)
+	if dep.Spec.Replicas != nil {
+		want = *dep.Spec.Replicas
+	}
+	st := dep.Status
+	if st.ObservedGeneration < dep.Generation {
+		return fmt.Sprintf("observedGeneration %d < generation %d", st.ObservedGeneration, dep.Generation)
+	}
+	if st.UpdatedReplicas != want || st.AvailableReplicas != want || st.Replicas != want {
+		return fmt.Sprintf("replicas want=%d updated=%d available=%d total=%d", want, st.UpdatedReplicas, st.AvailableReplicas, st.Replicas)
+	}
+
+	var pods corev1.PodList
+	if err := k8sClient.List(ctx, &pods, client.InNamespace(testNamespace), operatorLabels()); err != nil {
+		return fmt.Sprintf("list operator pods: %v", err)
+	}
+	live := 0
+	for _, p := range pods.Items {
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		live++
+		if operatorHasArg(p.Spec, snapshotsEnabledArg) != snapshots {
+			return fmt.Sprintf("pod %s still runs the previous template", p.Name)
+		}
+		ready := false
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+				ready = true
+			}
+		}
+		if !ready {
+			return fmt.Sprintf("pod %s is not Ready (phase %s)", p.Name, p.Status.Phase)
+		}
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.RestartCount > 0 {
+				return fmt.Sprintf("pod %s container %s restarted %d time(s)", p.Name, cs.Name, cs.RestartCount)
+			}
+		}
+	}
+	if int32(live) != want {
+		return fmt.Sprintf("%d live operator pod(s), want %d", live, want)
+	}
+	return ""
+}
+
+// helmRun runs one helm command against the suite's release and fails the
+// test on a non-zero exit. Output goes to the test log.
+func helmRun(t *testing.T, args ...string) {
+	t.Helper()
+	cmd := exec.Command("helm", args...)
+	out, err := cmd.CombinedOutput()
+	t.Logf("helm %s\n%s", strings.Join(args, " "), out)
+	if err != nil {
+		t.Fatalf("helm %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+// helmRevision returns the current revision number of the suite's release.
+func helmRevision(t *testing.T) int {
+	t.Helper()
+	out, err := exec.Command("helm", "status", helmReleaseName, "--namespace", testNamespace, "-o", "json").Output()
+	if err != nil {
+		t.Fatalf("helm status %s: %v", helmReleaseName, err)
+	}
+	var status struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(out, &status); err != nil {
+		t.Fatalf("parse helm status for %s: %v", helmReleaseName, err)
+	}
+	if status.Version < 1 {
+		t.Fatalf("helm status for %s reports revision %d", helmReleaseName, status.Version)
+	}
+	return status.Version
 }
 
 // dumpInstallFailureState prints the state of the half-installed release to
