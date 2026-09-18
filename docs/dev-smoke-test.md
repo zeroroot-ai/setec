@@ -462,12 +462,14 @@ runtime that actually supports Firecracker snapshots (see
 docs/kata-firecracker-integration.md). Skip sections where a
 prerequisite is missing and note it in the report.
 
-The corresponding Go E2E scenarios (`TestPhase3_PoolColdStart`,
-`TestPhase3_StorageFillProtection`, `TestPhase3_UpgradeFromPhase2`)
-are expected to pass on the bare-metal runner once Phase 4 has
-landed the `setec-pool-vm` launcher and pool reconcile tick. Run
-them via `make e2e` on that host and record results in the
-v0.1.0 smoke-test report (`docs/launch/v0.1.0-smoke-test-result.md`).
+The Go E2E scenarios cover the same ground in the `suites` job of
+`.github/workflows/e2e.yml`. `TestPhase3_UpgradeFromPhase2` performs the
+Phase 2 to Phase 3 upgrade itself: it runs `helm upgrade` with
+`snapshots.enabled=true` over the suite's own release, asserts that a
+Sandbox created before the upgrade keeps its Pod, that the operator rolls
+out with `--snapshots-enabled` and no restart, and that a Phase 2 shape
+Sandbox is still admitted, then rolls the release back. It needs a
+snapshots-off install, so it skips when `SETEC_E2E_SNAPSHOTS=1`.
 
 ## Scenario P7: Snapshot create and restore roundtrip
 

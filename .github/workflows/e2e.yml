@@ -1358,11 +1358,9 @@ jobs:
           # its cleanup. Isolated cluster only.
           SETEC_E2E_WEBHOOK: "0"
         run: |
-          # TestPhase3_UpgradeFromPhase2 is NOT in the -run set below: its body
-          # is empty apart from the cluster guard, so it asserts nothing and
-          # would contribute a PASS line that means nothing. Listing it would
-          # be faking coverage, which is the thing setec#298 is about. Tracked
-          # separately (setec#318).
+          # TestPhase3_UpgradeFromPhase2 drives a helm upgrade of the suite's
+          # own release (snapshots off -> on) and rolls it back, so it needs
+          # the install below to be a snapshots-off one, which it is.
           # TestEnv_KVMPresent first: it is the guard that keeps an incapable
           # environment from turning everything after it into a green all-skip.
           #
@@ -1394,7 +1392,7 @@ jobs:
           # Verified against run 31919018724, where only the first of the two
           # appears in the output.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
+            -run '^(TestEnv_KVMPresent|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of
