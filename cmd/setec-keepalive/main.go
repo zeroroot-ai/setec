@@ -39,5 +39,5 @@ func main() {
 
 	sigs := make(chan os.Signal, 16)
 	signal.Notify(sigs, syscall.SIGCHLD, syscall.SIGTERM, syscall.SIGINT)
-	os.Exit(run(sigs))
+	run(sigs)
 }

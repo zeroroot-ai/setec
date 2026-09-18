@@ -171,7 +171,8 @@ func main() {
 			"Used by the startup prerequisite check only; scheduling uses the RuntimeClass.")
 	// Phase 2 flags. Zero values reproduce Phase 1 behaviour exactly.
 	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
-		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
+		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
+			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",

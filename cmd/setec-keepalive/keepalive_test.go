@@ -42,13 +42,10 @@ func TestRun_ExitsOnTerm(t *testing.T) {
 		sigs := make(chan os.Signal, 2)
 		sigs <- syscall.SIGCHLD
 		sigs <- sig
-		done := make(chan int, 1)
-		go func() { done <- run(sigs) }()
+		done := make(chan struct{})
+		go func() { run(sigs); close(done) }()
 		select {
-		case code := <-done:
-			if code != 0 {
-				t.Fatalf("run on %v = %d, want 0", sig, code)
-			}
+		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Fatalf("run did not return on %v", sig)
 		}

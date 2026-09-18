@@ -43,18 +43,17 @@ func installTo(dir string) error {
 }
 
 // run blocks on sigs. SIGCHLD reaps exited children. SIGTERM and SIGINT
-// end the process with exit status 0. The loop does no polling: between
-// signals the process sleeps in the channel receive.
-func run(sigs <-chan os.Signal) int {
+// return, and main then exits with status 0. The loop does no polling:
+// between signals the process sleeps in the channel receive.
+func run(sigs <-chan os.Signal) {
 	for sig := range sigs {
 		switch sig {
 		case syscall.SIGCHLD:
 			reap()
 		case syscall.SIGTERM, syscall.SIGINT:
-			return 0
+			return
 		}
 	}
-	return 0
 }
 
 // reap collects every child that has exited. As PID 1 the keepalive is
