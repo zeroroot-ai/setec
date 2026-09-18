@@ -18,7 +18,9 @@
 #    touched, the commit's change to that file is REVERTED when the PR diff
 #    removes every line the commit added there and adds back every line the
 #    commit removed there, hunk by hunk, in order, and does not also re-add
-#    what it removed (a move is not a revert).
+#    what it removed anywhere in the diff (a move, within a file or to
+#    another file, is not a revert). Renames are followed, so a renamed
+#    file is not a deleted one.
 # 3. A revert is DECLARED when a commit message in base..HEAD names the
 #    reverted commit: `This reverts commit <sha>` (what `git revert`
 #    writes) or a `Reverts: <sha>[, <sha>...]` trailer. Seven or more hex
@@ -73,10 +75,11 @@ is_declared() {
 }
 
 # lines_of <from> <to>: "<sign>\t<file>\t<hunk>\t<line>" for each added (+)
-# or removed (-) line of the diff, no context, no rename detection, so
-# every line is keyed by the path it lives at. Hunks are numbered per file.
+# or removed (-) line of the diff, no context. Renames are detected, so a
+# renamed file contributes only the lines that changed inside it, keyed by
+# its new path. Hunks are numbered per file.
 lines_of() {
-  git diff --no-color --unified=0 --no-renames --no-ext-diff "$1" "$2" \
+  git diff --no-color --unified=0 --find-renames --no-ext-diff "$1" "$2" \
     | awk '
       /^diff --git / { file = substr($0, index($0, " b/") + 3); hunk = 0; next }
       /^(\+\+\+|---) /  { next }
@@ -103,9 +106,11 @@ compare() {
     function blank(s) { return s ~ /^[[:space:]]*$/ }
     BEGIN { SEP = "\037" }
     FILENAME == ARGV[1] {
-      # PR side: per file, the removed lines in order and the added lines in order.
+      # PR side: per file, the removed lines in order and the added lines in
+      # order, plus the same across every file for the move check.
       f = $2
-      if ($1 == "+") { npa[f]++; pa[f, npa[f]] = $4 } else { npr[f]++; pr[f, npr[f]] = $4 }
+      if ($1 == "+") { npa[f]++; pa[f, npa[f]] = $4; nall_a++; all_a[nall_a] = $4 }
+      else            { npr[f]++; pr[f, npr[f]] = $4; nall_r++; all_r[nall_r] = $4 }
       next
     }
     {
@@ -118,6 +123,9 @@ compare() {
       files[f] = 1
     }
     END {
+      # Every added and every removed line of the PR, in diff order.
+      n = nall_a; for (i = 1; i <= n; i++) tmp[i] = all_a[i]; padd_all = join(tmp, n)
+      n = nall_r; for (i = 1; i <= n; i++) tmp[i] = all_r[i]; prem_all = join(tmp, n)
       for (f in files) {
         # Join the PR side once per file.
         n = npr[f]; for (i = 1; i <= n; i++) tmp[i] = pr[f, i]; prem = join(tmp, n)
@@ -129,11 +137,11 @@ compare() {
           content = 1
           n = nca[key]; for (i = 1; i <= n; i++) tmp[i] = ca[key, i]; addseq = (n > 0) ? join(tmp, n) : ""
           n = ncr[key]; for (i = 1; i <= n; i++) tmp[i] = cr[key, i]; remseq = (n > 0) ? join(tmp, n) : ""
-          # What the commit added must be gone from the PR tree, and not
-          # merely moved. What the commit removed must be back, and not
-          # merely moved.
-          if (addseq != "" && (index(prem, addseq) == 0 || index(padd, addseq) > 0)) { reverted = 0; break }
-          if (remseq != "" && (index(padd, remseq) == 0 || index(prem, remseq) > 0)) { reverted = 0; break }
+          # What the commit added must be gone from this file, and not
+          # merely moved somewhere else in the diff. What the commit
+          # removed must be back in this file, and not merely moved.
+          if (addseq != "" && (index(prem, addseq) == 0 || index(padd_all, addseq) > 0)) { reverted = 0; break }
+          if (remseq != "" && (index(padd, remseq) == 0 || index(prem_all, remseq) > 0)) { reverted = 0; break }
         }
         if (content && reverted) print f
       }
