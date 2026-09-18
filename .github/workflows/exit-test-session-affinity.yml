@@ -65,6 +65,9 @@ concurrency:
 env:
   KIND_CLUSTER: chain6
   E2E_NAMESPACE: chain6-exit
+  # The Sandbox-only namespace the suite installs beside the release
+  # (setec#10). The session Sandbox, its Pod and its PVC live here.
+  E2E_SANDBOX_NAMESPACE: chain6-exit-sandboxes
   E2E_RELEASE: chain6-exit
   IMAGE_TAG: chain6-local
 
@@ -161,6 +164,7 @@ jobs:
           # consent is given explicitly (setec#298).
           SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_SANDBOX_NAMESPACE: ${{ env.E2E_SANDBOX_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
           # Preflight looks for this RuntimeClass; the sandbox runs on this
           # backend. Both are runc here — no KVM on a hosted runner.
@@ -225,6 +229,7 @@ jobs:
           # Its own release and namespace: TestMain uninstalls on the way out,
           # but distinct names keep the two runs' diagnostics unambiguous.
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}-fixture
+          SETEC_E2E_SANDBOX_NAMESPACE: ${{ env.E2E_SANDBOX_NAMESPACE }}-fixture
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}-fixture
           SETEC_E2E_RUNTIMECLASS: runc
           SETEC_E2E_BACKEND: runc
@@ -264,9 +269,10 @@ jobs:
 
       - name: Collect diagnostics
         if: failure()
-        # BOTH namespaces. The fixture run has its own, and a fixture step
-        # that fails while diagnostics only dump the primary namespace prints
-        # "No resources found" for the run that actually broke.
+        # ALL FOUR namespaces: the release and the Sandbox namespace, for the
+        # primary run and for the fixture run. A fixture step that fails while
+        # diagnostics only dump the primary namespace prints "No resources
+        # found" for the run that actually broke.
         #
         # TestMain uninstalls and deletes its namespace on the way out, so for
         # a step that got past install there may be nothing left to dump —
@@ -275,7 +281,7 @@ jobs:
           set -uo pipefail
           kubectl get runtimeclass,sandboxclasses -o wide || true
           kubectl get nodes -L setec.zeroroot.ai/runtime.runc || true
-          for ns in "${E2E_NAMESPACE}" "${E2E_NAMESPACE}-fixture"; do
+          for ns in "${E2E_NAMESPACE}" "${E2E_SANDBOX_NAMESPACE}" "${E2E_NAMESPACE}-fixture" "${E2E_SANDBOX_NAMESPACE}-fixture"; do
             echo "::group::diagnostics for namespace ${ns}"
             kubectl get sandboxes,pods,pvc -n "$ns" -o wide || true
             kubectl get events -n "$ns" --sort-by=.lastTimestamp | tail -60 || true

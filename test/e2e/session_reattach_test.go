@@ -74,7 +74,7 @@ func newInProcessFrontend() *frontend.Service {
 	return &frontend.Service{
 		Client:           k8sClient,
 		AuthDisabled:     true,
-		DefaultNamespace: testNamespace,
+		DefaultNamespace: sandboxNamespace,
 	}
 }
 
@@ -107,7 +107,7 @@ func TestSession_ReattachByHandle(t *testing.T) {
 	createAndCleanup(t, sb)
 
 	key := client.ObjectKeyFromObject(sb)
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-vm"}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}
 	waitForPhase(t, key, defaultWait, setecv1alpha1.SandboxPhaseRunning)
 
 	var current setecv1alpha1.Sandbox
@@ -181,7 +181,7 @@ func TestSession_ReattachByHandle(t *testing.T) {
 
 	// (5a) Unknown handle → NotFound.
 	if _, err := newInProcessFrontend().Attach(context.Background(),
-		&setecv1grpc.AttachRequest{SandboxId: testNamespace + "/never-was/uid-x"}); status.Code(err) != codes.NotFound {
+		&setecv1grpc.AttachRequest{SandboxId: sandboxNamespace + "/never-was/uid-x"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("attach to unknown handle: code = %v, want NotFound", status.Code(err))
 	}
 

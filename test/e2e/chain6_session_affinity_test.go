@@ -123,7 +123,7 @@ func chain6Frontend() *frontend.Service {
 		Client:           k8sClient,
 		RESTConfig:       restConfig,
 		AuthDisabled:     true,
-		DefaultNamespace: testNamespace,
+		DefaultNamespace: sandboxNamespace,
 	}
 }
 
@@ -246,7 +246,7 @@ func TestChain6_SessionAffinity(t *testing.T) {
 	}
 	handle := fmt.Sprintf("%s/%s/%s", current.Namespace, current.Name, current.UID)
 
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: podNameForChain6(sb.Name)}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: podNameForChain6(sb.Name)}
 	var podBefore corev1.Pod
 	if err := k8sClient.Get(ctx, podKey, &podBefore); err != nil {
 		t.Fatalf("get session pod: %v", err)

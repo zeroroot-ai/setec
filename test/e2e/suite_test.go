@@ -69,6 +69,26 @@ var (
 	helmReleaseName string
 	testNamespace   string
 
+	// sandboxNamespace is where every scenario's Sandbox runs. It is a
+	// sibling of testNamespace, never testNamespace itself (setec#10).
+	//
+	// The chart is explicit that a Sandbox namespace is a Sandbox-only
+	// namespace: `sandboxNamespaces` is a list distinct from `namespace`,
+	// the baseline default-deny NetworkPolicy and the host-access guard land
+	// on every namespace in it, and the chart refuses to render a values
+	// file that lists the release namespace there. A suite that put its
+	// Sandboxes beside the operator was the one configuration reaching the
+	// state the chart forbids, and so was not testing a supported
+	// deployment.
+	//
+	// One fixed namespace per job, not one per scenario: the chart requires
+	// listed namespaces to exist at install time, and one name keeps the
+	// workflow's reap and diagnostics steps able to find everything. The
+	// scenarios that test multi-tenant behavior keep creating their own
+	// tenant namespaces through createTenantNamespace; that is what they
+	// test. Override with SETEC_E2E_SANDBOX_NAMESPACE.
+	sandboxNamespace string
+
 	// restConfig is the kubeconfig the suite resolved. frontend.Service needs
 	// it to run commands: Exec goes through the Kubernetes pods/exec
 	// subresource, and a Service with a nil RESTConfig reports that it cannot
@@ -157,6 +177,11 @@ func TestMain(m *testing.M) {
 	stamp := time.Now().UTC().Format("20060102-150405")
 	helmReleaseName = envOr("SETEC_E2E_RELEASE", fmt.Sprintf("setec-e2e-%s", stamp))
 	testNamespace = envOr("SETEC_E2E_NAMESPACE", fmt.Sprintf("setec-e2e-%s", stamp))
+	sandboxNamespace = envOr("SETEC_E2E_SANDBOX_NAMESPACE", testNamespace+"-sandboxes")
+	if sandboxNamespace == testNamespace {
+		fmt.Fprintf(os.Stderr, "e2e: SETEC_E2E_SANDBOX_NAMESPACE=%q is the release namespace; Sandboxes need a namespace of their own (setec#10)\n", sandboxNamespace)
+		os.Exit(1)
+	}
 	chartPath = envOr("SETEC_E2E_CHART", resolveChartPath())
 	kataRuntimeClass = envOr("SETEC_E2E_RUNTIMECLASS", "kata-fc")
 	imageTag = envOr("SETEC_E2E_IMAGE_TAG", "dev")
@@ -583,6 +608,14 @@ func installChart() error {
 	if err := k8sClient.Create(ctx, nsObj); err != nil {
 		return fmt.Errorf("create namespace %q: %w", testNamespace, err)
 	}
+	// The Sandbox namespace exists before the install: the chart renders
+	// the baseline NetworkPolicy and the host guard into every namespace it
+	// lists, and requires those namespaces to be there already.
+	sbNs := &corev1.Namespace{}
+	sbNs.Name = sandboxNamespace
+	if err := k8sClient.Create(ctx, sbNs); err != nil {
+		return fmt.Errorf("create sandbox namespace %q: %w", sandboxNamespace, err)
+	}
 
 	// Provision the webhook serving cert before install so the operator can
 	// mount it on startup (the chart's fullname is the release name here, so
@@ -645,17 +678,19 @@ func installChart() error {
 		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
 		// with the locally-built installer image.
 		"--set", "installer.enabled=false",
-		// WITHOUT THIS THE CHART DOES NOT RENDER AT ALL. setec#157 made
-		// `sandboxNamespaces` mandatory unless this is set, and the suite
-		// cannot supply that list: it creates its tenant namespaces from the
-		// test bodies at run time (createTenantNamespace — p3-roundtrip,
-		// p2-quota-a, …), so there is nothing to name at install time. This
-		// is the chart's documented deliberate opt-out and the same one the
-		// roundtrip job takes, scoped to a throwaway release that is
-		// uninstalled at the end of the run.
-		//
-		// The suite has not rendered since setec#157 landed; nothing caught
-		// it because nothing ran the suite (setec#298).
+		// The Sandbox namespace, declared to the chart (setec#10). The
+		// release binds the operator's Pod-write RBAC there and covers it
+		// with the baseline default-deny NetworkPolicy and the host-access
+		// guard, which is the topology the chart documents and the one
+		// every scenario that goes through newSandbox now runs in.
+		"--set", fmt.Sprintf("sandboxNamespaces={%s}", sandboxNamespace),
+		// Still required (setec#157): the multi-tenant scenarios create
+		// their own tenant namespaces from the test bodies at run time
+		// (createTenantNamespace: p2-netpol, p3-roundtrip, e2e-egress, and
+		// more), and the operator has to be able to write Pods there too.
+		// The chart's documented opt-out covers that, scoped to a throwaway
+		// release that is uninstalled at the end of the run. It goes away
+		// when those scenarios name their namespaces at install time.
 		"--set", "rbac.allowClusterWideSandboxWrite=true",
 		// The chart ships two SandboxClasses, `tool` and `connector`, and
 		// SandboxClass is CLUSTER-scoped and NOT release-prefixed. Both
@@ -984,6 +1019,9 @@ func dumpInstallFailureState() {
 		// FailedScheduling, a failing probe) rather than in its status.
 		{"get", "events", "-n", testNamespace, "--sort-by=.lastTimestamp"},
 		{"describe", "pods", "-n", testNamespace},
+		// The install renders the baseline NetworkPolicy and the host guard
+		// into the Sandbox namespace; a refused render names them.
+		{"get", "networkpolicy,validatingadmissionpolicybinding", "-n", sandboxNamespace},
 	} {
 		fmt.Fprintf(os.Stderr, "\ne2e: --- kubectl %s ---\n", strings.Join(args, " "))
 		cmd := exec.Command("kubectl", args...)
@@ -1137,12 +1175,16 @@ func uninstallChart() error {
 		firstErr = fmt.Errorf("helm uninstall: %w", err)
 	}
 
-	// Delete namespace (ignore not-found; helm uninstall does not remove it).
-	delCmd := exec.Command("kubectl", "delete", "namespace", testNamespace, "--wait=true", "--ignore-not-found=true", "--timeout=2m")
-	delCmd.Stdout = os.Stdout
-	delCmd.Stderr = os.Stderr
-	if err := delCmd.Run(); err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("delete namespace: %w", err)
+	// Delete both namespaces (ignore not-found; helm uninstall removes
+	// neither). The Sandbox namespace goes first so its Pods are gone before
+	// the operator that reaps them is.
+	for _, ns := range []string{sandboxNamespace, testNamespace} {
+		delCmd := exec.Command("kubectl", "delete", "namespace", ns, "--wait=true", "--ignore-not-found=true", "--timeout=2m")
+		delCmd.Stdout = os.Stdout
+		delCmd.Stderr = os.Stderr
+		if err := delCmd.Run(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("delete namespace %s: %w", ns, err)
+		}
 	}
 
 	return firstErr

@@ -91,7 +91,7 @@ func installSessionClass(t *testing.T) {
 // kubectl, consistent with the harness's other cluster inspection.
 func podLogs(t *testing.T, podName string) string {
 	t.Helper()
-	out, err := exec.Command("kubectl", "logs", podName, "-n", testNamespace, "-c", "workload").CombinedOutput()
+	out, err := exec.Command("kubectl", "logs", podName, "-n", sandboxNamespace, "-c", "workload").CombinedOutput()
 	if err != nil {
 		t.Logf("kubectl logs %s: %v (output: %s)", podName, err, out)
 	}
@@ -126,7 +126,7 @@ func TestSession_WorkspaceSurvivesPodKill(t *testing.T) {
 	createAndCleanup(t, sb)
 
 	key := client.ObjectKeyFromObject(sb)
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-vm"}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}
 
 	// (1) First incarnation boots and creates the marker.
 	waitForPhase(t, key, defaultWait, setecv1alpha1.SandboxPhaseRunning)
@@ -169,7 +169,7 @@ func TestSession_WorkspaceSurvivesPodKill(t *testing.T) {
 	if err := k8sClient.Delete(context.Background(), sb); err != nil {
 		t.Fatalf("delete session sandbox: %v", err)
 	}
-	pvcKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-workspace"}
+	pvcKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-workspace"}
 	deadline = time.Now().Add(defaultWait)
 	for {
 		var pvc corev1.PersistentVolumeClaim

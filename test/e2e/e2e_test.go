@@ -162,12 +162,17 @@ func minimalSpec(cmd ...string) setecv1alpha1.SandboxSpec {
 	}
 }
 
-// newSandbox returns a client.Object-ready Sandbox in the test namespace.
+// newSandbox returns a client.Object-ready Sandbox in the Sandbox namespace.
+//
+// Every scenario that needs no namespace of its own goes through here, and
+// so lands in sandboxNamespace, never in the release namespace (setec#10).
+// A scenario that tests namespace behavior creates a tenant namespace with
+// createTenantNamespace instead.
 func newSandbox(name string, spec setecv1alpha1.SandboxSpec) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: testNamespace,
+			Namespace: sandboxNamespace,
 		},
 		Spec: spec,
 	}
@@ -200,15 +205,15 @@ func waitForPhase(t *testing.T, key client.ObjectKey, timeout time.Duration, pha
 	return nil
 }
 
-// waitForEvent polls Events in the test namespace until one is observed whose
-// Reason matches `reason` and whose involvedObject points at the named
+// waitForEvent polls Events in the Sandbox namespace until one is observed
+// whose Reason matches `reason` and whose involvedObject points at the named
 // Sandbox. Returns true if observed before the timeout.
 func waitForEvent(t *testing.T, sandboxName, reason string, timeout time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		var events corev1.EventList
-		if err := k8sClient.List(context.Background(), &events, client.InNamespace(testNamespace)); err != nil {
+		if err := k8sClient.List(context.Background(), &events, client.InNamespace(sandboxNamespace)); err != nil {
 			t.Fatalf("list events: %v", err)
 		}
 		for _, ev := range events.Items {
@@ -279,7 +284,7 @@ func TestSandbox_SuccessfulExit(t *testing.T) {
 
 	// The backing Pod must have used the Kata runtime class.
 	var pod corev1.Pod
-	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: sb.Name + "-vm"}, &pod); err != nil {
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}, &pod); err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
 	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != kataRuntimeClass {
@@ -358,7 +363,7 @@ func TestSandbox_DeleteMidRun(t *testing.T) {
 	// exists before we delete it.
 	_ = waitForPhase(t, key, defaultWait, setecv1alpha1.SandboxPhaseRunning)
 
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-vm"}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}
 	var pod corev1.Pod
 	if err := k8sClient.Get(context.Background(), podKey, &pod); err != nil {
 		t.Fatalf("get pod before delete: %v", err)

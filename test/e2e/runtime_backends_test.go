@@ -107,7 +107,7 @@ func TestRuntimeBackends_Smoke(t *testing.T) {
 			sb := &setecv1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      sc.sandboxName,
-					Namespace: testNamespace,
+					Namespace: sandboxNamespace,
 				},
 				Spec: setecv1alpha1.SandboxSpec{
 					SandboxClassName: sc.className,
@@ -126,13 +126,13 @@ func TestRuntimeBackends_Smoke(t *testing.T) {
 
 			// Wait for the backing Pod to be Ready.
 			podName := sc.sandboxName + "-vm"
-			if err := waitForPodReady(ctx, k8sClient, testNamespace, podName, backendSmokeDuration); err != nil {
-				dumpDiagnostics(t, client.ObjectKey{Namespace: testNamespace, Name: sc.sandboxName})
+			if err := waitForPodReady(ctx, k8sClient, sandboxNamespace, podName, backendSmokeDuration); err != nil {
+				dumpDiagnostics(t, client.ObjectKey{Namespace: sandboxNamespace, Name: sc.sandboxName})
 				t.Fatalf("pod %s not Ready within %s: %v", podName, backendSmokeDuration, err)
 			}
 
 			// Confirm status.runtime.chosen matches the requested backend.
-			chosen, err := waitForSandboxRuntimeChosen(ctx, k8sClient, testNamespace, sc.sandboxName, backendSmokeDuration)
+			chosen, err := waitForSandboxRuntimeChosen(ctx, k8sClient, sandboxNamespace, sc.sandboxName, backendSmokeDuration)
 			if err != nil {
 				t.Fatalf("sandbox %q status.runtime.chosen not set within %s: %v",
 					sc.sandboxName, backendSmokeDuration, err)
@@ -242,7 +242,7 @@ func TestRuntimeBackends_ZZ_Fallback(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "fallback-sb",
-			Namespace: testNamespace,
+			Namespace: sandboxNamespace,
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: "fallback-test-cls",
@@ -261,13 +261,13 @@ func TestRuntimeBackends_ZZ_Fallback(t *testing.T) {
 
 	// Wait for the Pod to become Ready.
 	podName := "fallback-sb-vm"
-	if err := waitForPodReady(ctx, k8sClient, testNamespace, podName, backendSmokeDuration); err != nil {
-		dumpDiagnostics(t, client.ObjectKey{Namespace: testNamespace, Name: "fallback-sb"})
+	if err := waitForPodReady(ctx, k8sClient, sandboxNamespace, podName, backendSmokeDuration); err != nil {
+		dumpDiagnostics(t, client.ObjectKey{Namespace: sandboxNamespace, Name: "fallback-sb"})
 		t.Fatalf("fallback Pod %s not Ready within %s: %v", podName, backendSmokeDuration, err)
 	}
 
 	// Assert that the chosen backend is gvisor (the fallback).
-	chosen, err := waitForSandboxRuntimeChosen(ctx, k8sClient, testNamespace, "fallback-sb", backendSmokeDuration)
+	chosen, err := waitForSandboxRuntimeChosen(ctx, k8sClient, sandboxNamespace, "fallback-sb", backendSmokeDuration)
 	if err != nil {
 		t.Fatalf("status.runtime.chosen not set: %v", err)
 	}
