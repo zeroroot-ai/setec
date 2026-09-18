@@ -60,6 +60,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/chartname"
 )
 
 // Release / namespace / chart paths for the suite. The release name and
@@ -68,6 +69,15 @@ import (
 var (
 	helmReleaseName string
 	testNamespace   string
+
+	// chartFullname is the chart's `setec.fullname` for helmReleaseName:
+	// the prefix of every object the release renders (the operator
+	// Deployment is the fullname itself, then <fullname>-runtime-agent,
+	// <fullname>-node-agent, <fullname>-installer, <fullname>-webhook). It
+	// equals the release name only when that name contains "setec"; the
+	// chain-6 job's chain6-exit renders chain6-exit-setec. Derived by
+	// internal/chartname, which is unit-tested against the chart.
+	chartFullname string
 
 	// sandboxNamespace is where every scenario's Sandbox runs. It is a
 	// sibling of testNamespace, never testNamespace itself (setec#10).
@@ -176,6 +186,7 @@ func init() {
 func TestMain(m *testing.M) {
 	stamp := time.Now().UTC().Format("20060102-150405")
 	helmReleaseName = envOr("SETEC_E2E_RELEASE", fmt.Sprintf("setec-e2e-%s", stamp))
+	chartFullname = chartname.Fullname(helmReleaseName)
 	testNamespace = envOr("SETEC_E2E_NAMESPACE", fmt.Sprintf("setec-e2e-%s", stamp))
 	sandboxNamespace = envOr("SETEC_E2E_SANDBOX_NAMESPACE", testNamespace+"-sandboxes")
 	if sandboxNamespace == testNamespace {
@@ -618,15 +629,14 @@ func installChart() error {
 	}
 
 	// Provision the webhook serving cert before install so the operator can
-	// mount it on startup (the chart's fullname is the release name here, so
-	// the Service is <release>-webhook and the cert Secret is
-	// <release>-webhook-cert). caBundle is fed to the
+	// mount it on startup: the Service is <fullname>-webhook and the cert
+	// Secret is <fullname>-webhook-cert. caBundle is fed to the
 	// ValidatingWebhookConfiguration so the API server trusts the webhook.
 	var webhookCertSecret, caBundle string
 	if webhookEnabled {
 		var err error
-		webhookSvc := helmReleaseName + "-webhook"
-		webhookCertSecret = helmReleaseName + "-webhook-cert"
+		webhookSvc := chartFullname + "-webhook"
+		webhookCertSecret = chartFullname + "-webhook-cert"
 		caBundle, err = createWebhookCertSecret(ctx, webhookCertSecret, webhookSvc, testNamespace)
 		if err != nil {
 			return err
@@ -642,7 +652,7 @@ func installChart() error {
 	// Issuer, and issuing both leaves from a selfsigned ClusterIssuer gives
 	// them no shared trust root anyway).
 	if snapshotsEnabled() {
-		if err := createNodeAgentMTLSSecrets(ctx, helmReleaseName, testNamespace); err != nil {
+		if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
 			return err
 		}
 	}
@@ -702,18 +712,15 @@ func installChart() error {
 		// e2e-session-checkpoint-*, …) and none references the chart's.
 		// Same opt-out the roundtrip job takes, for the same reason.
 		"--set", "sandboxClasses.enabled=false",
-		"--wait",
-		// 10m, not 5m. The suites job pre-warms a metal node BEFORE installing
-		// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
-		// runtime-agent DaemonSet has to roll out onto an m5zn.metal that came
-		// up minutes ago and has none of the images cached. Five minutes was
-		// not enough: run 31916255452 died on
-		// `DaemonSet ... not ready, Available: 3/4` with four amd64 nodes, the
-		// fourth being that fresh metal node.
-		//
-		// The roundtrip job does not hit this only because it installs BEFORE
-		// its own pre-warm, so its rollout never sees the metal node at all.
-		"--timeout", "10m",
+		// No --wait (setec#12). helm's wait calls a DaemonSet ready only at
+		// numberAvailable == desiredNumberScheduled, and the DaemonSet
+		// controller schedules a pod onto NotReady and unreachable nodes too
+		// (it stamps the not-ready and unreachable NoExecute tolerations on
+		// every DaemonSet pod itself), so a node that is gone holds a Pending
+		// pod that no timeout outlasts. Staging always has one: the metal
+		// node the previous run provisioned sits NotReady in the API while
+		// Karpenter drains it. waitForInstallReady below gates on the nodes
+		// the cluster reports Ready instead.
 	}
 
 	// WITHOUT snapshots.enabled THE SUITE IS A GREEN ALL-SKIP on the Phase 3
@@ -836,6 +843,10 @@ func installChart() error {
 		return fmt.Errorf("helm install: %w", err)
 	}
 
+	if err := waitForInstallReady(ctx); err != nil {
+		return err
+	}
+
 	// The operator's /readyz gates on prereqs, not on the webhook server
 	// having begun serving on :9443. With the webhook enabled + failurePolicy
 	// Fail, a Sandbox/SandboxClass create issued before the server is up gets
@@ -854,12 +865,11 @@ func installChart() error {
 // "Phase 3 is on" means to this suite.
 const snapshotsEnabledArg = "--snapshots-enabled"
 
-// operatorDeployment reads the operator Deployment of the suite's release.
-// The chart names it after the release: the release name contains the chart
-// name, so setec.fullname is the release name unchanged.
+// operatorDeployment reads the operator Deployment of the suite's release,
+// which the chart names with `setec.fullname` (chartFullname).
 func operatorDeployment(ctx context.Context) (*appsv1.Deployment, error) {
 	dep := &appsv1.Deployment{}
-	key := types.NamespacedName{Namespace: testNamespace, Name: helmReleaseName}
+	key := types.NamespacedName{Namespace: testNamespace, Name: chartFullname}
 	if err := k8sClient.Get(ctx, key, dep); err != nil {
 		return nil, fmt.Errorf("get operator Deployment %s: %w", key, err)
 	}
@@ -1004,6 +1014,165 @@ func helmRevision(t *testing.T) int {
 		t.Fatalf("helm status for %s reports revision %d", helmReleaseName, status.Version)
 	}
 	return status.Version
+}
+
+// installReadyTimeout bounds the post-install readiness gate. Ten minutes,
+// not five: the suites job pre-warms a metal node BEFORE installing
+// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
+// runtime-agent has to roll out onto an m5zn.metal that came up minutes ago
+// with none of the images cached. Run 31916255452 died at five.
+const installReadyTimeout = 10 * time.Minute
+
+// waitForInstallReady is the readiness gate that replaces `helm --wait`
+// (setec#12), ported from the roundtrip job's "Wait for the shadow release"
+// step. It asserts:
+//
+//   - the operator Deployment rolled out, with the snapshots flag matching
+//     the install, and holds Ready with no restart (waitForOperatorRollout);
+//   - every runtime-agent pod whose node the cluster reports Ready is
+//     itself Ready, with at least one such pod. Pods pinned to a node the
+//     cluster does not report Ready are named and excluded, out loud,
+//     rather than waited on: their node is gone, not slow;
+//   - the same for the node-agent DaemonSet when the install renders it.
+//
+// A DaemonSet the scheduler places on no node at all (desired 0, as on the
+// chain-6 kind cluster, which pins the runtime-agent to an unmatched
+// selector) has nothing to gate on and passes.
+func waitForInstallReady(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, installReadyTimeout)
+	defer cancel()
+
+	if err := waitForOperatorRollout(ctx, snapshotsEnabled()); err != nil {
+		return err
+	}
+	components := []string{"runtime-agent"}
+	if sessionS3.enabled {
+		components = append(components, "node-agent")
+	}
+	for _, c := range components {
+		if err := waitForAgentsOnReadyNodes(ctx, c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// agentGate is one sample of a DaemonSet component's readiness on the nodes
+// the cluster reports Ready.
+type agentGate struct {
+	ready, considered int
+	excluded, pending []string
+	// unscheduled is true while the DaemonSet controller has not yet
+	// reported how many pods it wants; the sample proves nothing then.
+	unscheduled bool
+	// desired is the DaemonSet's desiredNumberScheduled once reported.
+	desired int32
+}
+
+// waitForAgentsOnReadyNodes polls sampleAgentGate for the component until
+// every considered pod is Ready or ctx ends.
+func waitForAgentsOnReadyNodes(ctx context.Context, component string) error {
+	var last string
+	for {
+		g, err := sampleAgentGate(ctx, component)
+		switch {
+		case err != nil:
+			last = err.Error()
+		case g.unscheduled:
+			last = "DaemonSet has not reported its desired pod count yet"
+		case g.desired == 0:
+			fmt.Fprintf(os.Stderr, "e2e: %s DaemonSet schedules onto no node on this cluster (desired 0); nothing to gate on\n", component)
+			return nil
+		case g.considered >= 1 && g.ready == g.considered:
+			if len(g.excluded) > 0 {
+				fmt.Fprintf(os.Stderr, "e2e: %s pods on nodes the cluster does not report Ready were excluded from the readiness gate: %s\n",
+					component, strings.Join(g.excluded, " "))
+			}
+			fmt.Fprintf(os.Stderr, "e2e: %s ready %d/%d on Ready nodes\n", component, g.ready, g.considered)
+			return nil
+		default:
+			last = fmt.Sprintf("ready %d/%d on Ready nodes, waiting on: %s, excluded (node not Ready): %s",
+				g.ready, g.considered, orNone(g.pending), orNone(g.excluded))
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s readiness gate: %s: %w", component, last, ctx.Err())
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+// sampleAgentGate classifies the component's pods against the Ready nodes.
+func sampleAgentGate(ctx context.Context, component string) (agentGate, error) {
+	var g agentGate
+
+	ds := &appsv1.DaemonSet{}
+	dsKey := types.NamespacedName{Namespace: testNamespace, Name: chartFullname + "-" + component}
+	if err := k8sClient.Get(ctx, dsKey, ds); err != nil {
+		return g, fmt.Errorf("get DaemonSet %s: %w", dsKey, err)
+	}
+	if ds.Status.ObservedGeneration < ds.Generation {
+		g.unscheduled = true
+		return g, nil
+	}
+	g.desired = ds.Status.DesiredNumberScheduled
+	if g.desired == 0 {
+		return g, nil
+	}
+
+	var nodes corev1.NodeList
+	if err := k8sClient.List(ctx, &nodes); err != nil {
+		return g, fmt.Errorf("list nodes: %w", err)
+	}
+	readyNodes := map[string]bool{}
+	for _, n := range nodes.Items {
+		for _, c := range n.Status.Conditions {
+			if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+				readyNodes[n.Name] = true
+			}
+		}
+	}
+
+	var pods corev1.PodList
+	if err := k8sClient.List(ctx, &pods, client.InNamespace(testNamespace), client.MatchingLabels{
+		"app.kubernetes.io/instance":  helmReleaseName,
+		"app.kubernetes.io/component": component,
+	}); err != nil {
+		return g, fmt.Errorf("list %s pods: %w", component, err)
+	}
+	for _, p := range pods.Items {
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		node := p.Spec.NodeName
+		if node == "" || !readyNodes[node] {
+			if node == "" {
+				node = "unscheduled"
+			}
+			g.excluded = append(g.excluded, p.Name+"("+node+")")
+			continue
+		}
+		g.considered++
+		ready := false
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+				ready = true
+			}
+		}
+		if ready {
+			g.ready++
+		} else {
+			g.pending = append(g.pending, p.Name+"("+node+")")
+		}
+	}
+	return g, nil
+}
+
+func orNone(items []string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	return strings.Join(items, " ")
 }
 
 // dumpInstallFailureState prints the state of the half-installed release to

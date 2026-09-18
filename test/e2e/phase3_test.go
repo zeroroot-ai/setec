@@ -452,7 +452,7 @@ func TestPhase3_UpgradeFromPhase2(t *testing.T) {
 	// The upgrade. The operator mounts the node-agent mTLS trio once
 	// snapshots are on, and the chart creates none of it (setec#320), so
 	// mint it first exactly as installChart does on a snapshots install.
-	if err := createNodeAgentMTLSSecrets(ctx, helmReleaseName, testNamespace); err != nil {
+	if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
 		t.Fatalf("mint node-agent mTLS secrets: %v", err)
 	}
 	revision := helmRevision(t)
