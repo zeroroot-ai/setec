@@ -179,6 +179,11 @@ spec:
         - name: nodeagent-ca
           secret:
             secretName: {{ .Values.snapshots.mTLS.caSecret }}
+            # The CA Secret cert-manager issues also holds the CA private
+            # key as tls.key. Only the certificate reaches the Pod.
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
         {{- end }}
       tolerations:

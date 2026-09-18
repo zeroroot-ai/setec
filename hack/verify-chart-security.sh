@@ -486,6 +486,82 @@ else
 	fail "rbac.allowClusterWideSandboxWrite=true must bind pods/exec with a ClusterRoleBinding"
 fi
 
+# ---------------------------------------------------------------------------
+# Operator<->node-agent mTLS channel is issued from one trust root (setec#14).
+#
+# snapshots.enabled=true mounts three Secrets across two workloads, none of
+# them optional. The chart used to issue only the two leaves, each its own
+# root, and never the CA both workloads mount, so no values combination could
+# install. cert-manager mode must now issue a CA Certificate into caSecret, a
+# namespaced Issuer over it, and both leaves from that Issuer. The workloads
+# must mount only ca.crt, because the CA Secret also holds the CA key.
+# ---------------------------------------------------------------------------
+note "node-agent mTLS channel from one CA (setec#14)"
+SNAP_CM=(--set snapshots.enabled=true
+	--set nodeAgent.enabled=true
+	--set snapshots.mTLS.certManager.enabled=true)
+
+render "$workdir/na-certs.yaml" "${SNAP_CM[@]}" --show-only templates/nodeagent-certificates.yaml
+strip_comments "$workdir/na-certs.yaml" "$workdir/na-certs.stripped.yaml"
+assert_contains "$workdir/na-certs.stripped.yaml" "cert-manager mode issues the CA into caSecret" \
+	"kind: Certificate" \
+	"name: setec-nodeagent-ca" \
+	"isCA: true" \
+	"secretName: setec-nodeagent-ca"
+assert_contains "$workdir/na-certs.stripped.yaml" "a namespaced CA Issuer reads caSecret" \
+	"kind: Issuer" \
+	"    secretName: setec-nodeagent-ca"
+# Both leaves must chain to the CA Issuer, never to the bootstrap issuer.
+leaf_refs="$(awk '/^kind: Certificate/ {c=1} /^---/ {c=0} c && /^  issuerRef:/ {r=1; next} r && /^    (kind|name):/ {sub(/^ +/, ""); print; next} r && !/^    / {r=0}' "$workdir/na-certs.stripped.yaml" | sort | uniq -c | sed 's/^ *//')"
+if [ "$leaf_refs" = "$(printf '1 kind: ClusterIssuer\n2 kind: Issuer\n1 name: selfsigned\n2 name: setec-nodeagent-ca')" ]; then
+	pass "both leaves chain to the CA Issuer and only the CA uses the bootstrap issuer"
+else
+	fail "leaf issuerRefs are wrong (want two Issuer/setec-nodeagent-ca, one bootstrap for the CA); got: $(printf '%s' "$leaf_refs" | tr '\n' ';')"
+fi
+
+# Every Secret a workload mounts for the channel must be one the chart issues.
+render "$workdir/na-operator.yaml" "${SNAP_CM[@]}" --show-only templates/deployment.yaml
+render "$workdir/na-agent.yaml" "${SNAP_CM[@]}" --show-only templates/daemonset.yaml
+issued="$(sed 's/[[:space:]]*#.*$//' "$workdir/na-certs.yaml" | awk '/^  secretName:/ {print $2}' | sort -u)"
+for f in na-operator na-agent; do
+	strip_comments "$workdir/$f.yaml" "$workdir/$f.stripped.yaml"
+	mounted="$(awk '/^        - name: nodeagent-(tls|ca)$/ {m=1; next} m && /secretName:/ {print $2; m=0}' "$workdir/$f.stripped.yaml" | sort -u)"
+	missing=""
+	for s in $mounted; do
+		printf '%s\n' "$issued" | grep -qx "$s" || missing="$missing $s"
+	done
+	if [ -n "$mounted" ] && [ -z "$missing" ]; then
+		pass "$f mounts only Secrets the chart issues ($(printf '%s' "$mounted" | tr '\n' ' '))"
+	else
+		fail "$f mounts a Secret the chart does not issue:${missing:- (no nodeagent mounts found)}"
+	fi
+	if awk '/^        - name: nodeagent-ca$/ {m=1; next} m && /^        - name:/ {exit 1} m && /key: ca.crt/ {found=1} END {exit !found}' "$workdir/$f.stripped.yaml"; then
+		pass "$f mounts only ca.crt from the CA Secret"
+	else
+		fail "$f must mount only the ca.crt item of the CA Secret (it also holds the CA key)"
+	fi
+done
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	"${SNAP_CM[@]}" --set snapshots.mTLS.caProvided=true \
+	>/dev/null 2>&1; then
+	fail "caProvided=true with certManager.enabled=true must fail the render (the knob would be ignored)"
+else
+	pass "caProvided=true with certManager.enabled=true fails the render"
+fi
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set snapshots.enabled=true --set nodeAgent.enabled=true \
+	>/dev/null 2>&1; then
+	fail "snapshots without cert-manager and without caProvided must fail the render"
+else
+	pass "snapshots without cert-manager and without caProvided fails the render"
+fi
+
 # --- RuntimeClass scheduling.tolerations ------------------------------------
 # The RuntimeClass admission controller injects scheduling.tolerations into
 # every Pod naming the class, which is the ONLY path that reaches the per-run
