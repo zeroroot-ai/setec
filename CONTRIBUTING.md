@@ -76,6 +76,12 @@ Examples:
 Keep the subject under 72 characters. Explain the motivation in the
 body if the change is non-obvious.
 
+If your change undoes a commit that is already on `main`, say so in a
+commit message. Use the line `git revert` writes (`This reverts commit
+<sha>.`) or a `Reverts: <sha>` trailer. CI compares every PR diff with
+the last 30 days of `main` by content and fails a PR that reverts a
+merged commit without naming it (`scripts/check-silent-revert.sh`).
+
 ## Pull request process
 
 1. Fork the repository and create a topic branch from `main`.

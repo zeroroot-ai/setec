@@ -464,6 +464,31 @@ jobs:
       - name: Guard the tree
         run: bash scripts/check-kata-pin.sh
 
+  no-silent-revert:
+    name: A PR that undoes a merged commit says so
+    # Runs on both lanes. On pull_request HEAD is the PR merge ref; on
+    # merge_group it is the queue's merge commit. Either way the diff
+    # against the merge-base with main is what would land, and that diff
+    # is compared, by content, against the last 30 days of main commits.
+    # A revert is fine when a commit message carries `Reverts: <sha>`
+    # (setec#13).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Mutation-test the guard
+        run: bash scripts/__tests__/check-silent-revert.test.sh
+
+      - name: Guard the diff
+        run: bash scripts/check-silent-revert.sh
+
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
     if: github.event_name == 'pull_request'
@@ -713,6 +738,7 @@ jobs:
       - flag-smoke-test
       - no-marker-in-source
       - kata-pin
+      - no-silent-revert
       - no-insecure-flag-in-chart
       - no-unimplemented-in-frontend
       - examples-build
