@@ -37,6 +37,15 @@ Isolation holds per ADR-0005: a session VM + its workspace + checkpoints serve
 **one session**, and are wiped at session end; intra-session suspend/resume is
 permitted, cross-session/tenant reuse is not.
 
+**A session's boot command is a keepalive, not the work (setec#7).** A
+session's microVM lives as long as its boot process, so a session that boots
+the caller's command ends when that command does. `spec.command` is optional
+for a session. When it is empty the operator boots `setec-keepalive`, a static
+binary it installs into the Pod with an init container. The keepalive reaps
+orphans and exits only on teardown. Work reaches the session through `Exec`.
+An ephemeral Sandbox still requires a command: that one command is its whole
+life.
+
 ## Consequences
 
 - New: a session lifecycle mode, a durable per-session workspace volume

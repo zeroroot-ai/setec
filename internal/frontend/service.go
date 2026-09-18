@@ -166,8 +166,22 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
-	if len(req.GetCommand()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "command must have at least one entry")
+
+	// The lifecycle decides whether a command is required, so it is
+	// mapped first. An ephemeral Sandbox's command is its whole life. A
+	// session may omit it: the operator boots the setec keepalive and
+	// work arrives through Exec (setec#7).
+	var lifecycle *setecv1alpha1.Lifecycle
+	if lc := req.GetLifecycle(); lc != nil {
+		spec, err := lifecycleFromRequest(lc)
+		if err != nil {
+			return nil, err
+		}
+		lifecycle = spec
+	}
+	if len(req.GetCommand()) == 0 && (lifecycle == nil || lifecycle.Mode != setecv1alpha1.LifecycleModeSession) {
+		return nil, status.Error(codes.InvalidArgument,
+			"command must have at least one entry; only lifecycle.mode=session may omit it")
 	}
 
 	sb := &setecv1alpha1.Sandbox{
@@ -206,13 +220,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 			})
 		}
 	}
-	if lc := req.GetLifecycle(); lc != nil {
-		spec, err := lifecycleFromRequest(lc)
-		if err != nil {
-			return nil, err
-		}
-		sb.Spec.Lifecycle = spec
-	}
+	sb.Spec.Lifecycle = lifecycle
 	for k, v := range req.GetEnv() {
 		sb.Spec.Env = append(sb.Spec.Env, corev1.EnvVar{Name: k, Value: v})
 	}

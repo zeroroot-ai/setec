@@ -1,7 +1,8 @@
 name: images
 
 # Builds + pushes setec, setec-node-agent, setec-frontend,
-# setec-runtime-agent, setec-guest-agent, and setec-installer to GHCR.
+# setec-runtime-agent, setec-guest-agent, setec-keepalive, and
+# setec-installer to GHCR.
 # Adopts the org reusable image-build workflow (slice 1.2, .github#47).
 #
 # All service images share a single Dockerfile; CMD build-arg selects the
@@ -13,6 +14,9 @@ name: images
 # setec-guest-agent is not a runnable service image: it exists so microVM
 # rootfs builders can COPY the static binary out of it (the in-guest half
 # of the entropy reseed on snapshot restore, setec#72).
+# setec-keepalive is the boot command of a session Sandbox that declares
+# no spec.command (setec#7): the operator runs it as an init container that
+# installs the static binary into a shared volume.
 # The smoke-test gate and draft GitHub Release creation live in release.yml.
 # Example Dockerfiles under examples/ are NOT published as releases (skipped).
 #
@@ -193,6 +197,30 @@ jobs:
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
         CMD=setec-guest-agent
+
+  setec-keepalive:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@1366fb5a29590e522bf5a74308f55bb39a4edb56 # v0.5.1
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-keepalive
+      component_path: .
+      dockerfile_path: Dockerfile
+      image_name: ghcr.io/zeroroot-ai/setec-keepalive
+      tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        CMD=setec-keepalive
 
   setec-installer:
     needs: kata-pin

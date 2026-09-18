@@ -52,8 +52,16 @@ var (
 	// ErrMissingImage is returned when Sandbox.spec.image is empty.
 	ErrMissingImage = errors.New("podspec: sandbox.spec.image is required")
 
-	// ErrMissingCommand is returned when Sandbox.spec.command is empty.
-	ErrMissingCommand = errors.New("podspec: sandbox.spec.command is required and must have at least one entry")
+	// ErrMissingCommand is returned when an ephemeral Sandbox's
+	// spec.command is empty. A session may omit it (see
+	// BuildOptions.KeepaliveImage).
+	ErrMissingCommand = errors.New("podspec: sandbox.spec.command is required for an ephemeral sandbox and must have at least one entry")
+
+	// ErrNoKeepaliveImage is returned when a session Sandbox omits
+	// spec.command and no keepalive image is configured to boot in its
+	// place. The operator refuses the Pod rather than booting a command
+	// it does not have.
+	ErrNoKeepaliveImage = errors.New("podspec: session sandbox has no spec.command and no keepalive image is configured")
 
 	// ErrInvalidVCPU is returned when Sandbox.spec.resources.vcpu is less
 	// than 1. The CRD validation caps the upper bound; we only double-check
@@ -106,7 +114,33 @@ type BuildOptions struct {
 	// Sandbox's limit for that resource. Nil keeps requests equal to
 	// limits.
 	Requests *setecv1alpha1.ResourceRequests
+
+	// KeepaliveImage is the image that carries the static setec-keepalive
+	// binary (cmd/setec-keepalive). A session Sandbox with no
+	// spec.command boots that binary instead (setec#7): an init container
+	// from this image installs it into a shared volume, and the workload
+	// container runs it as its command. Empty is an error for such a
+	// Sandbox and is ignored for every other one.
+	KeepaliveImage string
 }
+
+// Keepalive injection for a session Sandbox with no spec.command.
+const (
+	// KeepaliveInitContainerName is the init container that installs the
+	// keepalive binary into the shared volume.
+	KeepaliveInitContainerName = "setec-keepalive"
+
+	// keepaliveVolumeName is the emptyDir the init container writes and
+	// the workload container reads.
+	keepaliveVolumeName = "setec-keepalive"
+
+	// keepaliveMountPath is where both containers see that volume.
+	keepaliveMountPath = "/setec"
+
+	// KeepalivePath is the workload command a session boots when it
+	// declares none. The file name matches cmd/setec-keepalive.
+	KeepalivePath = keepaliveMountPath + "/setec-keepalive"
+)
 
 // Hardening constants applied to every Sandbox Pod.
 const (
@@ -225,6 +259,14 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		BlockOwnerDeletion: &bod,
 	}
 
+	// A session with no command boots the keepalive (setec#7). The
+	// decision is made once here so the command, the mount and the init
+	// container cannot disagree.
+	usesKeepalive := sb.Spec.IsSession() && len(sb.Spec.Command) == 0
+	if usesKeepalive && opts.KeepaliveImage == "" {
+		return nil, ErrNoKeepaliveImage
+	}
+
 	container := corev1.Container{
 		Name:      ContainerName,
 		Image:     sb.Spec.Image,
@@ -246,6 +288,15 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 				Add:  append([]corev1.Capability(nil), sandboxCapabilities...),
 			},
 		},
+	}
+
+	if usesKeepalive {
+		container.Command = []string{KeepalivePath}
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      keepaliveVolumeName,
+			MountPath: keepaliveMountPath,
+			ReadOnly:  true,
+		})
 	}
 
 	rcName := effectiveRCName
@@ -279,6 +330,16 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			}},
 		},
+	}
+
+	if usesKeepalive {
+		pod.Spec.InitContainers = []corev1.Container{keepaliveInstaller(opts.KeepaliveImage)}
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: keepaliveVolumeName,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+				SizeLimit: resource.NewQuantity(16<<20, resource.BinarySI),
+			}},
+		})
 	}
 
 	// Session lifecycle: mount the durable workspace PVC at /workspace.
@@ -418,7 +479,7 @@ func validate(sb *setecv1alpha1.Sandbox, runtimeClassName string) error {
 	if sb.Spec.Image == "" {
 		return ErrMissingImage
 	}
-	if len(sb.Spec.Command) == 0 {
+	if len(sb.Spec.Command) == 0 && !sb.Spec.IsSession() {
 		return ErrMissingCommand
 	}
 	if sb.Spec.Resources.VCPU < 1 {
@@ -458,6 +519,34 @@ func buildResourceRequirements(r setecv1alpha1.Resources, req *setecv1alpha1.Res
 	return corev1.ResourceRequirements{
 		Requests: requests,
 		Limits:   limits,
+	}
+}
+
+// keepaliveInstaller is the init container that copies the static
+// keepalive binary into the shared volume. It carries the same hardening
+// as the workload container and no capabilities: it reads its own
+// executable and writes one file. Requests equal limits, so a class with
+// no reservation keeps the Pod's Guaranteed QoS.
+func keepaliveInstaller(image string) corev1.Container {
+	res := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("50m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+	return corev1.Container{
+		Name:  KeepaliveInitContainerName,
+		Image: image,
+		Args:  []string{"--install", keepaliveMountPath},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      keepaliveVolumeName,
+			MountPath: keepaliveMountPath,
+		}},
+		Resources: corev1.ResourceRequirements{Requests: res, Limits: res.DeepCopy()},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: new(false),
+			Privileged:               new(false),
+			ReadOnlyRootFilesystem:   new(true),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
 	}
 }
 

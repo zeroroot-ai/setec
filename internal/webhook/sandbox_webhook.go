@@ -165,6 +165,17 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 		}
 	}
 
+	// (0b) An ephemeral Sandbox's one command is its whole life
+	// (ADR-0006), so it must have one. A session may leave it empty:
+	// the operator boots the setec keepalive and work arrives through
+	// Exec (setec#7). The CRD no longer requires the field, so this is
+	// where the ephemeral rule is enforced at admission.
+	if len(sb.Spec.Command) == 0 && !sb.Spec.IsSession() {
+		errs = append(errs, fmt.Errorf(
+			"spec.command must have at least one entry for spec.lifecycle.mode=%q; only a session may leave it empty",
+			sb.Spec.EffectiveLifecycleMode()))
+	}
+
 	// (0a) Suspend is a session-checkpoint concept (setec#194): an
 	// ephemeral Sandbox has nothing to resume into, and a session
 	// whose class ships no checkpoint store could only "suspend" by

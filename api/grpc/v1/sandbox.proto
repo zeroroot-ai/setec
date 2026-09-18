@@ -133,7 +133,10 @@ message LaunchRequest {
   // OCI reference the microVM will run. Required.
   string image = 2;
 
-  // Command executed inside the microVM. At least one entry required.
+  // Command executed inside the microVM. Required for the ephemeral
+  // lifecycle. A session (lifecycle.mode = "session") may leave it
+  // empty: the operator then boots the setec keepalive, so the session
+  // outlives every command sent through Exec.
   repeated string command = 3;
 
   // Environment variables exposed to the workload. Optional.

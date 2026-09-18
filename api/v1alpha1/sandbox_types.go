@@ -346,9 +346,15 @@ type SandboxSpec struct {
 
 	// Command is the entrypoint executed inside the microVM. All arguments
 	// are passed verbatim; no shell interpretation occurs.
-	// +kubebuilder:validation:MinItems=1
-	// +required
-	Command []string `json:"command"`
+	//
+	// Required for the ephemeral lifecycle: that one command is the whole
+	// life of the Sandbox (ADR-0006). A session may leave it empty. The
+	// operator then boots the setec keepalive, a process that reaps
+	// orphans and never exits on its own, so the session outlives every
+	// command sent through Exec. The keepalive never depends on a shell
+	// or a sleep binary in the image.
+	// +optional
+	Command []string `json:"command,omitempty"`
 
 	// Env is an optional set of environment variables made available to
 	// the workload. Values follow the standard Kubernetes EnvVar schema.

@@ -121,21 +121,22 @@ func defaultReservedCIDRs() []string {
 // nolint:gocyclo
 func main() {
 	var (
-		metricsBindAddr     string
-		probeBindAddr       string
-		enableLeaderElect   bool
-		runtimeClassName    string
-		runtimesConfig      string
-		nodeSelectorLabel   string
-		multiTenancyEnabled bool
-		tenantLabelKey      string
-		otlpEndpoint        string
-		otlpInsecure        bool
-		otlpCAFile          string
-		otlpSPIFFESocket    string
-		otlpSPIFFEServerIDs []string
-		webhookEnabled      bool
-		webhookCertDir      string
+		metricsBindAddr       string
+		probeBindAddr         string
+		enableLeaderElect     bool
+		runtimeClassName      string
+		runtimesConfig        string
+		nodeSelectorLabel     string
+		multiTenancyEnabled   bool
+		tenantLabelKey        string
+		sessionKeepaliveImage string
+		otlpEndpoint          string
+		otlpInsecure          bool
+		otlpCAFile            string
+		otlpSPIFFESocket      string
+		otlpSPIFFEServerIDs   []string
+		webhookEnabled        bool
+		webhookCertDir        string
 
 		// Sandbox egress posture. Both lists are validated at startup;
 		// there is no runtime path that degrades to unrestricted egress.
@@ -169,6 +170,9 @@ func main() {
 		"Label key Nodes must carry to be considered Kata-capable. "+
 			"Used by the startup prerequisite check only; scheduling uses the RuntimeClass.")
 	// Phase 2 flags. Zero values reproduce Phase 1 behaviour exactly.
+	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
+		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
+			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
@@ -456,6 +460,7 @@ func main() {
 		Coordinator:           coordinator,
 		NetPol:                netpolCfg,
 		NamespaceBaselineDeny: nsBaselineDeny,
+		KeepaliveImage:        sessionKeepaliveImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)

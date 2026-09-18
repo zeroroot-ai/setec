@@ -562,6 +562,29 @@ else
 	pass "snapshots without cert-manager and without caProvided fails the render"
 fi
 
+# ---------------------------------------------------------------------------
+# Session keepalive image reaches the operator (setec#7).
+#
+# A session Sandbox with no spec.command boots the setec keepalive, which
+# the operator pulls from this image. Without the flag the operator refuses
+# every such Sandbox, so a chart that drops the argument turns a documented
+# default into a Pod-create failure.
+# ---------------------------------------------------------------------------
+note "session keepalive image (setec#7)"
+render "$workdir/keepalive.yaml" --show-only templates/deployment.yaml
+strip_comments "$workdir/keepalive.yaml" "$workdir/keepalive.stripped.yaml"
+assert_contains "$workdir/keepalive.stripped.yaml" "operator receives the session keepalive image" \
+	"--session-keepalive-image=ghcr.io/zeroroot-ai/setec-keepalive:"
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set sessionKeepalive.image.repository="" \
+	>/dev/null 2>&1; then
+	fail "an empty sessionKeepalive.image.repository must fail the render"
+else
+	pass "an empty sessionKeepalive.image.repository fails the render"
+fi
+
 # --- RuntimeClass scheduling.tolerations ------------------------------------
 # The RuntimeClass admission controller injects scheduling.tolerations into
 # every Pod naming the class, which is the ONLY path that reaches the per-run
