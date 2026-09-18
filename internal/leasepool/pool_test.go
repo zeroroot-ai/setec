@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // fakeBackend is an in-memory Backend. Launched sandboxes become ready
@@ -24,6 +23,11 @@ type fakeBackend struct {
 	destroys   atomic.Int64
 	launchErr  error
 	readyAfter map[string]int // id -> remaining not-ready polls
+	// launchGate, when set, blocks every Launch until it is closed and
+	// reports each arrival on launchArrived first. Tests use it to hold
+	// concurrent Replenish calls at the backend boundary.
+	launchGate    chan struct{}
+	launchArrived chan struct{}
 }
 
 func newFakeBackend() *fakeBackend {
@@ -37,6 +41,10 @@ func newFakeBackend() *fakeBackend {
 func (f *fakeBackend) Launch(_ context.Context, tmpl PoolTemplate) (SandboxRef, error) {
 	if f.launchErr != nil {
 		return SandboxRef{}, f.launchErr
+	}
+	if f.launchGate != nil {
+		f.launchArrived <- struct{}{}
+		<-f.launchGate
 	}
 	f.launches.Add(1)
 	n := f.seq.Add(1)
@@ -124,12 +132,13 @@ func TestLeaseFastPathConsumesWarmEntryAndReplenishes(t *testing.T) {
 		t.Fatalf("lease result missing ids: %+v", res)
 	}
 
-	// The consumed slot is replenished asynchronously; wait for the pool
-	// to return to target.
-	waitFor(t, func() bool {
-		ready, _, leased := m.Status("fast")
-		return ready == 2 && leased == 1
-	}, "pool to replenish to target after lease")
+	// The consumed slot is replenished in the background. Drain that
+	// goroutine, then assert the pool is back at target.
+	m.bg.Wait()
+	ready, _, leased := m.Status("fast")
+	if ready != 2 || leased != 1 {
+		t.Fatalf("want ready=2 leased=1 after lease, got ready=%d leased=%d", ready, leased)
+	}
 }
 
 func TestLeaseFailIfEmptyReturnsErrPoolEmpty(t *testing.T) {
@@ -189,11 +198,88 @@ func TestReleaseDestroysSandboxAndReplenishes(t *testing.T) {
 	if _, _, _, err := m.LeaseInfo(res.LeaseID); !errors.Is(err, ErrLeaseNotFound) {
 		t.Fatalf("released lease should be unknown, got %v", err)
 	}
-	// Pool replenishes back to target.
-	waitFor(t, func() bool {
-		ready, _, leased := m.Status("fast")
-		return ready == 1 && leased == 0
-	}, "pool to replenish after release")
+	// Lease and Release each spawned a background replenish. Drain both,
+	// then assert the pool is back at target: exactly one entry, not two.
+	m.bg.Wait()
+	ready, _, leased := m.Status("fast")
+	if ready != 1 || leased != 0 {
+		t.Fatalf("want ready=1 leased=0 after release, got ready=%d leased=%d", ready, leased)
+	}
+	if got := b.launches.Load(); got != 2 {
+		t.Fatalf("want 2 launches in total (initial fill + one refill), got %d", got)
+	}
+}
+
+// TestConcurrentReplenishFillsEachSlotOnce holds every Launch at the
+// backend boundary and fires several Replenish calls at a pool one slot
+// short. Only one of them may reach the backend. Before the launching
+// reservation, every call computed the same shortfall and the pool
+// over-filled, which is what made TestReleaseDestroysSandboxAndReplenishes
+// time out under full-suite load (setec#11).
+func TestConcurrentReplenishFillsEachSlotOnce(t *testing.T) {
+	t.Parallel()
+	const callers = 8
+	b := newFakeBackend()
+	b.launchGate = make(chan struct{})
+	b.launchArrived = make(chan struct{}, callers)
+	m := NewManager(b, Hooks{})
+	m.Register(tmplFor("fast", 1))
+
+	done := make(chan error, callers)
+	for range callers {
+		go func() { done <- m.Replenish(context.Background(), "fast") }()
+	}
+
+	// One caller reaches the backend and blocks on the gate.
+	<-b.launchArrived
+	// The other callers must return without launching. A second arrival
+	// at the backend is the over-fill.
+	for returned := 0; returned < callers-1; {
+		select {
+		case <-b.launchArrived:
+			t.Fatalf("a second Replenish reached the backend for the same slot")
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Replenish: %v", err)
+			}
+			returned++
+		}
+	}
+	close(b.launchGate)
+	if err := <-done; err != nil {
+		t.Fatalf("gated Replenish: %v", err)
+	}
+
+	ready, target, leased := m.Status("fast")
+	if ready != 1 || target != 1 || leased != 0 {
+		t.Fatalf("want ready=1 target=1 leased=0, got ready=%d target=%d leased=%d", ready, target, leased)
+	}
+	if got := b.launches.Load(); got != 1 {
+		t.Fatalf("want exactly 1 launch, got %d", got)
+	}
+}
+
+// TestReplenishReleasesReservationOnLaunchError makes sure a failed
+// Launch gives its slot back, so the next Replenish retries it instead
+// of treating the slot as filled forever.
+func TestReplenishReleasesReservationOnLaunchError(t *testing.T) {
+	t.Parallel()
+	b := newFakeBackend()
+	b.launchErr = errors.New("boom")
+	m := NewManager(b, Hooks{})
+	m.Register(tmplFor("fast", 1))
+
+	if err := m.Replenish(context.Background(), "fast"); err == nil {
+		t.Fatalf("Replenish must report the launch error")
+	}
+	b.launchErr = nil
+	if err := m.Replenish(context.Background(), "fast"); err != nil {
+		t.Fatalf("Replenish after error: %v", err)
+	}
+	ready, _, _ := m.Status("fast")
+	if ready != 1 {
+		t.Fatalf("want the slot filled on retry, got ready=%d", ready)
+	}
 }
 
 func TestReleaseUnknownLeaseIsNoop(t *testing.T) {
@@ -304,19 +390,25 @@ func TestHooksFireOnLeaseAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lease: %v", err)
 	}
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return lastLeased == 1
-	}, "hook to observe a lease")
+	// Lease notifies the hook before it returns; the background refill
+	// notifies again with the same leased count once its entry is ready.
+	m.bg.Wait()
+	mu.Lock()
+	gotReady, gotLeased := lastReady, lastLeased
+	mu.Unlock()
+	if gotLeased != 1 || gotReady != 1 {
+		t.Fatalf("after lease want hook ready=1 leased=1, got ready=%d leased=%d", gotReady, gotLeased)
+	}
 	if err := m.Release(context.Background(), res.LeaseID); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return lastLeased == 0 && lastReady >= 0
-	}, "hook to observe a release")
+	m.bg.Wait()
+	mu.Lock()
+	gotReady, gotLeased = lastReady, lastLeased
+	mu.Unlock()
+	if gotLeased != 0 || gotReady != 1 {
+		t.Fatalf("after release want hook ready=1 leased=0, got ready=%d leased=%d", gotReady, gotLeased)
+	}
 }
 
 // --- helpers ---
@@ -331,16 +423,4 @@ func mustReplenish(t *testing.T, m *Manager, class string) {
 	if err := m.Replenish(context.Background(), class); err != nil {
 		t.Fatalf("Replenish(%s): %v", class, err)
 	}
-}
-
-func waitFor(t *testing.T, cond func() bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
