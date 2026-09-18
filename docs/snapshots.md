@@ -50,6 +50,19 @@ The node-agent DaemonSet must also be enabled
 (`nodeAgent.enabled=true`) because snapshot persistence happens on
 the node where the VM lives.
 
+With `certManager.enabled: true` the chart issues the whole mTLS
+channel from one trust root. The `issuerRef` above is the bootstrap
+issuer that signs a CA `Certificate` into `caSecret`. A namespaced
+`Issuer` of kind `ca` reads that Secret and issues both leaves, so the
+operator and the node-agent verify each other against one CA. The
+workloads mount only the `ca.crt` key of `caSecret`. The CA private key
+stays in the Secret.
+
+With `certManager.enabled: false` you create all three Secrets out of
+band from one CA and set `caProvided: true` to confirm the CA exists.
+The chart refuses to render without that confirmation, because a
+missing non-optional Secret wedges the pods with no useful error.
+
 ## Creating a snapshot
 
 Set `spec.snapshot.create=true` with a `spec.snapshot.name` on any

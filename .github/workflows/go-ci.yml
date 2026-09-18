@@ -324,12 +324,14 @@ jobs:
             --set snapshots.mTLS.caProvided=true \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
 
-          # The chart does not create snapshots.mTLS.caSecret (setec#320), so
-          # rendering this path asserts caProvided=true — i.e. "an operator has
-          # supplied the CA out of band". Without it the chart now refuses to
-          # render rather than producing a release whose pods wedge on a missing
-          # non-optional Secret. Assert that refusal too, so the guard itself
-          # cannot rot into a no-op.
+          # With certManager.enabled=false the chart does not create
+          # snapshots.mTLS.caSecret, so rendering this path asserts
+          # caProvided=true, i.e. "an operator has supplied the CA out of
+          # band". Without it the chart refuses to render rather than
+          # producing a release whose pods wedge on a missing non-optional
+          # Secret. Assert that refusal too, so the guard itself cannot rot
+          # into a no-op. The cert-manager path (setec#14) is asserted in
+          # hack/verify-chart-security.sh.
           if helm template setec charts/setec \
                --set snapshots.enabled=true \
                --set nodeAgent.enabled=true \

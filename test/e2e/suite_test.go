@@ -325,11 +325,10 @@ func (c sessionS3Config) helmArgs() []string {
 		// Real S3 rejects path-style addressing; MinIO requires it.
 		"--set", fmt.Sprintf("snapshots.s3.pathStyle=%t", c.endpoint != ""),
 		// The operator<->node-agent channel is mTLS, and the chart's
-		// certManager path stays OFF: it issues the two leaves from a
-		// *selfsigned* ClusterIssuer, which makes each leaf its own root
-		// with no shared trust, and it never issues the CA Secret both
-		// workloads mount at all (setec#320). installChart mints all three
-		// from one CA instead — see nodeagentcert_test.go.
+		// certManager path stays OFF here: it needs the right to create
+		// an Issuer, which the ARC runner does not hold. installChart
+		// mints all three Secrets from one CA instead and confirms the
+		// CA with caProvided (see nodeagentcert_test.go).
 		"--set", "snapshots.mTLS.certManager.enabled=false",
 	}
 	if c.nodeAgentImageRepo != "" {

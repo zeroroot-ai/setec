@@ -925,20 +925,28 @@ snapshots:
     operatorCertSecret: setec-nodeagent-client-tls
     nodeAgentCertSecret: setec-nodeagent-server-tls
     caSecret: setec-nodeagent-ca
-    # -- caProvided acknowledges that caSecret exists in the release namespace.
-    # This chart does NOT create it: cert-manager mode issues only the two leaf
-    # certificates and there is no CA Issuer (setec#320). Both the operator and
-    # the node-agent mount caSecret non-optionally, so a missing one wedges the
-    # pods and surfaces as an opaque `context deadline exceeded` from
-    # `helm install --wait` rather than a useful error. Leaving this false makes
-    # the chart refuse to render instead.
+    # -- caProvided acknowledges that caSecret exists in the release namespace
+    # when certManager.enabled is false. In that mode the chart creates none
+    # of the three Secrets, and both the operator and the node-agent mount
+    # caSecret non-optionally, so a missing one wedges the pods and surfaces
+    # as an opaque `context deadline exceeded` from `helm install --wait`.
+    # Leaving this false makes the chart refuse to render instead.
     #
-    # Note a selfsigned issuer is not enough on its own: each leaf is then its
-    # own root, so the two sides do not trust each other even once the mount
-    # resolves. The CA must sign BOTH leaves.
+    # The CA must sign BOTH leaves: a leaf that is its own root cannot be
+    # verified by the other side. The workloads read only the ca.crt key of
+    # caSecret.
+    #
+    # Exclusive with certManager.enabled=true, which issues caSecret itself.
     caProvided: false
     certManager:
+      # -- enabled makes cert-manager issue the whole channel from one trust
+      # root: a self-signed CA Certificate into caSecret, a namespaced Issuer
+      # of kind ca over it, and both leaves from that Issuer. Needs
+      # cert-manager and the right to create Issuers in the release namespace.
       enabled: false
+      # -- issuerRef is the bootstrap issuer that signs the CA Certificate
+      # only. A selfsigned ClusterIssuer is the normal choice. The leaves
+      # never use it directly.
       issuerRef:
         kind: ClusterIssuer
         name: selfsigned

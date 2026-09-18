@@ -30,28 +30,24 @@ Secrets across two workloads:
 	operator  (deployment.yaml)  snapshots.mTLS.operatorCertSecret + caSecret
 	node-agent (daemonset.yaml)  snapshots.mTLS.nodeAgentCertSecret + caSecret
 
-None of the mounts is optional, and the chart creates only the two LEAF
-Secrets — and only when snapshots.mTLS.certManager.enabled is on. `caSecret`
-(setec-nodeagent-ca) is mounted by both workloads and produced by no values
-combination at all, so the operator Pod never starts and the install dies on
-the rollout wait:
+None of the mounts is optional. With snapshots.mTLS.certManager.enabled the
+chart issues all three from one trust root (setec#14): a CA Certificate into
+caSecret, a namespaced Issuer over it, and both leaves from that Issuer.
+Before that fix the chart issued only the two leaves, each from a selfsigned
+ClusterIssuer, and never produced caSecret, so the operator Pod never started
+and the install died on the rollout wait (setec#320):
 
 	INSTALLATION FAILED: resource Deployment/... not ready.
 	status: InProgress, message: Available: 0/2
 
-That is setec#320, and it is a CHART defect that the chart has to fix (a CA
-Certificate plus a namespaced Issuer both leaves are issued from, so the two
-sides share a trust root — issuing both leaves straight from a *selfsigned*
-ClusterIssuer, which is what the chart does today, makes each leaf its own
-root and the channel cannot verify even once caSecret exists).
-
-This file does NOT fix that. It is the suite's own way around it, and it
-exists because the chart fix cannot be exercised from here: adding an Issuer
-to the chart needs `create issuers.cert-manager.io` on the ARC runner's
-ServiceAccount, which it does not have and which only a change to the
-cluster's Argo GitOps tree can grant. What the runner CAN do is create Secrets in the namespace it
-owns — so the suite mints one CA, issues both leaves from it, and installs
-with certManager.enabled=false. Same trust root, no cert-manager, no new RBAC.
+This file is the suite's own path, and it stays because the chart's
+cert-manager path cannot be exercised from here: an Issuer needs
+`create issuers.cert-manager.io` on the ARC runner's ServiceAccount, which it
+does not have and which only a change to the cluster's Argo GitOps tree can
+grant. What the runner CAN do is create Secrets in the namespace it owns. So
+the suite mints one CA, issues both leaves from it, and installs with
+certManager.enabled=false and caProvided=true. Same trust root, no
+cert-manager, no new RBAC.
 
 This is the pattern webhookcert_test.go already uses for the admission
 webhook's serving cert, for the same reason.
