@@ -116,10 +116,19 @@ type Manager struct {
 	// idFn generates lease ids; overridable in tests for determinism.
 	idFn func() string
 
+	// bg tracks the background replenish goroutines Lease and Release
+	// spawn, so a caller can drain them (tests wait on it to make the
+	// assertion about the pool's state deterministic).
+	bg sync.WaitGroup
+
 	mu        sync.Mutex
 	templates map[string]PoolTemplate // class -> template
 	pools     map[string][]entry      // class -> warm entries
 	leases    map[string]*lease       // lease id -> lease
+	// launching counts the Launch calls in flight per class. Replenish
+	// reserves its shortfall here under mu before it calls the backend,
+	// so two concurrent Replenish calls never both launch for one slot.
+	launching map[string]int
 }
 
 // NewManager builds a pool Manager over the given Backend.
@@ -131,6 +140,7 @@ func NewManager(b Backend, hooks Hooks) *Manager {
 		templates: map[string]PoolTemplate{},
 		pools:     map[string][]entry{},
 		leases:    map[string]*lease{},
+		launching: map[string]int{},
 	}
 }
 
@@ -172,7 +182,7 @@ func (m *Manager) Lease(ctx context.Context, sandboxClass string, failIfEmpty bo
 		lr := m.recordLeaseLocked(sandboxClass, ref)
 		m.mu.Unlock()
 		// Refill the slot we just consumed.
-		go m.replenishAsync(sandboxClass)
+		m.bg.Go(func() { m.replenishAsync(sandboxClass) })
 		return LeaseResult{LeaseID: lr.id, Ref: ref, Warm: true}, nil
 	}
 	m.mu.Unlock()
@@ -194,7 +204,7 @@ func (m *Manager) Lease(ctx context.Context, sandboxClass string, failIfEmpty bo
 	m.mu.Lock()
 	lr := m.recordLeaseLocked(sandboxClass, ref)
 	m.mu.Unlock()
-	go m.replenishAsync(sandboxClass)
+	m.bg.Go(func() { m.replenishAsync(sandboxClass) })
 	return LeaseResult{LeaseID: lr.id, Ref: ref, Warm: false}, nil
 }
 
@@ -233,7 +243,7 @@ func (m *Manager) Release(ctx context.Context, leaseID string) error {
 	if err := m.backend.Destroy(ctx, l.ref); err != nil {
 		return fmt.Errorf("destroy leased sandbox: %w", err)
 	}
-	go m.replenishAsync(class)
+	m.bg.Go(func() { m.replenishAsync(class) })
 	return nil
 }
 
@@ -248,21 +258,28 @@ func (m *Manager) Replenish(ctx context.Context, sandboxClass string) error {
 		return fmt.Errorf("leasepool: class %q not registered", sandboxClass)
 	}
 	m.pruneDeadLocked(ctx, sandboxClass)
-	have := len(m.pools[sandboxClass])
+	// Count the slots another Replenish is already filling, and reserve
+	// this call's shortfall before releasing mu. Without the reservation
+	// two concurrent calls (Lease's refill and Release's refill, or the
+	// Run loop's tick) both see the same shortfall and over-fill the pool.
+	have := len(m.pools[sandboxClass]) + m.launching[sandboxClass]
 	want := tmpl.Target
-	shortfall := want - have
+	shortfall := max(want-have, 0)
+	m.launching[sandboxClass] += shortfall
 	m.mu.Unlock()
 
 	var errs []error
 	for range shortfall {
 		ref, err := m.backend.Launch(ctx, tmpl)
+		m.mu.Lock()
+		m.launching[sandboxClass]--
+		if err == nil {
+			m.pools[sandboxClass] = append(m.pools[sandboxClass], entry{ref: ref, ready: false})
+		}
+		m.mu.Unlock()
 		if err != nil {
 			errs = append(errs, err)
-			continue
 		}
-		m.mu.Lock()
-		m.pools[sandboxClass] = append(m.pools[sandboxClass], entry{ref: ref, ready: false})
-		m.mu.Unlock()
 	}
 
 	// Promote warming entries that have become ready.
