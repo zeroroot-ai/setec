@@ -148,6 +148,18 @@ var (
 	imageRepo             string
 	runtimeAgentImageRepo string
 
+	// installerEnabled turns the portable node installer DaemonSet on in
+	// the base install (SETEC_E2E_INSTALLER=1), with the same tag and pull
+	// policy as every other component and installerImageRepo as its
+	// repository. On a kata-deploy node the installer supplies the
+	// devmapper thin-pool and snapshotter the fc handler asks for and
+	// nobody else configures (setec#9); without it every kata-fc Sandbox
+	// there dies in containerd with "snapshotter must be provided to
+	// unpack". Off by default because the image has to exist in the
+	// cluster's runtime: the chain-6 kind job builds the operator only.
+	installerEnabled   bool
+	installerImageRepo string
+
 	// webhookEnabled controls whether the throwaway release installs the
 	// admission webhook. The ValidatingWebhookConfiguration is
 	// CLUSTER-scoped with failurePolicy=Fail, so on a SHARED cluster a run
@@ -199,6 +211,8 @@ func TestMain(m *testing.M) {
 	imagePullPolicy = envOr("SETEC_E2E_IMAGE_PULL_POLICY", "Never")
 	imageRepo = os.Getenv("SETEC_E2E_IMAGE_REPO")
 	runtimeAgentImageRepo = os.Getenv("SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO")
+	installerEnabled = os.Getenv("SETEC_E2E_INSTALLER") == "1"
+	installerImageRepo = os.Getenv("SETEC_E2E_INSTALLER_IMAGE_REPO")
 	webhookEnabled = envOr("SETEC_E2E_WEBHOOK", "1") != "0"
 
 	var err error
@@ -682,12 +696,14 @@ func installChart() error {
 		"--set", fmt.Sprintf("image.pullPolicy=%s", imagePullPolicy),
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
 		"--set", fmt.Sprintf("runtimeAgent.image.pullPolicy=%s", imagePullPolicy),
-		// Node prep on the E2E host is kata-deploy-owned (preflight above
-		// requires the kata-fc RuntimeClass to pre-exist), so the portable
-		// installer DaemonSet (ADR-0003) stays out of the base install.
-		// TestInstaller_Converges opts back in behind SETEC_E2E_INSTALLER=1
-		// with the locally-built installer image.
-		"--set", "installer.enabled=false",
+		// The portable installer DaemonSet (ADR-0003) joins the base install
+		// under SETEC_E2E_INSTALLER=1. kata-deploy owns the kata-fc handler
+		// on the metal node and the installer leaves it alone, but the
+		// handler asks for the devmapper snapshotter and kata-deploy
+		// configures no thin-pool and no snapshotter (setec#9). The
+		// installer supplies exactly that, before any scenario runs, and
+		// waitForInstallReady gates on its outcome.
+		"--set", fmt.Sprintf("installer.enabled=%t", installerEnabled),
 		// The Sandbox namespace, declared to the chart (setec#10). The
 		// release binds the operator's Pod-write RBAC there and covers it
 		// with the baseline default-deny NetworkPolicy and the host-access
@@ -773,6 +789,15 @@ func installChart() error {
 	}
 	if runtimeAgentImageRepo != "" {
 		args = append(args, "--set-string", fmt.Sprintf("runtimeAgent.image.repository=%s", runtimeAgentImageRepo))
+	}
+	if installerEnabled {
+		args = append(args,
+			"--set", fmt.Sprintf("installer.image.tag=%s", imageTag),
+			"--set", fmt.Sprintf("installer.image.pullPolicy=%s", imagePullPolicy),
+		)
+		if installerImageRepo != "" {
+			args = append(args, "--set-string", fmt.Sprintf("installer.image.repository=%s", installerImageRepo))
+		}
 	}
 	args = append(args, sessionS3.helmArgs()...)
 
@@ -1033,7 +1058,12 @@ const installReadyTimeout = 10 * time.Minute
 //     itself Ready, with at least one such pod. Pods pinned to a node the
 //     cluster does not report Ready are named and excluded, out loud,
 //     rather than waited on: their node is gone, not slow;
-//   - the same for the node-agent DaemonSet when the install renders it.
+//   - the same for the node-agent DaemonSet when the install renders it,
+//     and for the installer DaemonSet when the install renders it. The
+//     installer goes first: its readiness is a deliberate outcome
+//     (converged, converged-devmapper, or a stand-down), and it may restart
+//     containerd on the metal node once, which the agent gate must not
+//     watch mid-restart.
 //
 // A DaemonSet the scheduler places on no node at all (desired 0, as on the
 // chain-6 kind cluster, which pins the runtime-agent to an unmatched
@@ -1045,7 +1075,11 @@ func waitForInstallReady(parent context.Context) error {
 	if err := waitForOperatorRollout(ctx, snapshotsEnabled()); err != nil {
 		return err
 	}
-	components := []string{"runtime-agent"}
+	var components []string
+	if installerEnabled {
+		components = append(components, "installer")
+	}
+	components = append(components, "runtime-agent")
 	if sessionS3.enabled {
 		components = append(components, "node-agent")
 	}

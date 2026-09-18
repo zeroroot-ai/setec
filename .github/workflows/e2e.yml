@@ -99,6 +99,7 @@ jobs:
       manager_image: ${{ steps.tags.outputs.manager_image }}
       runtime_agent_image: ${{ steps.tags.outputs.runtime_agent_image }}
       node_agent_image: ${{ steps.tags.outputs.node_agent_image }}
+      installer_image: ${{ steps.tags.outputs.installer_image }}
       sha_tag: ${{ steps.tags.outputs.sha_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -111,6 +112,7 @@ jobs:
           echo "manager_image=ghcr.io/zeroroot-ai/setec:${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "runtime_agent_image=ghcr.io/zeroroot-ai/setec-runtime-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "node_agent_image=ghcr.io/zeroroot-ai/setec-node-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
+          echo "installer_image=ghcr.io/zeroroot-ai/setec-installer:${sha_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -153,6 +155,35 @@ jobs:
           build-args: CMD=node-agent
           push: true
           tags: ${{ steps.tags.outputs.node_agent_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The installer is what makes a kata-deploy metal node able to boot a
+      # kata-fc microVM at all (setec#9): kata-deploy points the fc handler
+      # at the devmapper snapshotter and configures neither a thin-pool nor
+      # the snapshotter, so without the installer every kata-fc Sandbox
+      # dies in containerd with "snapshotter must be provided to unpack".
+      # Built from Dockerfile.installer with the kata pin from kata.env, as
+      # images.yml does.
+      - name: Read the kata pin
+        id: kata
+        run: |
+          set -euo pipefail
+          . ./kata.env
+          echo "version=${KATA_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${KATA_SHA256}" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push installer (Dockerfile.installer)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.installer
+          platforms: linux/amd64
+          build-args: |
+            KATA_VERSION=${{ steps.kata.outputs.version }}
+            KATA_SHA256=${{ steps.kata.outputs.sha256 }}
+          push: true
+          tags: ${{ steps.tags.outputs.installer_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -1034,6 +1065,11 @@ jobs:
           SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
           SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
           SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+          # The installer supplies the devmapper thin-pool and snapshotter
+          # the kata-deploy fc handler asks for (setec#9). Without it no
+          # kata-fc Sandbox boots on the metal node.
+          SETEC_E2E_INSTALLER: "1"
+          SETEC_E2E_INSTALLER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-installer
           # The chart's ValidatingWebhookConfiguration is CLUSTER-scoped with
           # failurePolicy=Fail. On this SHARED cluster a run that dies before
           # cleanup would fail every Sandbox write cluster-wide until a human
@@ -1361,6 +1397,13 @@ jobs:
           SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
           SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
           SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+          # The installer supplies the devmapper thin-pool and snapshotter
+          # the kata-deploy fc handler asks for (setec#9). Run 31919018724
+          # scheduled every kata-fc Sandbox onto the metal node and lost
+          # every one in containerd: "snapshotter must be provided to
+          # unpack". TestInstaller_Converges below reads the outcome.
+          SETEC_E2E_INSTALLER: "1"
+          SETEC_E2E_INSTALLER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-installer
           # The chart's ValidatingWebhookConfiguration is CLUSTER-scoped with
           # failurePolicy=Fail. On this SHARED cluster a run that dies before
           # cleanup fails every Sandbox write cluster-wide until a human
@@ -1409,7 +1452,7 @@ jobs:
           # Verified against run 31919018724, where only the first of the two
           # appears in the output.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
+            -run '^(TestEnv_KVMPresent|TestInstaller_Converges|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of

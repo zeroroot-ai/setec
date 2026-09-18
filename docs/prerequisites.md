@@ -61,9 +61,13 @@ the runtime-agent labels capable nodes. No manual node preparation is
 necessary.
 
 If your cluster already installs Kata out of band — `kata-deploy`, a
-baked node image, an administrator — the installer detects the existing
-`kata-fc` registration and stands down without touching the node. Upstream
-references for that path:
+baked node image, an administrator — the installer never touches that
+`kata-fc` registration or the Kata binaries. `kata-deploy` points the `fc`
+handler at the devmapper snapshotter and configures neither a thin-pool nor
+the snapshotter, so beside it the installer supplies exactly those two and
+reports `converged-devmapper`. Where the owner supplies both, as a baked
+node image does, the installer stands down without touching the node.
+Upstream references for that path:
 
 - Project home: <https://katacontainers.io/>
 - `kata-deploy` (DaemonSet installer, also covers `kata-qemu`):

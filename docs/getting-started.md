@@ -50,7 +50,7 @@ kubectl -n setec-system rollout status ds/setec-installer --timeout=5m
 kubectl get runtimeclass kata-fc
 ```
 
-If Kata is already installed out of band (`kata-deploy`, a baked node image), the installer detects the foreign `kata-fc` registration and stands down; set `runtimes.kata-fc.install=false` so the chart does not fight for the `RuntimeClass` either.
+If Kata is already installed out of band (`kata-deploy`, a baked node image), the installer leaves the foreign `kata-fc` registration alone. Beside `kata-deploy` it supplies only the devmapper thin-pool and snapshotter the `fc` handler asks for; beside a baked image that already has both, it stands down. Set `runtimes.kata-fc.install=false` so the chart does not fight for the `RuntimeClass` either.
 
 **kata-qemu** (the upstream `kata-deploy` installer lays down Kata binaries on every labeled node and registers both `RuntimeClasses`; the Setec installer covers `kata-fc` only):
 

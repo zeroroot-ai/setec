@@ -5,6 +5,7 @@ package probe
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -104,11 +105,41 @@ var quotedStringRe = regexp.MustCompile(`"([^"]*)"|'([^']*)'`)
 var runtimeHandlerTableRe = regexp.MustCompile(
 	`(?m)^\s*\[+[^\]\n]*?containerd\.runtimes\.(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))`)
 
+// runtimeHandlerOwnTableRe matches only the handler's OWN table header, the
+// one that closes right after the handler name. Keys that follow it belong
+// to the handler; keys under a sub-table (`.options`) do not.
+var runtimeHandlerOwnTableRe = regexp.MustCompile(
+	`^\s*\[+[^\]\n]*?containerd\.runtimes\.(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*\]`)
+
+// snapshotterKeyRe matches a `snapshotter = "<name>"` key line. Under a
+// handler's own table it names the snapshotter that handler's images are
+// unpacked with (setec#9): a name containerd has no snapshotter plugin for
+// fails every RunPodSandbox with "snapshotter must be provided to unpack".
+var snapshotterKeyRe = regexp.MustCompile(`^\s*snapshotter\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+
+// snapshotterPluginTableRe matches a snapshotter plugin table header, the
+// configuration that makes containerd load that snapshotter at all:
+//
+//	[plugins."io.containerd.snapshotter.v1.devmapper"]
+var snapshotterPluginTableRe = regexp.MustCompile(
+	`(?m)^\s*\[plugins\.(?:"io\.containerd\.snapshotter\.v1\.([A-Za-z0-9_-]+)"|'io\.containerd\.snapshotter\.v1\.([A-Za-z0-9_-]+)')\s*\]`)
+
 // containerdScan is the result of reading a node's containerd configuration.
 type containerdScan struct {
 	// Handlers is the set of CRI runtime handler names containerd is
 	// configured to accept.
 	Handlers map[string]struct{}
+
+	// HandlerSnapshotters maps a handler to the snapshotter its own table
+	// names with `snapshotter = "..."`. A handler with no such key uses
+	// containerd's default snapshotter and is absent here.
+	HandlerSnapshotters map[string]string
+
+	// Snapshotters is the set of snapshotter plugins the configuration
+	// carries a `[plugins."io.containerd.snapshotter.v1.<name>"]` table for.
+	// A handler that names a snapshotter absent from this set is a handler
+	// containerd cannot unpack an image for (setec#9).
+	Snapshotters map[string]struct{}
 
 	// Scanned lists the config files actually read, in the order read. An
 	// empty Scanned means no containerd configuration was readable at all —
@@ -137,7 +168,11 @@ type containerdScan struct {
 // understand. It mirrors the installer's own ownership check
 // (internal/installer/containerd.go).
 func ScanContainerdConfig(root string) containerdScan {
-	scan := containerdScan{Handlers: make(map[string]struct{})}
+	scan := containerdScan{
+		Handlers:            make(map[string]struct{}),
+		HandlerSnapshotters: make(map[string]string),
+		Snapshotters:        make(map[string]struct{}),
+	}
 
 	// visited is keyed by the LOCAL (FSRoot-prefixed) path, so a file reached
 	// both as a seed and as an import is read once and a cycle terminates.
@@ -180,6 +215,15 @@ func ScanContainerdConfig(root string) containerdScan {
 				}
 			}
 		}
+		for _, m := range snapshotterPluginTableRe.FindAllSubmatch(data, -1) {
+			for _, group := range m[1:] {
+				if len(group) > 0 {
+					scan.Snapshotters[string(group)] = struct{}{}
+					break
+				}
+			}
+		}
+		maps.Copy(scan.HandlerSnapshotters, handlerSnapshotters(data))
 
 		if item.depth >= maxImportDepth {
 			continue
@@ -202,6 +246,41 @@ func ScanContainerdConfig(root string) containerdScan {
 	}
 	sort.Strings(scan.Unreadable)
 	return scan
+}
+
+// handlerSnapshotters walks one config file and returns, per runtime
+// handler, the snapshotter its own table names. TOML keys belong to the
+// most recent table header, so the walk tracks which handler's table it is
+// in and forgets it at the next header of any kind.
+func handlerSnapshotters(data []byte) map[string]string {
+	out := make(map[string]string)
+	current := ""
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			current = ""
+			if m := runtimeHandlerOwnTableRe.FindStringSubmatch(line); m != nil {
+				for _, group := range m[1:] {
+					if group != "" {
+						current = group
+						break
+					}
+				}
+			}
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		if m := snapshotterKeyRe.FindStringSubmatch(line); m != nil {
+			for _, group := range m[1:] {
+				if group != "" {
+					out[current] = group
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // configFilesIn returns the *.toml and *.tmpl files directly inside dir, in a

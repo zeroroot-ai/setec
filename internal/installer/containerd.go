@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/runtimeagent/probe"
 )
 
 // runtimeFlavor describes how the node's container runtime consumes
@@ -104,71 +106,100 @@ func unitPresent(hostRoot, unit string) bool {
 	return false
 }
 
-// kata-fc ownership states.
-type ownership int
-
-const (
-	ownerNone    ownership = iota // kata-fc not registered anywhere
-	ownerSelf                     // registered by this installer
-	ownerForeign                  // registered by something else (kata-deploy, baked image, admin)
-)
-
 // kataFCRuntimeTableRe matches a kata-fc runtime registration in any
 // containerd config schema (v2 grpc.v1.cri or v3 cri.v1.runtime table
 // names, quoted or bare key).
 var kataFCRuntimeTableRe = regexp.MustCompile(`containerd\.runtimes\.("kata-fc"|kata-fc)\b`)
 
-// kataFCOwnership decides who owns the node's kata-fc registration.
-//
-//   - our drop-in / managed template block present -> ownerSelf
-//   - otherwise kata-fc registered in the effective config -> ownerForeign
-//   - otherwise -> ownerNone
-func kataFCOwnership(cfg Config, flavor runtimeFlavor) ownership {
-	switch flavor.name {
-	case flavorK3s:
+// devmapperTableRe matches the devmapper snapshotter plugin table.
+var devmapperTableRe = regexp.MustCompile(`plugins\.["']io\.containerd\.snapshotter\.v1\.devmapper["']`)
+
+// devmapperSnapshotter is the snapshotter name the kata-fc handler asks
+// containerd for. Firecracker needs a block device per container rootfs,
+// so kata-deploy's default for the fc shim is this, with the note
+// "requires pre-configuration on the user side".
+const devmapperSnapshotter = "devmapper"
+
+// convergeMode selects how much of the node this installer owns.
+type convergeMode int
+
+const (
+	// modeFull: the installer owns the whole kata-fc registration: kata
+	// payload, thin-pool, devmapper snapshotter and the runtime handler.
+	modeFull convergeMode = iota
+	// modeDevmapper: another owner (kata-deploy, a baked image, an
+	// administrator) registered the kata-fc handler and pointed it at the
+	// devmapper snapshotter, and nothing configured that snapshotter. The
+	// installer supplies the thin-pool and the snapshotter table only, and
+	// never touches the handler or the kata payload (setec#9).
+	modeDevmapper
+)
+
+// ownership is what the node's effective containerd configuration says
+// about who registered what. Both halves are read through the same
+// import-following scan the runtime-agent uses (setec#281), so a drop-in
+// in a directory nobody enumerated (kata-deploy 3.28 writes
+// /opt/kata/containerd/config.d/kata-deploy.toml) is still seen.
+type ownership struct {
+	// handlerSelf: the kata-fc handler is in this installer's managed
+	// drop-in or template block.
+	handlerSelf bool
+	// handlerForeign: the kata-fc handler is registered, and not by us.
+	handlerForeign bool
+	// handlerWantsDevmapper: the kata-fc handler's own table names the
+	// devmapper snapshotter.
+	handlerWantsDevmapper bool
+	// devmapperSelf: the devmapper snapshotter table is in our managed
+	// content.
+	devmapperSelf bool
+	// devmapperForeign: the devmapper snapshotter table exists, and not in
+	// our managed content.
+	devmapperForeign bool
+}
+
+// nodeOwnership reads the node's containerd configuration and reports
+// what this installer owns and what somebody else does.
+func nodeOwnership(cfg Config, flavor runtimeFlavor) ownership {
+	managed := managedContent(cfg, flavor)
+	scan := probe.ScanContainerdConfig(cfg.HostRoot)
+
+	var own ownership
+	own.handlerSelf = kataFCRuntimeTableRe.MatchString(managed)
+	if _, ok := scan.Handlers["kata-fc"]; ok && !own.handlerSelf {
+		own.handlerForeign = true
+	}
+	own.handlerWantsDevmapper = scan.HandlerSnapshotters["kata-fc"] == devmapperSnapshotter
+	own.devmapperSelf = devmapperTableRe.MatchString(managed)
+	if _, ok := scan.Snapshotters[devmapperSnapshotter]; ok && !own.devmapperSelf {
+		own.devmapperForeign = true
+	}
+	return own
+}
+
+// managedContent returns the containerd configuration this installer
+// wrote: the stock drop-in, or the marker-delimited block of the k3s
+// template. Empty when nothing of ours is on the node.
+func managedContent(cfg Config, flavor runtimeFlavor) string {
+	if flavor.name == flavorK3s {
 		for _, tmpl := range k3sTemplateCandidates() {
 			content, err := os.ReadFile(cfg.HostRoot + tmpl)
 			if err != nil {
 				continue
 			}
-			if strings.Contains(string(content), beginMarker) {
-				return ownerSelf
+			text := string(content)
+			begin := strings.Index(text, beginMarker)
+			end := strings.Index(text, endMarker)
+			if begin >= 0 && end > begin {
+				return text[begin:end]
 			}
 		}
-	default:
-		if _, err := os.Stat(cfg.HostRoot + stockDropinPath); err == nil {
-			return ownerSelf
-		}
+		return ""
 	}
-	// Not ours — is it anyone's? Check the rendered/main config plus any
-	// sibling files in the config dir (imports, drop-ins, templates).
-	dirs := []string{flavor.configDir, stockDropinDir}
-	if flavor.name == flavorK3s {
-		dirs = []string{flavor.configDir, flavor.configDir + "/config.toml.d"}
+	content, err := os.ReadFile(cfg.HostRoot + stockDropinPath)
+	if err != nil {
+		return ""
 	}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(cfg.HostRoot + dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".toml") && !strings.HasSuffix(name, ".tmpl") {
-				continue
-			}
-			content, err := os.ReadFile(cfg.HostRoot + dir + "/" + name)
-			if err != nil {
-				continue
-			}
-			if kataFCRuntimeTableRe.Match(content) {
-				return ownerForeign
-			}
-		}
-	}
-	return ownerNone
+	return string(content)
 }
 
 // k3sTemplateCandidates lists the template filenames k3s may render the
@@ -216,11 +247,11 @@ func runtimeTableName(version int) string {
 	return `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`
 }
 
-// registrationTOML renders the devmapper snapshotter + kata-fc runtime
-// registration for the given schema version. This is the packer AMI's
-// drop-in, kept in one place for both flavors.
-func (in *Installer) registrationTOML(version int) string {
-	table := runtimeTableName(version)
+// registrationTOML renders what this installer registers with containerd
+// for the given schema version: the devmapper snapshotter always, and the
+// kata-fc runtime handler in modeFull. It is the packer AMI's drop-in,
+// kept in one place for both flavors.
+func (in *Installer) registrationTOML(version int, mode convergeMode) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `# Firecracker needs a block device per container rootfs (no overlayfs);
 # the devmapper snapshotter carves thin volumes out of the pool that
@@ -230,7 +261,17 @@ func (in *Installer) registrationTOML(version int) string {
   pool_name = "%s"
   base_image_size = "%s"
   discard_blocks = true
-
+`, in.cfg.DevmapperRoot, in.cfg.PoolName, in.cfg.BaseImageSize)
+	if mode == modeDevmapper {
+		b.WriteString(`
+# The kata-fc runtime handler on this node is registered by another owner
+# (kata-deploy, a baked image, an administrator) and asks for the devmapper
+# snapshotter above. This installer supplies the snapshotter only.
+`)
+		return b.String()
+	}
+	table := runtimeTableName(version)
+	fmt.Fprintf(&b, `
 [%s]
   runtime_type = "io.containerd.kata-fc.v2"
   privileged_without_host_devices = true
@@ -238,20 +279,20 @@ func (in *Installer) registrationTOML(version int) string {
   snapshotter = "devmapper"
   [%s.options]
     ConfigPath = "%s"
-`, in.cfg.DevmapperRoot, in.cfg.PoolName, in.cfg.BaseImageSize, table, table, kataFCConf)
+`, table, table, kataFCConf)
 	return b.String()
 }
 
 // ensureContainerdConfig registers kata-fc + devmapper with the node's
 // containerd, flavor-appropriately. Returns whether the effective config
 // changed (i.e. whether the runtime needs a restart).
-func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeFlavor) (bool, error) {
+func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeFlavor, mode convergeMode) (bool, error) {
 	version := in.detectConfigVersion(ctx, flavor)
 	switch flavor.name {
 	case flavorK3s:
-		return in.ensureK3sTemplate(version)
+		return in.ensureK3sTemplate(version, mode)
 	default:
-		return in.ensureStockDropin(version)
+		return in.ensureStockDropin(version, mode)
 	}
 }
 
@@ -262,10 +303,10 @@ func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeF
 // directory. The drop-in mechanism is containerd's supported extension
 // point; the only mutation of the admin's own config.toml is the
 // one-line imports entry, and the original is backed up first.
-func (in *Installer) ensureStockDropin(version int) (bool, error) {
+func (in *Installer) ensureStockDropin(version int, mode convergeMode) (bool, error) {
 	changed := false
 
-	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s", version, in.registrationTOML(version))
+	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s", version, in.registrationTOML(version, mode))
 	c, err := writeFileIfChanged(in.hostPath(stockDropinPath), []byte(dropin), 0o644)
 	if err != nil {
 		return changed, err
@@ -369,18 +410,17 @@ imports = [%q]
 // registration block and survives k3s upgrades without freezing the
 // dynamic config.
 //
-// When an existing template is found (admin- or third-party-owned but
-// without a kata-fc registration — that case was already classified as
-// ownerForeign upstream), the managed block is appended/refreshed
-// between markers and everything outside the markers is preserved
-// byte-for-byte.
-func (in *Installer) ensureK3sTemplate(version int) (bool, error) {
+// When an existing template is found (admin- or third-party-owned; a
+// kata-fc registration of its own puts the run in modeDevmapper upstream),
+// the managed block is appended/refreshed between markers and everything
+// outside the markers is preserved byte-for-byte.
+func (in *Installer) ensureK3sTemplate(version int, mode convergeMode) (bool, error) {
 	tmplPath := k3sConfigDir + "/config.toml.tmpl"
 	if version >= 3 {
 		tmplPath = k3sConfigDir + "/config-v3.toml.tmpl"
 	}
 
-	block := beginMarker + "\n" + in.registrationTOML(version) + endMarker + "\n"
+	block := beginMarker + "\n" + in.registrationTOML(version, mode) + endMarker + "\n"
 
 	existing, err := os.ReadFile(in.hostPath(tmplPath))
 	switch {
@@ -463,15 +503,19 @@ func (in *Installer) restartRuntime(ctx context.Context, flavor runtimeFlavor) e
 	}
 }
 
-// verify asserts the converged state: unit active, pool active, shim on
-// PATH. It performs no writes.
-func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor) error {
+// verify asserts the converged state: unit active, pool active, and in
+// modeFull the shim on PATH. It performs no writes.
+func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor, mode convergeMode) error {
 	out, err := in.cfg.Runner.Run(ctx, "systemctl", "is-active", flavor.unit)
 	if err != nil || strings.TrimSpace(string(out)) != "active" {
 		return fmt.Errorf("%s is not active", flavor.unit)
 	}
 	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "info", in.cfg.PoolName); err != nil {
 		return fmt.Errorf("thin-pool %s not active: %w", in.cfg.PoolName, err)
+	}
+	if mode == modeDevmapper {
+		// The shim belongs to the handler's owner.
+		return nil
 	}
 	// Lstat the link, then Stat its target THROUGH hostPath (setec#220).
 	//
