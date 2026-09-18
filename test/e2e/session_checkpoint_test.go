@@ -248,7 +248,7 @@ func TestSessionCheckpoint_SuspendIdleResume(t *testing.T) {
 	sb := newSandbox("e2e-ckpt-idle", checkpointSessionSpec())
 	createAndCleanup(t, sb)
 	key := client.ObjectKeyFromObject(sb)
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-vm"}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}
 
 	waitForPhase(t, key, defaultWait, setecv1alpha1.SandboxPhaseRunning)
 	if !waitForLogMarker(t, podKey.Name, "TICK-3", briefWait) {
@@ -314,7 +314,7 @@ func TestSessionCheckpoint_DrainResumeOnOtherNode(t *testing.T) {
 	sb := newSandbox("e2e-ckpt-drain", checkpointSessionSpec())
 	createAndCleanup(t, sb)
 	key := client.ObjectKeyFromObject(sb)
-	podKey := types.NamespacedName{Namespace: testNamespace, Name: sb.Name + "-vm"}
+	podKey := types.NamespacedName{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}
 
 	waitForPhase(t, key, defaultWait, setecv1alpha1.SandboxPhaseRunning)
 	if !waitForLogMarker(t, podKey.Name, "TICK-3", briefWait) {

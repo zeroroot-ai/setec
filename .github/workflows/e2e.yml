@@ -837,6 +837,10 @@ jobs:
       # silently breaks S3 auth with an AssumeRoleWithWebIdentity denial.
       E2E_NAMESPACE: setec-e2e-session
       E2E_RELEASE: setec-e2e-session
+      # The Sandbox-only namespace the suite installs beside the release
+      # (setec#10). Every scenario's Sandbox, Pod and PVC lives here, the
+      # operator and its agents stay in E2E_NAMESPACE.
+      E2E_SANDBOX_NAMESPACE: setec-e2e-session-sandboxes
       # Separate from E2E_NAMESPACE on purpose: the suite's TestMain CREATES
       # E2E_NAMESPACE and fails if it already exists, so the pre-warm
       # placeholder cannot live there.
@@ -900,6 +904,7 @@ jobs:
         run: |
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
+          kubectl delete namespace "${E2E_SANDBOX_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           kubectl delete namespace "${WARM_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           for kind in clusterrole clusterrolebinding; do
@@ -1017,6 +1022,7 @@ jobs:
           SETEC_E2E_SANDBOX_HOST_TAINT: setec.zeroroot.ai/sandbox-host=true:NoSchedule
           # Suite identity — see the E2E_NAMESPACE comment above.
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_SANDBOX_NAMESPACE: ${{ env.E2E_SANDBOX_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
           SETEC_E2E_RUNTIMECLASS: kata-fc
           # PR-built images, pulled from ghcr. pullPolicy=Never (the suite
@@ -1075,7 +1081,9 @@ jobs:
           set -uo pipefail
           mkdir -p session-e2e-artifacts
           kubectl get nodes -o wide -L setec.zeroroot.ai/runtime.kata-fc > session-e2e-artifacts/nodes.txt 2>&1 || true
-          kubectl get sandboxes -n "${E2E_NAMESPACE}" -o yaml > session-e2e-artifacts/sandboxes.yaml 2>&1 || true
+          kubectl get sandboxes -n "${E2E_SANDBOX_NAMESPACE}" -o yaml > session-e2e-artifacts/sandboxes.yaml 2>&1 || true
+          kubectl get pods,pvc -n "${E2E_SANDBOX_NAMESPACE}" -o wide > session-e2e-artifacts/sandbox-pods.txt 2>&1 || true
+          kubectl get events -n "${E2E_SANDBOX_NAMESPACE}" --sort-by=.lastTimestamp > session-e2e-artifacts/sandbox-events.txt 2>&1 || true
           kubectl get pods -n "${E2E_NAMESPACE}" -o wide > session-e2e-artifacts/pods.txt 2>&1 || true
           kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp > session-e2e-artifacts/events.txt 2>&1 || true
           kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=500 --all-containers \
@@ -1110,8 +1118,10 @@ jobs:
         run: |
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false 2>/dev/null || true
-          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false \
-            || echo "::warning::could not delete ${E2E_NAMESPACE}; the next run reaps it"
+          for ns in "${E2E_SANDBOX_NAMESPACE}" "${E2E_NAMESPACE}"; do
+            kubectl delete namespace "$ns" --ignore-not-found --wait=false \
+              || echo "::warning::could not delete ${ns}; the next run reaps it"
+          done
           # The placeholder pins the metal node for as long as it exists, so
           # reaping it is a cost control rather than tidiness.
           kubectl delete namespace "${WARM_NAMESPACE}" --ignore-not-found --wait=false || true
@@ -1191,6 +1201,11 @@ jobs:
     env:
       E2E_NAMESPACE: setec-e2e-suites
       E2E_RELEASE: setec-e2e-suites
+      # The Sandbox-only namespace the suite installs beside the release
+      # (setec#10). Every scenario's Sandbox, Pod and PVC lives here, the
+      # operator and its agents stay in E2E_NAMESPACE. The multi-tenant
+      # scenarios still create their own tenant namespaces on top.
+      E2E_SANDBOX_NAMESPACE: setec-e2e-suites-sandboxes
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -1220,6 +1235,7 @@ jobs:
         run: |
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
+          kubectl delete namespace "${E2E_SANDBOX_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
           for kind in clusterrole clusterrolebinding; do
             for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
@@ -1337,6 +1353,7 @@ jobs:
           # here, so the chart renders none.
           SETEC_E2E_SANDBOX_HOST_TAINT: setec.zeroroot.ai/sandbox-host=true:NoSchedule
           SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
+          SETEC_E2E_SANDBOX_NAMESPACE: ${{ env.E2E_SANDBOX_NAMESPACE }}
           SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
           SETEC_E2E_RUNTIMECLASS: kata-fc
           SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
@@ -1415,7 +1432,10 @@ jobs:
         if: failure()
         run: |
           set -uo pipefail
-          kubectl get sandboxes,sandboxclasses,pods -n "${E2E_NAMESPACE}" -o wide || true
+          kubectl get sandboxes,pods,pvc -n "${E2E_SANDBOX_NAMESPACE}" -o wide || true
+          kubectl get events -n "${E2E_SANDBOX_NAMESPACE}" --sort-by=.lastTimestamp | tail -50 || true
+          kubectl get sandboxclasses -o wide || true
+          kubectl get pods -n "${E2E_NAMESPACE}" -o wide || true
           kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp | tail -50 || true
           kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=200 --all-containers || true
 
@@ -1424,6 +1444,7 @@ jobs:
         run: |
           set -uo pipefail
           helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false || true
+          kubectl delete namespace "${E2E_SANDBOX_NAMESPACE}" --ignore-not-found --wait=false || true
           kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
           # The pre-warm placeholder pins the ~$4/hr metal node for as long as
           # it exists, so reaping it is a cost control, not tidiness. Karpenter
