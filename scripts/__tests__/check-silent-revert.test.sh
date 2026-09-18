@@ -133,6 +133,30 @@ printf 'name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    s
 commit "$r" "ci: move the schedule block"
 assert "moving a hunk inside its file" pass "$r"
 
+# A whole hunk that leaves its file for another file is a move, not a
+# revert: what the commit added is still in the tree.
+r="$(fresh cross-file-move)"
+git -C "$r" checkout -q -b pr
+printf 'name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make build\n' > "$r/ci.yml"
+printf 'schedule:\n  - cron: "0 4 * * *"\n' > "$r/nightly.yml"
+commit "$r" "ci: split the schedule into its own workflow"
+assert "moving a hunk to another file" pass "$r"
+
+# A renamed file is the same content at a new path.
+r="$(fresh rename)"
+git -C "$r" checkout -q -b pr
+git -C "$r" mv gate.sh scripts-gate.sh
+commit "$r" "ci: rename the gate script"
+assert "renaming a file a recent commit added" pass "$r"
+
+# A rename that also drops the content is still a revert.
+r="$(fresh rename-and-gut)"
+git -C "$r" checkout -q -b pr
+git -C "$r" mv gate.sh scripts-gate.sh
+printf 'exit 0\n' > "$r/scripts-gate.sh"
+commit "$r" "ci: rename and simplify the gate script"
+assert "MUTATION renaming a file and dropping what the commit added" fail "$r"
+
 r="$(fresh partial)"
 git -C "$r" checkout -q -b pr
 printf 'name: ci\non: [push]\nschedule:\n  - cron: "0 5 * * *"\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make build\n' > "$r/ci.yml"
