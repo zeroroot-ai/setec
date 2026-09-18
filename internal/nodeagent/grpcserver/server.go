@@ -188,8 +188,12 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		attribute.String("setec.snapshot_id", in.GetSnapshotId()),
 	)
 
-	if in.GetSnapshotId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "snapshot_id required")
+	// snapshot_id is joined onto a host path below, so it is checked
+	// with the storage rule before any directory is created. The
+	// storage backend checks it again, but only after the temp pair
+	// is written, which is too late for a traversal id.
+	if err := storage.ValidateSnapshotID(in.GetSnapshotId()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "snapshot_id: %v", err)
 	}
 	if in.GetSourceKataSocket() == "" {
 		return nil, status.Error(codes.InvalidArgument, "source_kata_socket required")
@@ -255,6 +259,11 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.snapshot_id", in.GetSnapshotId()))
 
+	// snapshot_id names the restore temp directory, so the same
+	// traversal rule applies before any filesystem call.
+	if err := storage.ValidateSnapshotID(in.GetSnapshotId()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "snapshot_id: %v", err)
+	}
 	if in.GetStorageRef() == "" {
 		return nil, status.Error(codes.InvalidArgument, "storage_ref required")
 	}

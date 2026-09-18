@@ -641,3 +641,77 @@ func TestDefaultReseedVsockPaths(t *testing.T) {
 		t.Fatalf("candidates = %v, want only the kata-socket sibling", got)
 	}
 }
+
+// traversalTempDir returns a TempDir nested four levels under root, so
+// a snapshot_id of ../../../../var/lib/kubelet resolves to
+// root/a/var/lib/kubelet and never leaves the test directory. The
+// returned tempDir does not exist yet, so its absence after the RPC
+// proves the server made no directory at all.
+func traversalTempDir(t *testing.T) (root, tempDir string) {
+	t.Helper()
+	root = t.TempDir()
+	return root, filepath.Join(root, "a", "b", "c", "d", "tmp")
+}
+
+func assertNoDirCreated(t *testing.T, root, tempDir string) {
+	t.Helper()
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Fatalf("temp dir %s exists after a rejected request (err=%v)", tempDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a", "var")); !os.IsNotExist(err) {
+		t.Fatalf("traversal target created under %s (err=%v)", root, err)
+	}
+}
+
+func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
+	for _, id := range []string{"../../../../var/lib/kubelet", "..\\..\\etc", "a/b", "..", ""} {
+		t.Run(id, func(t *testing.T) {
+			fc := &fakeFirecracker{}
+			srv := newServer(t, fc, nil)
+			root, tempDir := traversalTempDir(t)
+			srv.TempDir = tempDir
+			cli := newBufconnClient(t, srv)
+
+			_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
+				SandboxId:        "ns/s",
+				SnapshotId:       id,
+				StorageBackend:   "local-disk",
+				SourceKataSocket: "/tmp/fc.sock",
+			})
+			if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
+			}
+			if fc.pauseCalls != 0 {
+				t.Fatalf("VM paused %d times for a rejected snapshot_id", fc.pauseCalls)
+			}
+			assertNoDirCreated(t, root, tempDir)
+		})
+	}
+}
+
+func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	root, tempDir := traversalTempDir(t)
+	srv.TempDir = tempDir
+	// A real saved snapshot, so the only thing wrong with the request
+	// is the snapshot_id.
+	if _, _, err := srv.Storage.Save(context.Background(), "snap-1", bytes.NewReader(makeFramedPayload(t, []byte("STATE"), []byte("MEM")))); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cli := newBufconnClient(t, srv)
+
+	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId:       "../../../../var/lib/kubelet",
+		StorageRef:       "snap-1",
+		StorageBackend:   "local-disk",
+		KataSocketTarget: "/tmp/fc.sock",
+	})
+	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
+	}
+	if len(fc.loadCalls) != 0 {
+		t.Fatalf("LoadSnapshot called %d times for a rejected snapshot_id", len(fc.loadCalls))
+	}
+	assertNoDirCreated(t, root, tempDir)
+}
