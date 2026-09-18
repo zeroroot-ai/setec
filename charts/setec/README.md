@@ -141,6 +141,8 @@ kubectl delete namespace setec-system
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/zeroroot-ai/setec` | Container image repository. |
+| `sessionKeepalive.image.repository` | `ghcr.io/zeroroot-ai/setec-keepalive` | Image with the static keepalive a session Sandbox boots when it declares no `spec.command`. |
+| `sessionKeepalive.image.tag` | `""` (appVersion) | Tag of that image. |
 | `image.tag` | `"0.1.0"` | Image tag; falls back to `.Chart.AppVersion` when empty. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Pull secrets for private registries. |

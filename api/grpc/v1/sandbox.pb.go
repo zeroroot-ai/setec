@@ -185,7 +185,10 @@ type LaunchRequest struct {
 	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// OCI reference the microVM will run. Required.
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	// Command executed inside the microVM. At least one entry required.
+	// Command executed inside the microVM. Required for the ephemeral
+	// lifecycle. A session (lifecycle.mode = "session") may leave it
+	// empty: the operator then boots the setec keepalive, so the session
+	// outlives every command sent through Exec.
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Environment variables exposed to the workload. Optional.
 	Env map[string]string `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`

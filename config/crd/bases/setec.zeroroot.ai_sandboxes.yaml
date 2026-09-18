@@ -73,9 +73,15 @@ spec:
                 description: |-
                   Command is the entrypoint executed inside the microVM. All arguments
                   are passed verbatim; no shell interpretation occurs.
+
+                  Required for the ephemeral lifecycle: that one command is the whole
+                  life of the Sandbox (ADR-0006). A session may leave it empty. The
+                  operator then boots the setec keepalive, a process that reaps
+                  orphans and never exits on its own, so the session outlives every
+                  command sent through Exec. The keepalive never depends on a shell
+                  or a sleep binary in the image.
                 items:
                   type: string
-                minItems: 1
                 type: array
               desiredState:
                 default: Running
@@ -456,7 +462,6 @@ spec:
                 - name
                 type: object
             required:
-            - command
             - image
             - resources
             type: object

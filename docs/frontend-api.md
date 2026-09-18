@@ -23,6 +23,15 @@ service SandboxService {
 
 See `api/grpc/v1/sandbox.proto` for the full message schema.
 
+## Session boot command
+
+`LaunchRequest.command` is required for the ephemeral lifecycle and
+optional for `lifecycle.mode = "session"`. A session that omits it
+boots the setec keepalive: a static binary the operator installs into
+the Pod, which reaps orphans and exits only on teardown. The session
+then outlives every command sent through `Exec`. A session that sets a
+command boots that command instead, and ends when it exits.
+
 ## Resolved class and runtime reporting
 
 A caller that names `LaunchRequest.sandbox_class` selects a class for

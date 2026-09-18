@@ -951,6 +951,17 @@ snapshots:
         kind: ClusterIssuer
         name: selfsigned
 
+# -- sessionKeepalive is the image the operator injects into a session
+# Sandbox that declares no spec.command (setec#7). An init container from
+# it installs the static setec-keepalive binary into a shared volume and
+# the workload boots that binary, so the session outlives every Exec
+# without a shell or a sleep binary in the user's image. Built from this
+# repo's Dockerfile with CMD=setec-keepalive. tag empty means appVersion.
+sessionKeepalive:
+  image:
+    repository: ghcr.io/zeroroot-ai/setec-keepalive
+    tag: ""
+
 # -- preWarmPool controls the per-SandboxClass pre-warm pool feature.
 # When disabled at the chart level, all SandboxClasses behave as if
 # their preWarmPoolSize were 0 regardless of field values.

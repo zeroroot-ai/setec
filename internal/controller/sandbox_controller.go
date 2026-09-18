@@ -229,6 +229,11 @@ type SandboxReconciler struct {
 	// prereq.CheckMulti only; the reconciler itself does not select Nodes directly.
 	NodeSelectorLabel string
 
+	// KeepaliveImage is the image the pod builder pulls the static
+	// setec-keepalive binary from for a session Sandbox that declares no
+	// spec.command (setec#7). Set from --session-keepalive-image.
+	KeepaliveImage string
+
 	// --- Phase 2 optional dependencies ---
 	//
 	// All four of these may be nil. A nil value disables the
@@ -1618,6 +1623,9 @@ func (r *SandboxReconciler) createPod(
 	if cls != nil {
 		opts.Requests = cls.Spec.Requests
 	}
+	// A session with no command boots the keepalive from this image
+	// (setec#7). The builder refuses such a Sandbox when it is empty.
+	opts.KeepaliveImage = r.KeepaliveImage
 	pod, err := podspec.BuildWithOptions(sb, rcName, opts)
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))
