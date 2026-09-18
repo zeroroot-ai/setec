@@ -508,9 +508,12 @@ netpol:
   #
   # The default covers private (RFC1918), link-local — which includes the
   # cloud instance-metadata address 169.254.169.254 — carrier-grade NAT,
-  # loopback and multicast space. ADD YOUR CLUSTER'S Service and Pod
-  # CIDRs: they are what stands between a Sandbox and the control plane,
-  # and the chart cannot discover them for you.
+  # loopback and multicast space, in both address families. A reserved
+  # prefix only subtracts from an egress block of its own family, so the
+  # list must carry at least one IPv4 and one IPv6 entry or the render
+  # fails. ADD YOUR CLUSTER'S Service and Pod CIDRs, IPv6 included when
+  # the cluster is dual-stack: they are what stands between a Sandbox
+  # and the control plane, and the chart cannot discover them for you.
   #
   # SELF-HOSTED INSTALLS: if the authorised scope for your workloads is
   # private address space, this default denies exactly what you meant to
@@ -524,6 +527,10 @@ netpol:
     - 100.64.0.0/10
     - 127.0.0.0/8
     - 224.0.0.0/4
+    - "::1/128"
+    - fc00::/7
+    - fe80::/10
+    - ff00::/8
   # resolvers are the DNS servers Sandboxes may query. The same list is
   # written into each Sandbox Pod's dnsConfig with dnsPolicy None, so a
   # Sandbox resolves names through these addresses rather than through

@@ -308,8 +308,11 @@ neither the chart nor the operator will start with it empty.
 
 **Add your cluster's Service and Pod CIDRs.** The default covers RFC1918,
 link-local (including the cloud instance-metadata address), CGNAT,
-loopback and multicast — but the chart cannot discover the ranges your
-own control plane sits on.
+loopback and multicast, in both IPv4 and IPv6 — but the chart cannot
+discover the ranges your own control plane sits on. A reserved prefix
+only subtracts from an egress block of its own family, so the list must
+keep at least one IPv4 and one IPv6 entry. The render and the operator
+both refuse a list with a family missing.
 
 **Self-hosted installs must retune it.** If the authorized scope for your
 workloads is private address space, this default denies exactly what you

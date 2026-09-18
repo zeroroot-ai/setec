@@ -366,6 +366,47 @@ else
 	pass "a fixed namespace outside sandboxNamespaces fails the render"
 fi
 
+# ---------------------------------------------------------------------------
+# Reserved egress ranges cover both address families (GHSA-qwgf-q723-rpjf).
+#
+# A reserved prefix only subtracts from an egress block of its own family.
+# The shipped list used to be IPv4 only, so an allow-list entry naming an
+# IPv6 address such as the AWS instance-metadata address fd00:ec2::254 was
+# granted outright. The default render must carry the IPv6 entries, and a
+# list with either family missing must fail the render rather than start
+# an operator that grants one family unrestricted.
+# ---------------------------------------------------------------------------
+note "reserved egress ranges in both address families (GHSA-qwgf-q723-rpjf)"
+render "$workdir/operator.yaml" --show-only templates/deployment.yaml
+strip_comments "$workdir/operator.yaml" "$workdir/operator.stripped.yaml"
+assert_contains "$workdir/operator.stripped.yaml" "default reserved list reaches the operator with IPv6 entries" \
+	"--reserved-cidrs=" \
+	"::1/128" \
+	"fc00::/7" \
+	"fe80::/10" \
+	"ff00::/8" \
+	"169.254.0.0/16"
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set 'netpol.reservedCIDRs={10.0.0.0/8,169.254.0.0/16}' \
+	>/dev/null 2>&1; then
+	fail "an IPv4-only reserved list must fail the render"
+else
+	pass "an IPv4-only reserved list fails the render"
+fi
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set 'netpol.reservedCIDRs={fc00::/7,fe80::/10}' \
+	>/dev/null 2>&1; then
+	fail "an IPv6-only reserved list must fail the render"
+else
+	pass "an IPv6-only reserved list fails the render"
+fi
+
 # --- RuntimeClass scheduling.tolerations ------------------------------------
 # The RuntimeClass admission controller injects scheduling.tolerations into
 # every Pod naming the class, which is the ONLY path that reaches the per-run

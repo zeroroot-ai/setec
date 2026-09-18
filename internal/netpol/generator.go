@@ -112,6 +112,17 @@ var (
 	// startup rather than silently honoured.
 	ErrNoReservedCIDRs = errors.New("netpol: at least one reserved CIDR is required")
 
+	// ErrNoReservedIPv4 and ErrNoReservedIPv6 are returned by
+	// Config.Validate when the reserved list carries no prefix of
+	// that address family. A reserved prefix only subtracts from a
+	// base block of its own family, and an allow-list rule can carry
+	// a base block of either family: a literal IPv6 host or an IPv6
+	// CIDR is accepted as written, and a resolver may answer with
+	// either. A list with one family missing leaves every block of
+	// the other family unrestricted, so it is rejected at startup.
+	ErrNoReservedIPv4 = errors.New("netpol: at least one IPv4 reserved CIDR is required")
+	ErrNoReservedIPv6 = errors.New("netpol: at least one IPv6 reserved CIDR is required")
+
 	// ErrNoResolvers is returned by Config.Validate when no DNS
 	// resolver addresses are configured. Sandboxes resolve names
 	// through explicitly configured resolvers, never through
@@ -135,8 +146,11 @@ type Config struct {
 	// ReservedCIDRs are the address ranges no Sandbox may reach. They
 	// are subtracted from every permissive egress rule via
 	// ipBlock.except. The operator default covers private, link-local,
-	// carrier-grade-NAT, loopback and multicast space; a cluster
-	// operator adds the Service and Pod CIDRs of their own cluster.
+	// carrier-grade-NAT, loopback and multicast space in both address
+	// families; a cluster operator adds the Service and Pod CIDRs of
+	// their own cluster. Validate requires at least one IPv4 and one
+	// IPv6 entry, because a prefix only subtracts from a block of its
+	// own family.
 	ReservedCIDRs []string
 
 	// ResolverIPs are the DNS servers Sandboxes are permitted to query.
@@ -192,10 +206,23 @@ func (c Config) Validate() error {
 	if len(c.ReservedCIDRs) == 0 {
 		return ErrNoReservedCIDRs
 	}
+	var has4, has6 bool
 	for _, cidr := range c.ReservedCIDRs {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
+		p, err := netip.ParsePrefix(cidr)
+		if err != nil {
 			return fmt.Errorf("%w: reserved %q: %w", ErrInvalidCIDR, cidr, err)
 		}
+		if p.Addr().Unmap().Is4() {
+			has4 = true
+		} else {
+			has6 = true
+		}
+	}
+	if !has4 {
+		return ErrNoReservedIPv4
+	}
+	if !has6 {
+		return ErrNoReservedIPv6
 	}
 	if len(c.ResolverIPs) == 0 {
 		return ErrNoResolvers
@@ -622,6 +649,13 @@ func hostCIDR(ip string) string {
 // block it modifies, so reserved ranges that do not nest inside base are
 // dropped — they are already unreachable through this rule.
 //
+// A base block whose address family has no reserved prefix at all is
+// reported as covered. Nothing could be subtracted from it, so emitting
+// it would grant the whole block, including the cluster-internal space
+// the reserved list exists to hold back. Config.Validate refuses a list
+// with a family missing at startup; this branch is what keeps a class
+// exemption (subtractExempt) from reopening the same hole per class.
+//
 // covered reports that base lies entirely inside a reserved range, which
 // means the rule grants nothing and the caller should omit it.
 func exceptFor(base string, reserved []string) (except []string, covered bool, err error) {
@@ -630,13 +664,18 @@ func exceptFor(base string, reserved []string) (except []string, covered bool, e
 		return nil, false, fmt.Errorf("%w: %q: %w", ErrInvalidCIDR, base, err)
 	}
 	basePrefix = basePrefix.Masked()
+	baseIs4 := basePrefix.Addr().Unmap().Is4()
 
+	sameFamily := false
 	for _, r := range reserved {
 		rp, perr := netip.ParsePrefix(r)
 		if perr != nil {
 			return nil, false, fmt.Errorf("%w: reserved %q: %w", ErrInvalidCIDR, r, perr)
 		}
 		rp = rp.Masked()
+		if rp.Addr().Unmap().Is4() == baseIs4 {
+			sameFamily = true
+		}
 
 		switch {
 		case rp.Overlaps(basePrefix) && rp.Bits() <= basePrefix.Bits():
@@ -650,6 +689,9 @@ func exceptFor(base string, reserved []string) (except []string, covered bool, e
 			// Disjoint — including a different address family — so the
 			// range is already outside this rule's reach.
 		}
+	}
+	if !sameFamily {
+		return nil, true, nil
 	}
 	return except, false, nil
 }
