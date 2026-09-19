@@ -1438,6 +1438,12 @@ jobs:
           # it ran nowhere. The two TestSessionCheckpoint_* scenarios really do
           # need that bucket and stay behind the gate.
           #
+          # TestSessionExec_.* (setec#8) drive the real pods/exec path: exec
+          # after a reattach through a fresh frontend, a non-zero exit
+          # reported as its own code, and a Kill mid-command reported as
+          # STATUS_SANDBOX_GONE. They need only a session Sandbox and the
+          # in-process frontend, the same shape as TestSession_ReattachByHandle.
+          #
           # TestNodeAgentMTLS_.* are assertions on the material installChart
           # mints for the snapshots path. That path only executes on an
           # S3-configured install, i.e. almost never, so the generator would
@@ -1452,7 +1458,7 @@ jobs:
           # Verified against run 31919018724, where only the first of the two
           # appears in the output.
           go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestInstaller_Converges|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle))$' \
+            -run '^(TestEnv_KVMPresent|TestInstaller_Converges|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$' \
             2>&1 | tee suites-e2e.log
           status="${PIPESTATUS[0]}"
           # A skipped scenario is not a verified scenario — the whole point of

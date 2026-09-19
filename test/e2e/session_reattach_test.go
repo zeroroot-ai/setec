@@ -70,9 +70,14 @@ func highestTick(t *testing.T, podName string) int {
 // earlier one — the frontend is stateless by design (setec#193), so a
 // new instance IS a frontend restart as far as session resolution is
 // concerned.
+//
+// RESTConfig is what lets the instance run commands: Exec goes through
+// the pods/exec subresource, and a Service without it reports that it
+// cannot exec rather than pretending to.
 func newInProcessFrontend() *frontend.Service {
 	return &frontend.Service{
 		Client:           k8sClient,
+		RESTConfig:       restConfig,
 		AuthDisabled:     true,
 		DefaultNamespace: sandboxNamespace,
 	}
