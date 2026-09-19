@@ -6,10 +6,14 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -159,6 +163,8 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
 	allErrs = append(allErrs, validateRequests(class)...)
+	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
+	allErrs = append(allErrs, validateEgressAllowSelectors(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
@@ -417,4 +423,75 @@ func validateSessionCheckpoint(class *setecv1alpha1.SandboxClass) field.ErrorLis
 			path.Child("backend"), sc.Backend, []string{"s3"}))
 	}
 	return allErrs
+}
+
+// validateEgressExemptCIDRs checks that every spec.egressExemptCIDRs
+// entry parses as a prefix. The generator refuses a malformed entry at
+// reconcile time, which leaves every Sandbox in the class without a
+// policy and Pending; admission is where the author sees it.
+func validateEgressExemptCIDRs(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	base := field.NewPath("spec", "egressExemptCIDRs")
+	for i, cidr := range class.Spec.EgressExemptCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			errs = append(errs, field.Invalid(base.Index(i), cidr,
+				fmt.Sprintf("must be a CIDR prefix such as 10.96.0.0/12: %v", err)))
+		}
+	}
+	return errs
+}
+
+// egressAllowProtocols is the protocol set a NetworkPolicyPort accepts.
+var egressAllowProtocols = []string{
+	string(corev1.ProtocolTCP), string(corev1.ProtocolUDP), string(corev1.ProtocolSCTP),
+}
+
+// validateEgressAllowSelectors checks the shape of every
+// spec.egressAllowSelectors entry (setec#76) the way the API server
+// checks a NetworkPolicy egress rule: a peer names at least one
+// selector, each selector is a valid label selector, and every port is
+// a number in range or a valid port name with a known protocol. An
+// entry with no port is refused because an allowance never opens every
+// port on the selected Pods.
+func validateEgressAllowSelectors(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	base := field.NewPath("spec", "egressAllowSelectors")
+	selOpts := metav1validation.LabelSelectorValidationOptions{}
+
+	for i, a := range class.Spec.EgressAllowSelectors {
+		p := base.Index(i)
+		if a.NamespaceSelector == nil && a.PodSelector == nil {
+			errs = append(errs, field.Required(p,
+				"at least one of namespaceSelector or podSelector must be set; a peer with neither selects nothing"))
+		}
+		if a.NamespaceSelector != nil {
+			errs = append(errs, metav1validation.ValidateLabelSelector(
+				a.NamespaceSelector, selOpts, p.Child("namespaceSelector"))...)
+		}
+		if a.PodSelector != nil {
+			errs = append(errs, metav1validation.ValidateLabelSelector(
+				a.PodSelector, selOpts, p.Child("podSelector"))...)
+		}
+		if len(a.Ports) == 0 {
+			errs = append(errs, field.Required(p.Child("ports"),
+				"at least one port is required; an allowance never opens every port"))
+		}
+		for j, port := range a.Ports {
+			pp := p.Child("ports").Index(j)
+			if port.Protocol != "" && !slices.Contains(egressAllowProtocols, string(port.Protocol)) {
+				errs = append(errs, field.NotSupported(pp.Child("protocol"), string(port.Protocol), egressAllowProtocols))
+			}
+			switch port.Port.Type {
+			case intstr.Int:
+				for _, msg := range validation.IsValidPortNum(port.Port.IntValue()) {
+					errs = append(errs, field.Invalid(pp.Child("port"), port.Port.IntValue(), msg))
+				}
+			case intstr.String:
+				for _, msg := range validation.IsValidPortName(port.Port.StrVal) {
+					errs = append(errs, field.Invalid(pp.Child("port"), port.Port.StrVal, msg))
+				}
+			}
+		}
+	}
+	return errs
 }

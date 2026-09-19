@@ -99,6 +99,14 @@ var (
 	// test. Override with SETEC_E2E_SANDBOX_NAMESPACE.
 	sandboxNamespace string
 
+	// clusterDNSIP is the kube-dns Service ClusterIP, read in preflight.
+	// installChart lists it first in netpol.resolvers so the selector
+	// allowance scenario (setec#76) can point a class at cluster DNS. The
+	// operator hands it only to classes whose egressAllowSelectors grant
+	// port 53; every other Sandbox keeps the public resolvers. Empty when
+	// the cluster has no kube-system/kube-dns Service.
+	clusterDNSIP string
+
 	// restConfig is the kubeconfig the suite resolved. frontend.Service needs
 	// it to run commands: Exec goes through the Kubernetes pods/exec
 	// subresource, and a Service with a nil RESTConfig reports that it cannot
@@ -521,6 +529,14 @@ func preflight() error {
 		return fmt.Errorf("RuntimeClass %q not found on cluster: %w (install kata-deploy before running E2E)", kataRuntimeClass, err)
 	}
 
+	// Cluster DNS, for the selector allowance scenario (setec#76). Absent
+	// is not an error here: the scenario skips loudly on its own.
+	var dns corev1.Service
+	dnsKey := client.ObjectKey{Namespace: "kube-system", Name: "kube-dns"}
+	if err := k8sClient.Get(ctx, dnsKey, &dns); err == nil {
+		clusterDNSIP = dns.Spec.ClusterIP
+	}
+
 	// Capture the RuntimeClass's pod overhead. The operator stamps Sandbox
 	// VM pods with the chart's runtimes.<backend>.defaultOverhead, and the
 	// RuntimeClass admission controller rejects any pod whose overhead does
@@ -710,6 +726,13 @@ func installChart() error {
 		// guard, which is the topology the chart documents and the one
 		// every scenario that goes through newSandbox now runs in.
 		"--set", fmt.Sprintf("sandboxNamespaces={%s}", sandboxNamespace),
+		// The resolvers every Sandbox may query. The kube-dns ClusterIP
+		// goes first when the cluster has one (setec#76): the operator
+		// points only a class with a port-53 selector allowance at it, so
+		// every other scenario's Sandbox still resolves through the public
+		// pair alone, exactly as before. This is the shape the umbrella's
+		// kind profile installs.
+		"--set", fmt.Sprintf("netpol.resolvers={%s}", strings.Join(sandboxResolvers(), ",")),
 		// Still required (setec#157): the multi-tenant scenarios create
 		// their own tenant namespaces from the test bodies at run time
 		// (createTenantNamespace: p2-netpol, p3-roundtrip, e2e-egress, and
@@ -1207,6 +1230,17 @@ func orNone(items []string) string {
 		return "none"
 	}
 	return strings.Join(items, " ")
+}
+
+// sandboxResolvers is the netpol.resolvers list installChart sets: the
+// cluster DNS ClusterIP when preflight found one, then the chart's public
+// defaults.
+func sandboxResolvers() []string {
+	public := []string{"1.1.1.1", "8.8.8.8"}
+	if clusterDNSIP == "" {
+		return public
+	}
+	return append([]string{clusterDNSIP}, public...)
 }
 
 // dumpInstallFailureState prints the state of the half-installed release to

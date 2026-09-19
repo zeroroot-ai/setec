@@ -10,6 +10,39 @@ real manifest (runtimes-configmap.yaml) so render failures surface during
 {{- include "setec.validateRestoreUniquify" . -}}
 {{- include "setec.validateCredentials" . -}}
 {{- include "setec.validateSnapshotS3" . -}}
+{{- include "setec.validateSandboxClasses" . -}}
+{{- end -}}
+
+{{/*
+SandboxClass egress-allowance validation (setec#76). Every
+sandboxClasses.classes[].spec.egressAllowSelectors entry renders verbatim
+into a cluster-scoped SandboxClass, and a malformed entry is refused by
+the admission webhook at install time, when a post-install hook is the
+only thing that sees the error. Check the shape at render time instead:
+a peer names at least one selector, and lists at least one port, each
+with a port value.
+*/}}
+{{- define "setec.validateSandboxClasses" -}}
+{{- if .Values.sandboxClasses.enabled -}}
+{{- range $class := .Values.sandboxClasses.classes -}}
+{{- range $i, $a := ($class.spec.egressAllowSelectors | default list) -}}
+{{- if and (not $a.namespaceSelector) (not $a.podSelector) -}}
+{{- fail (printf "sandboxClasses.classes[%s].spec.egressAllowSelectors[%d] sets neither namespaceSelector nor podSelector; a peer with no selector selects nothing" $class.name $i) -}}
+{{- end -}}
+{{- if not $a.ports -}}
+{{- fail (printf "sandboxClasses.classes[%s].spec.egressAllowSelectors[%d].ports is empty; an allowance never opens every port, list the ports it grants" $class.name $i) -}}
+{{- end -}}
+{{- range $j, $p := $a.ports -}}
+{{- if not (hasKey $p "port") -}}
+{{- fail (printf "sandboxClasses.classes[%s].spec.egressAllowSelectors[%d].ports[%d] has no port; give a number or a container port name" $class.name $i $j) -}}
+{{- end -}}
+{{- if and $p.protocol (not (has $p.protocol (list "TCP" "UDP" "SCTP"))) -}}
+{{- fail (printf "sandboxClasses.classes[%s].spec.egressAllowSelectors[%d].ports[%d].protocol must be TCP, UDP or SCTP, got %q" $class.name $i $j $p.protocol) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

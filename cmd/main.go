@@ -21,6 +21,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -334,6 +335,25 @@ func main() {
 		"hostResolveTTL", egressHostTTL,
 		"hostResolveGrace", egressHostGrace,
 	)
+	// A resolver inside the reserved ranges (the kube-dns ClusterIP on
+	// the kind profile, setec#76) is reachable only from a class whose
+	// egressAllowSelectors grant port 53. Say so at startup, because a
+	// Sandbox in any other class is not pointed at it.
+	if public, err := netpolCfg.ResolversFor(nil); err != nil {
+		setupLog.Info("every sandbox resolver sits inside the reserved ranges; "+
+			"only a SandboxClass with an egressAllowSelectors entry on port 53 can resolve names",
+			"resolvers", netpolCfg.ResolverIPs)
+	} else if len(public) < len(netpolCfg.ResolverIPs) {
+		var clusterSide []string
+		for _, ip := range netpolCfg.ResolverIPs {
+			if !slices.Contains(public, ip) {
+				clusterSide = append(clusterSide, ip)
+			}
+		}
+		setupLog.Info("some sandbox resolvers sit inside the reserved ranges; "+
+			"a class reaches them only through an egressAllowSelectors entry on port 53",
+			"clusterSideResolvers", clusterSide, "publicResolvers", public)
+	}
 
 	// Build the dispatcher Registry and register one Dispatcher per enabled backend.
 	runtimeRegistry = runtimepkg.NewRegistry()

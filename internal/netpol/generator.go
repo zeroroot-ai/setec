@@ -136,6 +136,14 @@ var (
 	// ErrInvalidResolver is returned when a configured resolver is not
 	// a bare IP address.
 	ErrInvalidResolver = errors.New("netpol: invalid resolver address")
+
+	// ErrNoReachableResolver is returned when every configured resolver
+	// sits inside the class's effective reserved ranges and the class
+	// carries no selector allowance on port 53. A Sandbox in that class
+	// could be pointed at no resolver its policy lets it reach, so the
+	// operator refuses to build it rather than ship a Pod whose every
+	// lookup times out.
+	ErrNoReachableResolver = errors.New("netpol: no configured resolver is reachable from this class")
 )
 
 // Config carries the cluster-wide egress posture the operator was started
@@ -253,6 +261,11 @@ func (c Config) Validate() error {
 //     ranges subtracted, plus DNS to the configured resolvers. An entry
 //     whose host cannot be resolved is dropped, not widened.
 //
+// Under both permissive modes the class's EgressAllowSelectors render as
+// one further rule each, a namespaceSelector/podSelector peer with the
+// listed ports (setec#76). GenerateForClass is the entry point that sees
+// the class; Generate renders none.
+//
 // The returned NetworkPolicy is cluster-ready apart from its
 // OwnerReferences, which the controller stamps via
 // controllerutil.SetControllerReference. The controller also decides
@@ -334,16 +347,174 @@ func (c Config) generate(
 		return nil, err
 	}
 
-	switch mode {
-	case setecv1alpha1.NetworkModeNone:
+	if mode == setecv1alpha1.NetworkModeNone {
 		return denyAll(sb), nil
+	}
+
+	// Every permissive posture starts with DNS and the class's selector
+	// allowances. The DNS rule names only the resolvers an ipBlock can
+	// reach; a resolver inside the reserved ranges is reached, if at all,
+	// through a selector allowance on port 53 and gets no ipBlock.
+	resolvers, err := c.resolverSplit(class, reserved)
+	if err != nil {
+		return nil, err
+	}
+	head := make([]networkingv1.NetworkPolicyEgressRule, 0, 1+len(selectorAllowances(class)))
+	if len(resolvers.ipBlock) > 0 {
+		head = append(head, dnsRule(resolvers.ipBlock))
+	}
+	head = append(head, selectorRules(class)...)
+
+	switch mode {
 	case setecv1alpha1.NetworkModeExternalOnly:
-		return c.externalOnly(sb, reserved)
+		return externalOnly(sb, reserved, head)
 	case setecv1alpha1.NetworkModeEgressAllowList:
-		return c.egressAllowList(ctx, sb, allow, reserved)
+		return c.egressAllowList(ctx, sb, allow, reserved, head)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownMode, mode)
 	}
+}
+
+// ResolversFor returns the resolvers a Sandbox in class may be pointed
+// at, in Config.ResolverIPs order, for the Pod's dnsConfig.
+//
+// A resolver is kept when the class's policy can reach it: an address
+// outside the class's effective reserved ranges is reached through the
+// ipBlock the DNS rule writes, and an address inside them is reached
+// only through a selector allowance that grants port 53 (the kube-dns
+// case, setec#76). A resolver the policy cannot reach is left out, so a
+// class with no DNS allowance never has its Pods pointed at cluster DNS
+// and never waits on a query the CNI drops.
+//
+// When the configured list names resolvers and none is reachable the
+// error is ErrNoReachableResolver, and the controller refuses to build
+// the Pod. An empty configured list, which Validate refuses at startup
+// and only tests use, returns empty with no error.
+func (c Config) ResolversFor(class *setecv1alpha1.SandboxClass) ([]string, error) {
+	var exempt []string
+	if class != nil {
+		exempt = class.Spec.EgressExemptCIDRs
+	}
+	reserved, err := subtractExempt(c.ReservedCIDRs, exempt)
+	if err != nil {
+		return nil, err
+	}
+	split, err := c.resolverSplit(class, reserved)
+	if err != nil {
+		return nil, err
+	}
+	return split.pod, nil
+}
+
+// resolverSet is the outcome of resolverSplit: the resolvers the DNS
+// rule names as ipBlock peers, and the resolvers the Pod is pointed at.
+// The second is a superset of the first.
+type resolverSet struct {
+	ipBlock []string
+	pod     []string
+}
+
+// resolverSplit partitions Config.ResolverIPs for one class. See
+// ResolversFor for the rule.
+func (c Config) resolverSplit(class *setecv1alpha1.SandboxClass, reserved []string) (resolverSet, error) {
+	reservedPrefixes := make([]netip.Prefix, 0, len(reserved))
+	for _, r := range reserved {
+		p, err := netip.ParsePrefix(r)
+		if err != nil {
+			return resolverSet{}, fmt.Errorf("%w: reserved %q: %w", ErrInvalidCIDR, r, err)
+		}
+		reservedPrefixes = append(reservedPrefixes, p.Masked())
+	}
+	dnsAllowed := classGrantsDNS(class)
+
+	var out resolverSet
+	for _, ip := range c.ResolverIPs {
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			return resolverSet{}, fmt.Errorf("%w: %q: %w", ErrInvalidResolver, ip, err)
+		}
+		addr = addr.Unmap()
+		inReserved := false
+		for _, p := range reservedPrefixes {
+			if p.Contains(addr) {
+				inReserved = true
+				break
+			}
+		}
+		switch {
+		case !inReserved:
+			out.ipBlock = append(out.ipBlock, ip)
+			out.pod = append(out.pod, ip)
+		case dnsAllowed:
+			out.pod = append(out.pod, ip)
+		}
+	}
+	// An empty configured list is the test-only shape Validate refuses at
+	// startup, and it leaves the Pod on cluster DNS (podspec.BuildOptions).
+	// The refusal here is for a list that names resolvers and can reach
+	// none of them.
+	if len(c.ResolverIPs) > 0 && len(out.pod) == 0 {
+		return resolverSet{}, fmt.Errorf("%w: resolvers %v, reserved %v", ErrNoReachableResolver, c.ResolverIPs, reserved)
+	}
+	return out, nil
+}
+
+// classGrantsDNS reports whether class carries a selector allowance whose
+// ports include 53 by number. A named port is not enough: the operator
+// reads the class alone and cannot see what the selected Pod calls its
+// DNS port.
+func classGrantsDNS(class *setecv1alpha1.SandboxClass) bool {
+	for _, a := range selectorAllowances(class) {
+		for _, p := range a.Ports {
+			if p.Port.Type == intstr.Int && p.Port.IntValue() == 53 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// selectorAllowances returns the class's selector allowances, or nil
+// for no class.
+func selectorAllowances(class *setecv1alpha1.SandboxClass) []setecv1alpha1.EgressAllowSelector {
+	if class == nil {
+		return nil
+	}
+	return class.Spec.EgressAllowSelectors
+}
+
+// selectorRules renders the class's selector allowances, one egress rule
+// each: a peer carrying the namespaceSelector and podSelector verbatim,
+// and the listed ports. The CNI matches these against the Pod a packet
+// reaches after kube-proxy's translation, which is what lets a Sandbox
+// reach a Service where an ipBlock for the ClusterIP cannot (setec#76).
+//
+// The admission webhook has already refused an entry with no selector or
+// no port. This function still renders whatever it is given: the policy
+// is the honest picture of the class, and a peer with no selector would
+// be rejected by the API server rather than widened here.
+func selectorRules(class *setecv1alpha1.SandboxClass) []networkingv1.NetworkPolicyEgressRule {
+	allowances := selectorAllowances(class)
+	rules := make([]networkingv1.NetworkPolicyEgressRule, 0, len(allowances))
+	for _, a := range allowances {
+		ports := make([]networkingv1.NetworkPolicyPort, 0, len(a.Ports))
+		for _, p := range a.Ports {
+			proto := p.Protocol
+			if proto == "" {
+				proto = corev1.ProtocolTCP
+			}
+			port := p.Port
+			ports = append(ports, networkingv1.NetworkPolicyPort{Protocol: &proto, Port: &port})
+		}
+		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: a.NamespaceSelector.DeepCopy(),
+				PodSelector:       a.PodSelector.DeepCopy(),
+			}},
+			Ports: ports,
+		})
+	}
+	return rules
 }
 
 // effectivePosture resolves the mode and allow-list actually in force for
@@ -417,22 +588,22 @@ func denyAll(sb *setecv1alpha1.Sandbox) *networkingv1.NetworkPolicy {
 }
 
 // externalOnly returns a policy permitting egress to public address space
-// on every port while denying every reserved range, plus DNS to the
-// configured resolvers.
+// on every port while denying every reserved range, after the head rules
+// (DNS and the class's selector allowances).
 //
 // The rule deliberately carries no Ports: workloads under this posture
 // probe arbitrary destination ports, and constraining them would defeat
 // the purpose. Confinement comes from the address space the rule cannot
 // reach, not from the port set it may use.
-func (c Config) externalOnly(sb *setecv1alpha1.Sandbox, reserved []string) (*networkingv1.NetworkPolicy, error) {
+func externalOnly(sb *setecv1alpha1.Sandbox, reserved []string, head []networkingv1.NetworkPolicyEgressRule) (*networkingv1.NetworkPolicy, error) {
 	except, covered, err := exceptFor(AllCIDR, reserved)
 	if err != nil {
 		return nil, err
 	}
 	np := policyFor(sb, bothDirections())
 
-	egress := make([]networkingv1.NetworkPolicyEgressRule, 0, 2)
-	egress = append(egress, c.dnsRule())
+	egress := make([]networkingv1.NetworkPolicyEgressRule, 0, len(head)+1)
+	egress = append(egress, head...)
 	if !covered {
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{
@@ -447,7 +618,8 @@ func (c Config) externalOnly(sb *setecv1alpha1.Sandbox, reserved []string) (*net
 
 // egressAllowList returns a policy that denies all ingress and permits
 // egress only to the declared destinations, each rule scoped to its port
-// and stripped of the reserved ranges.
+// and stripped of the reserved ranges, after the head rules (DNS and the
+// class's selector allowances).
 //
 // # How a destination becomes an ipBlock
 //
@@ -487,11 +659,12 @@ func (c Config) egressAllowList(
 	sb *setecv1alpha1.Sandbox,
 	allow []setecv1alpha1.NetworkAllow,
 	reserved []string,
+	head []networkingv1.NetworkPolicyEgressRule,
 ) (*networkingv1.NetworkPolicy, error) {
 	np := policyFor(sb, bothDirections())
 
-	egress := make([]networkingv1.NetworkPolicyEgressRule, 0, 1+len(allow))
-	egress = append(egress, c.dnsRule())
+	egress := make([]networkingv1.NetworkPolicyEgressRule, 0, len(head)+len(allow))
+	egress = append(egress, head...)
 
 	var suppressed, unresolved []string
 	for _, a := range allow {
@@ -607,18 +780,22 @@ func (c Config) basesFor(ctx context.Context, a setecv1alpha1.NetworkAllow) ([]s
 	return prefixes, nil
 }
 
-// dnsRule permits UDP and TCP 53 to exactly the configured resolvers.
+// dnsRule permits UDP and TCP 53 to exactly the given resolvers, which
+// are the configured ones an ipBlock can reach (resolverSplit).
 //
 // Targeting named resolvers rather than any address is what keeps a
 // Sandbox off cluster DNS: it cannot resolve in-cluster Service names, so
 // it cannot enumerate the control plane by name even before any packet is
-// dropped. The Pod's dnsConfig points at the same addresses.
-func (c Config) dnsRule() networkingv1.NetworkPolicyEgressRule {
+// dropped. A class that may use cluster DNS says so with a selector
+// allowance on port 53, and that allowance is its own rule. The caller
+// omits this rule when the list is empty: a rule with no peers would
+// permit port 53 to every address.
+func dnsRule(resolvers []string) networkingv1.NetworkPolicyEgressRule {
 	protoUDP, protoTCP := corev1.ProtocolUDP, corev1.ProtocolTCP
 	port53UDP, port53TCP := intstr.FromInt32(53), intstr.FromInt32(53)
 
-	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(c.ResolverIPs))
-	for _, ip := range c.ResolverIPs {
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(resolvers))
+	for _, ip := range resolvers {
 		peers = append(peers, networkingv1.NetworkPolicyPeer{
 			IPBlock: &networkingv1.IPBlock{CIDR: hostCIDR(ip)},
 		})

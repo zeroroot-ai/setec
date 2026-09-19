@@ -609,6 +609,88 @@ render "$RC_TOL"
 assert_absent "$RC_TOL" "RuntimeClass omits tolerations when none are configured" \
 	'example.io/dedicated'
 
+# ---------------------------------------------------------------------------
+# SandboxClass egress allowance by selector (setec#76).
+#
+# The umbrella's test profile grants the agent class kube-dns and the
+# platform edge through sandboxClasses.classes[].spec.egressAllowSelectors.
+# The value renders verbatim, so the regression to catch is a chart that
+# quietly drops or mangles it, and a render-time validator that stops
+# refusing a peer with no selector or no port: that entry would install
+# cleanly and the admission webhook would refuse the class from inside a
+# post-install hook.
+# ---------------------------------------------------------------------------
+note "SandboxClass egress allowance by selector (setec#76)"
+cat >"$workdir/allowance-values.yaml" <<'YAML'
+sandboxClasses:
+  classes:
+    - name: tool
+      spec:
+        runtime: {backend: kata-fc}
+        defaultNetworkMode: external-only
+        default: true
+    - name: agent
+      spec:
+        runtime: {backend: kata-fc}
+        defaultNetworkMode: external-only
+        egressAllowSelectors:
+          - namespaceSelector:
+              matchLabels: {kubernetes.io/metadata.name: kube-system}
+            podSelector:
+              matchLabels: {k8s-app: kube-dns}
+            ports:
+              - {protocol: UDP, port: 53}
+              - {protocol: TCP, port: 53}
+          - namespaceSelector:
+              matchLabels: {kubernetes.io/metadata.name: gibson}
+            podSelector:
+              matchLabels: {app.kubernetes.io/name: envoy}
+            ports:
+              - {port: https}
+YAML
+render "$workdir/allowance.yaml" -f "$workdir/allowance-values.yaml" \
+	--show-only templates/sandboxclass-default.yaml
+strip_comments "$workdir/allowance.yaml" "$workdir/allowance.stripped.yaml"
+assert_contains "$workdir/allowance.stripped.yaml" "the allowance reaches the rendered SandboxClass" \
+	"egressAllowSelectors:" \
+	"kubernetes.io/metadata.name: kube-system" \
+	"k8s-app: kube-dns" \
+	"protocol: UDP" \
+	"port: 53" \
+	"app.kubernetes.io/name: envoy" \
+	"port: https"
+
+# The default values ship no allowance: production keeps public resolvers
+# and no selectors. Scoped to the SandboxClass documents, because the
+# admission policies elsewhere in the release carry selectors of their own.
+render "$workdir/classes-default.yaml" --show-only templates/sandboxclass-default.yaml
+strip_comments "$workdir/classes-default.yaml" "$workdir/classes-default.stripped.yaml"
+assert_absent "$workdir/classes-default.stripped.yaml" "the shipped classes grant no selector allowance" \
+	"namespaceSelector:"
+
+# Malformed shapes must fail the render, not the post-install hook.
+allowance_refused() {
+	local desc="$1" entries="$2"
+	printf 'sandboxClasses:\n  classes:\n    - name: t\n      spec:\n        defaultNetworkMode: none\n        egressAllowSelectors: %s\n' \
+		"$entries" >"$workdir/allowance-bad.yaml"
+	if "$HELM" template setec "$CHART_DIR" \
+		--set webhook.certManager.enabled=true \
+		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+		-f "$workdir/allowance-bad.yaml" >/dev/null 2>&1; then
+		fail "$desc"
+	else
+		pass "$desc"
+	fi
+}
+allowance_refused "an allowance with no selector fails the render" \
+	'[{"ports":[{"port":53}]}]'
+allowance_refused "an allowance with no ports fails the render" \
+	'[{"podSelector":{"matchLabels":{"a":"b"}}}]'
+allowance_refused "a port with no port value fails the render" \
+	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"TCP"}]}]'
+allowance_refused "a port with an unknown protocol fails the render" \
+	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"ICMP","port":53}]}]'
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

@@ -1612,9 +1612,15 @@ func (r *SandboxReconciler) createPod(
 	}
 
 	// The Pod's resolvers come from the same config the NetworkPolicy's
-	// DNS rule is built from, so the addresses the workload queries and
-	// the addresses the policy permits are the same list by construction.
-	opts := podspec.BuildOptions{NodeName: nodeName, ResolverIPs: r.NetPol.ResolverIPs}
+	// DNS rule is built from, filtered to the ones this class's policy
+	// can reach (netpol.Config.ResolversFor, setec#76), so the addresses
+	// the workload queries and the addresses the policy permits are the
+	// same list by construction.
+	resolvers, err := r.NetPol.ResolversFor(cls)
+	if err != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select Sandbox resolvers: %w", err))
+	}
+	opts := podspec.BuildOptions{NodeName: nodeName, ResolverIPs: resolvers}
 	if sel != nil {
 		opts.RuntimeSelection = sel
 	}
