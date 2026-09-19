@@ -317,15 +317,21 @@ runtimeAgent:
 # optimisation, never a requirement; on nodes booted from the baked AMI
 # the installer detects the existing registration and stands down.
 #
-# The installer is idempotent and ownership-aware: on a node where
+# The installer is idempotent and ownership-aware. On a node where
 # kata-fc is already registered by something else (kata-deploy, a baked
-# image, an administrator) it stands down without touching the node, and
-# a re-run on a converged node performs zero writes and zero containerd
-# restarts.
+# image, an administrator) it never touches the handler or the kata
+# payload. kata-deploy points the fc handler at the devmapper snapshotter
+# and configures neither a thin-pool nor the snapshotter (its chart says
+# "requires pre-configuration on the user side"), so on such a node the
+# installer supplies exactly those two and reports converged-devmapper
+# (setec#9). When the foreign owner supplies its own devmapper table, as
+# the baked AMI does, the installer stands down without touching the
+# node. A re-run on a converged node performs zero writes and zero
+# containerd restarts.
 installer:
-  # -- enabled gates the DaemonSet. Disable on clusters where node prep
-  # is owned out of band (kata-deploy, baked images) — though leaving it
-  # on is safe: the installer detects foreign ownership and idles.
+  # -- enabled gates the DaemonSet. Leave it on beside kata-deploy: the
+  # installer owns only what kata-deploy leaves out. Disable it only where
+  # a baked image already supplies the handler and its snapshotter.
   enabled: true
   image:
     # -- repository is the installer image (built from

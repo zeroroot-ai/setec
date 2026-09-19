@@ -38,11 +38,14 @@ the `kata-fc` RuntimeClass (`runtimes.kata-fc.install=true`), and the
 runtime-agent labels capable Nodes. On a node where `kata-fc` is already
 registered by something else —
 [`kata-deploy`](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy),
-a baked node image, an administrator — the installer detects the foreign
-owner and stands down without touching the node; set
-`installer.enabled=false` to keep it out entirely. The `kata-qemu`
-backend is not covered by the installer and still needs an out-of-band
-Kata install.
+a baked node image, an administrator — the installer leaves the handler
+and the Kata binaries to that owner. `kata-deploy` points the `fc` handler
+at the devmapper snapshotter and configures neither a thin-pool nor the
+snapshotter, so beside it the installer supplies exactly those two
+(`converged-devmapper`). Beside a baked image that supplies both, it stands
+down without touching the node. Set `installer.enabled=false` to keep it
+out entirely. The `kata-qemu` backend is not covered by the installer and
+still needs an out-of-band Kata install.
 
 The installer's thin-pool defaults to sparse loop-backed files
 (`installer.thinpool.mode=loop`, portable, works anywhere). For

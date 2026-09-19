@@ -287,6 +287,156 @@ func TestConvergeForeignKataFCStandsDown(t *testing.T) {
 	}
 }
 
+// kataDeployDropin is the kata-deploy 3.28 shape for the fc shim: the
+// handler names the devmapper snapshotter (the chart default for fc,
+// "requires pre-configuration on the user side"), the drop-in lives in a
+// directory of kata-deploy's own, and nothing configures the snapshotter.
+func kataDeployDropin(version int) string {
+	table := runtimeTableName(version)
+	return "version = " + string(rune('0'+version)) + "\n" +
+		"[" + table + "]\n" +
+		"  runtime_type = \"io.containerd.kata-fc.v2\"\n" +
+		"  privileged_without_host_devices = true\n" +
+		"  snapshotter = \"devmapper\"\n" +
+		"[" + table + ".options]\n" +
+		"  ConfigPath = \"/opt/kata/share/defaults/kata-containers/configuration-fc.toml\"\n"
+}
+
+// TestConvergeKataDeployNodeSuppliesDevmapper is the setec#9 fixture. On a
+// kata-deploy node the kata-fc handler asks for devmapper and nobody has
+// configured it, so every kata-fc pod dies in containerd with "snapshotter
+// must be provided to unpack". The installer must supply the thin-pool and
+// the snapshotter table, and nothing else.
+func TestConvergeKataDeployNodeSuppliesDevmapper(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
+		"version = 2\nimports = [\"/opt/kata/containerd/config.d/*.toml\"]\n")
+	mustWrite(t, filepath.Join(fx.root, "opt/kata/containerd/config.d/kata-deploy.toml"), kataDeployDropin(2))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if res.Outcome != OutcomeConvergedDevmapper {
+		t.Fatalf("outcome = %s, want %s", res.Outcome, OutcomeConvergedDevmapper)
+	}
+	if !res.Changed || !res.RuntimeRestarted {
+		t.Fatalf("Changed=%t RuntimeRestarted=%t, want both true", res.Changed, res.RuntimeRestarted)
+	}
+
+	// The snapshotter is registered, the handler is not touched.
+	dropin := readFile(t, filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml"))
+	if !strings.Contains(dropin, `[plugins."io.containerd.snapshotter.v1.devmapper"]`) {
+		t.Errorf("drop-in missing the devmapper table:\n%s", dropin)
+	}
+	if kataFCRuntimeTableRe.MatchString(dropin) {
+		t.Errorf("drop-in registers a second kata-fc handler beside kata-deploy's:\n%s", dropin)
+	}
+	foreign := readFile(t, filepath.Join(fx.root, "opt/kata/containerd/config.d/kata-deploy.toml"))
+	if foreign != kataDeployDropin(2) {
+		t.Errorf("kata-deploy's drop-in was rewritten:\n%s", foreign)
+	}
+	mainCfg := readFile(t, filepath.Join(fx.root, "etc/containerd/config.toml"))
+	if !strings.Contains(mainCfg, `imports = ["/opt/kata/containerd/config.d/*.toml", "/etc/containerd/config.d/*.toml"]`) {
+		t.Errorf("main config imports line does not keep kata-deploy's entry beside ours:\n%s", mainCfg)
+	}
+
+	// The thin-pool assets landed; the kata payload did not.
+	for _, p := range []string{
+		"usr/local/sbin/setec-thinpool.sh",
+		"etc/setec/thinpool.env",
+		"etc/systemd/system/setec-thinpool.service",
+		"etc/systemd/system/containerd.service.d/10-setec-thinpool.conf",
+	} {
+		if _, err := os.Stat(filepath.Join(fx.root, p)); err != nil {
+			t.Errorf("missing %s after converge: %v", p, err)
+		}
+	}
+	for _, p := range []string{"opt/kata/bin/firecracker", "opt/kata/VERSION", "usr/local/bin/containerd-shim-kata-fc-v2"} {
+		if _, err := os.Lstat(filepath.Join(fx.root, p)); err == nil {
+			t.Errorf("%s was written on a node whose kata is kata-deploy's", p)
+		}
+	}
+	if n := runner.called("systemctl restart containerd.service"); n != 1 {
+		t.Errorf("containerd restarts = %d, want 1", n)
+	}
+
+	// A re-run finds its own devmapper table, keeps the mode, and writes
+	// nothing.
+	res2, err := inst.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("second Converge: %v", err)
+	}
+	if res2.Outcome != OutcomeConvergedDevmapper || res2.Changed || res2.RuntimeRestarted {
+		t.Errorf("re-run: outcome=%s Changed=%t RuntimeRestarted=%t, want converged-devmapper with no writes",
+			res2.Outcome, res2.Changed, res2.RuntimeRestarted)
+	}
+}
+
+// TestConvergeK3sKataDeployNodeSuppliesDevmapper is the same fixture on
+// k3s: the managed template block carries the snapshotter table only.
+func TestConvergeK3sKataDeployNodeSuppliesDevmapper(t *testing.T) {
+	fx := newHostFixture(t, flavorK3s)
+	mustWrite(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config.toml"), "version = 3\n")
+	mustWrite(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config.toml.d/kata-deploy.toml"), kataDeployDropin(3))
+	runner := newFakeRunner(t)
+	runner.respond["systemctl is-active k3s.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if res.Outcome != OutcomeConvergedDevmapper {
+		t.Fatalf("outcome = %s, want %s", res.Outcome, OutcomeConvergedDevmapper)
+	}
+	tmpl := readFile(t, filepath.Join(fx.root, "var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl"))
+	if !strings.Contains(tmpl, `[plugins."io.containerd.snapshotter.v1.devmapper"]`) {
+		t.Errorf("k3s template block missing the devmapper table:\n%s", tmpl)
+	}
+	if kataFCRuntimeTableRe.MatchString(tmpl) {
+		t.Errorf("k3s template block registers a second kata-fc handler:\n%s", tmpl)
+	}
+	res2, err := inst.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("second Converge: %v", err)
+	}
+	if res2.Outcome != OutcomeConvergedDevmapper || res2.Changed || res2.RuntimeRestarted {
+		t.Errorf("re-run: outcome=%s Changed=%t RuntimeRestarted=%t", res2.Outcome, res2.Changed, res2.RuntimeRestarted)
+	}
+}
+
+// TestConvergeForeignKataFCWithDevmapperStandsDown is the baked-image
+// shape: the foreign owner registered the handler AND the snapshotter, so
+// there is nothing left for the installer to supply.
+func TestConvergeForeignKataFCWithDevmapperStandsDown(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
+		"version = 2\nimports = [\"/etc/containerd/config.d/*.toml\"]\n")
+	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.d/90-baked-kata-fc.toml"),
+		"[plugins.\"io.containerd.snapshotter.v1.devmapper\"]\n  pool_name = \"baked-thinpool\"\n"+kataDeployDropin(2))
+	runner := newFakeRunner(t)
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if res.Outcome != OutcomeIdleForeignOwner {
+		t.Fatalf("outcome = %s, want %s", res.Outcome, OutcomeIdleForeignOwner)
+	}
+	if res.Changed || len(runner.calls) != 0 {
+		t.Errorf("baked node was mutated: Changed=%t calls=%v", res.Changed, runner.calls)
+	}
+	if _, err := os.Stat(filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml")); err == nil {
+		t.Error("installer wrote its drop-in on a node whose owner supplies devmapper")
+	}
+}
+
 func TestConvergeK3sFreshNode(t *testing.T) {
 	fx := newHostFixture(t, flavorK3s)
 	// k3s renders a version-3 config (containerd 2.x).
@@ -623,7 +773,7 @@ func TestVerifyChecksTheInstalledTreeNotTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect flavor: %v", err)
 	}
-	if err := inst.verify(context.Background(), flavor); err == nil {
+	if err := inst.verify(context.Background(), flavor, modeFull); err == nil {
 		t.Fatal("verify passed with the shim target absent from the installed tree — " +
 			"it is resolving the symlink against the real filesystem instead of HostRoot")
 	}

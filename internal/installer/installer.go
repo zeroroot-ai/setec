@@ -29,8 +29,15 @@
 // against on-disk state and reports whether it changed anything; a re-run
 // on a converged node performs zero writes and zero runtime restarts.
 // When the node's kata-fc registration is owned by something else
-// (kata-deploy, a baked AMI, an admin) the installer stands down rather
-// than fight for ownership.
+// (kata-deploy, a baked AMI, an admin) the installer never touches the
+// handler or the kata payload. It still supplies the one thing such an
+// owner leaves out: kata-deploy points the fc handler at the devmapper
+// snapshotter and configures no thin-pool and no snapshotter, so every
+// kata-fc pod on such a node fails in containerd with "snapshotter must
+// be provided to unpack" (setec#9). On that node the installer converges
+// the thin-pool and the snapshotter table only. When the foreign owner
+// supplies its own devmapper table (a baked image) the installer stands
+// down entirely.
 package installer
 
 import (
@@ -167,8 +174,15 @@ const (
 	OutcomeIdleNoKVM Outcome = "idle-no-kvm"
 	// OutcomeIdleForeignOwner — kata-fc is already registered with the
 	// node's containerd by something the installer does not manage
-	// (kata-deploy, a baked image, an administrator). Nothing was touched.
+	// (kata-deploy, a baked image, an administrator), and that owner
+	// supplies every snapshotter it asks for. Nothing was touched.
 	OutcomeIdleForeignOwner Outcome = "idle-foreign-owner"
+	// OutcomeConvergedDevmapper — kata-fc is registered by a foreign owner
+	// whose handler asks for the devmapper snapshotter, and nothing had
+	// configured it. The installer supplied the thin-pool and the
+	// snapshotter table, and left the handler and the kata payload to
+	// their owner (setec#9).
+	OutcomeConvergedDevmapper Outcome = "converged-devmapper"
 )
 
 // Result reports what a convergence run did.
@@ -221,18 +235,29 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		return res, nil
 	}
 
-	// 2. Runtime flavor + ownership. If kata-fc is registered by someone
-	// else, the node is already capable — do not fight for ownership.
+	// 2. Runtime flavor + ownership. A kata-fc handler registered by
+	// someone else is theirs, and so is the kata payload. What is not
+	// theirs is a snapshotter their handler names and nobody configured.
 	flavor, err := detectFlavor(in.cfg)
 	if err != nil {
 		return res, fmt.Errorf("detecting container runtime flavor: %w", err)
 	}
 	res.Flavor = flavor.name
-	owner := kataFCOwnership(in.cfg, flavor)
-	if owner == ownerForeign {
-		in.log("kata-fc already registered with %s by an external owner — standing down", flavor.name)
-		res.Outcome = OutcomeIdleForeignOwner
-		return res, nil
+	mode := modeFull
+	if own := nodeOwnership(in.cfg, flavor); own.handlerForeign {
+		switch {
+		case own.devmapperForeign:
+			in.log("kata-fc and the devmapper snapshotter are both registered with %s by an external owner — standing down", flavor.name)
+			res.Outcome = OutcomeIdleForeignOwner
+			return res, nil
+		case own.devmapperSelf || own.handlerWantsDevmapper:
+			in.log("kata-fc is registered with %s by an external owner and asks for the devmapper snapshotter nobody configured — supplying the thin-pool and the snapshotter only", flavor.name)
+			mode = modeDevmapper
+		default:
+			in.log("kata-fc already registered with %s by an external owner — standing down", flavor.name)
+			res.Outcome = OutcomeIdleForeignOwner
+			return res, nil
+		}
 	}
 
 	// 3. Host tooling preflight: everything the boot-time thin-pool
@@ -241,12 +266,14 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		return res, err
 	}
 
-	// 4. Kata payload.
-	kataChanged, err := in.ensureKataPayload()
-	if err != nil {
-		return res, fmt.Errorf("installing kata payload: %w", err)
+	// 4. Kata payload. The handler's owner ships its own in modeDevmapper.
+	if mode == modeFull {
+		kataChanged, err := in.ensureKataPayload()
+		if err != nil {
+			return res, fmt.Errorf("installing kata payload: %w", err)
+		}
+		res.Changed = res.Changed || kataChanged
 	}
-	res.Changed = res.Changed || kataChanged
 
 	// 5. Thin-pool provisioner assets + boot ordering, then provision the
 	// pool NOW so the containerd restart below finds it.
@@ -258,7 +285,7 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 
 	// 6. Containerd registration. Restart the runtime only when the
 	// registration actually changed.
-	cdChanged, err := in.ensureContainerdConfig(ctx, flavor)
+	cdChanged, err := in.ensureContainerdConfig(ctx, flavor, mode)
 	if err != nil {
 		return res, fmt.Errorf("configuring %s: %w", flavor.name, err)
 	}
@@ -271,11 +298,14 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 	}
 
 	// 7. Verify converged state.
-	if err := in.verify(ctx, flavor); err != nil {
+	if err := in.verify(ctx, flavor, mode); err != nil {
 		return res, fmt.Errorf("post-convergence verification: %w", err)
 	}
 
 	res.Outcome = OutcomeConverged
+	if mode == modeDevmapper {
+		res.Outcome = OutcomeConvergedDevmapper
+	}
 	return res, nil
 }
 

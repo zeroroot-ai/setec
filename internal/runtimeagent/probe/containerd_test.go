@@ -259,6 +259,113 @@ func TestScanContainerdConfig(t *testing.T) {
 	}
 }
 
+// kataDeployFCConfig is the kata-deploy 3.28 shape for the fc shim: the
+// handler names the devmapper snapshotter (the chart default for fc,
+// "requires pre-configuration on the user side") and nothing configures it.
+const kataDeployFCConfig = "version = 2\n" +
+	"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.kata-fc]\n" +
+	"  runtime_type = \"io.containerd.kata-fc.v2\"\n" +
+	"  privileged_without_host_devices = true\n" +
+	"  snapshotter = \"devmapper\"\n" +
+	"[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.kata-fc.options]\n" +
+	"  ConfigPath = \"/opt/kata/share/defaults/kata-containers/configuration-fc.toml\"\n"
+
+// devmapperPluginTable is the snapshotter plugin table that makes containerd
+// load devmapper at all.
+const devmapperPluginTable = "[plugins.\"io.containerd.snapshotter.v1.devmapper\"]\n" +
+	"  root_path = \"/var/lib/containerd/io.containerd.snapshotter.v1.devmapper\"\n" +
+	"  pool_name = \"setec-thinpool\"\n"
+
+// TestScanContainerdConfigSnapshotters covers the two facts the installer
+// needs beside the handler set (setec#9): which snapshotter a handler asks
+// for, and which snapshotter plugins the configuration actually carries.
+func TestScanContainerdConfigSnapshotters(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		files            map[string]string
+		wantHandlerSnaps map[string]string
+		wantSnapshotters []string
+		wantNoSnapshot   []string
+	}{
+		{
+			// THE setec#9 SHAPE: the handler wants devmapper, nothing
+			// provides it. Every kata-fc pod fails in containerd with
+			// "snapshotter must be provided to unpack".
+			name: "kata-deploy fc handler names devmapper that nothing configures",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\nimports = [\"/opt/kata/containerd/config.d/*.toml\"]\n",
+				"opt/kata/containerd/config.d/kata-deploy.toml": kataDeployFCConfig,
+			},
+			wantHandlerSnaps: map[string]string{"kata-fc": "devmapper"},
+			wantNoSnapshot:   []string{"devmapper"},
+		},
+		{
+			// The packer AMI shape: handler and snapshotter in one drop-in.
+			name: "handler and its snapshotter plugin both configured",
+			files: map[string]string{
+				stockConfigRelPath: "version = 2\nimports = [\"/etc/containerd/config.d/*.toml\"]\n",
+				"etc/containerd/config.d/99-setec-kata-fc.toml": devmapperPluginTable + kataDeployFCConfig,
+			},
+			wantHandlerSnaps: map[string]string{"kata-fc": "devmapper"},
+			wantSnapshotters: []string{"devmapper"},
+		},
+		{
+			name: "a handler with no snapshotter key is not reported",
+			files: map[string]string{
+				stockConfigRelPath: containerdConfigWith("kata-qemu"),
+			},
+			wantHandlerSnaps: map[string]string{},
+		},
+		{
+			// A snapshotter key under the .options sub-table is not the
+			// handler's, and a single-quoted v3 table is read like a v2 one.
+			name: "v3 schema, key under the handler table only",
+			files: map[string]string{
+				stockConfigRelPath: "version = 3\n" +
+					"[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.\"kata-fc\"]\n" +
+					"  snapshotter = 'devmapper'\n" +
+					"[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.\"kata-qemu\".options]\n" +
+					"  snapshotter = 'overlayfs'\n" +
+					"[plugins.'io.containerd.snapshotter.v1.erofs']\n",
+			},
+			wantHandlerSnaps: map[string]string{"kata-fc": "devmapper"},
+			wantSnapshotters: []string{"erofs"},
+			wantNoSnapshot:   []string{"devmapper"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			for rel, content := range tc.files {
+				writeFile(t, root, rel, content)
+			}
+			scan := ScanContainerdConfig(root)
+			if len(scan.HandlerSnapshotters) != len(tc.wantHandlerSnaps) {
+				t.Errorf("handler snapshotters = %v, want %v", scan.HandlerSnapshotters, tc.wantHandlerSnaps)
+			}
+			for h, want := range tc.wantHandlerSnaps {
+				if got := scan.HandlerSnapshotters[h]; got != want {
+					t.Errorf("handler %q snapshotter = %q, want %q", h, got, want)
+				}
+			}
+			for _, s := range tc.wantSnapshotters {
+				if _, ok := scan.Snapshotters[s]; !ok {
+					t.Errorf("snapshotter plugin %q missing; got %v", s, scan.Snapshotters)
+				}
+			}
+			for _, s := range tc.wantNoSnapshot {
+				if _, ok := scan.Snapshotters[s]; ok {
+					t.Errorf("snapshotter plugin %q unexpectedly present; got %v", s, scan.Snapshotters)
+				}
+			}
+		})
+	}
+}
+
 // TestCheckContainerdHandler pins the three outcomes the kata probes key on,
 // with "cannot read the config" kept distinct from "the handler is not there"
 // while both deny the capability.
