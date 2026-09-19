@@ -644,7 +644,9 @@ sandboxClasses:
           - namespaceSelector:
               matchLabels: {kubernetes.io/metadata.name: gibson}
             podSelector:
-              matchLabels: {app.kubernetes.io/name: envoy}
+              matchLabels:
+                app.kubernetes.io/name: gibson-workloads
+                app.kubernetes.io/component: envoy
             ports:
               - {port: https}
 YAML
@@ -657,7 +659,7 @@ assert_contains "$workdir/allowance.stripped.yaml" "the allowance reaches the re
 	"k8s-app: kube-dns" \
 	"protocol: UDP" \
 	"port: 53" \
-	"app.kubernetes.io/name: envoy" \
+	"app.kubernetes.io/component: envoy" \
 	"port: https"
 
 # The default values ship no allowance: production keeps public resolvers

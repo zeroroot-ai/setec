@@ -854,7 +854,13 @@ sandboxClasses:
     #     - namespaceSelector:
     #         matchLabels: {kubernetes.io/metadata.name: gibson}
     #       podSelector:
-    #         matchLabels: {app.kubernetes.io/name: envoy}
+    #         # The labels the Pod really carries. The gibson umbrella labels
+    #         # Envoy with its chart's common labels, not a name of its own:
+    #         # `app.kubernetes.io/name: envoy` matches nothing there and the
+    #         # connect times out after DNS worked (gibson run 35475259037).
+    #         matchLabels:
+    #           app.kubernetes.io/name: gibson-workloads
+    #           app.kubernetes.io/component: envoy
     #       ports:
     #         - {port: https}
     - name: connector
