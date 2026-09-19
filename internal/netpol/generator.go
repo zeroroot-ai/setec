@@ -386,8 +386,10 @@ func (c Config) generate(
 // class with no DNS allowance never has its Pods pointed at cluster DNS
 // and never waits on a query the CNI drops.
 //
-// The list is never empty: when nothing is reachable the error is
-// ErrNoReachableResolver, and the controller refuses to build the Pod.
+// When the configured list names resolvers and none is reachable the
+// error is ErrNoReachableResolver, and the controller refuses to build
+// the Pod. An empty configured list, which Validate refuses at startup
+// and only tests use, returns empty with no error.
 func (c Config) ResolversFor(class *setecv1alpha1.SandboxClass) ([]string, error) {
 	var exempt []string
 	if class != nil {
@@ -447,7 +449,11 @@ func (c Config) resolverSplit(class *setecv1alpha1.SandboxClass, reserved []stri
 			out.pod = append(out.pod, ip)
 		}
 	}
-	if len(out.pod) == 0 {
+	// An empty configured list is the test-only shape Validate refuses at
+	// startup, and it leaves the Pod on cluster DNS (podspec.BuildOptions).
+	// The refusal here is for a list that names resolvers and can reach
+	// none of them.
+	if len(c.ResolverIPs) > 0 && len(out.pod) == 0 {
 		return resolverSet{}, fmt.Errorf("%w: resolvers %v, reserved %v", ErrNoReachableResolver, c.ResolverIPs, reserved)
 	}
 	return out, nil

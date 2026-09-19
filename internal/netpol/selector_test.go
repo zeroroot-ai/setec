@@ -403,6 +403,33 @@ func TestResolversFor_ClusterDNSNeedsAnAllowance(t *testing.T) {
 	}
 }
 
+// TestResolversFor_EmptyConfiguredListIsNotAnError pins the test-only
+// shape: a Config with no resolvers (which Validate refuses at startup)
+// yields no resolvers and no error, so an envtest reconciler built with
+// a zero Config still creates Pods, and the generated policy carries no
+// DNS rule rather than one with no peers.
+func TestResolversFor_EmptyConfiguredListIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	cfg := testCfg()
+	cfg.ResolverIPs = nil
+	pod, err := cfg.ResolversFor(classWith())
+	if err != nil {
+		t.Fatalf("ResolversFor() err = %v, want nil", err)
+	}
+	if len(pod) != 0 {
+		t.Fatalf("ResolversFor() = %v, want empty", pod)
+	}
+	np, err := cfg.GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly), classWith())
+	if err != nil {
+		t.Fatalf("GenerateForClass() err: %v", err)
+	}
+	requireNoOpenPeerRule(t, np)
+	if dnsRuleOf(np) != nil {
+		t.Fatalf("a DNS rule was rendered with no resolvers configured: %+v", np.Spec.Egress)
+	}
+}
+
 // TestResolversFor_ProductionDefaultUnchanged pins the shipped posture:
 // public resolvers and no selectors give every class the full list and
 // the DNS rule of before setec#76.
