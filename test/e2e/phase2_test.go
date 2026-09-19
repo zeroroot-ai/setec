@@ -335,6 +335,11 @@ func cniEnforcesNetworkPolicy(t *testing.T) bool {
 		{"kube-system", "cilium"},
 		{"kube-system", "calico-node"},
 		{"calico-system", "calico-node"},
+		// kind's default CNI. kindnetd enforces NetworkPolicy since kind
+		// v0.23 (it embeds kube-network-policies), and every kind the
+		// exit-test workflows pin is newer. setec#76 was found on exactly
+		// this enforcement.
+		{"kube-system", "kindnet"},
 	} {
 		if exec.Command("kubectl", "get", "daemonset", "-n", ds[0], ds[1]).Run() == nil {
 			t.Logf("NetworkPolicy enforced: %s/%s present", ds[0], ds[1])

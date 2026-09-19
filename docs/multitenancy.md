@@ -137,13 +137,26 @@ Two operator flags define the posture:
 - `--sandbox-resolvers` — the DNS servers Sandboxes may query. The same
   list is written into each Pod's `dnsConfig` with `dnsPolicy: None`, so
   a Sandbox resolves names through these addresses rather than through
-  cluster DNS and cannot enumerate in-cluster Services by name.
+  cluster DNS and cannot enumerate in-cluster Services by name. A
+  resolver inside the reserved ranges, such as the kube-dns ClusterIP,
+  reaches only the Sandboxes of a class whose `egressAllowSelectors`
+  grant port 53; every other class is pointed at the remaining
+  resolvers, and a class with none left cannot start a Sandbox.
 
 A `SandboxClass` may re-open specific reserved ranges for its own
 Sandboxes via `spec.egressExemptCIDRs`. An `allow` entry whose `cidr`
 lies entirely inside a still-reserved range is dropped rather than
 rendered, and recorded on the `setec.zeroroot.ai/suppressed-allow`
 annotation.
+
+A `SandboxClass` reaches an in-cluster Service through
+`spec.egressAllowSelectors` (setec#76), never through an address. The
+CNI evaluates egress after kube-proxy translates the ClusterIP to a
+backend Pod, so an `ipBlock` for a ClusterIP matches nothing. Each
+entry, `{namespaceSelector, podSelector, ports}`, renders as one egress
+rule with those selectors as the peer, and the CNI matches it against
+the Pod the packet reaches. The reserved ranges stay subtracted from
+every `ipBlock` rule with an allowance present.
 
 **Self-hosted installs must retune the reserved list.** If your
 authorized scope is private address space, the default reserved list
@@ -261,6 +274,8 @@ and tenants reference by name. A class carries:
   Sandbox declares no `spec.network`. Unset resolves to `none`.
 - `egressExemptCIDRs`: ranges this class may reach despite the
   cluster-wide reserved list.
+- `egressAllowSelectors`: in-cluster Pods this class may reach, by
+  namespace and Pod labels on listed ports. The route to a Service.
 - `nodeSelector`: additive node-selector merged into every Pod.
 - `tolerations`: additive tolerations appended to every Pod, letting
   Sandboxes schedule onto a tainted NodePool (e.g. a Karpenter pool

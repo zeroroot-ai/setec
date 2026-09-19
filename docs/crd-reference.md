@@ -324,7 +324,21 @@ Administrators author classes; tenants reference them by name in
   from the reserved list before it is rendered into `ipBlock.except`.
   Use it only for a specific in-cluster endpoint a class genuinely
   needs; every entry re-opens address space for every Sandbox in the
-  class.
+  class. An exemption cannot reach a Service: see
+  `spec.egressAllowSelectors`.
+- `spec.egressAllowSelectors` — in-cluster Pods this class may reach,
+  selected by labels (setec#76). Each entry is `{namespaceSelector,
+  podSelector, ports}` and renders as one egress rule whose peer carries
+  both selectors and whose ports are the listed ones, beside the
+  `ipBlock` rules of the mode. This is the only way to reach a Service:
+  the CNI evaluates egress after kube-proxy translates the ClusterIP to
+  a backend Pod, so an `ipBlock` for a ClusterIP never matches. A port
+  is a number or a container port name. At least one selector and one
+  port are required. An entry whose ports include `53` also lets the
+  class use a `--sandbox-resolvers` entry inside the reserved ranges,
+  such as the kube-dns ClusterIP. Ignored under mode `none`. The
+  webhook refuses an entry with no selector, no port, a malformed
+  selector or port, or an unknown protocol.
 - `spec.nodeSelector` — additive per-Sandbox node selector, merged with
   the backend's own `NodeAffinity` from `setec.zeroroot.ai/runtime.<backend>=true`.
 - `spec.tolerations` — additive `[]corev1.Toleration` appended to every

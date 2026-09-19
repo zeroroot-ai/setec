@@ -327,7 +327,21 @@ than clearing it.
 `netpol.resolvers` are the DNS servers Sandboxes may query. The same
 addresses are written into every Sandbox Pod's `dnsConfig` with
 `dnsPolicy: None`, so Sandboxes do not use cluster DNS and cannot
-enumerate in-cluster Services by name.
+enumerate in-cluster Services by name. A resolver that sits inside
+`netpol.reservedCIDRs`, such as the kube-dns ClusterIP, reaches only the
+Sandboxes of a class whose `egressAllowSelectors` grant port 53. Every
+other class is pointed at the public resolvers alone.
+
+`sandboxClasses.classes[].spec.egressAllowSelectors` is how a class
+reaches an in-cluster Service (setec#76). The CNI evaluates egress after
+kube-proxy translates the ClusterIP to a backend Pod, so an `ipBlock` for
+a ClusterIP never matches. Each entry is `{namespaceSelector,
+podSelector, ports}` and renders as one `NetworkPolicy` egress rule with
+those selectors as the peer. A port is a number or a container port
+name. The chart refuses to render an entry with no selector or no port.
+The shipped classes carry none. `values.yaml` shows the two entries a
+kind test profile sets, kube-dns on 53 and the platform edge on its
+`https` port.
 
 `sandboxNamespaces` names the namespaces Sandboxes run in, and is
 required (an empty list fails the render). It does two things:

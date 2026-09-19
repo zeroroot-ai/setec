@@ -832,6 +832,31 @@ sandboxClasses:
     # reachable by every Sandbox in the class, so it must be the
     # narrowest block that covers the one endpoint, and it must be set
     # per install rather than shipped as a default.
+    #
+    # egressAllowSelectors is how a class reaches an in-cluster Service
+    # (setec#76). The CNI evaluates egress after kube-proxy translates
+    # the ClusterIP to a backend Pod, so an ipBlock for a ClusterIP never
+    # matches; a selector does. Each entry is {namespaceSelector,
+    # podSelector, ports} and renders as one NetworkPolicy egress rule.
+    # An entry whose ports include 53 also lets the class use a
+    # netpol.resolvers entry that sits inside netpol.reservedCIDRs, such
+    # as the kube-dns ClusterIP. It is empty here and stays empty in
+    # production; a test profile sets, for example:
+    #
+    #   egressAllowSelectors:
+    #     - namespaceSelector:
+    #         matchLabels: {kubernetes.io/metadata.name: kube-system}
+    #       podSelector:
+    #         matchLabels: {k8s-app: kube-dns}
+    #       ports:
+    #         - {protocol: UDP, port: 53}
+    #         - {protocol: TCP, port: 53}
+    #     - namespaceSelector:
+    #         matchLabels: {kubernetes.io/metadata.name: gibson}
+    #       podSelector:
+    #         matchLabels: {app.kubernetes.io/name: envoy}
+    #       ports:
+    #         - {port: https}
     - name: connector
       spec:
         runtime:
@@ -844,6 +869,7 @@ sandboxClasses:
           - egress-allow-list
           - none
         egressExemptCIDRs: []
+        egressAllowSelectors: []
 
 # ---------------------------------------------------------------------------
 # Phase 3: snapshot, restore, pause/resume, pre-warmed pool.

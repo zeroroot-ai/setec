@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // VMM identifies a virtual machine monitor a SandboxClass may target. The
@@ -161,6 +162,30 @@ type SandboxClassSpec struct {
 	// +optional
 	EgressExemptCIDRs []string `json:"egressExemptCIDRs,omitempty"`
 
+	// EgressAllowSelectors lists in-cluster workloads this class may
+	// reach, selected by namespace and Pod labels (setec#76). Each entry
+	// renders as one egress rule whose peer carries the namespaceSelector
+	// and podSelector and whose ports are the listed ones, beside the
+	// ipBlock rules the mode produces.
+	//
+	// This is the only way to reach a Service. Kubernetes evaluates
+	// egress policy after kube-proxy translates the ClusterIP to a
+	// backend Pod address, so an ipBlock for a ClusterIP, whether from
+	// egressExemptCIDRs or an allow-list entry, never matches. A
+	// selector matches the Pod the packet actually reaches.
+	//
+	// An entry whose ports include 53 also lets the Sandbox use a
+	// configured resolver that sits inside the reserved ranges, such as
+	// the kube-dns ClusterIP. Without such an entry a class never has
+	// its Pods pointed at cluster DNS, whatever --sandbox-resolvers
+	// lists.
+	//
+	// Every entry widens what every Sandbox in the class reaches. Empty,
+	// the expected value for every class that runs tenant workloads,
+	// grants nothing. Ignored under mode "none".
+	// +optional
+	EgressAllowSelectors []EgressAllowSelector `json:"egressAllowSelectors,omitempty"`
+
 	// DefaultEgressAllow is the class-level egress allowlist applied
 	// when DefaultNetworkMode is "egress-allow-list" and a Sandbox does
 	// not declare its own network block. It lets an administrator open a
@@ -265,6 +290,47 @@ type SandboxClassSpec struct {
 	// sessionIdleTimeout.
 	// +optional
 	SessionCheckpoint *SessionCheckpointSpec `json:"sessionCheckpoint,omitempty"`
+}
+
+// EgressAllowSelector names a set of in-cluster Pods a SandboxClass may
+// reach on a set of ports. It is rendered verbatim as a NetworkPolicyPeer
+// with the listed ports, so its semantics are the Kubernetes ones: both
+// selectors set selects Pods matching podSelector in namespaces matching
+// namespaceSelector, namespaceSelector alone selects every Pod in those
+// namespaces, and podSelector alone selects Pods in the Sandbox's own
+// namespace. At least one selector is required.
+type EgressAllowSelector struct {
+	// NamespaceSelector selects the namespaces the peer Pods live in.
+	// +optional
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
+
+	// PodSelector selects the peer Pods by label.
+	// +optional
+	PodSelector *metav1.LabelSelector `json:"podSelector,omitempty"`
+
+	// Ports lists the destination ports permitted on the selected Pods.
+	// At least one is required: an allowance never opens every port.
+	// +kubebuilder:validation:MinItems=1
+	// +required
+	Ports []EgressAllowPort `json:"ports"`
+}
+
+// EgressAllowPort is one destination port of an EgressAllowSelector.
+type EgressAllowPort struct {
+	// Protocol is the transport protocol. Defaults to TCP.
+	// +kubebuilder:validation:Enum=TCP;UDP;SCTP
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+
+	// Port is the destination port on the selected Pod, as a number or
+	// as the name of a container port. A named port follows the Pod's
+	// own declaration, so a Service that maps port 443 to a container
+	// port named "https" is reached with Port "https". Name the DNS
+	// ports by number (53): the operator reads the class alone and
+	// cannot see the kube-dns Pod's port names.
+	// +required
+	Port intstr.IntOrString `json:"port"`
 }
 
 // SessionCheckpointSpec tunes the per-class memory-checkpoint policy
