@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.115.1](https://github.com/zeroroot-ai/setec/compare/v0.115.0...v0.115.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **installer:** the payload gate is a positive inventory, proven to fail ([#79](https://github.com/zeroroot-ai/setec/issues/79)) ([5279237](https://github.com/zeroroot-ai/setec/commit/5279237d602605bd54ab8c208325000565b6e11a))
+
 ## [0.115.0](https://github.com/zeroroot-ai/setec/compare/v0.114.6...v0.115.0) (2026-09-19)
 
 
