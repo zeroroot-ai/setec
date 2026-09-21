@@ -38,3 +38,33 @@ jobs:
 
   link-check:
     uses: zeroroot-ai/.github/.github/workflows/link-check.yml@1366fb5a29590e522bf5a74308f55bb39a4edb56 # v0.5.1
+
+  # The installer's payload gate, proven to fail (setec#17). The gate is a
+  # stage of Dockerfile.installer that asserts the pruned kata tree holds
+  # exactly the binaries the kata-fc handler runs. This job builds that
+  # stage twice: plain, which must pass, and with PAYLOAD_MUTATION planting
+  # a junk binary, which must fail. A guard that cannot fail is the
+  # recurring defect class in this org; this is the proof that this one
+  # can. The kata pin comes from kata.env, as in images.yml.
+  installer-payload-guard:
+    name: installer payload gate can fail
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Plain gate stage builds
+        run: |
+          set -euo pipefail
+          args="$(grep -vE '^\s*(#|$)' kata.env | sed 's/^/--build-arg /')"
+          # shellcheck disable=SC2086
+          docker build -f Dockerfile.installer --target payload-gate $args -t payload-gate:plain .
+      - name: Mutated gate stage is refused
+        run: |
+          set -euo pipefail
+          args="$(grep -vE '^\s*(#|$)' kata.env | sed 's/^/--build-arg /')"
+          # shellcheck disable=SC2086
+          if docker build -f Dockerfile.installer --target payload-gate $args --build-arg PAYLOAD_MUTATION=zz-junk-binary . ; then
+            echo "::error::the payload gate cannot fail: a build with a junk binary in bin passed the inventory check"
+            exit 1
+          fi
+          echo "the mutated build was refused: the inventory guard can fail"

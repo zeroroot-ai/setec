@@ -109,18 +109,41 @@ RUN set -eux; \
       case " $keep " in *" $f "*) ;; *) rm -rf "$f" ;; esac; \
     done
 
-# Payload gate: everything the kata-fc handler needs at runtime must be
-# in the pruned tree, including the kernel/image the FC config points at.
-# A bad prune fails the image build, never a node.
+# ----------------------------------------------------------------------------
+# Payload gate — its own stage so the gate can be proven to fail.
+#
+# Everything the kata-fc handler needs at runtime must be in the pruned
+# tree, including the kernel/image the FC config points at, and nothing
+# else may be. A bad prune fails the image build, never a node.
+#
+# PAYLOAD_MUTATION is the mutation hook (setec#17): a name here is touched
+# into the bin directory before the gate runs, and the build MUST fail. The
+# tree-guards workflow and `make installer-payload-guard` build this stage
+# twice, once plain and once mutated, and pass only when the plain build
+# passes and the mutated one fails. A guard that cannot fail is the
+# recurring defect class in this org; this is how this one is shown to.
+# The hook cannot ship anything: a mutated build never reaches the runtime
+# stage, because the gate below refuses it.
+# ----------------------------------------------------------------------------
+FROM payload AS payload-gate
+ARG PAYLOAD_MUTATION=""
+RUN set -eu; \
+    if [ -n "${PAYLOAD_MUTATION}" ]; then \
+      echo "PAYLOAD_MUTATION=${PAYLOAD_MUTATION}: planting a junk binary; this build must fail at the gate" >&2; \
+      : > "/payload/opt/kata/bin/${PAYLOAD_MUTATION}"; \
+    fi
 RUN set -eux; \
+    # Positive inventory (setec#17): bin holds exactly the three binaries
+    # the kata-fc handler runs, each executable. This replaces the two
+    # named negative tests from setec#284: an extract-list entry not in
+    # this set fails here whatever its name, so the list cannot silently
+    # grow and re-import a binary's CVE surface onto every sandbox host.
+    have="$(ls -A /payload/opt/kata/bin | LC_ALL=C sort | paste -sd' ')"; \
+    want="containerd-shim-kata-v2 firecracker jailer"; \
+    test "$have" = "$want" || { echo "payload bin inventory is '$have', declared '$want'" >&2; exit 1; }; \
     test -x /payload/opt/kata/bin/containerd-shim-kata-v2; \
     test -x /payload/opt/kata/bin/firecracker; \
     test -x /payload/opt/kata/bin/jailer; \
-    # Negative gate (setec#284): the unused kata CLI/debug binaries must
-    # stay out. Re-adding either to the extract list above fails here
-    # rather than silently re-importing their CVE surface.
-    test ! -e /payload/opt/kata/bin/kata-runtime; \
-    test ! -e /payload/opt/kata/bin/kata-collect-data.sh; \
     fc_conf=/payload/opt/kata/share/defaults/kata-containers/configuration-fc.toml; \
     test -f "$fc_conf"; \
     kernel="$(awk -F'"' '$1 ~ /^kernel = $/ {print $2; exit}' "$fc_conf")"; \
@@ -138,7 +161,7 @@ FROM ghcr.io/zeroroot-ai/mirror/distroless-static-debian12:nonroot@sha256:afa5c8
 WORKDIR /
 
 COPY --from=builder /out/installer /entrypoint
-COPY --from=payload /payload/opt/kata /opt/kata
+COPY --from=payload-gate /payload/opt/kata /opt/kata
 
 # Apache-2.0 §4(a) requires that every recipient of a distribution gets a
 # copy of the License, and a published image is a distribution. /licenses

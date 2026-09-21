@@ -199,6 +199,16 @@ installer-image: ## Build the setec-installer image with the kata pin from kata.
 	  $$(grep -vE '^\s*(#|$$)' kata.env | sed 's/^/--build-arg /') \
 	  -t ghcr.io/zeroroot-ai/setec-installer:dev .
 
+.PHONY: installer-payload-guard
+installer-payload-guard: ## Prove the installer's payload gate: the plain gate stage builds, a mutated one fails (setec#17).
+	@args="$$(grep -vE '^\s*(#|$$)' kata.env | sed 's/^/--build-arg /')"; \
+	$(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args -t setec-installer-payload-gate:check . >/dev/null; \
+	echo "payload gate: plain build passed"; \
+	if $(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args --build-arg PAYLOAD_MUTATION=zz-junk-binary . >/dev/null 2>&1; then \
+	  echo "payload gate CANNOT FAIL: a mutated payload built; the inventory guard is broken" >&2; exit 1; \
+	fi; \
+	echo "payload gate: mutated build refused, the guard can fail"
+
 .PHONY: check-kata-pin
 check-kata-pin: ## Fail if any consumer names a kata version of its own (kata.env is the source).
 	bash scripts/check-kata-pin.sh --selftest
