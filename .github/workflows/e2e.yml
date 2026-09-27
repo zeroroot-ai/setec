@@ -522,13 +522,16 @@ jobs:
       # The cluster is isolated, so the webhook stays on. A dead run cannot
       # fail anyone else's Sandbox writes closed.
       SETEC_E2E_WEBHOOK: "1"
-      # Installer overrides, appended to every pass's install:
+      # Chart overrides for this cluster, appended to every pass's install:
       #   - pin the installer to the worker, so it never restarts containerd
       #     under the API server on the control-plane node;
       #   - a 20 GiB sparse thin-pool instead of 50. The runner disk is small,
-      #     and the scenarios write far less than that.
-      INSTALLER_SET: >-
-        installer.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host,installer.thinpool.loopDataSizeGB=20
+      #     and the scenarios write far less than that;
+      #   - a 30s runtime-agent probe interval instead of 5m. The agent's
+      #     first probe can land before the installer registers kata-fc, and
+      #     the label then waits one interval. TestEnv_KVMPresent waits 3m.
+      NODE_SET: >-
+        installer.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host,installer.thinpool.loopDataSizeGB=20,defaults.runtime.probeInterval=30s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -643,7 +646,7 @@ jobs:
         run: |
           set +e
           set -uo pipefail
-          SETEC_E2E_EXTRA_SET="${INSTALLER_SET}" \
+          SETEC_E2E_EXTRA_SET="${NODE_SET}" \
             go test -tags=e2e ./test/e2e/... -v -timeout 20m \
             -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
             2>&1 | tee guard.log
@@ -661,7 +664,7 @@ jobs:
           # -skip: the installer registers kata-fc only, so no node can run
           # kata-qemu here. That subtest would SKIP on its own, and a SKIP
           # fails this pass. kata-qemu coverage is tracked in its own issue.
-          SETEC_E2E_EXTRA_SET="${INSTALLER_SET}" \
+          SETEC_E2E_EXTRA_SET="${NODE_SET}" \
             go test -tags=e2e ./test/e2e/... -v -timeout 60m \
             -run '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$' \
             -skip '^TestRuntimeBackends_Smoke/backend=kata-qemu$' \
@@ -686,7 +689,7 @@ jobs:
           # to kata-deploy's node label, which this cluster does not carry,
           # so the selector moves to the worker.
           node_agent_set="nodeAgent.enabled=true,nodeAgent.image.repository=${SETEC_E2E_NODE_AGENT_IMAGE_REPO},nodeAgent.image.tag=${SETEC_E2E_IMAGE_TAG},nodeAgent.nodeSelector.katacontainers\.io/kata-runtime=null,nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host"
-          SETEC_E2E_EXTRA_SET="${INSTALLER_SET},${node_agent_set}" \
+          SETEC_E2E_EXTRA_SET="${NODE_SET},${node_agent_set}" \
             go test -tags=e2e ./test/e2e/... -v -timeout 45m \
             -run '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$' \
             2>&1 | tee phase3.log
@@ -698,6 +701,7 @@ jobs:
         run: |
           set -uo pipefail
           kubectl get nodes -o wide --show-labels || true
+          kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.metadata.annotations.setec\.zeroroot\.ai/runtime-probe}{"\n"}{end}' || true
           kubectl get runtimeclass,sandboxclasses -o wide || true
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
