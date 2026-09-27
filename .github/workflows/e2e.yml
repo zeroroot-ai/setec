@@ -547,11 +547,9 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Make /dev/kvm usable
-        # The runner's /dev/kvm is root:kvm 0660. kind copies the host device
-        # nodes into each node container with the mode they have when the
-        # container starts, so the mode has to change BEFORE the cluster
-        # exists. The ioctl proves the device answers, not only that it is
-        # present.
+        # The runner's /dev/kvm is root:kvm 0660. The worker node mounts the
+        # runner's /dev, so it sees this mode. The ioctl proves the device
+        # answers, not only that it is present.
         run: |
           set -euo pipefail
           ls -l /dev/kvm
@@ -584,12 +582,15 @@ jobs:
         #     published SHA-256. Upstream builds include devmapper. The
         #     installer then refuses to report converged on a containerd
         #     that did not load it.
-        #   - No udev runs inside the node container, so nothing creates the
-        #     /dev/mapper node when dmsetup activates a device. containerd
-        #     then reports the thin-pool as "Device does not exist", and a
-        #     failed devmapper plugin takes containerd's metadata store down
-        #     with it. DM_DISABLE_UDEV=1 makes libdevmapper create the nodes
-        #     itself, for containerd and for the installer's thin-pool unit.
+        #   - No udev runs inside the node container. The worker mounts the
+        #     runner's /dev (hack/kind-kvm.yaml says why), but the runner's
+        #     udev cannot finish a device-mapper handshake that starts in the
+        #     node's IPC namespace, so nothing creates /dev/mapper/<name>.
+        #     containerd then reports the thin-pool as "Device does not
+        #     exist", and a failed devmapper plugin takes containerd's
+        #     metadata store down with it. DM_DISABLE_UDEV=1 makes
+        #     libdevmapper create the /dev/mapper nodes itself, for
+        #     containerd and for the installer's thin-pool unit.
         #   - The kind image ships /etc/containerd as 0644, with no execute
         #     bit. The runtime-agent runs as non-root and cannot traverse
         #     into the directory to read the containerd config, so it would

@@ -1,11 +1,7 @@
 # kind topology for the Go e2e suites (.github/workflows/e2e.yml, job `suites`).
 #
 # The job runs on a GitHub-hosted ubuntu-latest runner, which exposes
-# /dev/kvm (nested virtualization). kind nodes are privileged containers, so
-# the node sees the host's /dev/kvm without an extra mount. The workflow
-# makes the device world-readable BEFORE it creates the cluster, because a
-# privileged container copies the host device nodes with the mode they have
-# at container start.
+# /dev/kvm (nested virtualization).
 #
 # Two nodes, for the reason hack/kind-chain6.yaml gives: a Sandbox requests a
 # whole CPU, and the control-plane node has little CPU left. The worker is
@@ -13,6 +9,16 @@
 # suite pins the installer DaemonSet to that label. So the installer never
 # restarts containerd under the API server on the control-plane node, and
 # only the worker ever reads as kata-fc capable.
+#
+# The worker mounts the runner's /dev. A kind node's own /dev is a tmpfs that
+# docker fills once, at container start, and nothing adds to it later. But
+# kata-fc needs device nodes that appear at run time: containerd's devmapper
+# snapshotter activates a thin device per container rootfs, and the kata
+# shim resolves it as /dev/dm-<n> before it hands the block device to
+# Firecracker. Without the mount every kata-fc Pod failed with "Could not
+# resolve symlink for source /dev/dm-1". The runner's /dev is a devtmpfs,
+# where the kernel creates /dev/dm-<n> and /dev/loop<n> itself. It also
+# carries /dev/kvm with the mode the workflow sets.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -20,3 +26,6 @@ nodes:
   - role: worker
     labels:
       setec.zeroroot.ai/e2e-role: sandbox-host
+    extraMounts:
+      - hostPath: /dev
+        containerPath: /dev
