@@ -260,6 +260,63 @@ func TestConvergeNoRootConfigUsesBinaryDefaultVersion(t *testing.T) {
 	}
 }
 
+// The kind node image ships a containerd built without the devmapper
+// snapshotter. The installer used to report converged on it, and every
+// kata-fc Pod then failed to unpack its image (setec#22). With ctr on the
+// host the installer now asks containerd, and a missing plugin fails the
+// convergence.
+func TestConvergeFailsWhenContainerdLacksDevmapper(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "TYPE                            ID          PLATFORMS      STATUS\n" +
+		"io.containerd.snapshotter.v1    native      linux/amd64    ok\n" +
+		"io.containerd.snapshotter.v1    overlayfs   linux/amd64    ok\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err == nil {
+		t.Fatalf("Converge succeeded with outcome %s on a containerd without devmapper; want an error", res.Outcome)
+	}
+	if !strings.Contains(err.Error(), "no devmapper snapshotter plugin") {
+		t.Errorf("error does not name the missing plugin: %v", err)
+	}
+}
+
+func TestConvergeFailsWhenDevmapperDidNotLoad(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "io.containerd.snapshotter.v1    devmapper   linux/amd64    error\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err == nil || !strings.Contains(err.Error(), `plugin status "error"`) {
+		t.Fatalf("Converge error = %v, want the devmapper plugin status named", err)
+	}
+}
+
+func TestConvergeConfirmsDevmapperLoaded(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "io.containerd.snapshotter.v1    devmapper   linux/amd64    ok\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err != nil || res.Outcome != OutcomeConverged {
+		t.Fatalf("Converge = %s, %v; want converged", res.Outcome, err)
+	}
+	if runner.called("ctr plugins ls") == 0 {
+		t.Error("the installer never asked containerd for its plugins")
+	}
+}
+
 func TestConvergeIsIdempotent(t *testing.T) {
 	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)

@@ -525,6 +525,9 @@ func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor, mode conv
 	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "info", in.cfg.PoolName); err != nil {
 		return fmt.Errorf("thin-pool %s not active: %w", in.cfg.PoolName, err)
 	}
+	if err := in.verifyDevmapperPlugin(ctx, flavor); err != nil {
+		return err
+	}
 	if mode == modeDevmapper {
 		// The shim belongs to the handler's owner.
 		return nil
@@ -548,4 +551,69 @@ func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor, mode conv
 		return fmt.Errorf("kata-fc shim target missing at %s: %w", kataShimBin, err)
 	}
 	return nil
+}
+
+// devmapperPluginType and devmapperPluginID name the containerd snapshotter
+// the kata-fc handler asks for, as `ctr plugins ls` prints them.
+const (
+	devmapperPluginType = "io.containerd.snapshotter.v1"
+	devmapperPluginID   = "devmapper"
+)
+
+// verifyDevmapperPlugin asks the running containerd whether it loaded the
+// devmapper snapshotter. A pool and a drop-in on disk prove nothing when the
+// binary was built without the plugin: the kind node image ships such a
+// build, so the installer reported "converged" while every kata-fc Pod died
+// with "inspection service could not find snapshotter devmapper plugin"
+// (setec#22). A plugin that is present but failed to initialise is the same
+// failure, one step later.
+//
+// When the host has no ctr to ask (k3s without its multicall binary, a
+// minimal image), the check is skipped out loud rather than guessed.
+func (in *Installer) verifyDevmapperPlugin(ctx context.Context, flavor runtimeFlavor) error {
+	var name string
+	var args []string
+	switch {
+	case flavor.name == flavorK3s && hostHas(in.cfg.HostRoot, "k3s"):
+		name, args = "k3s", []string{"ctr", "plugins", "ls"}
+	case hostHas(in.cfg.HostRoot, "ctr"):
+		name, args = "ctr", []string{"plugins", "ls"}
+	default:
+		in.log("no ctr on the host; cannot confirm that %s loaded the devmapper snapshotter", flavor.name)
+		return nil
+	}
+	out, err := in.cfg.Runner.Run(ctx, name, args...)
+	if err != nil {
+		return fmt.Errorf("listing %s plugins to confirm the devmapper snapshotter: %w", flavor.name, err)
+	}
+	status, found := devmapperPluginStatus(out)
+	if !found {
+		return fmt.Errorf(
+			"%s on this node has no devmapper snapshotter plugin: the binary was built without it "+
+				"(the kind node image is one), so no kata-fc Pod can unpack its image here. "+
+				"Install a containerd build that includes devmapper", flavor.name)
+	}
+	if status != "ok" {
+		return fmt.Errorf("%s did not load the devmapper snapshotter (plugin status %q); inspect `journalctl -u %s` on the node",
+			flavor.name, status, flavor.unit)
+	}
+	return nil
+}
+
+// devmapperPluginStatus finds the devmapper snapshotter row in `ctr plugins
+// ls` output (TYPE ID PLATFORMS STATUS) and returns its status.
+func devmapperPluginStatus(out []byte) (string, bool) {
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 3 && f[0] == devmapperPluginType && f[1] == devmapperPluginID {
+			return f[len(f)-1], true
+		}
+	}
+	return "", false
+}
+
+// hostHas reports whether name resolves on the host's PATH.
+func hostHas(root, name string) bool {
+	_, err := lookPathIn(root, name)
+	return err == nil
 }
