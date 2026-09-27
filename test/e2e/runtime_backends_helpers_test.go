@@ -153,25 +153,28 @@ func skipIfNodeLabelMissing(t *testing.T, label string) {
 	}
 }
 
-// scrapeOperatorMetrics port-forwards the operator's metrics service and
-// returns the parsed Prometheus metric families.
+// scrapeOperatorMetrics port-forwards to the operator Deployment's metrics
+// port and returns the parsed Prometheus metric families.
 //
-// The metrics service is expected to be named "setec-metrics" in testNamespace,
-// listening on port 8080 (controller-runtime default).
+// The chart renders no metrics Service for the operator. This used to name a
+// "setec-metrics" Service that no release has, so every scrape failed: the
+// cold-start label check skipped on every run and the fallback counter was
+// never asserted (setec#22). The Deployment is named by the chart's fullname.
 func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
-	return scrapeServiceMetrics(ctx, "setec-metrics", "8080", "19090")
+	return scrapeServiceMetrics(ctx, "deploy/"+chartFullname, "8080", "19090")
 }
 
-// scrapeServiceMetrics port-forwards svc/<svcName>:<svcPort> in testNamespace
-// to 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed
-// Prometheus metric families. The port-forward subprocess is killed when ctx
-// is cancelled.
-func scrapeServiceMetrics(ctx context.Context, svcName, svcPort, localPort string) (map[string]*dto.MetricFamily, error) {
+// scrapeServiceMetrics port-forwards <target>:<port> in testNamespace to
+// 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed Prometheus
+// metric families. target is a kubectl resource reference such as
+// svc/<name> or deploy/<name>. The port-forward subprocess is killed when
+// ctx is cancelled.
+func scrapeServiceMetrics(ctx context.Context, target, port, localPort string) (map[string]*dto.MetricFamily, error) {
 	pf := exec.CommandContext(ctx,
 		"kubectl", "port-forward",
 		"-n", testNamespace,
-		"svc/"+svcName,
-		localPort+":"+svcPort,
+		target,
+		localPort+":"+port,
 	)
 	pf.Stderr = io.Discard
 	if err := pf.Start(); err != nil {
@@ -194,7 +197,7 @@ func scrapeServiceMetrics(ctx context.Context, svcName, svcPort, localPort strin
 		resp = r
 		return true, nil
 	}); err != nil {
-		return nil, fmt.Errorf("port-forward to svc/%s not ready within 15s: %w", svcName, err)
+		return nil, fmt.Errorf("port-forward to %s not ready within 15s: %w", target, err)
 	}
 
 	defer resp.Body.Close()
