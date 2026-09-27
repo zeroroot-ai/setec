@@ -476,30 +476,50 @@ jobs:
   # ----------------------------------------------------------------------
   # suites: the Go e2e scenarios (setec#298), on kind + nested KVM (setec#22).
   #
-  # One runner, one kind cluster, three `go test` passes. Each pass installs
-  # its own throwaway release from THIS checkout's chart with the images
-  # build-images pushed, and uninstalls it on the way out (TestMain):
+  # Two jobs from one matrix, each on its own runner and kind cluster, so the
+  # two halves run side by side and one failing does not hide the other.
+  # Every `go test` installs its own throwaway release from THIS checkout's
+  # chart with the images build-images pushed, and uninstalls it on the way
+  # out (TestMain).
+  #
+  # Each job runs two steps:
   #
   #   1. The guard. TestEnv_KVMPresent and TestInstaller_Converges run alone,
   #      before anything else, so an incapable environment fails the job
   #      here instead of turning the rest into a green all-skip. In one
   #      `go test` they would not run first: Go orders tests by file name.
-  #   2. The suites with snapshots off. This pass also holds the scenarios
-  #      a shared cluster could not run: the admission webhook, and the
-  #      RuntimeClass delete in TestSandbox_ZZ_NoRuntimeClass.
-  #   3. Phase 3 with snapshots on: snapshot/restore, the pool, and both
-  #      ADR-0005 invariants. Snapshots are an install-time switch, and
-  #      TestPhase3_UpgradeFromPhase2 needs them off, so this is its own
-  #      install.
+  #   2. Its half of the scenarios:
+  #        suites  snapshots off. It also holds the scenarios a shared
+  #                cluster could not run: the admission webhook, and the
+  #                RuntimeClass delete in TestSandbox_ZZ_NoRuntimeClass.
+  #        phase3  snapshots on: snapshot/restore, the pool, and both
+  #                ADR-0005 invariants. Snapshots are an install-time
+  #                switch, and TestPhase3_UpgradeFromPhase2 needs them off.
   #
-  # A SKIP fails the pass. A skipped scenario is not a verified one, and the
+  # A SKIP fails the step. A skipped scenario is not a verified one, and the
   # warning the old job printed was read as a pass. The one exclusion is
-  # named in the `-skip` flag below, with the reason beside it.
+  # named in the matrix `skip` entry, with the reason beside it.
   # ----------------------------------------------------------------------
   suites:
+    name: suites (${{ matrix.pass }})
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pass: suites
+            snapshots: "0"
+            run: '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$'
+            # The installer registers kata-fc only, so no node can run
+            # kata-qemu here. That subtest would SKIP on its own, and a SKIP
+            # fails the step. kata-qemu coverage has its own issue.
+            skip: '^TestRuntimeBackends_Smoke/backend=kata-qemu$'
+          - pass: phase3
+            snapshots: "1"
+            run: '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$'
+            skip: ''
     env:
       KIND_CLUSTER: setec-kvm
       # The worker is the one node that hosts microVMs (hack/kind-kvm.yaml).
@@ -674,8 +694,7 @@ jobs:
             | kubectl apply -f -
           kubectl get runtimeclass
 
-      - name: "Pass 1: the KVM guard"
-        id: guard
+      - name: The KVM guard
         env:
           SETEC_E2E_NAMESPACE: setec-e2e-guard
           SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-guard-sandboxes
@@ -688,64 +707,52 @@ jobs:
             -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
             2>&1 | tee guard.log
           status="${PIPESTATUS[0]}"
-          scripts/e2e-summary.sh "Pass 1: the KVM guard" guard.log "$status"
+          scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
 
-      - name: "Pass 2: the suites, snapshots off"
+      - name: The ${{ matrix.pass }} scenarios
         env:
-          SETEC_E2E_NAMESPACE: setec-e2e-suites
-          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-suites-sandboxes
-          SETEC_E2E_RELEASE: setec-e2e-suites
+          SETEC_E2E_NAMESPACE: setec-e2e-${{ matrix.pass }}
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-${{ matrix.pass }}-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-${{ matrix.pass }}
+          SETEC_E2E_SNAPSHOTS: ${{ matrix.snapshots }}
+          RUN_PATTERN: ${{ matrix.run }}
+          SKIP_PATTERN: ${{ matrix.skip }}
+          PASS: ${{ matrix.pass }}
         run: |
           set +e
           set -uo pipefail
-          # -skip: the installer registers kata-fc only, so no node can run
-          # kata-qemu here. That subtest would SKIP on its own, and a SKIP
-          # fails this pass. kata-qemu coverage is tracked in its own issue.
-          SETEC_E2E_EXTRA_SET="${NODE_SET}" \
-            go test -tags=e2e ./test/e2e/... -v -timeout 60m \
-            -run '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$' \
-            -skip '^TestRuntimeBackends_Smoke/backend=kata-qemu$' \
-            2>&1 | tee suites.log
+          extra_set="${NODE_SET}"
+          sampler=""
+          if [ "${SETEC_E2E_SNAPSHOTS}" = "1" ]; then
+            # The node-agent takes the Firecracker snapshots. The chart pins
+            # it to kata-deploy's node label, which this cluster does not
+            # carry, so the selector moves to the worker.
+            extra_set="${extra_set},nodeAgent.enabled=true,nodeAgent.image.repository=${SETEC_E2E_NODE_AGENT_IMAGE_REPO},nodeAgent.image.tag=${SETEC_E2E_IMAGE_TAG},nodeAgent.nodeSelector.katacontainers\.io/kata-runtime=null,nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host"
+            # TestMain uninstalls the release on the way out, so a node-agent
+            # that crashed mid-pass leaves no logs behind. Sample them while
+            # the pass runs.
+            (
+              while sleep 60; do
+                echo "--- $(date -u +%H:%M:%S)"
+                kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
+                  --all-containers --previous --tail=60 2>&1
+                kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
+                  --all-containers --tail=60 2>&1
+              done
+            ) > node-agent.log &
+            sampler=$!
+          fi
+          skip_args=()
+          if [ -n "${SKIP_PATTERN}" ]; then
+            skip_args=(-skip "${SKIP_PATTERN}")
+          fi
+          SETEC_E2E_EXTRA_SET="${extra_set}" \
+            go test -tags=e2e ./test/e2e/... -v -timeout 70m \
+            -run "${RUN_PATTERN}" "${skip_args[@]}" \
+            2>&1 | tee "${PASS}.log"
           status="${PIPESTATUS[0]}"
-          scripts/e2e-summary.sh "Pass 2: the suites, snapshots off" suites.log "$status"
-
-      - name: "Pass 3: Phase 3, snapshots on"
-        # Runs after a pass 2 failure too, so one run reports both passes.
-        # It runs only when the guard passed: with no capable node every
-        # scenario here fails for the same reason the guard already named.
-        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
-        env:
-          SETEC_E2E_NAMESPACE: setec-e2e-phase3
-          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-phase3-sandboxes
-          SETEC_E2E_RELEASE: setec-e2e-phase3
-          SETEC_E2E_SNAPSHOTS: "1"
-        run: |
-          set +e
-          set -uo pipefail
-          # The node-agent takes the Firecracker snapshots. The chart pins it
-          # to kata-deploy's node label, which this cluster does not carry,
-          # so the selector moves to the worker.
-          node_agent_set="nodeAgent.enabled=true,nodeAgent.image.repository=${SETEC_E2E_NODE_AGENT_IMAGE_REPO},nodeAgent.image.tag=${SETEC_E2E_IMAGE_TAG},nodeAgent.nodeSelector.katacontainers\.io/kata-runtime=null,nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host"
-          # TestMain uninstalls the release on the way out, so a node-agent
-          # that crashed mid-pass leaves no logs behind. Sample them while
-          # the pass runs.
-          (
-            while sleep 60; do
-              echo "--- $(date -u +%H:%M:%S)"
-              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
-                --all-containers --previous --tail=60 2>&1
-              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
-                --all-containers --tail=60 2>&1
-            done
-          ) > node-agent.log &
-          sampler=$!
-          SETEC_E2E_EXTRA_SET="${NODE_SET},${node_agent_set}" \
-            go test -tags=e2e ./test/e2e/... -v -timeout 45m \
-            -run '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$' \
-            2>&1 | tee phase3.log
-          status="${PIPESTATUS[0]}"
-          kill "$sampler" 2>/dev/null
-          scripts/e2e-summary.sh "Pass 3: Phase 3, snapshots on" phase3.log "$status"
+          [ -n "${sampler}" ] && kill "${sampler}" 2>/dev/null
+          scripts/e2e-summary.sh "The ${PASS} scenarios" "${PASS}.log" "$status"
 
       - name: Collect diagnostics
         if: failure()
@@ -772,11 +779,10 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: e2e-suites-logs
+          name: e2e-${{ matrix.pass }}-logs
           path: |
             guard.log
-            suites.log
-            phase3.log
+            ${{ matrix.pass }}.log
             node-agent.log
           if-no-files-found: ignore
 
