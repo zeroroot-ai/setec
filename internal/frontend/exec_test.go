@@ -340,6 +340,39 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 	}
 }
 
+// TestExec_KilledSessionIsGoneNotExited covers the Kill of a session with a
+// command in flight on a real cluster. The teardown kills the command, and
+// the kubelet reports that as a wait status: exit code 137, a genuine
+// CodeExitError. The session is gone, so the verdict is SANDBOX_GONE with no
+// exit code. A plugin reading EXITED/137 would take a reaped session for a
+// build that crashed (gibson#1183). The kind e2e run found it once non-zero
+// exits were classified at all (setec#22).
+func TestExec_KilledSessionIsGoneNotExited(t *testing.T) {
+	sb := runningSession(execTestNS)
+	ex := &stubExecutor{err: clientexec.CodeExitError{Err: errors.New("command terminated with exit code 137"), Code: 137}}
+	svc := execService(t, ex, sb)
+	ex.onExec = func() {
+		_ = svc.Client.Delete(context.Background(), sb)
+	}
+
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
+		startMsg(execTestHandle, "sleep", "300"),
+	}}
+	if err := svc.Exec(st); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	exits := st.exits()
+	if len(exits) != 1 {
+		t.Fatalf("got %d exit messages, want exactly 1", len(exits))
+	}
+	if exits[0].GetStatus() != setecv1grpc.SessionExecExit_STATUS_SANDBOX_GONE {
+		t.Fatalf("status = %v, want STATUS_SANDBOX_GONE", exits[0].GetStatus())
+	}
+	if exits[0].GetExitCode() != 0 {
+		t.Errorf("exit_code = %d, want 0 (a gone sandbox has no code)", exits[0].GetExitCode())
+	}
+}
+
 // TestExec_CanceledReportsCanceled asserts a caller-canceled exec is
 // reported as CANCELED rather than as a transport failure.
 func TestExec_CanceledReportsCanceled(t *testing.T) {
