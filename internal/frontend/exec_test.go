@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
-	utilexec "k8s.io/utils/exec"
+	clientexec "k8s.io/client-go/util/exec"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -252,9 +252,15 @@ func TestExec_Success(t *testing.T) {
 // TestExec_NonZeroExitReportsCode asserts a failing command yields
 // STATUS_EXITED with the command's real code — the case that must stay
 // distinguishable from every "no code was reported" outcome.
+//
+// The stub returns the type client-go's remotecommand really returns,
+// k8s.io/client-go/util/exec.CodeExitError. This test used to return the
+// look-alike from k8s.io/utils/exec, the type the classifier matched, so it
+// passed while every real non-zero exit read as STATUS_TRANSPORT_FAILED. The
+// kind e2e run found it (setec#22).
 func TestExec_NonZeroExitReportsCode(t *testing.T) {
 	sb := runningSession(execTestNS)
-	ex := &stubExecutor{err: utilexec.CodeExitError{Err: errors.New("exit 17"), Code: 17}}
+	ex := &stubExecutor{err: clientexec.CodeExitError{Err: errors.New("command terminated with exit code 17"), Code: 17}}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
