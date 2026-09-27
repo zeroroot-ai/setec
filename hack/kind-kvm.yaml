@@ -1,0 +1,22 @@
+# kind topology for the Go e2e suites (.github/workflows/e2e.yml, job `suites`).
+#
+# The job runs on a GitHub-hosted ubuntu-latest runner, which exposes
+# /dev/kvm (nested virtualization). kind nodes are privileged containers, so
+# the node sees the host's /dev/kvm without an extra mount. The workflow
+# makes the device world-readable BEFORE it creates the cluster, because a
+# privileged container copies the host device nodes with the mode they have
+# at container start.
+#
+# Two nodes, for the reason hack/kind-chain6.yaml gives: a Sandbox requests a
+# whole CPU, and the control-plane node has little CPU left. The worker is
+# the only node that hosts microVMs. It carries the e2e-role label, and the
+# suite pins the installer DaemonSet to that label. So the installer never
+# restarts containerd under the API server on the control-plane node, and
+# only the worker ever reads as kata-fc capable.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      setec.zeroroot.ai/e2e-role: sandbox-host

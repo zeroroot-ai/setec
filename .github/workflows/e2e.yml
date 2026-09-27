@@ -1,79 +1,41 @@
-# End-to-end round-trip smoke of THIS PR's setec build, shadow-installed
-# into a throwaway namespace in staging EKS
-# (The cicd-efficiency epic: build the images on a GitHub-hosted runner and
-# shadow-install the PR's own chart into a throwaway namespace.)
+# End-to-end: the Go e2e suites in test/e2e, run against real
+# Kata + Firecracker microVMs on a kind cluster inside a GitHub-hosted runner.
 #
-# Replaces the old self-hosted `setec-bare-metal` model, which installed
-# kata-deploy + the setec chart FROM THE PR'S OWN WORKING TREE into a
-# throwaway namespace on a persistent bare-metal box. That model is gone —
-# `ec2-kind-standup` / `workstation-setec-kvm` are decommissioned and no
-# persistent self-hosted runner exists anywhere in the org.
+# WHERE THE MICROVMS RUN
 #
-# NEW model: ephemeral ARC runner pods (`runs-on: staging-ephemeral`) are
-# NORMAL pods in staging EKS — no /dev/kvm, no nodeSelector onto the
-# setec-metal Karpenter NodePool. The KVM requirement is satisfied by the
-# setec sandbox-host node that Karpenter provisions on demand for the
-# shadow release's own sandbox pods (kata RuntimeClass + node selector);
-# the runner pod itself needs only the RBAC the ARC runner ServiceAccount
-# already carries in the cluster's Argo tree in the hosted repo.
+# A GitHub-hosted ubuntu-latest runner exposes /dev/kvm (nested
+# virtualization, measured 2026-09-27: 4 vCPU, 15 GB, kvm_amd loaded,
+# KVM_GET_API_VERSION 12). The `suites` job creates a kind cluster on that
+# runner. kind nodes are privileged containers, so the worker node sees
+# /dev/kvm, and setec's own installer DaemonSet converges it to boot kata-fc:
+# the kata payload, the devmapper thin-pool and the containerd registration
+# (ADR-0003). No metal node, no ARC scale-set, no AWS account.
 #
-# PARITY MODEL (zeroroot-ai/setec#113 — option A, namespace-scoped shadow
-# install): the `roundtrip` job helm-installs the PR's OWN chart (from the
-# checkout) with the PR-built `sha-<sha>` manager/runtime-agent images that
-# `build-images` pushes, into a throwaway `setec-e2e-<run_id>` namespace,
-# and round-trips a Sandbox against THAT install. The gate therefore
-# exercises the PR's operator/controller code and chart templates again,
-# like the old bare-metal model did — not whatever build happens to be live
-# in staging.
+# This replaces the `runs-on: staging-ephemeral` design, which ran on an ARC
+# scale-set inside staging EKS and pre-warmed an m5zn.metal from a Karpenter
+# NodePool. Staging EKS was torn down on 2026-08-16. From then on every run
+# sat `queued` with no runner to take it (setec#22).
 #
-# Coverage still NOT restored from the old `make e2e` suite (test/e2e/...):
-#   - admission-webhook scenarios: the shadow install keeps
-#     webhook.enabled=false — a throwaway ValidatingWebhookConfiguration is
-#     CLUSTER-scoped with failurePolicy=Fail and would fail closed every
-#     Sandbox/SandboxClass write in the shared staging cluster if a run is
-#     cancelled before cleanup.
-#   - NetworkPolicy-enforcement scenario.
-#   - CRD changes: helm only installs charts/setec/crds/ when the CRDs are
-#     absent; on a cluster where setec already ran, PR CRD changes are not
-#     applied.
-#   - once staging's own setec is enabled (deploy#1080): the operator
-#     watches cluster-wide (no namespace scoping in cmd/main.go), so the
-#     live staging operator and the shadow operator will BOTH see the
-#     throwaway Sandbox and race to create its pod. Benign for the smoke
-#     (create is first-writer-wins) but it can mask a pod-spec regression;
-#     revisit namespace-scoped watches when that flip happens.
+# WHAT IS NOT HERE ANY MORE
 #
-# ⚠ RBAC PREREQUISITE: the shadow install needs an install-grade grant
-# (namespaces, helm release secrets, workloads, the chart's release-prefixed
-# ClusterRole/Binding) that is meaningfully larger than the round-trip-only
-# grant the ARC runner ServiceAccount carries today. That grant lives in the
-# cluster's Argo tree in the hosted repo, not here. The job fails fast until
-# it lands.
+#   - `roundtrip` and `teardown`. They shadow-installed the chart into staging
+#     and booted one kata-qemu Sandbox from a shell script. The `suites` job
+#     boots, runs and reads back Sandboxes from this build's chart and images
+#     (TestSandbox_*), on an isolated cluster, with the webhook on.
+#   - the `merge_group` trigger. The suites take tens of minutes, so they do
+#     not gate a merge. They run nightly and on demand, and feed the tracking
+#     issue below (ADR-0012: exit tests run on main and on a schedule).
 #
-# ⚠ PREREQUISITE GAP (deploy#1080): staging's gitops overlay currently
-# ships `setec.enabled: false` / `frontend.enabled: false` (envs/staging/
-# values.yaml in the deploy repo) — the shadow install no longer needs the
-# LIVE staging setec release, but it still needs the surrounding stack that
-# enablement brings up (kata-deploy's kata-fc/kata-qemu RuntimeClasses on
-# the setec-metal NodePool). The RuntimeClass preflight below fails with a
-# pointer here until that is flipped on.
-#
-# Triggers: `merge_group` (the authoritative pre-merge gate — trusted
-# context only, so fork PRs never reach the in-cluster runner) and manual
-# `workflow_dispatch`. No more `pull_request`/`push` — the `e2e` PR label
-# opt-in model is retired along with the runner it depended on.
+# Triggers: the nightly schedule and manual `workflow_dispatch`.
 
 name: e2e
 
 on:
-  merge_group:
   workflow_dispatch: {}
-  # Nightly, for the `suites` job (setec#298). The Go e2e scenarios need a
-  # metal node and tens of minutes, so they are not charged to every
-  # merge-group entry — but "not on every merge" must not mean "never", which
-  # is exactly where they were. 04:00 UTC is outside the working day in every
-  # timezone the team is in, so the single m5zn.metal it provisions is not
-  # competing with a human's `roundtrip`.
+  push:  # TEMPORARY: iteration trigger, removed before the PR
+    branches: [fix/e2e-suites-kvm-runner]
+  # Nightly. The suites are too long for the merge gate, but "not on every
+  # merge" must not mean "never" (setec#298).
   schedule:
     - cron: '0 4 * * *'
 
@@ -187,667 +149,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ----------------------------------------------------------------------
-  # roundtrip — shadow-installs the PR's chart + sha-tagged images into a
-  # throwaway namespace from an ephemeral ARC runner pod, then drives a
-  # Sandbox round-trip against that install. Achievable core preserved from
-  # the old suite: PR-built operator reconciles, microVM boots (kata-qemu
-  # backend, setec#86 — kata-fc's dev-loopback devmapper snapshotter is
-  # flaky under load), workload executes, result returns. Coverage still
-  # not preserved: see the header (webhook, NetworkPolicy, CRD-change
-  # caveats).
-  # ----------------------------------------------------------------------
-  roundtrip:
-    # ARC readiness gate (Epic: cicd-efficiency, board #44). The
-    # staging-ephemeral runner scale-set cannot start pods until an operator
-    # seeds the ARC GitHub App secret (gibson/staging/arc-github-app) and
-    # runners come up. Until then this job would sit "queued" forever inside
-    # every merge group, stalling/ejecting queue entries. Flip the repo
-    # variable STAGING_EPHEMERAL_READY to 'true' once the secret is seeded
-    # and runners are confirmed live. build-images stays ungated above: it's
-    # a standalone ubuntu-latest build-sanity check that also publishes
-    # sha-tagged images to ghcr, not a job that exists solely to feed this
-    # one.
-    if: vars.STAGING_EPHEMERAL_READY == 'true'
-    needs: build-images
-    runs-on: staging-ephemeral
-    timeout-minutes: 30
-    env:
-      # Throwaway shadow-install identity — one namespace + Helm release per
-      # run so concurrent merge-group entries never collide. The chart's
-      # release-prefixed resource names (<release>-manager ClusterRole etc.)
-      # keep the cluster-scoped objects per-run too.
-      E2E_NAMESPACE: setec-e2e-${{ github.run_id }}
-      E2E_RELEASE: setec-e2e-${{ github.run_id }}
-      # PR-built images from build-images — THE point of this job (setec#113
-      # parity fix): the round-trip must exercise this PR's operator and
-      # runtime-agent, not whatever build is live in staging.
-      MANAGER_IMAGE: ${{ needs.build-images.outputs.manager_image }}
-      RUNTIME_AGENT_IMAGE: ${{ needs.build-images.outputs.runtime_agent_image }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # The ephemeral ARC runner image (ghcr.io/actions/actions-runner) ships
-      # neither kubectl nor helm — the retired workstation runner had both
-      # preinstalled, so the migration to ARC (setec#161) dropped them. Install
-      # both before any cluster call; without this every kubectl/helm step below
-      # fails "command not found" (exit 127).
-      - name: Install kubectl
-        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
-
-      - name: Install helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - name: Verify kubectl + helm and install-grade RBAC
-        run: |
-          kubectl version --client=true
-          helm version
-          # The shadow install needs more than the original round-trip-only
-          # grant (see the RBAC PREREQUISITE header note). Probe the
-          # signature verb so a missing grant fails loud and early.
-          kubectl auth can-i create namespaces >/dev/null 2>&1 || {
-            echo "::error::arc-runner-sa lacks install-grade RBAC for the shadow install — it needs create on namespaces, helm release Secrets, workloads and the chart's release-prefixed ClusterRole/Binding. Grant it in the cluster's Argo tree in the hosted repo."
-            exit 1
-          }
-          # Teardown is not optional either: a run that can install but not
-          # delete leaks its namespace and every workload in it.
-          kubectl auth can-i delete namespaces >/dev/null 2>&1 || {
-            echo "::error::arc-runner-sa cannot delete namespaces — the shadow install would leak setec-e2e-${{ github.run_id }}. Grant the delete verb on namespaces in the cluster's Argo tree in the hosted repo."
-            exit 1
-          }
-
-      - name: Sweep stale e2e namespaces
-        # The per-run teardown below cannot catch every leak: a run cancelled
-        # mid-step never executes its own steps at all. That is exactly what
-        # happened on run 31722553592 — "Pre-warm a sandbox-host metal node"
-        # failed, the merge group was cancelled, "Cleanup (always)" reported
-        # `skipped`, and setec-e2e-31722553592 was still Active 29h later
-        # with a 5-node runtime-agent DaemonSet running (setec#255). An ARC
-        # runner pod evicted before its cleanup step lands in the same place.
-        #
-        # So every run reaps what earlier runs left behind. The age threshold
-        # is well past the job's own `timeout-minutes: 30`, so a namespace
-        # this old cannot belong to a run that is still going; the current
-        # run's namespace is skipped explicitly regardless.
-        #
-        # Best-effort: a sweep that cannot run must not fail a green e2e.
-        env:
-          STALE_AFTER_MINUTES: "120"
-        run: |
-          set -uo pipefail
-          if ! ns_list="$(kubectl get namespaces \
-                -o go-template='{{range .items}}{{.metadata.name}} {{.metadata.creationTimestamp}}{{"\n"}}{{end}}' 2>&1)"; then
-            echo "::warning::cannot list namespaces, stale setec-e2e-* sweep skipped — arc-runner-setec-installer needs the list verb on namespaces, granted in the cluster's Argo tree in the hosted repo. Detail: ${ns_list}"
-            exit 0
-          fi
-
-          now="$(date -u +%s)"
-          stale_seconds=$(( STALE_AFTER_MINUTES * 60 ))
-          swept=0
-
-          while read -r name created; do
-            case "$name" in setec-e2e-*) ;; *) continue ;; esac
-            [ "$name" = "${E2E_NAMESPACE}" ] && continue
-            [ -n "$created" ] || continue
-
-            age=$(( now - $(date -u -d "$created" +%s) ))
-            [ "$age" -ge "$stale_seconds" ] || continue
-
-            run_id="${name#setec-e2e-}"
-            echo "sweeping ${name} (age $(( age / 60 ))m, run ${run_id})"
-            # The namespace delete reaps the release's namespaced objects;
-            # the per-run cluster-scoped ones the chart and the workflow
-            # create carry the same run id and must go by name.
-            kubectl delete namespace "$name" --ignore-not-found --wait=false \
-              || echo "::warning::failed to delete namespace ${name}"
-            kubectl delete sandboxclass "setec-e2e-roundtrip-qemu-${run_id}" --ignore-not-found --wait=false \
-              || echo "::warning::failed to delete sandboxclass for run ${run_id}"
-            for kind in clusterrole clusterrolebinding; do
-              for obj in "${name}-manager" "${name}-runtime-agent"; do
-                kubectl delete "$kind" "$obj" --ignore-not-found --wait=false \
-                  || echo "::warning::failed to delete ${kind}/${obj}"
-              done
-            done
-            swept=$(( swept + 1 ))
-          done <<EOF
-          ${ns_list}
-          EOF
-
-          echo "swept ${swept} stale e2e namespace(s) older than ${STALE_AFTER_MINUTES}m"
-
-      - name: Preflight — kata RuntimeClasses present
-        # The chart is installed with runtimes.*.install=false (kata-deploy /
-        # the staging stack owns the RuntimeClass lifecycle; a second release
-        # rendering the same cluster-scoped RuntimeClass would hit a Helm
-        # ownership conflict). Both backends the shadow install enables must
-        # therefore pre-exist. kata-qemu is the one the round-trip boots.
-        run: |
-          set -euo pipefail
-          for rc in kata-fc kata-qemu; do
-            kubectl get runtimeclass "$rc" >/dev/null 2>&1 || {
-              echo "::error::RuntimeClass ${rc} not found — staging's kata-deploy stack is not up yet (deploy#1080 / envs/staging setec enablement)."
-              exit 1
-            }
-          done
-
-      - name: Shadow-install the PR's chart with the PR-built sha images
-        run: |
-          set -euo pipefail
-          # Match the sandbox pod overhead the operator stamps
-          # (runtimes.kata-qemu.defaultOverhead) to the live RuntimeClass's
-          # declared overhead — the RuntimeClass admission controller rejects
-          # any pod whose overhead does not EQUAL the RuntimeClass's own
-          # (same live-read the old suite did in test/e2e/suite_test.go
-          # preflight; chart defaults drift from kata-deploy's values).
-          overhead_args=()
-          qemu_mem="$(kubectl get runtimeclass kata-qemu -o jsonpath='{.overhead.podFixed.memory}' 2>/dev/null || true)"
-          qemu_cpu="$(kubectl get runtimeclass kata-qemu -o jsonpath='{.overhead.podFixed.cpu}' 2>/dev/null || true)"
-          if [ -z "$qemu_mem" ] && [ -z "$qemu_cpu" ]; then
-            overhead_args+=(--set "runtimes.kata-qemu.defaultOverhead=null")
-          else
-            [ -n "$qemu_mem" ] && overhead_args+=(--set "runtimes.kata-qemu.defaultOverhead.memory=${qemu_mem}")
-            [ -n "$qemu_cpu" ] && overhead_args+=(--set "runtimes.kata-qemu.defaultOverhead.cpu=${qemu_cpu}")
-          fi
-
-          # Do not fight Argo for the cluster-scoped CRDs (setec#298).
-          #
-          # Helm 4 applies chart CRDs SERVER-SIDE by default (--server-side
-          # defaults to true), so the shadow install tries to take ownership
-          # of .spec.versions from whoever already owns it. On this cluster
-          # that is `argocd-controller` — staging's setec release is
-          # GitOps-managed — and the API server refuses:
-          #
-          #   INSTALLATION FAILED: failed to install CRD
-          #   setec.zeroroot.ai_sandboxclasses.yaml: conflict occurred while
-          #   applying object ... conflict with "argocd-controller":
-          #   .spec.versions
-          #
-          # Every merge_group e2e run failed here from the moment the chart's
-          # CRDs diverged from the live ones; nothing caught it because `e2e`
-          # is not one of ci-required's needs (they are separate workflow
-          # files, and `needs:` cannot cross files).
-          #
-          # --force-conflicts is NOT the fix: it would overwrite the LIVE
-          # staging CRD schema with this PR's, on a shared cluster. Skipping
-          # is, and it matches the intent the header already documented
-          # ("helm only installs charts/setec/crds/ when the CRDs are
-          # absent") — an intent Helm 4 silently stopped honouring.
-          crd_args=()
-          if kubectl get crd sandboxes.setec.zeroroot.ai >/dev/null 2>&1; then
-            owners="$(kubectl get crd sandboxes.setec.zeroroot.ai \
-              -o jsonpath='{range .metadata.managedFields[*]}{.manager}{" "}{end}' 2>/dev/null || echo unknown)"
-            crd_args+=(--skip-crds)
-            echo "::notice::setec CRDs already exist (field managers: ${owners}); installing with --skip-crds"
-            echo "::warning::this run exercises the CLUSTER's CRD schema, not this PR's — an API-type change is NOT covered by it (setec#298)"
-          fi
-
-          helm install "${E2E_RELEASE}" ./charts/setec \
-            "${crd_args[@]}" \
-            --namespace "${E2E_NAMESPACE}" --create-namespace \
-            --set "namespace=${E2E_NAMESPACE}" \
-            --set "image.repository=${MANAGER_IMAGE%:*}" \
-            --set "image.tag=${MANAGER_IMAGE##*:}" \
-            --set "runtimeAgent.image.repository=${RUNTIME_AGENT_IMAGE%:*}" \
-            --set "runtimeAgent.image.tag=${RUNTIME_AGENT_IMAGE##*:}" \
-            --set sandboxClasses.enabled=false \
-            --set runtimes.kata-fc.install=false \
-            --set runtimes.kata-qemu.enabled=true \
-            --set runtimes.kata-qemu.install=false \
-            --set webhook.enabled=false \
-            --set rbac.allowClusterWideSandboxWrite=true \
-            --set installer.enabled=false \
-            "${overhead_args[@]}"
-          # NOTE: no --wait. Readiness is asserted by the next step instead,
-          # because `helm --wait` gates on the runtime-agent DaemonSet being
-          # Available on EVERY node, and on this cluster that condition is
-          # frequently unreachable — see that step's header.
-          #
-          # Notes on the values above:
-          #  - image tags are the sha-<sha> refs build-images pushed to ghcr;
-          #    pullPolicy stays the chart default (IfNotPresent) — unlike the
-          #    old bare-metal model there IS a registry to pull from, so no
-          #    docker-save/ctr-import dance and no pullPolicy=Never.
-          #  - sandboxClasses.enabled=false (renamed from defaultClass by
-          #    setec#157): the chart-shipped classes are NOT release-prefixed
-          #    and would collide with a live staging release once deploy#1080
-          #    flips setec on. The round-trip creates its own run-scoped
-          #    SandboxClass below.
-          #  - webhook.enabled=false is now an explicit override, not the
-          #    chart default — setec#157 flipped the default to true. Left
-          #    at true here a throwaway ValidatingWebhookConfiguration would
-          #    be CLUSTER-scoped with failurePolicy=Fail and fail closed
-          #    every Sandbox/SandboxClass write in the shared staging
-          #    cluster if a run is cancelled before cleanup — see the header
-          #    note.
-          #  - rbac.allowClusterWideSandboxWrite=true: setec#157 also made
-          #    sandboxNamespaces (Sandbox-only namespaces, RBAC-bound and
-          #    default-denied) required unless this is set, and the chart
-          #    refuses to list the operator's own namespace there. This
-          #    shadow install puts the operator and its Sandbox in the SAME
-          #    throwaway namespace, so sandboxNamespaces cannot express it;
-          #    this is the documented deliberate opt-out, scoped to a
-          #    single ephemeral namespace deleted at job end.
-
-      - name: Wait for the shadow release, ignoring nodes the cluster cannot run
-        # This step replaces `helm install --wait` (setec#315).
-        #
-        # WHY HELM'S OWN WAIT CANNOT WORK HERE
-        #
-        # `helm --wait` treats a DaemonSet as ready only when
-        # status.numberAvailable == status.desiredNumberScheduled — every
-        # eligible node, no exceptions. The DaemonSet controller schedules a
-        # pod onto NotReady and unreachable nodes too: it stamps every
-        # DaemonSet pod with `node.kubernetes.io/not-ready:NoExecute` and
-        # `node.kubernetes.io/unreachable:NoExecute` tolerations itself
-        # (kubernetes pkg/controller/daemon/util.AddOrUpdateDaemonPodTolerations),
-        # so there is no chart-side toleration or nodeSelector that can opt
-        # out. A dead node therefore holds a permanently Pending pod, and
-        # desiredNumberScheduled counts it.
-        #
-        # Staging always has such a node. The setec-metal NodePool is
-        # scale-to-zero, so after a run the m5zn.metal it provisioned is
-        # disrupted by Karpenter and sits `NotReady` /
-        # `node.kubernetes.io/unreachable:NoExecute` /
-        # `karpenter.sh/disrupted:NoSchedule` in the API for minutes while
-        # it drains. Run 31916042487 died on `Available: 2/3` against
-        # ip-10-40-95-240 in exactly that state; run 31914271177 died on
-        # `Available: 3/4`. Raising --timeout does not help — the pod is not
-        # slow, its node is gone.
-        #
-        # WHAT IS ASSERTED INSTEAD
-        #
-        # The operator Deployment must roll out (it is what reconciles the
-        # Sandbox, so nothing downstream works without it), and every
-        # runtime-agent pod whose node the cluster reports Ready must itself
-        # be Ready, with at least one such pod. Pods pinned to a NotReady
-        # node are named and excluded, out loud, rather than silently
-        # tolerated. That is strictly the coverage the round-trip needs: the
-        # per-node capability probe on the node that actually hosts the
-        # microVM is asserted by the pre-warm step below, which waits for
-        # `setec.zeroroot.ai/runtime.kata-qemu=true` — a label only a live
-        # runtime-agent writes.
-        env:
-          # 5m, sized against the job's own `timeout-minutes: 30` rather than
-          # generously: the pre-warm step below can spend 18 of those 30
-          # minutes, so a ceiling here that is too high turns a diagnosable
-          # step failure into an undiagnosable job timeout. It is a ceiling,
-          # not a budget — the install runs BEFORE pre-warm, so every node
-          # this gate looks at is an established general node whose agent
-          # image pull measured under a second (run 31916042487: 572ms).
-          READY_TIMEOUT_SECONDS: "300"
-        run: |
-          set -euo pipefail
-
-          echo "--- operator Deployment ---"
-          kubectl -n "${E2E_NAMESPACE}" rollout status "deployment/${E2E_RELEASE}" --timeout=5m
-
-          echo "--- runtime-agent DaemonSet (nodes the cluster reports Ready) ---"
-          deadline=$(( $(date -u +%s) + READY_TIMEOUT_SECONDS ))
-          while :; do
-            # Node names the cluster reports Ready=True. `$n` below is a Go
-            # template variable, not a shell one — the single quotes are
-            # deliberate.
-            # shellcheck disable=SC2016
-            ready_nodes="$(kubectl get nodes -o go-template='{{range .items}}{{$n := .metadata.name}}{{range .status.conditions}}{{if eq .type "Ready"}}{{if eq .status "True"}}{{$n}}{{"\n"}}{{end}}{{end}}{{end}}{{end}}')"
-
-            # One line per agent pod: name|node|Ready-condition (empty while
-            # the pod is still Pending and has no condition yet).
-            pods="$(kubectl -n "${E2E_NAMESPACE}" get pods \
-              -l "app.kubernetes.io/instance=${E2E_RELEASE},app.kubernetes.io/component=runtime-agent" \
-              -o go-template='{{range .items}}{{.metadata.name}}|{{.spec.nodeName}}|{{range .status.conditions}}{{if eq .type "Ready"}}{{.status}}{{end}}{{end}}{{"\n"}}{{end}}')"
-
-            considered=0
-            agent_ready=0
-            skipped=""
-            pending=""
-            while IFS='|' read -r pod node cond; do
-              [ -n "$pod" ] || continue
-              if [ -z "$node" ] || ! printf '%s\n' "${ready_nodes}" | grep -qxF -- "${node}"; then
-                skipped="${skipped} ${pod}(${node:-unscheduled})"
-                continue
-              fi
-              considered=$(( considered + 1 ))
-              if [ "$cond" = "True" ]; then
-                agent_ready=$(( agent_ready + 1 ))
-              else
-                pending="${pending} ${pod}(${node})"
-              fi
-            done <<EOF
-          ${pods}
-          EOF
-
-            echo "runtime-agent ready ${agent_ready}/${considered} on Ready nodes;${skipped:+ excluded (node not Ready):${skipped};} $(( deadline - $(date -u +%s) ))s left"
-
-            if [ "$considered" -ge 1 ] && [ "$agent_ready" -eq "$considered" ]; then
-              if [ -n "${skipped}" ]; then
-                echo "::notice::runtime-agent pods on nodes the cluster does not report Ready were excluded from the readiness gate:${skipped}"
-              fi
-              echo "shadow release ready"
-              exit 0
-            fi
-
-            if [ "$(date -u +%s)" -ge "$deadline" ]; then
-              echo "::error::runtime-agent not ready on every Ready node within ${READY_TIMEOUT_SECONDS}s (ready ${agent_ready}/${considered}, waiting on:${pending:-none})"
-              kubectl get nodes -o wide || true
-              kubectl -n "${E2E_NAMESPACE}" get pods -o wide || true
-              kubectl -n "${E2E_NAMESPACE}" describe daemonset "${E2E_RELEASE}-runtime-agent" || true
-              kubectl -n "${E2E_NAMESPACE}" get events --sort-by=.lastTimestamp || true
-              exit 1
-            fi
-            sleep 10
-          done
-
-      - name: Ensure a kata-qemu SandboxClass exists (throwaway, this run only)
-        # SandboxClass is CLUSTER-scoped (api/v1alpha1/sandboxclass_types.go:
-        # +kubebuilder:resource:scope=Cluster) — no namespace field. The
-        # arc-runner-sa grant for this resource is therefore a (narrowly
-        # scoped) ClusterRole, not a namespaced Role — see gitops
-        # envs/staging/manifests/arc-runners/rbac.yaml.
-        run: |
-          set -euo pipefail
-          cat <<EOF | kubectl apply -f -
-          apiVersion: setec.zeroroot.ai/v1alpha1
-          kind: SandboxClass
-          metadata:
-            name: setec-e2e-roundtrip-qemu-${{ github.run_id }}
-          spec:
-            vmm: qemu
-            runtime:
-              backend: kata-qemu
-            maxResources:
-              vcpu: 2
-              memory: 1Gi
-            # The staging setec-metal NodePool taints its nodes
-            # setec.zeroroot.ai/sandbox-host=true:NoSchedule; without this
-            # toleration the sandbox pod sits Pending with "untolerated
-            # taint" (run 31716143181; the field exists for exactly this,
-            # setec#115).
-            tolerations:
-              - key: setec.zeroroot.ai/sandbox-host
-                operator: Equal
-                value: "true"
-                effect: NoSchedule
-          EOF
-
-      - name: Pre-warm a sandbox-host metal node (scale-from-zero)
-        # The setec-metal Karpenter NodePool is scale-to-zero, and this
-        # placeholder is what gets a metal node out of it.
-        #
-        # The operator's half of the deadlock is FIXED (setec#300): it no
-        # longer returns before createPod when no node advertises the
-        # backend — it creates the Pod, which is the only thing Karpenter
-        # provisions for. So why is this step still here?
-        #
-        # Because the Sandbox Pod is not schedulable-by-Karpenter against
-        # THIS cluster's NodePool, for a reason that lives in the deploy
-        # repo, not in setec. Every Sandbox Pod requires
-        # `setec.zeroroot.ai/runtime.<backend>=true` (the backend's node
-        # affinity, plus the nodeSelector RuntimeClass admission injects),
-        # and Karpenter DENIES a pod whose required affinity names a custom
-        # label key its NodePool template does not declare — "label %q does
-        # not have known values", kubernetes-sigs/karpenter
-        # pkg/scheduling/requirements.go, Requirements.Compatible. The
-        # setec-metal NodePool (deploy: eks/gibson/karpenter.tf) declares
-        # only `setec.zeroroot.ai/sandbox-host`, never a `runtime.*` key, so
-        # the Sandbox Pod is rejected by every NodePool in the cluster. The
-        # chart's own NodePool gets this right (charts/setec/values.yaml,
-        # karpenter.nodeLabels); the hand-rolled terraform one does not.
-        #
-        # This placeholder sidesteps that: it requires ONLY the label the
-        # NodePool does declare, so Karpenter provisions the metal node, and
-        # kata-deploy + the runtime-agent then write the capability label
-        # the Sandbox Pod needs. Delete this step once the setec-metal
-        # NodePool stamps the runtime labels itself — and not before, or the
-        # e2e goes red with a Sandbox stuck in AwaitingCapableNode.
-        #
-        # It also usefully overlaps the 10-15 minute metal boot with the
-        # rest of the setup rather than spending it inside the Sandbox-ready
-        # wait. Metal instances boot slowly — the wait is sized for that.
-        # The placeholder lives in the throwaway namespace, so the existing
-        # cleanup reaps it and the node scales back to zero after its
-        # emptiness TTL.
-        run: |
-          set -euo pipefail
-          cat <<EOF | kubectl apply -f -
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: setec-e2e-warm-${{ github.run_id }}
-            namespace: ${E2E_NAMESPACE}
-          spec:
-            nodeSelector:
-              setec.zeroroot.ai/sandbox-host: "true"
-            tolerations:
-              - key: setec.zeroroot.ai/sandbox-host
-                operator: Equal
-                value: "true"
-                effect: NoSchedule
-            containers:
-              - name: warm
-                image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
-                command: ["sleep", "1800"]
-                resources:
-                  requests:
-                    cpu: 50m
-                    memory: 32Mi
-            restartPolicy: Never
-          EOF
-          echo "waiting for a node with the kata-qemu capability label (metal boot + kata-deploy, up to ~18 min)..."
-          for i in $(seq 1 72); do
-            # Require BOTH labels: the runtime-agent's capability label can
-            # fire before kata is actually installed (setec#243) — a node
-            # that passed it alone still fails RunPodSandbox with `no
-            # runtime for "kata-qemu" is configured` (run 31719841337).
-            # katacontainers.io/kata-runtime=true is written by kata-deploy
-            # itself only after the runtime is installed and containerd is
-            # configured, so it is the truthful gate.
-            n="$(kubectl get nodes -l setec.zeroroot.ai/runtime.kata-qemu=true,katacontainers.io/kata-runtime=true -o name 2>/dev/null | head -1)"
-            if [ -n "$n" ]; then
-              echo "eligible node ready after ${i} polls: ${n}"
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "::error::no node gained setec.zeroroot.ai/runtime.kata-qemu=true within the wait window"
-          kubectl get nodes -o wide || true
-          kubectl -n "${E2E_NAMESPACE}" describe pod "setec-e2e-warm-${{ github.run_id }}" || true
-          kubectl get nodeclaims -o wide 2>/dev/null || true
-          exit 1
-
-      - name: Create throwaway Sandbox + assert boot / execute / result
-        # The Sandbox lives in the shadow namespace, so it is reconciled by
-        # the shadow operator running THIS PR's manager image — that is the
-        # parity assertion. (Caveat: once staging's own cluster-watching
-        # operator is live, both may race the pod create; see header.)
-        env:
-          GIBSON_EXECUTOR_IMAGE: ${{ vars.GIBSON_EXECUTOR_IMAGE || 'ghcr.io/zeroroot-ai/gibson-executor:main' }}
-          SANDBOX_NAME: setec-e2e-roundtrip-${{ github.run_id }}
-          SANDBOX_CLASS: setec-e2e-roundtrip-qemu-${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          # spec.resources is required (api/v1alpha1/sandbox_types.go);
-          # vcpu/memory must stay within the SandboxClass's maxResources.
-          cat <<EOF | kubectl apply -f -
-          apiVersion: setec.zeroroot.ai/v1alpha1
-          kind: Sandbox
-          metadata:
-            name: ${SANDBOX_NAME}
-            namespace: ${E2E_NAMESPACE}
-          spec:
-            sandboxClassName: ${SANDBOX_CLASS}
-            image: ${GIBSON_EXECUTOR_IMAGE}
-            command: ["/bin/sh", "-c", "echo SETEC_E2E_ROUNDTRIP_OK && sleep 2"]
-            resources:
-              vcpu: 1
-              memory: 512Mi
-          EOF
-
-          # Phase enum: Pending/Running/Completed/Failed/Paused/Snapshotting/
-          # Restoring (api/v1alpha1/sandbox_types.go). A one-shot Command
-          # microVM transitions Running -> Completed on exit.
-          echo "waiting for Sandbox ${SANDBOX_NAME} to boot and complete..."
-          for i in $(seq 1 60); do
-            phase="$(kubectl get sandbox -n "${E2E_NAMESPACE}" "${SANDBOX_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-            if [ "$phase" = "Completed" ]; then
-              echo "Sandbox reached phase=Completed after ${i} polls."
-              break
-            fi
-            if [ "$phase" = "Failed" ]; then
-              echo "::error::Sandbox ${SANDBOX_NAME} reached phase=Failed"
-              kubectl describe sandbox -n "${E2E_NAMESPACE}" "${SANDBOX_NAME}" || true
-              exit 1
-            fi
-            sleep 5
-          done
-
-          final_phase="$(kubectl get sandbox -n "${E2E_NAMESPACE}" "${SANDBOX_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-          if [ "$final_phase" != "Completed" ]; then
-            echo "::error::Sandbox ${SANDBOX_NAME} did not reach phase=Completed within 5 minutes (last observed: '${final_phase:-<empty>}')"
-            kubectl describe sandbox -n "${E2E_NAMESPACE}" "${SANDBOX_NAME}" || true
-            exit 1
-          fi
-
-          pod="$(kubectl get pods -n "${E2E_NAMESPACE}" -l setec.zeroroot.ai/sandbox="${SANDBOX_NAME}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-          if [ -z "$pod" ]; then
-            echo "::error::no workload pod found for Sandbox ${SANDBOX_NAME}"
-            kubectl get pods -n "${E2E_NAMESPACE}" || true
-            exit 1
-          fi
-
-          echo "reading logs from pod ${pod}..."
-          logs="$(kubectl logs -n "${E2E_NAMESPACE}" "${pod}" --tail=50 2>&1 || true)"
-          echo "$logs"
-          echo "$logs" | grep -q "SETEC_E2E_ROUNDTRIP_OK" || {
-            echo "::error::result marker not found in workload pod logs — microVM booted but did not execute/return the expected result"
-            exit 1
-          }
-          echo "round-trip OK: microVM booted, workload executed, result returned."
-
-      - name: Collect diagnostics on failure
-        # Ordered BEFORE cleanup so the shadow install's state (manager logs
-        # included — it runs the PR's code under test) is captured before the
-        # release and namespace are torn down.
-        if: failure()
-        run: |
-          mkdir -p e2e-artifacts
-          kubectl get nodes -o wide                                > e2e-artifacts/nodes.txt      2>&1 || true
-          kubectl get sandboxes -n "${E2E_NAMESPACE}" -o yaml      > e2e-artifacts/sandboxes.yaml 2>&1 || true
-          kubectl get pods -n "${E2E_NAMESPACE}" -o wide           > e2e-artifacts/pods.txt       2>&1 || true
-          kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp \
-                                                                   > e2e-artifacts/events.txt     2>&1 || true
-          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/instance="${E2E_RELEASE}" \
-            --tail=500 --prefix                                    > e2e-artifacts/manager.log    2>&1 || true
-
-      - name: Cleanup (always)
-        # First and fastest attempt. NOT the guarantee: `always()` steps are
-        # skipped outright when the run is cancelled mid-step, which is how
-        # setec-e2e-31722553592 survived (setec#255). The `teardown` job
-        # below is the one that has to hold, and the stale-namespace sweep
-        # at the top of this job is the backstop for both.
-        if: always()
-        run: |
-          kubectl delete sandbox -n "${E2E_NAMESPACE}" "setec-e2e-roundtrip-${{ github.run_id }}" --ignore-not-found --wait=false
-          # SandboxClass is cluster-scoped — no namespace flag.
-          kubectl delete sandboxclass "setec-e2e-roundtrip-qemu-${{ github.run_id }}" --ignore-not-found --wait=false
-          # Tear down the shadow install: the release removes its namespaced
-          # workloads AND its release-prefixed ClusterRole/Binding; the
-          # namespace delete reaps everything else (helm release secrets,
-          # any straggler pods). --wait=false keeps cleanup non-blocking.
-          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false || true
-          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false
-
-      - name: Upload diagnostics
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: e2e-diagnostics-${{ github.run_id }}
-          path: e2e-artifacts/
-          if-no-files-found: ignore
-
-  # ----------------------------------------------------------------------
-  # teardown — the per-run namespace delete that CANNOT be skipped.
-  #
-  # roundtrip's own `Cleanup (always)` step is a step, and a cancelled run
-  # skips the steps it has not reached yet: on run 31722553592 the pre-warm
-  # step failed, the merge group was cancelled, `Collect diagnostics` was
-  # reported `cancelled` and `Cleanup (always)` `skipped` — leaving
-  # setec-e2e-31722553592 Active for 29h with its runtime-agent DaemonSet
-  # still running on five nodes (setec#255). A separate job with
-  # `if: always()` starts on its own runner after roundtrip reaches any
-  # terminal state, cancellation included, so the delete gets attempted
-  # even when roundtrip never ran a single cleanup step.
-  #
-  # Idempotent by construction (--ignore-not-found), so it is harmless when
-  # roundtrip already cleaned up, and it stays green either way: a teardown
-  # that cannot delete must SAY so, not fail an otherwise-good e2e — the
-  # next run's sweep reaps whatever it missed.
-  # ----------------------------------------------------------------------
-  teardown:
-    if: always() && vars.STAGING_EPHEMERAL_READY == 'true'
-    needs: roundtrip
-    runs-on: staging-ephemeral
-    timeout-minutes: 10
-    env:
-      E2E_NAMESPACE: setec-e2e-${{ github.run_id }}
-      E2E_RELEASE: setec-e2e-${{ github.run_id }}
-    steps:
-      - name: Install kubectl
-        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
-
-      - name: Install helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - name: Delete the run's namespace and cluster-scoped leftovers
-        run: |
-          set -uo pipefail
-          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false 2>/dev/null || true
-          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false \
-            || echo "::warning::could not delete ${E2E_NAMESPACE} — the next run's stale sweep will reap it"
-          kubectl delete sandboxclass "setec-e2e-roundtrip-qemu-${{ github.run_id }}" --ignore-not-found --wait=false \
-            || echo "::warning::could not delete the run's SandboxClass"
-          for kind in clusterrole clusterrolebinding; do
-            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent"; do
-              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false \
-                || echo "::warning::could not delete ${kind}/${obj}"
-            done
-          done
-
-          # Report the end state so a leak is visible in the run, not only
-          # in a `kubectl get ns` someone happens to run a day later.
-          if kubectl get namespace "${E2E_NAMESPACE}" >/dev/null 2>&1; then
-            phase="$(kubectl get namespace "${E2E_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo unknown)"
-            echo "::warning::${E2E_NAMESPACE} still present (phase=${phase}) after teardown"
-          else
-            echo "${E2E_NAMESPACE} is gone"
-          fi
-
-  # ----------------------------------------------------------------------
-  # session-checkpoint — the FIRST execution of the session lifecycle
-  # (setec#192/#193/#194) against real infrastructure. Everything the
-  # roundtrip job covers is the EPHEMERAL path; this job covers the durable
-  # one: reattach-by-handle, suspend-on-idle with a memory checkpoint to a
-  # real S3 bucket, and resume with process state intact.
-  #
-  # Unlike `roundtrip` this job runs the Go suite in test/e2e (which
-  # helm-installs its own release from the checkout and then asserts
-  # against it), because the scenarios are stateful multi-step flows that a
-  # shell script cannot express honestly.
-  #
-  # WHY A SEPARATE READINESS VARIABLE (STAGING_SESSION_S3_READY, not
-  # STAGING_EPHEMERAL_READY): this job needs strictly more infrastructure
-  # than the roundtrip — the checkpoint bucket and the node-agent IRSA role
-  # from deploy `eks/gibson` — and that Terraform is applied by hand. Reusing
-  # the ephemeral flag would turn "ARC runners are up" into a claim about
-  # an S3 bucket nobody created, and the job would fail on AccessDenied
-  # while looking like a setec regression.
-  #
-  # FIXED namespace/release, unlike every other job here, which uses
-  # ${{ github.run_id }}. The node-agent authenticates to S3 with IRSA, and
-  # the trust policy pins an EXACT `system:serviceaccount:<ns>:<sa>`
-  # subject. A per-run namespace would force a StringLike wildcard over
-  # `setec-e2e-*`, which would let anyone who can create a namespace in
-  # staging assume a role with write access to the checkpoint bucket. A
-  # fixed name plus the concurrency group below is the cheaper trade.
   # ----------------------------------------------------------------------
   session-checkpoint:
     if: vars.STAGING_SESSION_S3_READY == 'true'
@@ -1174,74 +475,61 @@ jobs:
           done
 
   # ----------------------------------------------------------------------
-  # suites: the Go e2e scenarios that had no runner at all (setec#298).
+  # suites: the Go e2e scenarios (setec#298), on kind + nested KVM (setec#22).
   #
-  # Before this job, `.github/workflows/e2e.yml` never invoked `go test`:
-  # it was a kubectl/helm shell round-trip, and `-tags=e2e` appeared only in
-  # the Makefile. The session-checkpoint job (#294) was the first Go e2e with
-  # a runner; everything else — phase2/phase3, runtime backends, egress
-  # confinement, the ADR-0005 invariants, the installer, the invariant gate,
-  # and the TestEnv_KVMPresent guard itself — ran only when a human remembered
-  # `make e2e` on a KVM box, and no such box exists any more (#161).
+  # One runner, one kind cluster, three `go test` passes. Each pass installs
+  # its own throwaway release from THIS checkout's chart with the images
+  # build-images pushed, and uninstalls it on the way out (TestMain):
   #
-  # Sizing (the issue asks for this to be deliberate rather than bolted on):
+  #   1. The guard. TestEnv_KVMPresent and TestInstaller_Converges run alone,
+  #      before anything else, so an incapable environment fails the job
+  #      here instead of turning the rest into a green all-skip. In one
+  #      `go test` they would not run first: Go orders tests by file name.
+  #   2. The suites with snapshots off. This pass also holds the scenarios
+  #      a shared cluster could not run: the admission webhook, and the
+  #      RuntimeClass delete in TestSandbox_ZZ_NoRuntimeClass.
+  #   3. Phase 3 with snapshots on: snapshot/restore, the pool, and both
+  #      ADR-0005 invariants. Snapshots are an install-time switch, and
+  #      TestPhase3_UpgradeFromPhase2 needs them off, so this is its own
+  #      install.
   #
-  #   - ONE install, ONE runner pod, ONE metal node. The scenarios below all
-  #     run against a single throwaway release rather than a job each, because
-  #     the metal ceiling is one m5zn.metal (~$4/hr) by design.
-  #   - SHARES the session-checkpoint concurrency group. The two jobs would
-  #     otherwise contend for that single metal node and flake each other.
-  #     Serialising them costs wall-clock, not money, and money is the scarce
-  #     resource here.
-  #   - Scenarios needing a SECOND node or a cordon (the session drain case)
-  #     stay out; they are gated behind their own capacity variable.
-  #
-  # TestEnv_KVMPresent runs FIRST and deliberately: it is the guard that stops
-  # an incapable environment turning the rest of the suite into a green
-  # all-skip. It now asks the cluster (does any node carry the kata-fc
-  # capability label?) rather than stat'ing /dev/kvm on the runner, because
-  # under ARC the test binary and the microVM host are different machines.
-  #
-  # WHEN IT RUNS, and why not on merge_group (setec#298 follow-up)
-  #
-  # As first landed this job was gated on `vars.STAGING_E2E_SUITES_READY`,
-  # a variable that was never set and that nothing in the repo would ever set
-  # — so the job reported `skipped` on every run and the suite still never
-  # executed. A test suite behind a flag nobody flips is the same defect as a
-  # suite with no runner at all, which is the defect this issue is about, so
-  # the flag is gone.
-  #
-  # What replaces it is a schedule, not a merge-queue gate. The scenarios need
-  # an m5zn.metal (~$4/hr) and the whole suite takes tens of minutes; charging
-  # that to every merge-group entry is the "size it deliberately" mistake the
-  # issue warns against. Nightly + on-demand means it runs without anyone
-  # remembering to run it, which is the property that was missing. A failure
-  # opens/updates a tracking issue (`notify-suites` below) so a red nightly is
-  # not something a human has to go looking for.
-  #
-  # `STAGING_EPHEMERAL_READY` is the gate it does use — the same one
-  # `roundtrip` uses, and the only true precondition: an ARC runner that can
-  # take the job. That variable IS set.
+  # A SKIP fails the pass. A skipped scenario is not a verified one, and the
+  # warning the old job printed was read as a pass. The one exclusion is
+  # named in the `-skip` flag below, with the reason beside it.
   # ----------------------------------------------------------------------
   suites:
-    if: >-
-      vars.STAGING_EPHEMERAL_READY == 'true' &&
-      github.event_name != 'merge_group'
     needs: build-images
-    runs-on: staging-ephemeral
-    timeout-minutes: 60
-    concurrency:
-      # Deliberately the SAME group as session-checkpoint: one metal node.
-      group: setec-session-checkpoint-e2e
-      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
-      E2E_NAMESPACE: setec-e2e-suites
-      E2E_RELEASE: setec-e2e-suites
-      # The Sandbox-only namespace the suite installs beside the release
-      # (setec#10). Every scenario's Sandbox, Pod and PVC lives here, the
-      # operator and its agents stay in E2E_NAMESPACE. The multi-tenant
-      # scenarios still create their own tenant namespaces on top.
-      E2E_SANDBOX_NAMESPACE: setec-e2e-suites-sandboxes
+      KIND_CLUSTER: setec-kvm
+      # The worker is the one node that hosts microVMs (hack/kind-kvm.yaml).
+      KVM_NODE: setec-kvm-worker
+      # A throwaway cluster that exists only for this job. Naming a context
+      # would add nothing, so consent is explicit instead (setec#298).
+      SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+      SETEC_E2E_RUNTIMECLASS: kata-fc
+      # This build's images, pulled from ghcr (the packages are public).
+      SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
+      SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
+      SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
+      SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
+      SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+      # setec's own installer prepares the node: kata payload, devmapper
+      # thin-pool, containerd registration (ADR-0003). There is no kata-deploy
+      # on this cluster, so the installer runs in full mode.
+      SETEC_E2E_INSTALLER: "1"
+      SETEC_E2E_INSTALLER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-installer
+      # The cluster is isolated, so the webhook stays on. A dead run cannot
+      # fail anyone else's Sandbox writes closed.
+      SETEC_E2E_WEBHOOK: "1"
+      # Installer overrides, appended to every pass's install:
+      #   - pin the installer to the worker, so it never restarts containerd
+      #     under the API server on the control-plane node;
+      #   - a 20 GiB sparse thin-pool instead of 50. The runner disk is small,
+      #     and the scenarios write far less than that.
+      INSTALLER_SET: >-
+        installer.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host,installer.thinpool.loopDataSizeGB=20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -1256,255 +544,180 @@ jobs:
       - name: Install helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
-      - name: Preflight — the kata RuntimeClasses exist
-        run: |
-          set -uo pipefail
-          if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
-            echo "::error::RuntimeClass kata-fc is absent; kata-deploy has not run on this cluster"
-            exit 1
-          fi
-
-      # Same reasoning as the session job: a previous run that died between
-      # install and cleanup leaves a release in the way. This runs BEFORE the
-      # pre-warm so the namespace the warm pod lands in is freshly created.
-      - name: Reap a previous run's leftovers
-        run: |
-          set -uo pipefail
-          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait --timeout 2m 2>/dev/null || true
-          kubectl delete namespace "${E2E_SANDBOX_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
-          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=3m || true
-          for kind in clusterrole clusterrolebinding; do
-            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
-              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
-            done
-          done
-          # Cluster-scoped and created by a test body under t.Cleanup, which
-          # does not run on a cancelled job (setec#255).
-          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
-
-      - name: Pre-warm a kata-fc-capable metal node (scale-from-zero)
-        # WITHOUT THIS STEP THE JOB CAN NEVER BE GREEN.
-        #
-        # As first landed, this job's preflight asserted that a node already
-        # carried `setec.zeroroot.ai/runtime.kata-fc=true` and exited 1 within
-        # seconds if none did. But the setec-metal Karpenter NodePool is
-        # scale-to-zero by design and NOTHING in this job provokes it, so that
-        # assertion was guaranteed to fail on a quiet cluster — which is the
-        # normal state. Verified 2026-08-15: `kubectl get nodepool setec-metal`
-        # reports 0 nodes and no node in staging carries the label.
-        #
-        # `roundtrip` already solved this and this step is modelled on its
-        # solution: schedule a placeholder that requires ONLY the label the
-        # NodePool template declares (`setec.zeroroot.ai/sandbox-host`), which
-        # is the one thing Karpenter will provision for — a Sandbox Pod's own
-        # required `runtime.<backend>` affinity names a label key the
-        # hand-rolled terraform NodePool does not declare, and Karpenter
-        # rejects those outright. See the long note on roundtrip's own
-        # pre-warm step.
-        #
-        # The placeholder then STAYS UP for the whole suite. The NodePool's
-        # `consolidateAfter: 120s` would otherwise reap the metal node two
-        # minutes after the last sandbox exits, mid-run, and the next scenario
-        # would wait out its timeout against a cluster with no metal in it.
-        #
-        # 3300s (55m) sits just INSIDE this job's `timeout-minutes: 60`, and
-        # that direction matters. `Cleanup (always)` does not run when the job
-        # is cancelled or times out (setec#255) — observed on run 31918112679,
-        # where the runner was evicted mid-scenario
-        # and cleanup was `skipped`. The earlier 4200s (70m) OUTLASTED the
-        # timeout, so in exactly that case the placeholder went on pinning a
-        # ~$4/hr m5zn.metal with no job left to use it. A sleep shorter than
-        # the job ceiling makes the expiry itself the backstop, rather than a
-        # cleanup step that is not guaranteed to run.
-        #
-        # It lives in its own namespace, NOT ${E2E_NAMESPACE}: TestMain
-        # CREATES that namespace and fails if it already exists.
-        env:
-          WARM_NAMESPACE: setec-e2e-suites-warm
+      - name: Make /dev/kvm usable
+        # The runner's /dev/kvm is root:kvm 0660. kind copies the host device
+        # nodes into each node container with the mode they have when the
+        # container starts, so the mode has to change BEFORE the cluster
+        # exists. The ioctl proves the device answers, not only that it is
+        # present.
         run: |
           set -euo pipefail
-          kubectl create namespace "${WARM_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl delete pod setec-e2e-suites-warm -n "${WARM_NAMESPACE}" --ignore-not-found --wait=true --timeout=2m
-          cat <<EOF | kubectl apply -f -
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: setec-e2e-suites-warm
-            namespace: ${WARM_NAMESPACE}
-          spec:
-            nodeSelector:
-              setec.zeroroot.ai/sandbox-host: "true"
-            tolerations:
-              - key: setec.zeroroot.ai/sandbox-host
-                operator: Equal
-                value: "true"
-                effect: NoSchedule
-            containers:
-              - name: warm
-                image: ghcr.io/zeroroot-ai/mirror/kubectl:1.31.4
-                command: ["sleep", "3300"]
-                resources:
-                  requests:
-                    cpu: 50m
-                    memory: 32Mi
-            restartPolicy: Never
-          EOF
+          ls -l /dev/kvm
+          grep -E '^kvm_(intel|amd) ' /proc/modules
+          sudo chmod 666 /dev/kvm
+          python3 - <<'PY'
+          import fcntl, os
+          fd = os.open("/dev/kvm", os.O_RDWR)
+          version = fcntl.ioctl(fd, 0xAE00)  # KVM_GET_API_VERSION
+          print("KVM API version:", version)
+          assert version == 12, "unexpected KVM API version"
+          PY
 
-          echo "waiting for a kata-fc-capable node (metal boot + kata-deploy, up to ~18 min)..."
-          for i in $(seq 1 72); do
-            # BOTH labels, for the reason roundtrip documents (setec#243): the
-            # runtime-agent's capability label can fire before kata is really
-            # installed, and `katacontainers.io/kata-runtime=true` is written
-            # by kata-deploy only once containerd is configured.
-            n="$(kubectl get nodes \
-              -l setec.zeroroot.ai/runtime.kata-fc=true,katacontainers.io/kata-runtime=true \
-              -o name 2>/dev/null | head -1)"
-            if [ -n "$n" ]; then
-              echo "kata-fc-capable node ready after ${i} polls: ${n}"
-              exit 0
-            fi
-            sleep 15
-          done
+      - name: Create the kind cluster
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          config: hack/kind-kvm.yaml
+          wait: 120s
 
-          echo "::error::no node gained setec.zeroroot.ai/runtime.kata-fc=true within the wait window — the suite would skip into a green run, so this fails instead"
-          kubectl get nodes -L setec.zeroroot.ai/runtime.kata-fc,setec.zeroroot.ai/runtime.kata-qemu,katacontainers.io/kata-runtime -o wide || true
-          kubectl -n "${WARM_NAMESPACE}" describe pod setec-e2e-suites-warm || true
-          kubectl get nodeclaims -o wide 2>/dev/null || true
-          exit 1
-
-      - name: Run the previously-unwired scenarios
-        env:
-          # In-cluster ARC runner + destructive suite: state the intent
-          # explicitly or the suite refuses to touch the cluster (setec#298).
-          SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
-          # The setec-metal NodePool taints its nodes
-          # setec.zeroroot.ai/sandbox-host=true:NoSchedule, and those are the
-          # only nodes the runtime-agent ever labels runtime.<backend>=true —
-          # the nodeSelector every RuntimeClass puts on a Sandbox Pod. Without
-          # this the two contradict and every Sandbox sits Pending forever
-          # (setec#330). The suite injects it into every SandboxClass it
-          # creates; it cannot use the chart's
-          # runtimeClasses.*.scheduling.tolerations because it installs with
-          # runtimes.kata-fc.install=false — kata-deploy owns the RuntimeClass
-          # here, so the chart renders none.
-          SETEC_E2E_SANDBOX_HOST_TAINT: setec.zeroroot.ai/sandbox-host=true:NoSchedule
-          SETEC_E2E_NAMESPACE: ${{ env.E2E_NAMESPACE }}
-          SETEC_E2E_SANDBOX_NAMESPACE: ${{ env.E2E_SANDBOX_NAMESPACE }}
-          SETEC_E2E_RELEASE: ${{ env.E2E_RELEASE }}
-          SETEC_E2E_RUNTIMECLASS: kata-fc
-          SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
-          SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
-          SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
-          SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
-          SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
-          # The installer supplies the devmapper thin-pool and snapshotter
-          # the kata-deploy fc handler asks for (setec#9). Run 31919018724
-          # scheduled every kata-fc Sandbox onto the metal node and lost
-          # every one in containerd: "snapshotter must be provided to
-          # unpack". TestInstaller_Converges below reads the outcome.
-          SETEC_E2E_INSTALLER: "1"
-          SETEC_E2E_INSTALLER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-installer
-          # The chart's ValidatingWebhookConfiguration is CLUSTER-scoped with
-          # failurePolicy=Fail. On this SHARED cluster a run that dies before
-          # cleanup fails every Sandbox write cluster-wide until a human
-          # removes it. TestPhase2_WebhookRejects is therefore NOT in the
-          # -run set below; it needs an isolated cluster.
-          #
-          # TestSandbox_ZZ_NoRuntimeClass is out for the same class of reason
-          # and is worth naming separately: it DELETES the cluster-scoped
-          # kata-fc RuntimeClass and restores it in t.Cleanup. On a shared
-          # cluster that breaks the live setec release and every other kata
-          # workload for the duration — and permanently if the run dies before
-          # its cleanup. Isolated cluster only.
-          SETEC_E2E_WEBHOOK: "0"
+      - name: Prepare the worker node
+        # Three facts about a kind node that a real node does not share:
+        #
+        #   - /dev/kvm must be visible inside the node container. The check
+        #     here fails the job with a clear message if it is not.
+        #   - The kind image ships /etc/containerd as 0644, with no execute
+        #     bit. The runtime-agent runs as non-root and cannot traverse
+        #     into the directory to read the containerd config, so it would
+        #     never label the node kata-fc capable. Real nodes ship 0755.
+        #   - gVisor is bring-your-own. The installer lays down kata only,
+        #     and TestRuntimeBackends_* boot a gvisor Sandbox beside the
+        #     kata-fc one, and fall back to gvisor when kata-fc is gone.
+        #     This installs runsc from the gVisor release bucket, checks its
+        #     SHA-512, and registers the handler with containerd.
         run: |
-          # TestPhase3_UpgradeFromPhase2 drives a helm upgrade of the suite's
-          # own release (snapshots off -> on) and rolls it back, so it needs
-          # the install below to be a snapshots-off one, which it is.
-          # TestEnv_KVMPresent first: it is the guard that keeps an incapable
-          # environment from turning everything after it into a green all-skip.
-          #
-          # TestSession_ReattachByHandle is here and NOT in the
-          # session-checkpoint job (setec#296). It is one of the two scenarios
-          # that issue names as never having executed, and it is the one with
-          # NO infrastructure dependency at all: it needs a session-mode
-          # Sandbox with a workspace PVC on kata-fc and an in-process
-          # frontend.Service, which is the same shape as
-          # TestSession_WorkspaceSurvivesPodKill already in this list. It does
-          # not touch S3, the node-agent, or snapshots. Leaving it in the
-          # session-checkpoint job made it hostage to
-          # `vars.STAGING_SESSION_S3_READY`, a variable gated on a Terraform
-          # apply, an IRSA role and a checkpoint bucket it has no use for — so
-          # it ran nowhere. The two TestSessionCheckpoint_* scenarios really do
-          # need that bucket and stay behind the gate.
-          #
-          # TestSessionExec_.* (setec#8) drive the real pods/exec path: exec
-          # after a reattach through a fresh frontend, a non-zero exit
-          # reported as its own code, and a Kill mid-command reported as
-          # STATUS_SANDBOX_GONE. They need only a session Sandbox and the
-          # in-process frontend, the same shape as TestSession_ReattachByHandle.
-          #
-          # TestNodeAgentMTLS_.* are assertions on the material installChart
-          # mints for the snapshots path. That path only executes on an
-          # S3-configured install, i.e. almost never, so the generator would
-          # otherwise rot until the one run a human paid a metal node and a
-          # Terraform apply for.
-          #
-          # The wildcard is deliberate, and it is a correction: this list first
-          # named TestNodeAgentMTLS_LeavesChainToOneCA alone, which left
-          # TestNodeAgentMTLS_SecretNamesTrackTheChart written, committed, and
-          # never executed — the exact defect setec#298 and setec#296 are about,
-          # reintroduced by an enumeration that had to be kept in sync by hand.
-          # Verified against run 31919018724, where only the first of the two
-          # appears in the output.
-          go test -tags=e2e ./test/e2e/... -v -timeout 55m \
-            -run '^(TestEnv_KVMPresent|TestInstaller_Converges|TestNodeAgentMTLS_.*|TestPhase2_(UpgradeFromPhase1|NetworkPolicyEnforced|MultiTenantQuota)|TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection|UpgradeFromPhase2)|TestEgress_.*|TestGate_UnverifiedWarmStartFailsClosed|TestRuntimeBackends_.*|TestSandbox_(SuccessfulExit|NonZeroExit|Timeout|DeleteMidRun|OperatorRestartMidRun)|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$' \
-            2>&1 | tee suites-e2e.log
+          set -euo pipefail
+          docker exec "${KVM_NODE}" test -c /dev/kvm || {
+            echo "::error::/dev/kvm is not a character device inside ${KVM_NODE}"
+            exit 1
+          }
+          docker exec "${KVM_NODE}" ls -l /dev/kvm
+          docker exec "${KVM_NODE}" chmod 0755 /etc/containerd
+
+          url=https://storage.googleapis.com/gvisor/releases/release/latest/x86_64
+          dir="$(mktemp -d)"
+          for bin in runsc containerd-shim-runsc-v1; do
+            curl -fsSL -o "${dir}/${bin}" "${url}/${bin}"
+            curl -fsSL -o "${dir}/${bin}.sha512" "${url}/${bin}.sha512"
+            (cd "${dir}" && sha512sum -c "${bin}.sha512")
+            chmod 0755 "${dir}/${bin}"
+            docker cp "${dir}/${bin}" "${KVM_NODE}:/usr/local/bin/${bin}"
+          done
+          docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
+
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+          EOF'
+          docker exec "${KVM_NODE}" systemctl restart containerd
+          kubectl wait --for=condition=Ready "node/${KVM_NODE}" --timeout=120s
+          docker exec "${KVM_NODE}" crictl info | grep -q '"runsc"' || {
+            echo "::error::containerd on ${KVM_NODE} did not register the runsc handler"
+            exit 1
+          }
+
+      - name: Create the chart's RuntimeClasses
+        # The suite requires the RuntimeClass to exist before it installs,
+        # and installs with runtimes.<backend>.install=false. So the objects
+        # come from the chart's own template, rendered here with install=true,
+        # and are identical to what a default install renders. The values
+        # besides the runtimes only satisfy the chart's render guards.
+        run: |
+          set -euo pipefail
+          helm template rc ./charts/setec \
+            --show-only templates/runtime-classes.yaml \
+            --set webhook.enabled=false \
+            --set 'sandboxNamespaces={render-only}' \
+            --set runtimes.kata-fc.install=true \
+            --set runtimes.gvisor.enabled=true \
+            --set runtimes.gvisor.install=true \
+            | kubectl apply -f -
+          kubectl get runtimeclass
+
+      - name: "Pass 1: the KVM guard"
+        id: guard
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-guard
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-guard-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-guard
+        run: |
+          set +e
+          set -uo pipefail
+          SETEC_E2E_EXTRA_SET="${INSTALLER_SET}" \
+            go test -tags=e2e ./test/e2e/... -v -timeout 20m \
+            -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
+            2>&1 | tee guard.log
           status="${PIPESTATUS[0]}"
-          # A skipped scenario is not a verified scenario — the whole point of
-          # this issue. Surface every one so a green check is never mistaken
-          # for coverage it does not have.
-          {
-            echo "### e2e suites"
-            echo ''
-            grep -E '^(=== RUN|--- (PASS|FAIL|SKIP))' suites-e2e.log || true
-          } >> "$GITHUB_STEP_SUMMARY"
-          if grep -q -- '--- SKIP' suites-e2e.log; then
-            echo "::warning::one or more scenarios SKIPPED — see the job summary; this run did not verify them"
-            if grep -q 'snapshots.enabled=false' suites-e2e.log; then
-              echo "::warning::the Phase 3 skips (both ADR-0005 invariants + the warm-start gate) need SETEC_E2E_SNAPSHOTS=1. The chart-install blocker behind that (setec#320) is routed around as of setec#296 — installChart now mints the operator<->node-agent mTLS trio itself — but snapshots also require the node-agent DaemonSet on every node of a SHARED cluster, which is a separate call tracked on setec#320."
-            fi
-          fi
-          exit "$status"
+          scripts/e2e-summary.sh "Pass 1: the KVM guard" guard.log "$status"
+
+      - name: "Pass 2: the suites, snapshots off"
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-suites
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-suites-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-suites
+        run: |
+          set +e
+          set -uo pipefail
+          # -skip: the installer registers kata-fc only, so no node can run
+          # kata-qemu here. That subtest would SKIP on its own, and a SKIP
+          # fails this pass. kata-qemu coverage is tracked in its own issue.
+          SETEC_E2E_EXTRA_SET="${INSTALLER_SET}" \
+            go test -tags=e2e ./test/e2e/... -v -timeout 60m \
+            -run '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$' \
+            -skip '^TestRuntimeBackends_Smoke/backend=kata-qemu$' \
+            2>&1 | tee suites.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "Pass 2: the suites, snapshots off" suites.log "$status"
+
+      - name: "Pass 3: Phase 3, snapshots on"
+        # Runs after a pass 2 failure too, so one run reports both passes.
+        # It does not run after a guard failure: with no capable node every
+        # scenario here fails for the same reason the guard already named.
+        if: ${{ !cancelled() && steps.guard.outcome != 'failure' }}
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-phase3
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-phase3-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-phase3
+          SETEC_E2E_SNAPSHOTS: "1"
+        run: |
+          set +e
+          set -uo pipefail
+          # The node-agent takes the Firecracker snapshots. The chart pins it
+          # to kata-deploy's node label, which this cluster does not carry,
+          # so the selector moves to the worker.
+          node_agent_set="nodeAgent.enabled=true,nodeAgent.image.repository=${SETEC_E2E_NODE_AGENT_IMAGE_REPO},nodeAgent.image.tag=${SETEC_E2E_IMAGE_TAG},nodeAgent.nodeSelector.katacontainers\.io/kata-runtime=null,nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host"
+          SETEC_E2E_EXTRA_SET="${INSTALLER_SET},${node_agent_set}" \
+            go test -tags=e2e ./test/e2e/... -v -timeout 45m \
+            -run '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$' \
+            2>&1 | tee phase3.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "Pass 3: Phase 3, snapshots on" phase3.log "$status"
 
       - name: Collect diagnostics
         if: failure()
         run: |
           set -uo pipefail
-          kubectl get sandboxes,pods,pvc -n "${E2E_SANDBOX_NAMESPACE}" -o wide || true
-          kubectl get events -n "${E2E_SANDBOX_NAMESPACE}" --sort-by=.lastTimestamp | tail -50 || true
-          kubectl get sandboxclasses -o wide || true
-          kubectl get pods -n "${E2E_NAMESPACE}" -o wide || true
-          kubectl get events -n "${E2E_NAMESPACE}" --sort-by=.lastTimestamp | tail -50 || true
-          kubectl logs -n "${E2E_NAMESPACE}" -l app.kubernetes.io/name=setec --tail=200 --all-containers || true
+          kubectl get nodes -o wide --show-labels || true
+          kubectl get runtimeclass,sandboxclasses -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          echo "::group::containerd on ${KVM_NODE}"
+          docker exec "${KVM_NODE}" journalctl -u containerd --no-pager | tail -200 || true
+          echo "::endgroup::"
+          echo "::group::thin-pool on ${KVM_NODE}"
+          docker exec "${KVM_NODE}" journalctl -u setec-thinpool --no-pager | tail -50 || true
+          docker exec "${KVM_NODE}" dmsetup ls || true
+          docker exec "${KVM_NODE}" losetup -a || true
+          echo "::endgroup::"
 
-      - name: Cleanup (always)
-        if: always()
-        run: |
-          set -uo pipefail
-          helm uninstall "${E2E_RELEASE}" -n "${E2E_NAMESPACE}" --wait=false || true
-          kubectl delete namespace "${E2E_SANDBOX_NAMESPACE}" --ignore-not-found --wait=false || true
-          kubectl delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
-          # The pre-warm placeholder pins the ~$4/hr metal node for as long as
-          # it exists, so reaping it is a cost control, not tidiness. Karpenter
-          # consolidates the node 120s after it goes empty.
-          kubectl delete namespace setec-e2e-suites-warm --ignore-not-found --wait=false || true
-          kubectl delete sandboxclass "e2e-session-${E2E_NAMESPACE}" --ignore-not-found --wait=false || true
-          for kind in clusterrole clusterrolebinding; do
-            for obj in "${E2E_RELEASE}-manager" "${E2E_RELEASE}-runtime-agent" "${E2E_RELEASE}-node-agent" "${E2E_RELEASE}-sandbox-namespace"; do
-              kubectl delete "$kind" "$obj" --ignore-not-found --wait=false || true
-            done
-          done
+      - name: Upload the test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: e2e-suites-logs
+          path: |
+            guard.log
+            suites.log
+            phase3.log
+          if-no-files-found: ignore
 
   # ----------------------------------------------------------------------
   # notify-suites — make a red nightly loud.
