@@ -46,10 +46,8 @@ jobs:
   # ----------------------------------------------------------------------
   # build-images — GitHub-hosted (ADR-0060: no metal needed to build a Go
   # binary + container image, only to run it). Publishes sha-tagged images
-  # that the roundtrip job's shadow install consumes (its `needs:` +
-  # image-tag inputs below), so the round-trip exercises THIS PR's exact
-  # build; also serves as a build-sanity check the old workflow implicitly
-  # ran via `docker build ... -t :dev`.
+  # that the `suites` job installs (its `needs:` + image-tag inputs below),
+  # so the suites exercise this commit's exact build.
   # ----------------------------------------------------------------------
   build-images:
     runs-on: ubuntu-latest
@@ -120,8 +118,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The installer is what makes a kata-deploy metal node able to boot a
-      # kata-fc microVM at all (setec#9): kata-deploy points the fc handler
+      # The installer prepares the `suites` job's kind worker to boot kata-fc
+      # (ADR-0003). On a kata-deploy node it is also what makes a kata-fc
+      # microVM boot at all (setec#9): kata-deploy points the fc handler
       # at the devmapper snapshotter and configures neither a thin-pool nor
       # the snapshotter, so without the installer every kata-fc Sandbox
       # dies in containerd with "snapshotter must be provided to unpack".
@@ -593,15 +592,18 @@ jobs:
           docker exec "${KVM_NODE}" ls -l /dev/kvm
           docker exec "${KVM_NODE}" chmod 0755 /etc/containerd
 
+          # gVisor ships one tarball per release: runsc, the containerd shim,
+          # and a gvisor-bin/ directory runsc reads beside itself. The loose
+          # runsc download the gVisor docs still name returns 404.
           url=https://storage.googleapis.com/gvisor/releases/release/latest/x86_64
           dir="$(mktemp -d)"
-          for bin in runsc containerd-shim-runsc-v1; do
-            curl -fsSL -o "${dir}/${bin}" "${url}/${bin}"
-            curl -fsSL -o "${dir}/${bin}.sha512" "${url}/${bin}.sha512"
-            (cd "${dir}" && sha512sum -c "${bin}.sha512")
-            chmod 0755 "${dir}/${bin}"
-            docker cp "${dir}/${bin}" "${KVM_NODE}:/usr/local/bin/${bin}"
-          done
+          curl -fsSL -o "${dir}/gvisor.tar.bz2" "${url}/gvisor.tar.bz2"
+          curl -fsSL -o "${dir}/gvisor.tar.bz2.sha512" "${url}/gvisor.tar.bz2.sha512"
+          (cd "${dir}" && sha512sum -c gvisor.tar.bz2.sha512)
+          mkdir "${dir}/bin"
+          tar -xjf "${dir}/gvisor.tar.bz2" -C "${dir}/bin"
+          docker cp "${dir}/bin/." "${KVM_NODE}:/usr/local/bin/"
+          docker exec "${KVM_NODE}" /usr/local/bin/runsc --version
           docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
 
           [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
@@ -669,9 +671,9 @@ jobs:
 
       - name: "Pass 3: Phase 3, snapshots on"
         # Runs after a pass 2 failure too, so one run reports both passes.
-        # It does not run after a guard failure: with no capable node every
+        # It runs only when the guard passed: with no capable node every
         # scenario here fails for the same reason the guard already named.
-        if: ${{ !cancelled() && steps.guard.outcome != 'failure' }}
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         env:
           SETEC_E2E_NAMESPACE: setec-e2e-phase3
           SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-phase3-sandboxes
