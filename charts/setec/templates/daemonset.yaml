@@ -105,7 +105,16 @@ spec:
             # /dev/mapper entries and talks to the kernel's
             # device-mapper subsystem. Non-privileged operation is
             # not possible for thin-pool provisioning.
+            #
+            # Root as well as privileged. The image defaults to the distroless
+            # nonroot user (65532), and privileged grants a non-root process no
+            # effective capabilities. The agent then could not create its DEK
+            # directory under the root-owned keysDir hostPath, and crash-looped
+            # on "mkdir /var/lib/setec/keys/dek: permission denied" on every
+            # snapshots-enabled install. The kind e2e run found it (setec#22).
             privileged: true
+            runAsUser: 0
+            runAsGroup: 0
             readOnlyRootFilesystem: true
             capabilities:
               drop:
