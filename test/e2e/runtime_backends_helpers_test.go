@@ -38,6 +38,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -202,7 +203,12 @@ func scrapeServiceMetrics(ctx context.Context, target, port, localPort string) (
 
 	defer resp.Body.Close()
 
-	var parser expfmt.TextParser
+	// A zero-value TextParser has no name validation scheme, and
+	// prometheus/common v0.71 panics on the first metric name it checks
+	// ("Invalid name validation scheme requested: unset"). The scrape never
+	// reached this line before setec#22, because the Service it asked for
+	// did not exist.
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	families, err := parser.TextToMetricFamilies(bufio.NewReader(resp.Body))
 	if err != nil && !isMetricParseEOF(err) {
 		return nil, fmt.Errorf("parse prometheus text: %w", err)
