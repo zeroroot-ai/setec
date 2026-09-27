@@ -573,10 +573,17 @@ jobs:
           wait: 120s
 
       - name: Prepare the worker node
-        # Three facts about a kind node that a real node does not share:
+        # Four facts about a kind node that a real node does not share:
         #
         #   - /dev/kvm must be visible inside the node container. The check
         #     here fails the job with a clear message if it is not.
+        #   - The kind image builds containerd without the devmapper
+        #     snapshotter, and kata-fc needs it: Firecracker takes a block
+        #     device per container rootfs. So the worker gets the upstream
+        #     containerd release of the same version, checked against its
+        #     published SHA-256. Upstream builds include devmapper. The
+        #     installer then refuses to report converged on a containerd
+        #     that did not load it.
         #   - The kind image ships /etc/containerd as 0644, with no execute
         #     bit. The runtime-agent runs as non-root and cannot traverse
         #     into the directory to read the containerd config, so it would
@@ -594,6 +601,19 @@ jobs:
           }
           docker exec "${KVM_NODE}" ls -l /dev/kvm
           docker exec "${KVM_NODE}" chmod 0755 /etc/containerd
+
+          version="$(docker exec "${KVM_NODE}" containerd --version | awk '{print $3}')"
+          version="${version#v}"
+          echo "kind node containerd: ${version}"
+          cdir="$(mktemp -d)"
+          tarball="containerd-${version}-linux-amd64.tar.gz"
+          curl -fsSL -o "${cdir}/${tarball}" \
+            "https://github.com/containerd/containerd/releases/download/v${version}/${tarball}"
+          curl -fsSL -o "${cdir}/${tarball}.sha256sum" \
+            "https://github.com/containerd/containerd/releases/download/v${version}/${tarball}.sha256sum"
+          (cd "${cdir}" && sha256sum -c "${tarball}.sha256sum")
+          tar -xzf "${cdir}/${tarball}" -C "${cdir}" bin/containerd
+          docker cp "${cdir}/bin/containerd" "${KVM_NODE}:/usr/local/bin/containerd"
 
           # gVisor ships one tarball per release: runsc, the containerd shim,
           # and a gvisor-bin/ directory runsc reads beside itself. The loose
@@ -616,6 +636,12 @@ jobs:
           kubectl wait --for=condition=Ready "node/${KVM_NODE}" --timeout=120s
           docker exec "${KVM_NODE}" crictl info | grep -q '"runsc"' || {
             echo "::error::containerd on ${KVM_NODE} did not register the runsc handler"
+            exit 1
+          }
+          # The plugin reports "skip" until the installer configures a pool.
+          # Present is what this step can prove.
+          docker exec "${KVM_NODE}" ctr plugins ls | grep -E 'io\.containerd\.snapshotter\.v1 +devmapper ' || {
+            echo "::error::containerd on ${KVM_NODE} has no devmapper snapshotter plugin"
             exit 1
           }
 
@@ -689,11 +715,25 @@ jobs:
           # to kata-deploy's node label, which this cluster does not carry,
           # so the selector moves to the worker.
           node_agent_set="nodeAgent.enabled=true,nodeAgent.image.repository=${SETEC_E2E_NODE_AGENT_IMAGE_REPO},nodeAgent.image.tag=${SETEC_E2E_IMAGE_TAG},nodeAgent.nodeSelector.katacontainers\.io/kata-runtime=null,nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host"
+          # TestMain uninstalls the release on the way out, so a node-agent
+          # that crashed mid-pass leaves no logs behind. Sample them while
+          # the pass runs.
+          (
+            while sleep 60; do
+              echo "--- $(date -u +%H:%M:%S)"
+              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
+                --all-containers --previous --tail=60 2>&1
+              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
+                --all-containers --tail=60 2>&1
+            done
+          ) > node-agent.log &
+          sampler=$!
           SETEC_E2E_EXTRA_SET="${NODE_SET},${node_agent_set}" \
             go test -tags=e2e ./test/e2e/... -v -timeout 45m \
             -run '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$' \
             2>&1 | tee phase3.log
           status="${PIPESTATUS[0]}"
+          kill "$sampler" 2>/dev/null
           scripts/e2e-summary.sh "Pass 3: Phase 3, snapshots on" phase3.log "$status"
 
       - name: Collect diagnostics
@@ -711,6 +751,8 @@ jobs:
           echo "::group::thin-pool on ${KVM_NODE}"
           docker exec "${KVM_NODE}" journalctl -u setec-thinpool --no-pager | tail -50 || true
           docker exec "${KVM_NODE}" dmsetup ls || true
+          docker exec "${KVM_NODE}" ctr plugins ls || true
+          docker exec "${KVM_NODE}" journalctl -u containerd --no-pager | grep -iE 'devmapper|failed to load plugin' | tail -40 || true
           docker exec "${KVM_NODE}" losetup -a || true
           echo "::endgroup::"
 
@@ -723,6 +765,7 @@ jobs:
             guard.log
             suites.log
             phase3.log
+            node-agent.log
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------------
