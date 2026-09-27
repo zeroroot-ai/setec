@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -140,5 +141,33 @@ func (in *Installer) ensureThinpool(ctx context.Context, flavor runtimeFlavor) (
 	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "info", in.cfg.PoolName); err != nil {
 		return changed, fmt.Errorf("thin-pool %s not active after provisioning: %w", in.cfg.PoolName, err)
 	}
+	if err := in.ensurePoolNode(ctx); err != nil {
+		return changed, err
+	}
 	return changed, nil
+}
+
+// ensurePoolNode makes sure /dev/mapper/<pool> exists, which is the path
+// containerd's devmapper snapshotter opens. `dmsetup info <name>` answers by
+// name through the kernel, so it passes on a node where nothing created the
+// device node. That is any node without udev, such as a kind node. containerd
+// then reports "Device does not exist", and a devmapper plugin that fails to
+// load takes containerd's metadata store down with it: every Pod on the node
+// stops (setec#22). So the node is created with `dmsetup mknodes` when it is
+// missing, and the installer stops before it touches containerd when even
+// that does not produce it.
+func (in *Installer) ensurePoolNode(ctx context.Context) error {
+	node := "/dev/mapper/" + in.cfg.PoolName
+	if _, err := os.Stat(in.hostPath(node)); err == nil {
+		return nil
+	}
+	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "mknodes", in.cfg.PoolName); err != nil {
+		return fmt.Errorf("creating the missing device node %s: %w", node, err)
+	}
+	if _, err := os.Stat(in.hostPath(node)); err != nil {
+		return fmt.Errorf("thin-pool %s is active but %s does not exist, and containerd opens that path; "+
+			"refusing to register the devmapper snapshotter, which would stop containerd on this node: %w",
+			in.cfg.PoolName, node, err)
+	}
+	return nil
 }

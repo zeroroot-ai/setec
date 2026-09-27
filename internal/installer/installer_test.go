@@ -60,8 +60,10 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	root := t.TempDir()
 	payload := t.TempDir()
 
-	// KVM device + module.
+	// KVM device + module, and the thin-pool's device node, which udev
+	// creates on a real node when setec-thinpool.service activates the pool.
 	mustWrite(t, filepath.Join(root, "dev/kvm"), "")
+	mustWrite(t, filepath.Join(root, "dev/mapper/setec-thinpool"), "")
 	mustMkdir(t, filepath.Join(root, "sys/module/kvm_intel"))
 
 	// Host tools the preflight looks for.
@@ -314,6 +316,42 @@ func TestConvergeConfirmsDevmapperLoaded(t *testing.T) {
 	}
 	if runner.called("ctr plugins ls") == 0 {
 		t.Error("the installer never asked containerd for its plugins")
+	}
+}
+
+// A node without udev (a kind node) activates the pool but gets no
+// /dev/mapper node, and containerd opens that path. Registering devmapper
+// there stops containerd for every Pod on the node (setec#22).
+func TestConvergeCreatesMissingPoolNode(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	node := filepath.Join(fx.root, "dev/mapper/setec-thinpool")
+	if err := os.Remove(node); err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	// mknodes does not produce the node: the installer must stop before it
+	// touches containerd.
+	if _, err := inst.Converge(context.Background()); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("Converge error = %v, want the missing device node named", err)
+	}
+	if runner.called("dmsetup mknodes setec-thinpool") != 1 {
+		t.Error("the installer did not try dmsetup mknodes")
+	}
+	if n := runner.called("systemctl restart containerd.service"); n != 0 {
+		t.Errorf("containerd restarted %d time(s) with no pool device node; want 0", n)
+	}
+	if _, err := os.Stat(filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml")); err == nil {
+		t.Error("the devmapper drop-in was written with no pool device node")
+	}
+
+	// mknodes produces the node: convergence goes on.
+	mustWrite(t, node, "")
+	if res, err := inst.Converge(context.Background()); err != nil || res.Outcome != OutcomeConverged {
+		t.Fatalf("Converge after the node appeared = %s, %v; want converged", res.Outcome, err)
 	}
 }
 
