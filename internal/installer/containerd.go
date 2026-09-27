@@ -212,26 +212,38 @@ func k3sTemplateCandidates() []string {
 }
 
 // detectConfigVersion determines the containerd config schema version
-// (2 for containerd 1.x, 3 for containerd 2.x). It prefers asking the
-// host's containerd binary for its default config; when that fails (no
-// `containerd` on PATH — k3s embeds it) it falls back to the version
-// line of the rendered config, then to 2.
+// the installer writes (2 for the containerd 1.x schema, 3 and later for
+// containerd 2.x).
+//
+// The version line of the node's own config wins. containerd refuses to
+// start when a drop-in declares a higher version than the root config
+// ("drop-in config version 4 higher than root config version 2"), and a
+// containerd 2.x binary still runs a version-2 root config by migrating it.
+// So on a node that upgraded containerd and kept its config (the kind node
+// image is one), the binary's default schema is the wrong answer: the
+// installer took that node's containerd down for good (setec#22).
+//
+// Only when the config has no version line, or does not exist (the
+// installer then creates it), does the host's containerd binary decide,
+// through its default config. k3s embeds containerd and has no binary on
+// PATH, so its flavor reads the rendered config alone. The last fallback
+// is 2.
 var versionLineRe = regexp.MustCompile(`(?m)^\s*version\s*=\s*(\d+)`)
 
 func (in *Installer) detectConfigVersion(ctx context.Context, flavor runtimeFlavor) int {
+	if content, err := os.ReadFile(in.hostPath(flavor.configPath)); err == nil {
+		if m := versionLineRe.FindSubmatch(content); m != nil {
+			if v, err := strconv.Atoi(string(m[1])); err == nil {
+				return v
+			}
+		}
+	}
 	if flavor.name == "containerd" {
 		if out, err := in.cfg.Runner.Run(ctx, "containerd", "config", "default"); err == nil {
 			if m := versionLineRe.FindSubmatch(out); m != nil {
 				if v, err := strconv.Atoi(string(m[1])); err == nil {
 					return v
 				}
-			}
-		}
-	}
-	if content, err := os.ReadFile(in.hostPath(flavor.configPath)); err == nil {
-		if m := versionLineRe.FindSubmatch(content); m != nil {
-			if v, err := strconv.Atoi(string(m[1])); err == nil {
-				return v
 			}
 		}
 	}

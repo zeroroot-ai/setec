@@ -208,6 +208,58 @@ func TestConvergeFreshStockContainerdNode(t *testing.T) {
 	}
 }
 
+// A node whose config.toml still says `version = 2` while its containerd
+// binary is 2.x (default schema 3 or later) is the kind node image, and any
+// host that upgraded containerd and kept its config. containerd refuses to
+// start when a drop-in declares a higher schema version than the root
+// config ("drop-in config version 4 higher than root config version 2"),
+// so the drop-in must follow the root config, not the binary's default.
+// Found on the setec e2e kind cluster (setec#22): the installer took the
+// node's containerd down and it never came back.
+func TestConvergeDropinFollowsRootConfigVersion(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
+		"# kind node config\nversion = 2\n\n[plugins.\"io.containerd.grpc.v1.cri\".containerd]\n  snapshotter = \"overlayfs\"\n")
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 4\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	dropin := readFile(t, filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml"))
+	if !strings.Contains(dropin, "\nversion = 2\n") {
+		t.Errorf("drop-in must declare the root config's version 2, got:\n%s", dropin)
+	}
+	if !strings.Contains(dropin, `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`) {
+		t.Errorf("drop-in must use the version-2 runtime table, got:\n%s", dropin)
+	}
+}
+
+// With no config.toml at all, the installer creates one, and the binary's
+// default schema is the right version for both files.
+func TestConvergeNoRootConfigUsesBinaryDefaultVersion(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 3\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	dropin := readFile(t, filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml"))
+	if !strings.Contains(dropin, "\nversion = 3\n") ||
+		!strings.Contains(dropin, `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`) {
+		t.Errorf("drop-in must use version 3 and its runtime table, got:\n%s", dropin)
+	}
+	mainCfg := readFile(t, filepath.Join(fx.root, "etc/containerd/config.toml"))
+	if !strings.Contains(mainCfg, "version = 3") {
+		t.Errorf("created config.toml must declare version 3, got:\n%s", mainCfg)
+	}
+}
+
 func TestConvergeIsIdempotent(t *testing.T) {
 	fx := newHostFixture(t, flavorContainerd)
 	runner := newFakeRunner(t)
