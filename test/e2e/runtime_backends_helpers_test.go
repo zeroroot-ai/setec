@@ -154,15 +154,35 @@ func skipIfNodeLabelMissing(t *testing.T, label string) {
 	}
 }
 
-// scrapeOperatorMetrics port-forwards to the operator Deployment's metrics
+// operatorLeaseName is the operator's leader-election Lease
+// (cmd/main.go LeaderElectionID).
+const operatorLeaseName = "setec.zeroroot.ai"
+
+// scrapeOperatorMetrics port-forwards to the leading operator Pod's metrics
 // port and returns the parsed Prometheus metric families.
 //
-// The chart renders no metrics Service for the operator. This used to name a
-// "setec-metrics" Service that no release has, so every scrape failed: the
-// cold-start label check skipped on every run and the fallback counter was
-// never asserted (setec#22). The Deployment is named by the chart's fullname.
+// Two facts decide the target (setec#22):
+//
+//   - The chart renders no metrics Service for the operator. This used to
+//     name a "setec-metrics" Service that no release has, so every scrape
+//     failed and the cold-start and fallback metric checks never ran.
+//   - The chart runs two operator replicas, and only the leader reconciles,
+//     so only the leader records sandbox metrics. A port-forward to the
+//     Deployment picks either Pod and reads an empty set half the time. The
+//     leader is the Pod the leader-election Lease names.
 func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
-	return scrapeServiceMetrics(ctx, "deploy/"+chartFullname, "8080", "19090")
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "lease", operatorLeaseName,
+		"-n", testNamespace, "-o", "jsonpath={.spec.holderIdentity}").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("read the operator leader Lease %s/%s: %v (%s)", testNamespace, operatorLeaseName, err, out)
+	}
+	// controller-runtime writes the holder as <pod name>_<uuid>.
+	holder := strings.TrimSpace(string(out))
+	pod, _, found := strings.Cut(holder, "_")
+	if !found || pod == "" {
+		return nil, fmt.Errorf("operator leader Lease %s/%s has holder %q, want <pod>_<uuid>", testNamespace, operatorLeaseName, holder)
+	}
+	return scrapeServiceMetrics(ctx, "pod/"+pod, "8080", "19090")
 }
 
 // scrapeServiceMetrics port-forwards <target>:<port> in testNamespace to
