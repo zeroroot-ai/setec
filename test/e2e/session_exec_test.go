@@ -236,6 +236,16 @@ func TestSessionExec_KillMidExec(t *testing.T) {
 		res execResult
 		err error
 	}
+	// The command is in flight once the frontend has stamped the
+	// session's activity annotation for it; that is the same signal the
+	// idle evictor reads. The stamp is second-precision, so the Attach's
+	// stamp is read BEFORE the Exec starts, and the Exec starts in a later
+	// second. Otherwise an Exec that follows the Attach within the same
+	// second writes the same string, and nothing moves again until the
+	// one-minute heartbeat (seen on the kind e2e run, setec#22).
+	was := sessionActivityStamp(t, handle)
+	time.Sleep(1100 * time.Millisecond)
+
 	done := make(chan outcome, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
@@ -244,10 +254,7 @@ func TestSessionExec_KillMidExec(t *testing.T) {
 		done <- outcome{res: res, err: err}
 	}()
 
-	// The command is in flight once the frontend has stamped the
-	// session's activity annotation for it; that is the same signal the
-	// idle evictor reads. Poll for a stamp newer than the Attach's.
-	waitForExecInFlight(t, handle)
+	waitForExecInFlight(t, handle, was)
 
 	if _, err := newInProcessFrontend().Kill(context.Background(), &setecv1grpc.KillRequest{SandboxId: handle}); err != nil {
 		t.Fatalf("Kill %s: %v", handle, err)
@@ -274,27 +281,26 @@ func TestSessionExec_KillMidExec(t *testing.T) {
 	}
 }
 
-// waitForExecInFlight polls the session's last-activity annotation until
-// it moves past the value the Attach left, which the frontend does when
-// an Exec starts and holds for the command's whole run.
-func waitForExecInFlight(t *testing.T, handle string) {
+// sessionActivityStamp returns the session's last-activity annotation.
+func sessionActivityStamp(t *testing.T, handle string) string {
 	t.Helper()
 	parts := strings.Split(handle, "/")
-	key := client.ObjectKey{Namespace: parts[0], Name: parts[1]}
-
-	var before setecv1alpha1.Sandbox
-	if err := k8sClient.Get(context.Background(), key, &before); err != nil {
+	var sb setecv1alpha1.Sandbox
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: parts[0], Name: parts[1]}, &sb); err != nil {
 		t.Fatalf("get session sandbox: %v", err)
 	}
-	was := before.Annotations[setecv1alpha1.AnnotationLastActivity]
+	return sb.Annotations[setecv1alpha1.AnnotationLastActivity]
+}
 
+// waitForExecInFlight polls the session's last-activity annotation until
+// it moves past was, the value read before the Exec started. The frontend
+// stamps it when an Exec starts and holds it fresh for the command's whole
+// run.
+func waitForExecInFlight(t *testing.T, handle, was string) {
+	t.Helper()
 	deadline := time.Now().Add(briefWait)
 	for time.Now().Before(deadline) {
-		var now setecv1alpha1.Sandbox
-		if err := k8sClient.Get(context.Background(), key, &now); err != nil {
-			t.Fatalf("get session sandbox: %v", err)
-		}
-		if stamp := now.Annotations[setecv1alpha1.AnnotationLastActivity]; stamp != "" && stamp != was {
+		if stamp := sessionActivityStamp(t, handle); stamp != "" && stamp != was {
 			return
 		}
 		time.Sleep(defaultPoll)

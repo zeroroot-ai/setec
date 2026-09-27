@@ -171,18 +171,28 @@ const operatorLeaseName = "setec.zeroroot.ai"
 //     Deployment picks either Pod and reads an empty set half the time. The
 //     leader is the Pod the leader-election Lease names.
 func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
+	pod, err := operatorLeaderPod(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return scrapeServiceMetrics(ctx, "pod/"+pod, "8080", "19090")
+}
+
+// operatorLeaderPod returns the name of the operator Pod that holds the
+// leader-election Lease, the one replica that reconciles.
+func operatorLeaderPod(ctx context.Context) (string, error) {
 	out, err := exec.CommandContext(ctx, "kubectl", "get", "lease", operatorLeaseName,
 		"-n", testNamespace, "-o", "jsonpath={.spec.holderIdentity}").CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("read the operator leader Lease %s/%s: %v (%s)", testNamespace, operatorLeaseName, err, out)
+		return "", fmt.Errorf("read the operator leader Lease %s/%s: %v (%s)", testNamespace, operatorLeaseName, err, out)
 	}
 	// controller-runtime writes the holder as <pod name>_<uuid>.
 	holder := strings.TrimSpace(string(out))
 	pod, _, found := strings.Cut(holder, "_")
 	if !found || pod == "" {
-		return nil, fmt.Errorf("operator leader Lease %s/%s has holder %q, want <pod>_<uuid>", testNamespace, operatorLeaseName, holder)
+		return "", fmt.Errorf("operator leader Lease %s/%s has holder %q, want <pod>_<uuid>", testNamespace, operatorLeaseName, holder)
 	}
-	return scrapeServiceMetrics(ctx, "pod/"+pod, "8080", "19090")
+	return pod, nil
 }
 
 // scrapeServiceMetrics port-forwards <target>:<port> in testNamespace to
