@@ -259,6 +259,36 @@ func runtimeTableName(version int) string {
 	return `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`
 }
 
+// keepUnpackedLayersTOML turns discard_unpacked_layers off. The kata-fc
+// handler unpacks into the devmapper snapshotter, every other handler into
+// the node's default one, and an image already unpacked for one of them has
+// to be unpacked again for the other. With discard_unpacked_layers = true
+// (the kind node image sets it) the second unpack finds no layer to read and
+// fails with "failed to get reader from content store ... not found"
+// (setec#22).
+//
+// Stock containerd only. The drop-in is a file of its own, and containerd
+// merges it over the root config. k3s renders one config from a template
+// whose base already declares the images table, and a second declaration of
+// a table in one TOML file does not parse.
+func keepUnpackedLayersTOML(version int) string {
+	return fmt.Sprintf(`
+# Keep compressed layers after unpacking, so an image unpacked for one
+# snapshotter can be unpacked again for the other.
+[%s]
+  discard_unpacked_layers = false
+`, imagesTableName(version))
+}
+
+// imagesTableName returns the CRI table that holds discard_unpacked_layers
+// for the config schema version.
+func imagesTableName(version int) string {
+	if version >= 3 {
+		return `plugins."io.containerd.cri.v1.images"`
+	}
+	return `plugins."io.containerd.grpc.v1.cri".containerd`
+}
+
 // registrationTOML renders what this installer registers with containerd
 // for the given schema version: the devmapper snapshotter always, and the
 // kata-fc runtime handler in modeFull. It is the packer AMI's drop-in,
@@ -318,7 +348,8 @@ func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeF
 func (in *Installer) ensureStockDropin(version int, mode convergeMode) (bool, error) {
 	changed := false
 
-	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s", version, in.registrationTOML(version, mode))
+	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s%s",
+		version, in.registrationTOML(version, mode), keepUnpackedLayersTOML(version))
 	c, err := writeFileIfChanged(in.hostPath(stockDropinPath), []byte(dropin), 0o644)
 	if err != nil {
 		return changed, err

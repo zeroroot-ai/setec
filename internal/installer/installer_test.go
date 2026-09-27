@@ -237,6 +237,9 @@ func TestConvergeDropinFollowsRootConfigVersion(t *testing.T) {
 	if !strings.Contains(dropin, `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`) {
 		t.Errorf("drop-in must use the version-2 runtime table, got:\n%s", dropin)
 	}
+	if !strings.Contains(dropin, "[plugins.\"io.containerd.grpc.v1.cri\".containerd]\n  discard_unpacked_layers = false") {
+		t.Errorf("drop-in must keep unpacked layers in the version-2 table, got:\n%s", dropin)
+	}
 }
 
 // With no config.toml at all, the installer creates one, and the binary's
@@ -255,6 +258,9 @@ func TestConvergeNoRootConfigUsesBinaryDefaultVersion(t *testing.T) {
 	if !strings.Contains(dropin, "\nversion = 3\n") ||
 		!strings.Contains(dropin, `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`) {
 		t.Errorf("drop-in must use version 3 and its runtime table, got:\n%s", dropin)
+	}
+	if !strings.Contains(dropin, "[plugins.\"io.containerd.cri.v1.images\"]\n  discard_unpacked_layers = false") {
+		t.Errorf("drop-in must keep unpacked layers in the version-3 images table, got:\n%s", dropin)
 	}
 	mainCfg := readFile(t, filepath.Join(fx.root, "etc/containerd/config.toml"))
 	if !strings.Contains(mainCfg, "version = 3") {
