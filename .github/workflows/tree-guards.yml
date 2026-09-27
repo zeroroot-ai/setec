@@ -34,10 +34,10 @@ concurrency:
 
 jobs:
   brand-guard:
-    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@1366fb5a29590e522bf5a74308f55bb39a4edb56 # v0.5.1
+    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@c06ea08fddecc754ac6faf06f9fc0511d13cb955 # v0.5.2
 
   link-check:
-    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@1366fb5a29590e522bf5a74308f55bb39a4edb56 # v0.5.1
+    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@c06ea08fddecc754ac6faf06f9fc0511d13cb955 # v0.5.2
 
   # The installer's payload gate, proven to fail (setec#17). The gate is a
   # stage of Dockerfile.installer that asserts the pruned kata tree holds
