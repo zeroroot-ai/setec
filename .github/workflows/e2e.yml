@@ -573,7 +573,7 @@ jobs:
           wait: 120s
 
       - name: Prepare the worker node
-        # Four facts about a kind node that a real node does not share:
+        # Five facts about a kind node that a real node does not share:
         #
         #   - /dev/kvm must be visible inside the node container. The check
         #     here fails the job with a clear message if it is not.
@@ -584,6 +584,12 @@ jobs:
         #     published SHA-256. Upstream builds include devmapper. The
         #     installer then refuses to report converged on a containerd
         #     that did not load it.
+        #   - No udev runs inside the node container, so nothing creates the
+        #     /dev/mapper node when dmsetup activates a device. containerd
+        #     then reports the thin-pool as "Device does not exist", and a
+        #     failed devmapper plugin takes containerd's metadata store down
+        #     with it. DM_DISABLE_UDEV=1 makes libdevmapper create the nodes
+        #     itself, for containerd and for the installer's thin-pool unit.
         #   - The kind image ships /etc/containerd as 0644, with no execute
         #     bit. The runtime-agent runs as non-root and cannot traverse
         #     into the directory to read the containerd config, so it would
@@ -601,6 +607,10 @@ jobs:
           }
           docker exec "${KVM_NODE}" ls -l /dev/kvm
           docker exec "${KVM_NODE}" chmod 0755 /etc/containerd
+          for unit in containerd.service setec-thinpool.service; do
+            docker exec "${KVM_NODE}" sh -c "mkdir -p /etc/systemd/system/${unit}.d && printf '[Service]\nEnvironment=DM_DISABLE_UDEV=1\n' > /etc/systemd/system/${unit}.d/05-dm-disable-udev.conf"
+          done
+          docker exec "${KVM_NODE}" systemctl daemon-reload
 
           version="$(docker exec "${KVM_NODE}" containerd --version | awk '{print $3}')"
           version="${version#v}"
@@ -751,6 +761,7 @@ jobs:
           echo "::group::thin-pool on ${KVM_NODE}"
           docker exec "${KVM_NODE}" journalctl -u setec-thinpool --no-pager | tail -50 || true
           docker exec "${KVM_NODE}" dmsetup ls || true
+          docker exec "${KVM_NODE}" ls -l /dev/mapper || true
           docker exec "${KVM_NODE}" ctr plugins ls || true
           docker exec "${KVM_NODE}" journalctl -u containerd --no-pager | grep -iE 'devmapper|failed to load plugin' | tail -40 || true
           docker exec "${KVM_NODE}" losetup -a || true
