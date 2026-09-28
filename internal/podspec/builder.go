@@ -349,9 +349,17 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		})
 	}
 	if usesBlockWorkspace {
-		// mount(2) needs CAP_SYS_ADMIN. This is the one extra capability
-		// a kata-fc session workload carries beyond every other Sandbox
-		// (NET_RAW/NET_ADMIN, above): it is added, never full
+		// mount(2) needs CAP_SYS_ADMIN, and opening the raw block device
+		// needs CAP_DAC_OVERRIDE: the workload runs as the unprivileged
+		// sandbox UID/GID (podspec keeps every Sandbox non-root), and a
+		// freshly attached Block-mode device node is not guaranteed to
+		// be group-writable by that GID on every volume plugin (a real
+		// run against a kind e2e cluster's static local PVs hit "open
+		// /dev/setec-workspace: permission denied" without it; the
+		// device's ownership there never reflects the pod's fsGroup the
+		// way a CSI driver's would). These are the two extra
+		// capabilities a kata-fc session workload carries beyond every
+		// other Sandbox (NET_RAW/NET_ADMIN, above): added, never full
 		// `privileged`, because the operator's own admission policy
 		// (charts/setec/templates/sandbox-namespace-host-guard.yaml,
 		// setec#159) refuses any privileged container in a Sandbox
@@ -359,17 +367,18 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		// ADR-0052's "the microVM is the boundary" reasoning, which
 		// covers individual capabilities, not full node access.
 		//
-		// The capability does not reach the Sandbox's own command: the
+		// Neither capability reaches the Sandbox's own command: the
 		// keepalive wrapper (cmd/setec-keepalive) formats and mounts the
 		// workspace, then execs the Sandbox's command via syscall.Exec.
 		// Per the Linux capability model, an exec'd binary with no file
 		// capabilities of its own starts with an empty effective/
 		// permitted set regardless of what the exec'ing process held,
 		// unless the process populated its ambient set — which nothing
-		// here does. So CAP_SYS_ADMIN is held only for the format+mount
-		// step, never by the workload the Sandbox actually runs.
+		// here does. So these capabilities are held only for the
+		// format+mount step, never by the workload the Sandbox actually
+		// runs.
 		container.SecurityContext.Capabilities.Add =
-			append(container.SecurityContext.Capabilities.Add, "SYS_ADMIN")
+			append(container.SecurityContext.Capabilities.Add, "SYS_ADMIN", "DAC_OVERRIDE")
 	}
 
 	rcName := effectiveRCName

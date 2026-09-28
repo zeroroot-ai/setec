@@ -153,16 +153,20 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 		}
 	}
 
-	// mount(2) needs CAP_SYS_ADMIN; nothing else in the Pod needs it.
-	var hasSysAdmin bool
-	for _, cap := range c.SecurityContext.Capabilities.Add {
-		if cap == "SYS_ADMIN" {
-			hasSysAdmin = true
+	// mount(2) needs CAP_SYS_ADMIN, and opening the raw block device
+	// (which a Block-mode volume plugin may not have chgrp'd to the
+	// workload's own fsGroup) needs CAP_DAC_OVERRIDE; nothing else in
+	// the Pod needs either.
+	for _, want := range []string{"SYS_ADMIN", "DAC_OVERRIDE"} {
+		var has bool
+		for _, cap := range c.SecurityContext.Capabilities.Add {
+			if cap == corev1.Capability(want) {
+				has = true
+			}
 		}
-	}
-	if !hasSysAdmin {
-		t.Errorf("workload container capabilities.add = %v, want SYS_ADMIN (needed for mount(2))",
-			c.SecurityContext.Capabilities.Add)
+		if !has {
+			t.Errorf("workload container capabilities.add = %v, want %s", c.SecurityContext.Capabilities.Add, want)
+		}
 	}
 
 	// The keepalive-install init container must exist (it carries the
@@ -258,8 +262,8 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 		t.Errorf("command = %v, want the Sandbox's own command %v unwrapped", c.Command, sb.Spec.Command)
 	}
 	for _, cap := range c.SecurityContext.Capabilities.Add {
-		if cap == "SYS_ADMIN" {
-			t.Errorf("gvisor workload container carries SYS_ADMIN; only kata-fc needs it")
+		if cap == "SYS_ADMIN" || cap == "DAC_OVERRIDE" {
+			t.Errorf("gvisor workload container carries %s; only kata-fc needs it", cap)
 		}
 	}
 

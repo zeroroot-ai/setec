@@ -71,8 +71,12 @@ propagation at all. That guard is deliberately absolute — unlike individual
 capabilities, which ADR-0052 already treats as costing nothing extra because
 the microVM is the containment boundary, `privileged` hands the container the
 node itself, which no backend's containment model excuses. The one-container
-design needs only `CAP_SYS_ADMIN` for the `mount(2)` call, added to the same
-capability set that already carries NET_RAW/NET_ADMIN, and it never reaches
+design needs `CAP_SYS_ADMIN` for the `mount(2)` call and `CAP_DAC_OVERRIDE` to
+open the raw block device — a static local PersistentVolume (the kind e2e
+cluster's stand-in for a CSI driver) does not chgrp the device node to the
+Pod's fsGroup the way a Block-capable CSI driver does, so the workload's own
+unprivileged GID cannot open it without this — both added to the same
+capability set that already carries NET_RAW/NET_ADMIN, and neither reaches
 the Sandbox's own command: an exec'd binary with no file capabilities of its
 own gets an empty effective/permitted set regardless of what the exec'ing
 process held, because nothing here populates the ambient capability set.
