@@ -194,3 +194,35 @@ func TestFormatOnce_UnknownDeviceErrors(t *testing.T) {
 		t.Fatalf("FormatOnce(missing device) = nil error, want an error")
 	}
 }
+
+// TestFormatOnce_ReleasesTheDevice asserts that FormatOnce keeps no
+// descriptor open on the device. It opens the device O_EXCL, and a
+// descriptor left open makes the mount(2) that follows fail with EBUSY
+// on a real block device (setec#91, every first boot of a kata-fc
+// session).
+func TestFormatOnce_ReleasesTheDevice(t *testing.T) {
+	dev := blankDevice(t, 16<<20)
+	before := openDescriptorsOn(t, dev)
+	if err := FormatOnce(dev); err != nil {
+		t.Fatalf("FormatOnce: %v", err)
+	}
+	if after := openDescriptorsOn(t, dev); after != before {
+		t.Fatalf("open descriptors on %s: %d before FormatOnce, %d after; the device was not released", dev, before, after)
+	}
+}
+
+// openDescriptorsOn counts this process's open descriptors on path.
+func openDescriptorsOn(t *testing.T, path string) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read /proc/self/fd: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name())); err == nil && target == path {
+			n++
+		}
+	}
+	return n
+}

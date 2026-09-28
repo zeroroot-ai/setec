@@ -110,14 +110,20 @@ func FormatOnce(device string) error {
 	if err != nil {
 		return fmt.Errorf("open %s for formatting: %w", device, err)
 	}
-	if _, err := d.CreateFilesystem(disk.FilesystemSpec{
+	_, err = d.CreateFilesystem(disk.FilesystemSpec{
 		Partition:   0, // whole device, no partition table — mkfs.ext4's default behavior on a bare device
 		FSType:      filesystem.TypeExt4,
 		VolumeLabel: extVolumeLabel,
-	}); err != nil {
-		return fmt.Errorf("format %s as ext4: %w", device, err)
+	})
+	// Close before returning: the device was opened O_EXCL, and the
+	// mount(2) that follows fails with EBUSY while this process still
+	// holds it (setec#91, every first boot of a kata-fc session).
+	if cerr := d.Close(); cerr != nil && err == nil {
+		err = fmt.Errorf("close %s after formatting: %w", device, cerr)
+	} else if err != nil {
+		err = fmt.Errorf("format %s as ext4: %w", device, err)
 	}
-	return nil
+	return err
 }
 
 // Mount mounts device at target as ext4.
