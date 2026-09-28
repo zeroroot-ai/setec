@@ -1031,7 +1031,8 @@ func operatorRolloutUnmet(ctx context.Context, snapshots bool) (string, map[stri
 		return fmt.Sprintf("observedGeneration %d < generation %d", st.ObservedGeneration, dep.Generation), restarts
 	}
 	if st.UpdatedReplicas != want || st.AvailableReplicas != want || st.Replicas != want {
-		return fmt.Sprintf("replicas want=%d updated=%d available=%d total=%d", want, st.UpdatedReplicas, st.AvailableReplicas, st.Replicas), restarts
+		return fmt.Sprintf("replicas want=%d updated=%d available=%d total=%d",
+			want, st.UpdatedReplicas, st.AvailableReplicas, st.Replicas), restarts
 	}
 
 	var pods corev1.PodList
