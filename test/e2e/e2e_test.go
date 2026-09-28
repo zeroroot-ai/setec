@@ -243,6 +243,18 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 		{"kubectl", "get", "events", "-n", key.Namespace, "--sort-by=.lastTimestamp"},
 		{"kubectl", "logs", "-l", operatorLabel, "-n", testNamespace, "--tail=200"},
 	}
+	// The Pod's own container output (never captured above: `describe`
+	// shows state and events, never stdout/stderr). A session Pod that
+	// keeps failing is deleted and recreated every few seconds (the
+	// session-restart contract), so both the current container and its
+	// immediately preceding incarnation (--previous) are worth capturing
+	// — whichever one is still around by the time this runs.
+	for _, c := range []string{"workload", "setec-keepalive"} {
+		cmds = append(cmds,
+			[]string{"kubectl", "logs", key.Name + "-vm", "-n", key.Namespace, "-c", c},
+			[]string{"kubectl", "logs", key.Name + "-vm", "-n", key.Namespace, "-c", c, "--previous"},
+		)
+	}
 	for _, c := range cmds {
 		out, _ := exec.Command(c[0], c[1:]...).CombinedOutput()
 		t.Logf("--- %s ---\n%s", strings.Join(c, " "), string(out))
