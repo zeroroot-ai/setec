@@ -634,7 +634,7 @@ func (in *Installer) verifyDevmapperPlugin(ctx context.Context, flavor runtimeFl
 // devmapperPluginStatus finds the devmapper snapshotter row in `ctr plugins
 // ls` output (TYPE ID PLATFORMS STATUS) and returns its status.
 func devmapperPluginStatus(out []byte) (string, bool) {
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 3 && f[0] == devmapperPluginType && f[1] == devmapperPluginID {
 			return f[len(f)-1], true
