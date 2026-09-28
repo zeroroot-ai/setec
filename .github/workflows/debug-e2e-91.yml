@@ -559,22 +559,19 @@ jobs:
         #
         # `ctr images import` reads a full OCI/Docker tarball in one
         # local pass instead of streaming layers from a remote registry,
-        # a materially different code path in containerd. Building the
-        # tarball on the runner (a plain `docker pull` + `docker save`,
-        # nothing to do with the node's own containerd) and loading it
-        # into the node with `ctr images import` sidesteps the
-        # registry-fetch path entirely; `ctr images unpack` afterward
-        # only has to read content this same import already committed
-        # in full.
+        # a materially different code path in containerd. Streaming the
+        # tarball straight from `docker save` on the runner into `ctr
+        # images import` on the node over stdin (no intermediate file —
+        # a `docker cp` of the same tarball to a file first left `ctr`
+        # unable to find it moments later, cause unconfirmed) sidesteps
+        # the registry-fetch path entirely; `ctr images unpack`
+        # afterward only has to read content this same import already
+        # committed in full.
         run: |
           set -euo pipefail
           docker pull "${KEEPALIVE_IMAGE}"
-          tarball="$(mktemp -d)/setec-keepalive.tar"
-          docker save -o "${tarball}" "${KEEPALIVE_IMAGE}"
-          docker cp "${tarball}" "${KVM_NODE}:/tmp/setec-keepalive.tar"
-          docker exec "${KVM_NODE}" ctr -n k8s.io images import /tmp/setec-keepalive.tar
+          docker save "${KEEPALIVE_IMAGE}" | docker exec -i "${KVM_NODE}" ctr -n k8s.io images import -
           docker exec "${KVM_NODE}" ctr -n k8s.io images unpack --snapshotter devmapper "${KEEPALIVE_IMAGE}"
-          docker exec "${KVM_NODE}" rm -f /tmp/setec-keepalive.tar
 
       - name: The ${{ matrix.pass }} scenarios
         env:
