@@ -425,10 +425,12 @@ Phase 3 adds these collectors to the existing Prometheus suite:
   failed its SHA256 integrity check, the kernel version no longer
   matches, or the node-agent could not speak to Firecracker. Check
   the Sandbox Events and the node-agent logs.
-- **NodeAgentUnreachable**: the operator could not dial the
-  node-agent via its DNS endpoint. Verify the headless
-  `<release>-node-agent` Service exists and the DaemonSet pods are
-  Ready.
+- **NodeAgentUnreachable**: the operator could not find or dial the
+  node-agent Pod on the target node. The operator resolves that Pod
+  through the API (label `app.kubernetes.io/component=node-agent`,
+  field `spec.nodeName=<node>`), so confirm a node-agent Pod exists on
+  the node and is Running and Ready, and that `--nodeagent-namespace`
+  matches the namespace the DaemonSet runs in.
 
 See the kata-firecracker integration doc for details on how Setec
 drives the underlying VMM.

@@ -148,10 +148,11 @@ func main() {
 		egressHostGrace  time.Duration
 
 		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
-		snapshotsEnabled  bool
-		nodeAgentEndpoint string
-		nodeAgentCreds    nodeAgentCredentialFlags
-		kataSocketPattern string
+		snapshotsEnabled          bool
+		nodeAgentAuthorityPattern string
+		nodeAgentNamespace        string
+		nodeAgentCreds            nodeAgentCredentialFlags
+		kataSocketPattern         string
 	)
 
 	pflag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080",
@@ -231,9 +232,17 @@ func main() {
 	pflag.BoolVar(&snapshotsEnabled, "snapshots-enabled", false,
 		"Phase 3 kill-switch: register the Snapshot CRD controller and wire snapshot.Coordinator"+
 			" for the Sandbox reconciler. Default false preserves Phase 2 behaviour.")
-	pflag.StringVar(&nodeAgentEndpoint, "nodeagent-endpoint-pattern",
+	pflag.StringVar(&nodeAgentAuthorityPattern, "nodeagent-authority-pattern",
 		"%s.setec-node-agent.setec-system.svc:50052",
-		"Phase 3: format string that renders a dial target from a node name. %s is substituted with Pod.Spec.NodeName.")
+		"Phase 3: format string that renders the gRPC authority (and TLS ServerName) for a node's "+
+			"node-agent. %s is substituted with Pod.Spec.NodeName. This is never resolved in DNS: "+
+			"the operator finds the node-agent Pod through the API and dials its Pod IP, then sends "+
+			"this string as the gRPC :authority so TLS verification checks it against the wildcard "+
+			"SAN the node-agent certificate carries. It must match that SAN pattern.")
+	pflag.StringVar(&nodeAgentNamespace, "nodeagent-namespace", "setec-system",
+		"Phase 3: namespace the node-agent DaemonSet runs in. The operator lists Pods labelled "+
+			"app.kubernetes.io/component=node-agent in this namespace to find the one running on "+
+			"a given node.")
 	pflag.StringVar(&nodeAgentCreds.certPath, "nodeagent-tls-cert", "",
 		"Phase 3: path to the operator's client certificate for mTLS to node-agents. "+
 			"Selects file credential mode, the default.")
@@ -448,7 +457,11 @@ func main() {
 			os.Exit(1)
 		}
 		setupLog.Info("Resolved node-agent client credentials", "mode", credMode)
-		dialer := snapshot.NewGRPCDialer(nodeAgentEndpoint, creds)
+		nodeAgentPodResolver := &snapshot.PodResolver{
+			Client:    mgr.GetClient(),
+			Namespace: nodeAgentNamespace,
+		}
+		dialer := snapshot.NewGRPCDialer(nodeAgentPodResolver, nodeAgentAuthorityPattern, creds)
 		snapshotCoordRecorder := mgr.GetEventRecorder("snapshot-coordinator")
 		coordinator = &snapshot.Coordinator{
 			Client:            mgr.GetClient(),

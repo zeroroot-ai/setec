@@ -1,10 +1,20 @@
 {{- if and .Values.nodeAgent.enabled .Values.snapshots.enabled }}
-# Headless Service selecting the node-agent DaemonSet pods. The
-# operator dials individual nodes via DNS names of the form
-# <pod-name>.<service>.<namespace>.svc.cluster.local:50052. Since the
-# DaemonSet uses the node name in its Pod naming scheme via the
-# downward API (NODE_NAME), this renders a stable per-node endpoint
-# pattern suitable for the --nodeagent-endpoint-pattern flag.
+# Headless Service selecting the node-agent DaemonSet pods.
+#
+# The operator does NOT dial through this Service (setec#92): a
+# per-pod DNS record such as <node>.<service>.<namespace>.svc only
+# exists when a Pod sets hostname and subdomain, and the node-agent
+# DaemonSet sets neither, so that name has never resolved. The
+# operator instead finds the right Pod through the API (by node name
+# and the app.kubernetes.io/component=node-agent label) and dials its
+# Pod IP directly.
+#
+# This Service still matters for one thing: the node-agent
+# Certificate (nodeagent-certificates.yaml) carries this Service's
+# bare and wildcard names as SANs, and the operator sends the same
+# per-node name pattern as the gRPC :authority so TLS verification
+# checks the certificate against a SAN it actually carries, even
+# though the name is never looked up in DNS.
 apiVersion: v1
 kind: Service
 metadata:
@@ -14,9 +24,8 @@ metadata:
     {{- include "setec.labels" . | nindent 4 }}
     app.kubernetes.io/component: node-agent
 spec:
-  # ClusterIP: None makes this a headless Service; DNS returns the
-  # per-pod addresses so the operator's endpoint pattern resolves to
-  # the node-agent running on the specific node.
+  # ClusterIP: None makes this headless. Nothing dials through it.
+  # It exists to back the SANs on the node-agent Certificate above.
   clusterIP: None
   selector:
     {{- include "setec.selectorLabels" . | nindent 4 }}
