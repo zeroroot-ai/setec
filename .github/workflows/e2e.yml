@@ -6,10 +6,12 @@
 # A GitHub-hosted ubuntu-latest runner exposes /dev/kvm (nested
 # virtualization, measured 2026-09-27: 4 vCPU, 15 GB, kvm_amd loaded,
 # KVM_GET_API_VERSION 12). The `suites` job creates a kind cluster on that
-# runner. kind nodes are privileged containers, so the worker node sees
-# /dev/kvm, and setec's own installer DaemonSet converges it to boot kata-fc:
-# the kata payload, the devmapper thin-pool and the containerd registration
-# (ADR-0003). No metal node, no ARC scale-set, no AWS account.
+# runner. The worker node mounts the runner's /dev, so it sees /dev/kvm, and
+# setec's own installer DaemonSet converges it to boot kata-fc: the kata
+# payload, the devmapper thin-pool and the containerd registration
+# (ADR-0003). The cluster runs Calico, so NetworkPolicy is enforced the way
+# production CNIs enforce it. hack/kind-kvm.yaml has the details. No metal
+# node, no ARC scale-set, no AWS account.
 #
 # This replaces the `runs-on: staging-ephemeral` design, which ran on an ARC
 # scale-set inside staging EKS and pre-warmed an m5zn.metal from a Karpenter
@@ -21,7 +23,12 @@
 #   - `roundtrip` and `teardown`. They shadow-installed the chart into staging
 #     and booted one kata-qemu Sandbox from a shell script. The `suites` job
 #     boots, runs and reads back Sandboxes from this build's chart and images
-#     (TestSandbox_*), on an isolated cluster, with the webhook on.
+#     (TestSandbox_*), on an isolated cluster, with the webhook on. No job
+#     boots kata-qemu now: the installer registers kata-fc only (setec#93).
+#   - `session-checkpoint`. It needed a staging bucket and an IRSA role that
+#     no longer exist, behind a variable that was never set. Its two
+#     scenarios need an object store. The way back is an in-cluster MinIO on
+#     this same kind cluster (setec#16).
 #   - the `merge_group` trigger. The suites take tens of minutes, so they do
 #     not gate a merge. They run nightly and on demand, and feed the tracking
 #     issue below (ADR-0012: exit tests run on main and on a schedule).
@@ -32,8 +39,6 @@ name: e2e
 
 on:
   workflow_dispatch: {}
-  push:  # TEMPORARY: iteration trigger, removed before the PR
-    branches: [fix/e2e-suites-kvm-runner]
   # Nightly. The suites are too long for the merge gate, but "not on every
   # merge" must not mean "never" (setec#298).
   schedule:
@@ -186,7 +191,7 @@ jobs:
             run: '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$'
             # The installer registers kata-fc only, so no node can run
             # kata-qemu here. That subtest would SKIP on its own, and a SKIP
-            # fails the step. kata-qemu coverage has its own issue.
+            # fails the step. kata-qemu coverage is setec#93.
             skip: '^TestRuntimeBackends_Smoke/backend=kata-qemu$'
           - pass: phase3
             snapshots: "1"
@@ -216,9 +221,9 @@ jobs:
       SETEC_E2E_WEBHOOK: "1"
       # Chart overrides for this cluster, appended to every pass's install:
       #   - pin the installer to the worker, so it never restarts containerd
-      #     under the API server on the control-plane node;
+      #     under the API server on the control-plane node.
       #   - a 20 GiB sparse thin-pool instead of 50. The runner disk is small,
-      #     and the scenarios write far less than that;
+      #     and the scenarios write far less than that.
       #   - a 30s runtime-agent probe interval instead of 5m. The agent's
       #     first probe can land before the installer registers kata-fc, and
       #     the label then waits one interval. TestEnv_KVMPresent waits 3m.

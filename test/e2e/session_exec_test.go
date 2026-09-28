@@ -237,7 +237,7 @@ func TestSessionExec_KillMidExec(t *testing.T) {
 		err error
 	}
 	// The command is in flight once the frontend has stamped the
-	// session's activity annotation for it; that is the same signal the
+	// session's activity annotation for it. That is the same signal the
 	// idle evictor reads. The stamp is second-precision, so the Attach's
 	// stamp is read BEFORE the Exec starts, and the Exec starts in a later
 	// second. Otherwise an Exec that follows the Attach within the same

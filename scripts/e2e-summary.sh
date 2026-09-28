@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-summary.sh — decide whether one `go test` pass of the e2e suites passed.
+# e2e-summary.sh: decide whether one `go test` pass of the e2e suites passed.
 #
 # Usage: e2e-summary.sh <title> <go-test-log> <go-test-exit-status>
 #

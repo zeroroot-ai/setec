@@ -610,7 +610,7 @@ func (in *Installer) verifyDevmapperPlugin(ctx context.Context, flavor runtimeFl
 	case hostHas(in.cfg.HostRoot, "ctr"):
 		name, args = "ctr", []string{"plugins", "ls"}
 	default:
-		in.log("no ctr on the host; cannot confirm that %s loaded the devmapper snapshotter", flavor.name)
+		in.log("no ctr on the host, so the installer cannot confirm that %s loaded the devmapper snapshotter", flavor.name)
 		return nil
 	}
 	out, err := in.cfg.Runner.Run(ctx, name, args...)
@@ -625,7 +625,7 @@ func (in *Installer) verifyDevmapperPlugin(ctx context.Context, flavor runtimeFl
 				"Install a containerd build that includes devmapper", flavor.name)
 	}
 	if status != "ok" {
-		return fmt.Errorf("%s did not load the devmapper snapshotter (plugin status %q); inspect `journalctl -u %s` on the node",
+		return fmt.Errorf("%s did not load the devmapper snapshotter (plugin status %q), inspect `journalctl -u %s` on the node",
 			flavor.name, status, flavor.unit)
 	}
 	return nil

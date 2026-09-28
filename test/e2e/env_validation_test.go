@@ -160,8 +160,8 @@ func requireKataFCCapableNode(t *testing.T) {
 	t.Fatalf("FATAL: no node carries %s=true after %s, so no Firecracker microVM can boot and "+
 		"Phase 3 would silently skip into a green run. Do NOT bypass this check.\n"+
 		"Nodes seen (%d):%s\n"+
-		"Likely causes: no KVM node is in the cluster; the installer (or kata-deploy) has not "+
-		"registered kata-fc with containerd on it; or the runtime-agent probe cannot read that "+
+		"Likely causes: no KVM node is in the cluster, the installer (or kata-deploy) has not "+
+		"registered kata-fc with containerd on it, or the runtime-agent probe cannot read that "+
 		"registration (see the probe annotation above).",
 		kataFCNodeLabel, kataFCLabelWait, len(all.Items), detail.String())
 }

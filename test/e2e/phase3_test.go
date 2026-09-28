@@ -242,7 +242,7 @@ func TestPhase3_PauseResume(t *testing.T) {
 // scrapeNodeAgentMetrics port-forwards the node-agent metrics service
 // and returns the parsed Prometheus families. Uses a dedicated local
 // port so it can never collide with a concurrent operator scrape. The
-// Service is <fullname>-node-agent; a literal "setec-node-agent" matched
+// Service is <fullname>-node-agent. A literal "setec-node-agent" matched
 // no release the suite installs (setec#22).
 func scrapeNodeAgentMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
 	return scrapeServiceMetrics(ctx, "svc/"+chartFullname+"-node-agent", "9090", "19091")
