@@ -126,9 +126,7 @@ func TestCreateSnapshotSuccess(t *testing.T) {
 			if m["mem_file_path"] != "/tmp/m.bin" {
 				t.Fatalf("mem_file_path = %v", m["mem_file_path"])
 			}
-			if m["version"] != "1.0.0" {
-				t.Fatalf("version = %v", m["version"])
-			}
+			assertOnlyFields(t, m, snapshotCreateFields)
 		},
 	}})
 	c := NewClientFromSocket(sock)
@@ -149,6 +147,14 @@ func TestLoadSnapshotSuccess(t *testing.T) {
 			if m["resume_vm"] != true {
 				t.Fatalf("resume_vm = %v", m["resume_vm"])
 			}
+			mb, _ := m["mem_backend"].(map[string]any)
+			if mb["backend_type"] != "File" || mb["backend_path"] != "/tmp/m.bin" {
+				t.Fatalf("mem_backend = %v, want a File backend at /tmp/m.bin", m["mem_backend"])
+			}
+			if _, deprecated := m["mem_file_path"]; deprecated {
+				t.Fatal("load body carries the deprecated mem_file_path")
+			}
+			assertOnlyFields(t, m, snapshotLoadFields)
 		},
 	}})
 	c := NewClientFromSocket(sock)
@@ -263,5 +269,31 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 			t.Fatalf("%d API connections still open after the calls returned; want 0", n)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The request fields Firecracker v1.12.1 accepts (the version kata
+// 4.2.0 ships), from its swagger definitions SnapshotCreateParams and
+// SnapshotLoadParams. Firecracker rejects any other field with 400 Bad
+// Request, so the client must never send one (setec#19).
+var (
+	snapshotCreateFields = []string{"mem_file_path", "snapshot_path", "snapshot_type"}
+	snapshotLoadFields   = []string{
+		"enable_diff_snapshots", "mem_file_path", "mem_backend",
+		"snapshot_path", "resume_vm", "network_overrides",
+	}
+)
+
+// assertOnlyFields fails the test if body has a field outside allowed.
+func assertOnlyFields(t *testing.T, body map[string]any, allowed []string) {
+	t.Helper()
+	ok := map[string]bool{}
+	for _, f := range allowed {
+		ok[f] = true
+	}
+	for f := range body {
+		if !ok[f] {
+			t.Errorf("request body has field %q, which Firecracker v1.12.1 rejects", f)
+		}
 	}
 }
