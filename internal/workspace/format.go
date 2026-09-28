@@ -77,7 +77,8 @@ func IsFormatted(device string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("open %s: %w", device, err)
 	}
-	defer f.Close()
+	// Read-only: a failed close loses nothing this function reports.
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, 2)
 	n, err := f.ReadAt(buf, ext4SuperblockMagicAbsolute)

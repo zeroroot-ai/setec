@@ -109,7 +109,8 @@ func execInto(args []string) error {
 	if err != nil {
 		return fmt.Errorf("look up %s: %w", args[0], err)
 	}
-	if err := syscall.Exec(path, args, os.Environ()); err != nil { //nolint:gosec // args come from the operator-built Pod spec, not external input
+	// args come from the operator-built Pod spec, not external input.
+	if err := syscall.Exec(path, args, os.Environ()); err != nil { //nolint:gosec // see above
 		return fmt.Errorf("exec %s: %w", path, err)
 	}
 	return nil
@@ -131,7 +132,8 @@ func workspaceReady(dir string) error {
 		return fmt.Errorf("statfs %s: %w", dir, err)
 	}
 	if st.Type != ext4SuperMagic {
-		return fmt.Errorf("%s is not the mounted workspace yet (filesystem type 0x%x, want ext4 0x%x)", dir, st.Type, ext4SuperMagic)
+		return fmt.Errorf("%s is not the mounted workspace yet (filesystem type 0x%x, want ext4 0x%x)",
+			dir, st.Type, ext4SuperMagic)
 	}
 	return nil
 }
