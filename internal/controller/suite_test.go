@@ -333,6 +333,12 @@ func TestMain(m *testing.M) {
 		NodeSelectorLabel: testNodeSelectorLabel,
 		Runtimes:          testRuntimeRegistry,
 		RuntimeCfg:        testRuntimeCfg,
+		// The default backend here is kata-fc, and every kata-fc session
+		// Sandbox now needs this image for its workspace-format init
+		// container (setec#91), not only a session with no spec.command.
+		// A real deployment always sets this (the chart fails to render
+		// without it), so envtest matches that.
+		KeepaliveImage: "test-keepalive:latest",
 		// Phase 2 dependencies wired so the envtest reconciler exercises
 		// the full Phase 2 flow. Each dependency is nil-safe so Phase 1
 		// scenarios continue to pass unchanged.

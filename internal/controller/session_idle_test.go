@@ -66,12 +66,20 @@ func stampActivity(g Gomega, ns, name string, at time.Time) {
 	}, convergeTimeout, convergeInterval).Should(Succeed())
 }
 
+// podReadyConditions is what the kubelet reports once a started Pod's
+// readiness probes pass. envtest has no kubelet, and a Sandbox whose
+// Pod declares a probe stays Pending until the Pod is Ready (setec#91).
+func podReadyConditions() []corev1.PodCondition {
+	return []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+}
+
 // markPodRunning drives the Pod to Running so the Sandbox derives a
 // Running phase — the only phase the idle policy evaluates.
 func markPodRunning(g Gomega, ns, sbName string) {
 	t := metav1.NewTime(time.Now())
 	patchPodStatus(g, ns, sbName+podspec.PodNameSuffix, func(p *corev1.Pod) {
 		p.Status.Phase = corev1.PodRunning
+		p.Status.Conditions = podReadyConditions()
 		p.Status.StartTime = &t
 	})
 }

@@ -53,6 +53,7 @@ func driveSandboxPodRunning(t *testing.T, g *gomega.WithT, ns, sbName string) {
 	pod, err = getPod(testCtx, ns, sbName+"-vm")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = podReadyConditions()
 	pod.Status.StartTime = &metav1.Time{Time: time.Now()}
 	g.Expect(testClient.Status().Update(testCtx, pod)).To(gomega.Succeed())
 }

@@ -65,6 +65,7 @@ jobs:
       runtime_agent_image: ${{ steps.tags.outputs.runtime_agent_image }}
       node_agent_image: ${{ steps.tags.outputs.node_agent_image }}
       installer_image: ${{ steps.tags.outputs.installer_image }}
+      keepalive_image_repo: ${{ steps.tags.outputs.keepalive_image_repo }}
       sha_tag: ${{ steps.tags.outputs.sha_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -78,6 +79,7 @@ jobs:
           echo "runtime_agent_image=ghcr.io/zeroroot-ai/setec-runtime-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "node_agent_image=ghcr.io/zeroroot-ai/setec-node-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
           echo "installer_image=ghcr.io/zeroroot-ai/setec-installer:${sha_tag}" >> "$GITHUB_OUTPUT"
+          echo "keepalive_image_repo=ghcr.io/zeroroot-ai/setec-keepalive" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -117,6 +119,23 @@ jobs:
           build-args: CMD=node-agent
           push: true
           tags: ${{ steps.tags.outputs.node_agent_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Every kata-fc session Sandbox boots this image's binary, not only
+      # a session with no spec.command (setec#91): the `suites` scenarios
+      # (TestSession_*, TestSessionExec_*) are the only place any of this
+      # binary's code has ever run in-cluster, so they need THIS build's
+      # setec-keepalive, not the chart's own released default — the
+      # "session scenarios" step below overrides sessionKeepalive.image
+      # to point at it.
+      - name: Build + push setec-keepalive (CMD=setec-keepalive)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          build-args: CMD=setec-keepalive
+          push: true
+          tags: ${{ steps.tags.outputs.keepalive_image_repo }}:${{ steps.tags.outputs.sha_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -205,6 +224,18 @@ jobs:
       # would add nothing, so consent is explicit instead (setec#298).
       SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
       SETEC_E2E_RUNTIMECLASS: kata-fc
+      # kata-fc's session workspace PVC is volumeMode: Block (setec#91):
+      # Firecracker has no virtio-fs, so a filesystem-mode volume's guest
+      # writes never reach the PVC. kind's default StorageClass
+      # (rancher.io/local-path) provisions Filesystem-mode volumes only,
+      # so the "Provision Block-mode PersistentVolumes" step below hand-
+      # provisions a small pool of Block-mode local PersistentVolumes
+      # under this StorageClass name instead, and the session scenarios
+      # (test/e2e/session_lifecycle_test.go and friends) request it by
+      # name via this variable.
+      SETEC_E2E_WORKSPACE_STORAGE_CLASS: setec-e2e-workspace-block
+      # Full reference for the "Import setec-keepalive" step below.
+      KEEPALIVE_IMAGE: ${{ needs.build-images.outputs.keepalive_image_repo }}:${{ needs.build-images.outputs.sha_tag }}
       # This build's images, pulled from ghcr (the packages are public).
       SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
       SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
@@ -227,8 +258,13 @@ jobs:
       #   - a 30s runtime-agent probe interval instead of 5m. The agent's
       #     first probe can land before the installer registers kata-fc, and
       #     the label then waits one interval. TestEnv_KVMPresent waits 3m.
+      # sessionKeepalive.image.* pin every kata-fc session's boot binary
+      # to THIS build (setec#91): the chart's own default points at a
+      # released tag, and this is the first time any e2e scenario boots
+      # that binary at all — until now only a spec.command-less session
+      # used it, and no such scenario runs here.
       NODE_SET: >-
-        installer.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host,installer.thinpool.loopDataSizeGB=20,defaults.runtime.probeInterval=30s
+        installer.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host,installer.thinpool.loopDataSizeGB=20,defaults.runtime.probeInterval=30s,sessionKeepalive.image.repository=${{ needs.build-images.outputs.keepalive_image_repo }},sessionKeepalive.image.tag=${{ needs.build-images.outputs.sha_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -351,6 +387,33 @@ jobs:
           tar -xjf "${dir}/gvisor.tar.bz2" -C "${dir}/bin"
           docker cp "${dir}/bin/." "${KVM_NODE}:/usr/local/bin/"
           docker exec "${KVM_NODE}" /usr/local/bin/runsc --version
+          # discard_unpacked_layers = false here, before this node ever pulls
+          # any image, not only in the installer's own drop-in it writes
+          # later (setec#91): setec's own images (manager, runtime-agent,
+          # node-agent) share layers with setec-keepalive (same distroless
+          # base), and the guard's own Helm install pulls the first of them
+          # concurrently with the installer converging. Left at the kind
+          # image's default (true) for even that first pull, containerd
+          # discards the shared layer content right after unpacking it into
+          # the default snapshotter, and no later config change un-discards
+          # it: every subsequent devmapper unpack of the same shared layer
+          # (any kata-fc session on this backend, since setec-keepalive is
+          # the workspace-format binary now) fails with "failed to get
+          # reader from content store ... not found" for the rest of the
+          # job. Set here, before that first pull happens, not after — as
+          # its own config.d drop-in (the kind image's stock config.toml
+          # already declares [plugins."...".containerd], so appending a
+          # second copy of that same table header is invalid TOML; the
+          # installer's own ensureImportsLine treats an existing glob entry
+          # as a no-op, so this and the installer's later identical drop-in
+          # never conflict).
+          docker exec "${KVM_NODE}" sh -c 'set -e
+            mkdir -p /etc/containerd/config.d
+            cat > /etc/containerd/config.d/00-keep-unpacked-layers.toml <<EOF
+          [plugins."io.containerd.grpc.v1.cri".containerd]
+            discard_unpacked_layers = false
+          EOF
+            grep -q "config.d/\*.toml" /etc/containerd/config.toml || sed -i "1i imports = [\"/etc/containerd/config.d/*.toml\"]" /etc/containerd/config.toml'
           docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
 
           [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
@@ -368,6 +431,78 @@ jobs:
             echo "::error::containerd on ${KVM_NODE} has no devmapper snapshotter plugin"
             exit 1
           }
+
+      - name: Provision Block-mode PersistentVolumes for kata-fc session workspaces
+        # setec#91: kata-fc's session workspace PVC is volumeMode: Block, and
+        # kind's default StorageClass (rancher.io/local-path) cannot provision
+        # one. This is the standard Kubernetes static "local volume" recipe —
+        # no extra controller needed for a cluster that lives one job run:
+        # a handful of loop devices, one PersistentVolume each, and a
+        # StorageClass that names no provisioner because nothing dynamic ever
+        # provisions against it.
+        #
+        # The loop devices are created on the RUNNER, not inside `docker exec
+        # ${KVM_NODE}`: hack/kind-kvm.yaml bind-mounts the runner's real /dev
+        # into the worker node (the same reason containerd's devmapper
+        # /dev/dm-<n> nodes are visible to it), so a /dev/loopN attached here
+        # appears inside the node's container under the identical path.
+        #
+        # Six volumes: the suite's session scenarios in this pass
+        # (TestSession_WorkspaceSurvivesPodKill, TestSession_ReattachByHandle,
+        # and the three TestSessionExec_* scenarios launchSession starts) each
+        # create exactly one session Sandbox and run strictly sequentially, so
+        # five distinct never-reused PVs is the true minimum; one spare avoids
+        # a retry starving the pool. 1200Mi each clears the 1Gi every scenario
+        # requests with room for the ext4 filesystem's own overhead.
+        run: |
+          set -euo pipefail
+          node_name="${KVM_NODE}"
+          backing_dir="/var/lib/setec-e2e-block-pv"
+          sudo mkdir -p "${backing_dir}"
+          for i in 0 1 2 3 4 5; do
+            img="${backing_dir}/vol${i}.img"
+            sudo truncate -s 1200M "${img}"
+            dev="$(sudo losetup --show -f "${img}")"
+            echo "loop device ${i}: ${dev} (${img})"
+            docker exec "${KVM_NODE}" test -b "${dev}" || {
+              echo "::error::${dev} is not visible as a block device inside ${KVM_NODE}"
+              exit 1
+            }
+            cat <<PV | kubectl apply -f -
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: setec-e2e-workspace-block-${i}
+          spec:
+            capacity:
+              storage: 1200Mi
+            volumeMode: Block
+            accessModes:
+              - ReadWriteOnce
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+            local:
+              path: ${dev}
+            nodeAffinity:
+              required:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                          - ${node_name}
+          PV
+          done
+          cat <<SC | kubectl apply -f -
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+          provisioner: kubernetes.io/no-provisioner
+          volumeBindingMode: WaitForFirstConsumer
+          SC
+          kubectl get pv -o wide
+          kubectl get storageclass "${SETEC_E2E_WORKSPACE_STORAGE_CLASS}"
 
       - name: Create the chart's RuntimeClasses
         # The suite requires the RuntimeClass to exist before it installs,
@@ -402,6 +537,43 @@ jobs:
           status="${PIPESTATUS[0]}"
           scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
 
+      - name: Import setec-keepalive into containerd's content store directly
+        # setec#91: every kata-fc session Sandbox now boots this image's
+        # binary — the first time any e2e scenario has pulled a
+        # setec-built image into a kata-fc Pod at all (every other
+        # kata-fc scenario's workload is a public image such as
+        # busybox). Every attempt so far failed unpacking one specific
+        # layer into devmapper with "failed to get reader from content
+        # store ... not found", including a from-scratch `ctr images
+        # pull` run alone with nothing else on the node, and again after
+        # setting discard_unpacked_layers=false before this node's first
+        # pull (setec#22's fix for a *different* shape of this same
+        # error). The layer is real and intact — `docker pull` on an
+        # unrelated machine reads it back and verifies its checksum with
+        # no issue — so whatever loses it is specific to containerd's
+        # own registry-fetch path on this node, not the registry, this
+        # image's content, or a stale discard setting.
+        #
+        # `ctr images import` reads a full OCI/Docker tarball in one
+        # local pass instead of streaming layers from a remote registry,
+        # a materially different code path in containerd. Streaming the
+        # tarball straight from `docker save` on the runner into `ctr
+        # images import` on the node over stdin (no intermediate file —
+        # a `docker cp` of the same tarball to a file first left `ctr`
+        # unable to find it moments later, cause unconfirmed) sidesteps
+        # the registry-fetch path entirely; mounting the image afterward
+        # (containerd 2.x dropped the old `images unpack` verb — `images
+        # mount` unpacks into the named snapshotter as a side effect of
+        # mounting, verified locally) only has to read content this same
+        # import already committed in full.
+        run: |
+          set -euo pipefail
+          docker pull "${KEEPALIVE_IMAGE}"
+          docker save "${KEEPALIVE_IMAGE}" | docker exec -i "${KVM_NODE}" ctr -n k8s.io images import -
+          docker exec "${KVM_NODE}" mkdir -p /tmp/setec-keepalive-mount
+          docker exec "${KVM_NODE}" ctr -n k8s.io images mount --snapshotter devmapper "${KEEPALIVE_IMAGE}" /tmp/setec-keepalive-mount
+          docker exec "${KVM_NODE}" ctr -n k8s.io images unmount /tmp/setec-keepalive-mount
+
       - name: The ${{ matrix.pass }} scenarios
         env:
           SETEC_E2E_NAMESPACE: setec-e2e-${{ matrix.pass }}
@@ -416,6 +588,36 @@ jobs:
           set -uo pipefail
           extra_set="${NODE_SET}"
           sampler=""
+          # kubectl logs cannot read a kata-fc container's output on this
+          # kind + nested-KVM cluster, and the controller replaces a failed
+          # session Pod within seconds. crictl reads the log file on the
+          # node directly, so poll each session Pod for container IDs and
+          # dump each one the moment it appears (setec#91).
+          session_pod_names="e2e-session e2e-reattach e2e-exec-reattach e2e-exec-false e2e-exec-kill"
+          (
+            declare -A seen_ids
+            while true; do
+              for sb in ${session_pod_names}; do
+                pod="${sb}-vm"
+                statuses="$(kubectl get pod -n "${SETEC_E2E_SANDBOX_NAMESPACE}" "${pod}" \
+                  -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{"\t"}{.containerID}{"\n"}{end}{range .status.containerStatuses[*]}{.name}{"\t"}{.containerID}{"\n"}{end}' \
+                  2>/dev/null)"
+                [ -z "${statuses}" ] && continue
+                while IFS=$'\t' read -r cname cid; do
+                  [ -z "${cid}" ] && continue
+                  short="${cid#containerd://}"
+                  key="${pod}/${cname}/${short}"
+                  [ -n "${seen_ids[${key}]:-}" ] && continue
+                  seen_ids["${key}"]=1
+                  out="$(docker exec "${KVM_NODE}" crictl logs "${short}" 2>&1)"
+                  printf '%s\n--- %s -c %s (container %s) ---\n%s\n' \
+                    "$(date -u +%H:%M:%S.%N)" "${pod}" "${cname}" "${short:0:12}" "${out}"
+                done <<< "${statuses}"
+              done
+              sleep 1
+            done
+          ) > session-pods.log &
+          session_sampler=$!
           if [ "${SETEC_E2E_SNAPSHOTS}" = "1" ]; then
             # The node-agent takes the Firecracker snapshots. The chart pins
             # it to kata-deploy's node label, which this cluster does not
@@ -448,15 +650,21 @@ jobs:
             2>&1 | tee "${PASS}.log"
           status="${PIPESTATUS[0]}"
           [ -n "${sampler}" ] && kill "${sampler}" 2>/dev/null
+          kill "${session_sampler}" 2>/dev/null
           scripts/e2e-summary.sh "The ${PASS} scenarios" "${PASS}.log" "$status"
 
       - name: Collect diagnostics
         if: failure()
         run: |
           set -uo pipefail
+          echo "::group::session-pods.log (crictl sampler)"
+          cat session-pods.log 2>/dev/null || echo "session-pods.log missing"
+          echo "::endgroup::"
           kubectl get nodes -o wide --show-labels || true
           kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.metadata.annotations.setec\.zeroroot\.ai/runtime-probe}{"\n"}{end}' || true
           kubectl get runtimeclass,sandboxclasses -o wide || true
+          kubectl get pv,storageclass -o wide || true
+          kubectl get pvc -A -o wide || true
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
           echo "::group::containerd on ${KVM_NODE}"
@@ -480,6 +688,7 @@ jobs:
             guard.log
             ${{ matrix.pass }}.log
             node-agent.log
+            session-pods.log
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------------

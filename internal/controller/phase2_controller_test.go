@@ -455,6 +455,7 @@ func TestPhase2_MetricsRecorded(t *testing.T) {
 	startTime := metav1.NewTime(metav1.Now().Time)
 	patchPodStatus(g, ns, pod.Name, func(p *corev1.Pod) {
 		p.Status.Phase = corev1.PodRunning
+		p.Status.Conditions = podReadyConditions()
 		p.Status.StartTime = &startTime
 	})
 

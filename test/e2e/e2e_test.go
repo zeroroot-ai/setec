@@ -232,6 +232,27 @@ func waitForEvent(t *testing.T, sandboxName, reason string, timeout time.Duratio
 // reimplement here.
 func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 	t.Helper()
+	// The Pod's own container output — never captured by anything below
+	// (`describe` shows state and events, never stdout/stderr) — polled
+	// repeatedly rather than sampled once: a session Pod that keeps
+	// failing is deleted and recreated every few seconds (the
+	// session-restart contract), and a single snapshot far more often
+	// lands on a just-created, still-initializing incarnation than on
+	// one that has actually run and printed something. Both the current
+	// container and its immediately preceding incarnation (--previous)
+	// are tried on every poll.
+	deadline := time.Now().Add(8 * time.Second)
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		for _, c := range []string{"workload", "setec-keepalive"} {
+			for _, extra := range [][]string{{}, {"--previous"}} {
+				args := append([]string{"logs", key.Name + "-vm", "-n", key.Namespace, "-c", c}, extra...)
+				out, _ := exec.Command("kubectl", args...).CombinedOutput()
+				t.Logf("--- [poll %d] kubectl %s ---\n%s", attempt, strings.Join(args, " "), string(out))
+			}
+		}
+		time.Sleep(time.Second)
+	}
+
 	cmds := [][]string{
 		{"kubectl", "get", "sandbox", key.Name, "-n", key.Namespace, "-o", "yaml"},
 		{"kubectl", "describe", "sandbox", key.Name, "-n", key.Namespace},

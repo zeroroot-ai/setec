@@ -231,7 +231,9 @@ type SandboxReconciler struct {
 
 	// KeepaliveImage is the image the pod builder pulls the static
 	// setec-keepalive binary from for a session Sandbox that declares no
-	// spec.command (setec#7). Set from --session-keepalive-image.
+	// spec.command (setec#7), and which every kata-fc session boots
+	// first, regardless of spec.command, to format and mount its
+	// workspace (setec#91). Set from --session-keepalive-image.
 	KeepaliveImage string
 
 	// --- Phase 2 optional dependencies ---
@@ -646,18 +648,67 @@ func (r *SandboxReconciler) handleMissingPod(
 	// Pod that mounts it. Like the NetworkPolicy, a failure here defers
 	// Pod creation rather than producing a Pod without its workspace.
 	if sb.Spec.IsSession() {
-		if err := r.ensureWorkspacePVC(ctx, logger, sb); err != nil {
+		if err := r.ensureWorkspacePVC(ctx, logger, sb, sel.Backend); err != nil {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("ensure workspace PVC: %w", err))
 		}
 	}
 	return r.createPod(ctx, sb, cls, pinnedNode, sel)
 }
 
+// newWorkspacePVC builds the session Sandbox's durable workspace claim
+// object (ADR-0007: a portable RWO CSI volume; any CSI driver works).
+// It is a pure function — no API calls — so the PVC shape can be
+// asserted per backend without a fake or live apiserver.
+//
+// backend is the runtime.Selection.Backend the controller resolved for
+// this Sandbox. On kata-fc the claim is provisioned with
+// volumeMode: Block (setec#91): Kata Containers + Firecracker has no
+// virtio-fs, so a filesystem-mode volume's writes never reach the PVC
+// back on the host, and a raw block device is the one volume type
+// Firecracker can attach to the guest. Every other backend keeps the
+// existing filesystem-mode claim (volumeMode left nil, which the API
+// defaults to Filesystem).
+func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.PersistentVolumeClaim {
+	name := podspec.WorkspacePVCName(sb.Name)
+
+	size := resource.MustParse(defaultWorkspaceSize)
+	var storageClassName *string
+	if sb.Spec.Lifecycle != nil && sb.Spec.Lifecycle.Workspace != nil {
+		ws := sb.Spec.Lifecycle.Workspace
+		if ws.Size != nil {
+			size = *ws.Size
+		}
+		storageClassName = ws.StorageClassName
+	}
+
+	var volumeMode *corev1.PersistentVolumeMode
+	if backend == runtimepkg.BackendKataFC {
+		block := corev1.PersistentVolumeBlock
+		volumeMode = &block
+	}
+
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: sb.Namespace,
+			Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
+			},
+			StorageClassName: storageClassName,
+			VolumeMode:       volumeMode,
+		},
+	}
+}
+
 // ensureWorkspacePVC creates the session Sandbox's durable workspace
-// claim when it does not exist yet (ADR-0007: a portable RWO CSI volume;
-// any CSI driver works). The claim is owner-referenced to the Sandbox as
-// defense in depth, but its authoritative teardown is the workspace
-// finalizer, which wipes it deterministically at session end.
+// claim when it does not exist yet. The claim is owner-referenced to
+// the Sandbox as defense in depth, but its authoritative teardown is
+// the workspace finalizer, which wipes it deterministically at session
+// end.
 //
 // A workspace PVC found mid-deletion is an error, not a wait: per
 // ADR-0005 invariant 3 a workspace serves exactly one session, so a
@@ -667,6 +718,7 @@ func (r *SandboxReconciler) ensureWorkspacePVC(
 	ctx context.Context,
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
+	backend string,
 ) error {
 	name := podspec.WorkspacePVCName(sb.Name)
 	existing := &corev1.PersistentVolumeClaim{}
@@ -681,37 +733,14 @@ func (r *SandboxReconciler) ensureWorkspacePVC(
 		return fmt.Errorf("get workspace PVC %q: %w", name, err)
 	}
 
-	size := resource.MustParse(defaultWorkspaceSize)
-	var storageClassName *string
-	if sb.Spec.Lifecycle != nil && sb.Spec.Lifecycle.Workspace != nil {
-		ws := sb.Spec.Lifecycle.Workspace
-		if ws.Size != nil {
-			size = *ws.Size
-		}
-		storageClassName = ws.StorageClassName
-	}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: sb.Namespace,
-			Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
-			},
-			StorageClassName: storageClassName,
-		},
-	}
+	pvc := newWorkspacePVC(sb, backend)
 	if err := controllerutil.SetControllerReference(sb, pvc, r.Scheme); err != nil {
 		return fmt.Errorf("set owner on workspace PVC: %w", err)
 	}
 	if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create workspace PVC %q: %w", name, err)
 	}
-	logger.Info("created session workspace PVC", "pvc", name)
+	logger.Info("created session workspace PVC", "pvc", name, "volumeMode", pvc.Spec.VolumeMode)
 	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonWorkspaceCreated, actionManageWorkspace,
 		"Created workspace PVC %q for session Sandbox", name)
 	return nil

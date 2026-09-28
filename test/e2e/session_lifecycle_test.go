@@ -23,6 +23,7 @@ package e2e
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -36,6 +37,30 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
+
+// workspaceStorageClassEnv, when set, names the StorageClass every
+// session-lifecycle scenario provisions its workspace PVC from.
+//
+// The suite's session class pins backend=kata-fc only, and kata-fc
+// provisions its workspace PVC as volumeMode: Block (setec#91):
+// Firecracker has no virtio-fs, so a filesystem-mode PVC's writes never
+// reach the guest's writes back. kind's default StorageClass
+// (rancher.io/local-path) cannot provision a Block-mode PVC, so the
+// `suites` job wires a dedicated block-capable StorageClass and points
+// every session scenario at it via this variable. Empty (any run
+// outside that job) falls back to the cluster default StorageClass —
+// unchanged pre-setec#91 behavior.
+const workspaceStorageClassEnv = "SETEC_E2E_WORKSPACE_STORAGE_CLASS"
+
+// workspaceStorageClassName returns the StorageClass every
+// session-lifecycle scenario's Workspace should request, or nil to
+// defer to the cluster default.
+func workspaceStorageClassName() *string {
+	if v := strings.TrimSpace(os.Getenv(workspaceStorageClassEnv)); v != "" {
+		return &v
+	}
+	return nil
+}
 
 // sessionProbeCommand records whether the durable workspace already
 // carries the marker from a previous VM incarnation, then keeps the VM
@@ -52,7 +77,7 @@ func sessionSpec() setecv1alpha1.SandboxSpec {
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
-		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
+		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size, StorageClassName: workspaceStorageClassName()},
 	}
 	return spec
 }

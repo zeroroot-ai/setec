@@ -35,3 +35,90 @@ Checkpoint frequency is a tunable trade of bandwidth/cost vs replay-on-resume.
   alongside the local-disk default; self-hosted points it at MinIO.
 - Large memory checkpoints pulled from object storage add failover latency;
   keeping checkpoints infrequent (data safety already handled) bounds the cost.
+
+## Addendum (2026-09-27): kata-fc's workspace PVC is Block-mode, not Filesystem
+
+setec#91: `TestSession_WorkspaceSurvivesPodKill` showed that on kata-fc a
+session's workspace did not survive a VM restart. Kata Containers +
+Firecracker carries no virtio-fs, so kata cannot share a host directory with
+the guest the way it does on kata-qemu — it copies a filesystem-mode volume's
+contents into the guest once, at container start, and guest writes never
+reach the PVC back on the host. A raw block device is the one volume type
+Firecracker can attach to the guest (the same mechanism kata already uses for
+a container's own rootfs).
+
+**Decision (owner, 2026-09-27):** on the kata-fc backend only, the session
+workspace PVC is provisioned with `volumeMode: Block` and the Pod's workload
+container consumes it via `volumeDevices` instead of `volumeMounts`. The
+container's command becomes the static `cmd/setec-keepalive` binary (the same
+one that boots a command-less session, setec#7), which formats the raw device
+as ext4 — only if it carries no filesystem yet, so a session VM that restarts
+against the same PVC never loses its corpus (`internal/workspace.FormatOnce`)
+— mounts it onto an ordinary emptyDir at `/workspace`, and then either execs
+the Sandbox's own `spec.command` (a session that declared one) or falls into
+the existing keepalive reap loop (a session that declared none).
+
+The format and mount happen inside the *same* container that will run the
+workload, in that container's own mount namespace, rather than in a separate
+init container that shares its mount with a sibling. The alternative design —
+an init container mounting onto a shared emptyDir with `Bidirectional`
+propagation so the workload container sees it via `HostToContainer` — was
+tried and rejected empirically: the chart's own
+`sandbox-namespace-host-guard` ValidatingAdmissionPolicy (setec#159) refuses
+*any* privileged container in a Sandbox namespace, full stop, and Kubernetes
+requires exactly that (`privileged: true`) to grant `Bidirectional`
+propagation at all. That guard is deliberately absolute — unlike individual
+capabilities, which ADR-0052 already treats as costing nothing extra because
+the microVM is the containment boundary, `privileged` hands the container the
+node itself, which no backend's containment model excuses. The one-container
+design needs `CAP_SYS_ADMIN` for the `mount(2)` call, `CAP_DAC_OVERRIDE` to
+open the raw block device (a static local PersistentVolume, the kind e2e
+cluster's stand-in for a CSI driver, does not chgrp the device node to the
+Pod's fsGroup), `CAP_CHOWN` to hand the mounted workspace to the sandbox
+user, and `CAP_SETUID`/`CAP_SETGID` to drop to that user.
+
+**The format-and-mount step runs as root, then drops to the sandbox user.**
+Kubernetes grants a capability from `securityContext.capabilities.add` to
+the effective set of a root process only. For a non-root container the
+runtime fills `CapBnd` and sets no ambient capabilities, so `CapEff` stays
+empty. A kata-fc run measured exactly this in `/proc/self/status`. So the
+kata-fc workload container runs as UID 0 with those five capabilities. The
+wrapper formats, mounts and chowns, then calls `setgroups`, `setgid` and
+`setuid` to become UID/GID 65532. The `setuid(2)` from root to a non-zero
+UID clears the permitted and effective sets, so the Sandbox's command, or
+the reap loop, runs with no capability. Kubernetes refuses
+`allowPrivilegeEscalation: false` next to `CAP_SYS_ADMIN`, so the wrapper
+sets `no_new_privs` on every thread itself before it execs the command.
+
+**The Sandbox reports Running only once the workspace is mounted.** The
+container starts, and the Pod reports Running, before the wrapper mounts the
+device over the emptyDir at `/workspace`. A turn that ran in that window
+wrote into the emptyDir, and the mount then hid the write for good. The
+kata-fc container therefore carries a readiness probe,
+`setec-keepalive --workspace-ready /workspace`, which passes only when
+`/workspace` is an ext4 filesystem. The status reconciler keeps a Sandbox
+Pending while a probed Pod is not Ready. A Pod with no probe is unchanged.
+
+A file capability on the `setec-keepalive` binary was tried first and
+rejected. The keepalive installer init container runs the same binary with
+every capability dropped, and the kernel refuses to exec a binary whose
+`+ep` file capabilities the bounding set cannot grant. Every session Pod
+failed in its init container with no output. The installer's copy of the
+binary into the shared volume would also lose the capability xattr.
+
+Root inside the container is an individual, scoped grant that ADR-0052
+treats as costing nothing extra on kata-fc, because the microVM is the
+containment boundary. It is not the `privileged: true` the admission guard
+refuses.
+
+gVisor and runc keep the original filesystem-mode PVC unchanged: neither has
+kata-fc's virtio-fs gap, and this addendum introduces no new code path for
+either backend (ADR-0027).
+
+This does not change the workspace's durability contract: the volume is still
+a portable RWO CSI PVC (any Block-capable CSI driver works — most CSI
+drivers, including the AWS EBS CSI driver, support both volumeMode values
+from the same StorageClass, since the mode is a property of the PVC request,
+not the class), still re-attaches to a fresh Pod on node loss, and still
+holds the corpus/findings/worktree with continuous persistence. Only how the
+guest turns that block device back into a mounted filesystem is new.
