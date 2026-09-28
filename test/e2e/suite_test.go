@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -941,28 +942,39 @@ func operatorHasArg(spec corev1.PodSpec, flag string) bool {
 }
 
 // operatorRolloutStable is how long the operator must hold a complete,
-// Ready, restart-free rollout before waitForOperatorRollout accepts it.
-// A restart loop shows up as a restart count, not as a missing Ready
-// condition, so one green sample is not enough.
+// Ready rollout, with no container restarting, before
+// waitForOperatorRollout accepts it. A restart loop shows up as a
+// growing restart count, so one green sample is not enough.
 const operatorRolloutStable = 30 * time.Second
 
 // waitForOperatorRollout blocks until the operator Deployment has rolled
 // out with snapshotsEnabledArg present (snapshots=true) or absent
 // (snapshots=false), every replica is updated and available, and every
-// operator Pod is Ready with zero container restarts, and that state has
-// held for operatorRolloutStable. It returns the last unmet condition on
-// timeout.
+// operator Pod is Ready, and that state has held for
+// operatorRolloutStable with no container restarting. It returns the
+// last unmet condition on timeout.
+//
+// A restart that happened before the window is not a failure: the
+// installer restarts containerd on the node while the operator starts,
+// which restarts every container there once (runs 36453858768 and
+// 36474786195). A crash loop restarts again inside the window, and a
+// container in CrashLoopBackOff is not Ready, so both still fail.
 func waitForOperatorRollout(ctx context.Context, snapshots bool) error {
 	var stableSince time.Time
+	var baseline map[string]int32
 	var last string
 	for {
-		unmet := operatorRolloutUnmet(ctx, snapshots)
+		unmet, restarts := operatorRolloutUnmet(ctx, snapshots)
+		if unmet == "" && !stableSince.IsZero() {
+			unmet = restartedSince(baseline, restarts)
+		}
 		switch {
 		case unmet != "":
 			stableSince = time.Time{}
 			last = unmet
 		case stableSince.IsZero():
 			stableSince = time.Now()
+			baseline = restarts
 		case time.Since(stableSince) >= operatorRolloutStable:
 			return nil
 		}
@@ -977,15 +989,38 @@ func waitForOperatorRollout(ctx context.Context, snapshots bool) error {
 	}
 }
 
+// restartedSince returns a description of the first container whose
+// restart count grew from baseline to now, or of a container that is
+// new since baseline, or "" when none did.
+func restartedSince(baseline, now map[string]int32) string {
+	keys := make([]string, 0, len(now))
+	for k := range now {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		before, seen := baseline[k]
+		if !seen {
+			return fmt.Sprintf("%s is new since the stability window started", k)
+		}
+		if now[k] > before {
+			return fmt.Sprintf("%s restarted during the stability window (%d -> %d)", k, before, now[k])
+		}
+	}
+	return ""
+}
+
 // operatorRolloutUnmet returns the first rollout condition that does not
-// hold, or "" when the rollout is complete and healthy right now.
-func operatorRolloutUnmet(ctx context.Context, snapshots bool) string {
+// hold, or "" when the rollout is complete and healthy right now, plus
+// the restart count of every operator container, keyed "pod/container".
+func operatorRolloutUnmet(ctx context.Context, snapshots bool) (string, map[string]int32) {
+	restarts := map[string]int32{}
 	dep, err := operatorDeployment(ctx)
 	if err != nil {
-		return err.Error()
+		return err.Error(), restarts
 	}
 	if operatorHasArg(dep.Spec.Template.Spec, snapshotsEnabledArg) != snapshots {
-		return fmt.Sprintf("Deployment template has %s=%t, want %t", snapshotsEnabledArg, !snapshots, snapshots)
+		return fmt.Sprintf("Deployment template has %s=%t, want %t", snapshotsEnabledArg, !snapshots, snapshots), restarts
 	}
 	want := int32(1)
 	if dep.Spec.Replicas != nil {
@@ -993,15 +1028,16 @@ func operatorRolloutUnmet(ctx context.Context, snapshots bool) string {
 	}
 	st := dep.Status
 	if st.ObservedGeneration < dep.Generation {
-		return fmt.Sprintf("observedGeneration %d < generation %d", st.ObservedGeneration, dep.Generation)
+		return fmt.Sprintf("observedGeneration %d < generation %d", st.ObservedGeneration, dep.Generation), restarts
 	}
 	if st.UpdatedReplicas != want || st.AvailableReplicas != want || st.Replicas != want {
-		return fmt.Sprintf("replicas want=%d updated=%d available=%d total=%d", want, st.UpdatedReplicas, st.AvailableReplicas, st.Replicas)
+		return fmt.Sprintf("replicas want=%d updated=%d available=%d total=%d",
+			want, st.UpdatedReplicas, st.AvailableReplicas, st.Replicas), restarts
 	}
 
 	var pods corev1.PodList
 	if err := k8sClient.List(ctx, &pods, client.InNamespace(testNamespace), operatorLabels()); err != nil {
-		return fmt.Sprintf("list operator pods: %v", err)
+		return fmt.Sprintf("list operator pods: %v", err), restarts
 	}
 	live := 0
 	for _, p := range pods.Items {
@@ -1010,7 +1046,7 @@ func operatorRolloutUnmet(ctx context.Context, snapshots bool) string {
 		}
 		live++
 		if operatorHasArg(p.Spec, snapshotsEnabledArg) != snapshots {
-			return fmt.Sprintf("pod %s still runs the previous template", p.Name)
+			return fmt.Sprintf("pod %s still runs the previous template", p.Name), restarts
 		}
 		ready := false
 		for _, c := range p.Status.Conditions {
@@ -1019,18 +1055,16 @@ func operatorRolloutUnmet(ctx context.Context, snapshots bool) string {
 			}
 		}
 		if !ready {
-			return fmt.Sprintf("pod %s is not Ready (phase %s)", p.Name, p.Status.Phase)
+			return fmt.Sprintf("pod %s is not Ready (phase %s)", p.Name, p.Status.Phase), restarts
 		}
 		for _, cs := range p.Status.ContainerStatuses {
-			if cs.RestartCount > 0 {
-				return fmt.Sprintf("pod %s container %s restarted %d time(s)", p.Name, cs.Name, cs.RestartCount)
-			}
+			restarts[p.Name+"/"+cs.Name] = cs.RestartCount
 		}
 	}
 	if int32(live) != want {
-		return fmt.Sprintf("%d live operator pod(s), want %d", live, want)
+		return fmt.Sprintf("%d live operator pod(s), want %d", live, want), restarts
 	}
-	return ""
+	return "", restarts
 }
 
 // helmRun runs one helm command against the suite's release and fails the
