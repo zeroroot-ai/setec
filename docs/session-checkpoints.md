@@ -4,38 +4,38 @@ How to run the session-lifecycle e2e against a
 real cluster and a real object store, and what each scenario costs.
 
 The suite is `test/e2e/session_reattach_test.go` and
-`test/e2e/session_checkpoint_test.go`. They run from **two different jobs**
-in `.github/workflows/e2e.yml`, because they do not need the same things.
+`test/e2e/session_checkpoint_test.go`. They do not need the same things,
+and today only one of them has a CI job.
 
 ## What the scenarios need, and which job runs them
 
-| Scenario | Object store | Sandbox-capable nodes | CI job | Gate |
-|---|---|---|---|---|
-| `TestSession_ReattachByHandle` | no | 1 | `suites` | `vars.STAGING_EPHEMERAL_READY` |
-| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | `session-checkpoint` | `vars.STAGING_SESSION_S3_READY` |
-| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | `session-checkpoint` | + `vars.STAGING_SESSION_DRAIN_CAPACITY` |
+| Scenario | Object store | Sandbox-capable nodes | CI job |
+|---|---|---|---|
+| `TestSession_ReattachByHandle` | no | 1 | `e2e` / `suites (suites)`, nightly |
+| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | none (setec#16) |
+| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | none (setec#16) |
 
-`TestSession_ReattachByHandle` sits in `suites` deliberately. It
-needs a session-mode Sandbox with a workspace PVC and an in-process
-`frontend.Service` — no bucket, no IRSA role, no node-agent — so gating it
-on `STAGING_SESSION_S3_READY`, a variable that waits on a Terraform apply
-and a checkpoint bucket it never touches, meant it ran nowhere at all. The
-`suites` gate is the only true precondition it has: an ARC runner.
+`TestSession_ReattachByHandle` needs a session-mode Sandbox with a
+workspace PVC and an in-process `frontend.Service`. It needs no bucket
+and no node-agent. It runs in the `suites` job of
+`.github/workflows/e2e.yml`, on a kind cluster inside a GitHub-hosted
+runner with nested KVM.
 
-Both jobs share one `concurrency` group and therefore one metal node, and
-both pre-warm that node themselves: the `setec-metal` NodePool is
-scale-to-zero and nothing else in either job provokes Karpenter, so without
-the pre-warm step the kata-fc assertion fails within seconds on a quiet
-cluster — which is the cluster's normal state.
+The two checkpoint scenarios had a `session-checkpoint` job that ran on
+an ARC runner inside staging EKS, against a Terraform-made bucket and an
+IRSA role. Staging EKS is gone, so that job could never run, and it was
+removed. The path back to CI is the same kind cluster with an in-cluster
+MinIO as the object store. setec#16 tracks it. Checkpoints also need the
+operator to reach the node-agent, which setec#92 blocks today.
 
 All three need the `kata-fc` backend. Memory checkpointing drives the
 Firecracker API socket directly, so `kata-qemu` cannot serve these
 scenarios however healthy the node looks.
 
 Every scenario that cannot run **skips loudly**: it prints a banner naming
-what is missing and what would satisfy it, and the CI job repeats the
-skips in the run summary. A green run that contains a skip banner has not
-verified that scenario.
+what is missing and what would satisfy it. The `e2e` workflow fails any
+step whose `go test` output contains a SKIP (`scripts/e2e-summary.sh`),
+because a skipped scenario is not a verified one.
 
 ## Object store
 
@@ -54,14 +54,12 @@ Set `SETEC_E2E_S3=1` plus:
 credentials Secret against real S3, fails the suite at startup rather than
 installing a node-agent that would fail closed at the first suspend.
 
-On staging the bucket and role come from Terraform in the `deploy` repo,
-`eks/gibson`: `module.s3` key `setec_checkpoints` and `module.iam_irsa`
-key `setec_node_agent`. The role's trust policy pins exact
-`system:serviceaccount:<ns>:<sa>` subjects, which is why the CI job uses a
-**fixed** namespace and release name (`setec-e2e-session`) instead of the
-suite's default per-run stamp — a wildcard subject would let anyone able
-to create a namespace in staging assume a role with write access to the
-bucket.
+On an EKS cluster the node-agent authenticates to S3 through IRSA. The
+role's trust policy pins exact `system:serviceaccount:<ns>:<sa>`
+subjects, so a run against such a bucket needs a **fixed** namespace and
+release name (set `SETEC_E2E_NAMESPACE` and `SETEC_E2E_RELEASE`) instead
+of the suite's default per-run stamp. A wildcard subject would let anyone
+able to create a namespace assume a role with write access to the bucket.
 
 ## Bucket and IAM prerequisites
 
@@ -157,8 +155,7 @@ automatic capability probe:
    `setec.zeroroot.ai/runtime.kata-fc=true`. Both the label AND
    `katacontainers.io/kata-runtime=true` matter: the capability label
    alone can appear before kata is actually installed.
-3. Run with `SETEC_E2E_SESSION_DRAIN=1`, or set the repository variable
-   `STAGING_SESSION_DRAIN_CAPACITY` and dispatch the `e2e` workflow.
+3. Run with `SETEC_E2E_SESSION_DRAIN=1`.
 4. **Revert the ceiling PR.** Consolidation reclaims the node once it is
    idle and back under the limit.
 
@@ -173,8 +170,7 @@ Attribute the failure before filing it against the session path.
 - **Sandbox stuck Pending, no node has `runtime.kata-fc=true`** — the
   runtime-agent's node probe, not the session code. The known instance
   was a probe that did not follow containerd's `imports` array.
-  The CI job checks this in preflight and fails with a message that
-  names the probe bug.
+  `TestEnv_KVMPresent` prints each node's probe result, reason included.
 - **`AccessDenied` in the node-agent log** — IAM or KMS, not the
   checkpoint code. The bucket's default encryption is SSE-KMS, so the role
   needs a KMS grant as well as the S3 statement; without it every
