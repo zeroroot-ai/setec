@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,12 +37,37 @@ func formatWorkspace(device, target string, uid, gid int) error {
 		return fmt.Errorf("wait for workspace device: %w", err)
 	}
 	if err := workspace.FormatAndMount(device, target); err != nil {
+		logCapabilityDiagnostics(device)
 		return err
 	}
 	if err := os.Chown(target, uid, gid); err != nil {
 		return fmt.Errorf("chown %s to %d:%d: %w", target, uid, gid, err)
 	}
 	return nil
+}
+
+// logCapabilityDiagnostics prints this process's own capability sets
+// (from /proc/self/status) and the device's mode/owner to stderr. Only
+// called on a FormatAndMount failure — a temporary, low-cost aid for
+// diagnosing setec#91's "open ...: permission denied" on a real
+// kata-fc cluster, where CAP_DAC_OVERRIDE is granted in the Pod spec
+// but the guest kernel's actual behavior needs confirming empirically.
+func logCapabilityDiagnostics(device string) {
+	if status, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if strings.HasPrefix(line, "Cap") || strings.HasPrefix(line, "Uid") || strings.HasPrefix(line, "Gid") {
+				fmt.Fprintln(os.Stderr, "setec-keepalive: diagnostics:", line)
+			}
+		}
+	}
+	if fi, err := os.Stat(device); err == nil {
+		fmt.Fprintf(os.Stderr, "setec-keepalive: diagnostics: %s mode=%s\n", device, fi.Mode())
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			fmt.Fprintf(os.Stderr, "setec-keepalive: diagnostics: %s uid=%d gid=%d rdev=%d\n", device, st.Uid, st.Gid, st.Rdev)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "setec-keepalive: diagnostics: stat", device, "failed:", err)
+	}
 }
 
 // execInto replaces the current process with args[0] (resolved against
