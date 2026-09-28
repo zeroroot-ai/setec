@@ -179,6 +179,7 @@ func TestScenario2_PodRunningReflectsToSandbox(t *testing.T) {
 	startTime := metav1.NewTime(time.Now())
 	patchPodStatus(g, ns, pod.Name, func(p *corev1.Pod) {
 		p.Status.Phase = corev1.PodRunning
+		p.Status.Conditions = podReadyConditions()
 		p.Status.StartTime = &startTime
 	})
 
@@ -323,6 +324,7 @@ func TestScenario5_Timeout(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-1 * time.Hour))
 	patchPodStatus(g, ns, pod.Name, func(p *corev1.Pod) {
 		p.Status.Phase = corev1.PodRunning
+		p.Status.Conditions = podReadyConditions()
 		p.Status.StartTime = &past
 	})
 
