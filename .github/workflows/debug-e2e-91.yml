@@ -499,6 +499,21 @@ jobs:
             | kubectl apply -f -
           kubectl get runtimeclass
 
+      - name: The KVM guard
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-guard
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-guard-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-guard
+        run: |
+          set +e
+          set -uo pipefail
+          SETEC_E2E_EXTRA_SET="${NODE_SET}" \
+            go test -tags=e2e ./test/e2e/... -v -timeout 20m \
+            -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
+            2>&1 | tee guard.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
+
       - name: Pre-warm the kata-fc devmapper snapshot for setec-keepalive
         # setec#91: every kata-fc session Sandbox now boots this image's
         # binary, which is the first time any e2e scenario has ever
@@ -515,6 +530,14 @@ jobs:
         # once here, alone, before any session scenario starts, leaves a
         # real devmapper snapshot on disk for every later Sandbox to
         # reuse instead of a fresh unpack to race on.
+        #
+        # Runs after the KVM guard, not before: the kata-fc RuntimeClass
+        # (charts/setec/templates/runtime-classes.yaml) injects its own
+        # scheduling.nodeSelector requiring the runtime-agent's dynamic
+        # setec.zeroroot.ai/runtime.kata-fc=true node label, and the
+        # guard (TestEnv_KVMPresent) is what waits for that label to
+        # converge after the installer runs. A pod naming this
+        # RuntimeClass before then just sits Pending.
         run: |
           set -euo pipefail
           printf '%s\n' \
@@ -535,21 +558,6 @@ jobs:
           kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/setec-keepalive-warmup --timeout=180s
           kubectl logs pod/setec-keepalive-warmup || true
           kubectl delete pod/setec-keepalive-warmup --ignore-not-found
-
-      - name: The KVM guard
-        env:
-          SETEC_E2E_NAMESPACE: setec-e2e-guard
-          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-guard-sandboxes
-          SETEC_E2E_RELEASE: setec-e2e-guard
-        run: |
-          set +e
-          set -uo pipefail
-          SETEC_E2E_EXTRA_SET="${NODE_SET}" \
-            go test -tags=e2e ./test/e2e/... -v -timeout 20m \
-            -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
-            2>&1 | tee guard.log
-          status="${PIPESTATUS[0]}"
-          scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
 
       - name: The ${{ matrix.pass }} scenarios
         env:
