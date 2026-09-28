@@ -237,6 +237,8 @@ jobs:
       # (test/e2e/session_lifecycle_test.go and friends) request it by
       # name via this variable.
       SETEC_E2E_WORKSPACE_STORAGE_CLASS: setec-e2e-workspace-block
+      # Full reference for the "Import setec-keepalive" step below.
+      KEEPALIVE_IMAGE: ${{ needs.build-images.outputs.keepalive_image_repo }}:${{ needs.build-images.outputs.sha_tag }}
       # This build's images, pulled from ghcr (the packages are public).
       SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
       SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
@@ -537,6 +539,42 @@ jobs:
             2>&1 | tee guard.log
           status="${PIPESTATUS[0]}"
           scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
+
+      - name: Import setec-keepalive into containerd's content store directly
+        # setec#91: every kata-fc session Sandbox now boots this image's
+        # binary — the first time any e2e scenario has pulled a
+        # setec-built image into a kata-fc Pod at all (every other
+        # kata-fc scenario's workload is a public image such as
+        # busybox). Every attempt so far failed unpacking one specific
+        # layer into devmapper with "failed to get reader from content
+        # store ... not found", including a from-scratch `ctr images
+        # pull` run alone with nothing else on the node, and again after
+        # setting discard_unpacked_layers=false before this node's first
+        # pull (setec#22's fix for a *different* shape of this same
+        # error). The layer is real and intact — `docker pull` on an
+        # unrelated machine reads it back and verifies its checksum with
+        # no issue — so whatever loses it is specific to containerd's
+        # own registry-fetch path on this node, not the registry, this
+        # image's content, or a stale discard setting.
+        #
+        # `ctr images import` reads a full OCI/Docker tarball in one
+        # local pass instead of streaming layers from a remote registry,
+        # a materially different code path in containerd. Building the
+        # tarball on the runner (a plain `docker pull` + `docker save`,
+        # nothing to do with the node's own containerd) and loading it
+        # into the node with `ctr images import` sidesteps the
+        # registry-fetch path entirely; `ctr images unpack` afterward
+        # only has to read content this same import already committed
+        # in full.
+        run: |
+          set -euo pipefail
+          docker pull "${KEEPALIVE_IMAGE}"
+          tarball="$(mktemp -d)/setec-keepalive.tar"
+          docker save -o "${tarball}" "${KEEPALIVE_IMAGE}"
+          docker cp "${tarball}" "${KVM_NODE}:/tmp/setec-keepalive.tar"
+          docker exec "${KVM_NODE}" ctr -n k8s.io images import /tmp/setec-keepalive.tar
+          docker exec "${KVM_NODE}" ctr -n k8s.io images unpack --snapshotter devmapper "${KEEPALIVE_IMAGE}"
+          docker exec "${KVM_NODE}" rm -f /tmp/setec-keepalive.tar
 
       - name: The ${{ matrix.pass }} scenarios
         env:
