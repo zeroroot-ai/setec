@@ -136,24 +136,12 @@ jobs:
       # setec-keepalive, not the chart's own released default — the
       # "session scenarios" step below overrides sessionKeepalive.image
       # to point at it.
-      # provenance: false — buildx's default provenance attestation adds a
-      # second manifest (not a real filesystem layer) to the pushed image
-      # index. containerd's devmapper snapshotter is the one snapshotter
-      # this image now runs under (setec#91, every kata-fc session), and
-      # unpacking hit "failed to get reader from content store: content
-      # digest ... not found" on its very first pull, alone, with no
-      # other pod racing it — the shape of resolving the wrong manifest
-      # entry, not a full thin-pool or a concurrency race. Every other
-      # image this workflow builds runs under the node's default
-      # snapshotter, which tolerates the extra manifest, so this is the
-      # one build that needs the plain image index.
       - name: Build + push setec-keepalive (CMD=setec-keepalive)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           build-args: CMD=setec-keepalive
           push: true
-          provenance: false
           tags: ${{ steps.tags.outputs.keepalive_image_repo }}:${{ steps.tags.outputs.sha_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -249,9 +237,6 @@ jobs:
       # (test/e2e/session_lifecycle_test.go and friends) request it by
       # name via this variable.
       SETEC_E2E_WORKSPACE_STORAGE_CLASS: setec-e2e-workspace-block
-      # Full reference for the "Pre-warm the kata-fc devmapper snapshot"
-      # step below (setec#91).
-      KEEPALIVE_IMAGE: ${{ needs.build-images.outputs.keepalive_image_repo }}:${{ needs.build-images.outputs.sha_tag }}
       # This build's images, pulled from ghcr (the packages are public).
       SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
       SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
@@ -403,7 +388,25 @@ jobs:
           tar -xjf "${dir}/gvisor.tar.bz2" -C "${dir}/bin"
           docker cp "${dir}/bin/." "${KVM_NODE}:/usr/local/bin/"
           docker exec "${KVM_NODE}" /usr/local/bin/runsc --version
+          # discard_unpacked_layers = false here, before this node ever pulls
+          # any image, not only in the installer'"'"'s own drop-in it writes
+          # later (setec#91): setec'"'"'s own images (manager, runtime-agent,
+          # node-agent) share layers with setec-keepalive (same distroless
+          # base, ADR-0003-adjacent), and the guard'"'"'s own Helm install
+          # pulls the first of them concurrently with the installer
+          # converging. Left at the kind image'"'"'s default (true) for even
+          # that first pull, containerd discards the shared layer content
+          # right after unpacking it into the default snapshotter, and no
+          # later config change un-discards it: every subsequent devmapper
+          # unpack of the same shared layer (any kata-fc session on this
+          # backend, including the first, since setec-keepalive is the
+          # workspace-format binary now) fails with "failed to get reader
+          # from content store ... not found" for the rest of the job. Set
+          # here, before that first pull happens, not after.
           docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
+
+          [plugins."io.containerd.grpc.v1.cri".containerd]
+            discard_unpacked_layers = false
 
           [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
             runtime_type = "io.containerd.runsc.v1"
@@ -525,41 +528,6 @@ jobs:
             2>&1 | tee guard.log
           status="${PIPESTATUS[0]}"
           scripts/e2e-summary.sh "The KVM guard" guard.log "$status"
-
-      - name: Pre-warm the kata-fc devmapper snapshot for setec-keepalive
-        # setec#91: every kata-fc session Sandbox now boots this image's
-        # binary, which is the first time any e2e scenario has ever
-        # pulled a setec-built image into a kata-fc Pod (every prior
-        # kata-fc scenario's workload is a public image such as
-        # busybox). The first real run hit containerd's devmapper
-        # snapshotter unpacking this image for several session Sandboxes
-        # at once: "failed to get reader from content store: content
-        # digest ... not found", on the exact same digest, for the rest
-        # of the job. That is the shape of a losing race, not a full
-        # thin-pool (the error names a missing blob, not "no space") —
-        # several Pods asking the devmapper snapshotter to unpack the
-        # same not-yet-materialized image concurrently. Unpacking it
-        # once here, alone, before any session scenario starts, leaves a
-        # real devmapper snapshot on disk for every later Sandbox to
-        # reuse instead of a fresh unpack to race on.
-        #
-        # Runs after the KVM guard, not before: the kata-fc RuntimeClass
-        # (charts/setec/templates/runtime-classes.yaml) injects its own
-        # scheduling.nodeSelector requiring the runtime-agent's dynamic
-        # setec.zeroroot.ai/runtime.kata-fc=true node label, and the
-        # guard (TestEnv_KVMPresent) is what waits for that label to
-        # converge after the installer runs. A pod naming this
-        # RuntimeClass before then just sits Pending.
-        run: |
-          set -euo pipefail
-          echo "::group::containerd's own drop-in (discard_unpacked_layers)"
-          docker exec "${KVM_NODE}" find /etc/containerd/config.d -type f -exec sh -c 'echo "--- {} ---"; cat "{}"' \; || true
-          echo "::endgroup::"
-          echo "::group::ctr pull + unpack directly against devmapper (bypasses CRI's wrapped error)"
-          docker exec "${KVM_NODE}" ctr -n k8s.io images pull "${KEEPALIVE_IMAGE}"
-          docker exec "${KVM_NODE}" ctr -n k8s.io content ls | grep a5789fc40e828c4e7467626e3f69ec5dea8e5da22fe660db8ae6d16f777b0bbf || echo "layer not in content store after pull"
-          docker exec "${KVM_NODE}" ctr -n k8s.io images unpack --snapshotter devmapper "${KEEPALIVE_IMAGE}"
-          echo "::endgroup::"
 
       - name: The ${{ matrix.pass }} scenarios
         env:
