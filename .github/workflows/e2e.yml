@@ -588,27 +588,11 @@ jobs:
           set -uo pipefail
           extra_set="${NODE_SET}"
           sampler=""
-          # setec#91: a failing kata-fc session Pod is deleted and recreated
-          # by the controller every few seconds (the session-restart
-          # contract). Neither a 1-second `kubectl logs` poll nor a
-          # `kubectl logs -f` follower ever recovered one byte of container
-          # output in a full 24-minute run (both tried and abandoned —
-          # see git history on this block): every call either landed on
-          # "PodInitializing" or failed outright with "context deadline
-          # exceeded", including for the setec-keepalive INIT container,
-          # which `kubectl describe pod` confirms does reach a Terminated
-          # state with a real exit code and lives long enough (several
-          # seconds, until the Sandbox controller deletes the Pod) for a
-          # 1-second poll to have caught it. `kubectl logs` on this
-          # kind+nested-KVM cluster cannot retrieve a kata-fc container's
-          # output at all — a kubelet log-serving problem specific to this
-          # environment, not a timing problem. `crictl logs` reads the same
-          # on-disk log file directly on the node, with no kubelet HTTP
-          # proxy in the path, so it works even when `kubectl logs` cannot.
-          # Poll each known Sandbox's container statuses for a containerID
-          # we have not already dumped (init or main, any state) and pull
-          # its log the moment it appears, so a container that is deleted
-          # moments later is still caught.
+          # kubectl logs cannot read a kata-fc container's output on this
+          # kind + nested-KVM cluster, and the controller replaces a failed
+          # session Pod within seconds. crictl reads the log file on the
+          # node directly, so poll each session Pod for container IDs and
+          # dump each one the moment it appears (setec#91).
           session_pod_names="e2e-session e2e-reattach e2e-exec-reattach e2e-exec-false e2e-exec-kill"
           (
             declare -A seen_ids
@@ -633,7 +617,7 @@ jobs:
               sleep 1
             done
           ) > session-pods.log &
-          session_sampler2=$!
+          session_sampler=$!
           if [ "${SETEC_E2E_SNAPSHOTS}" = "1" ]; then
             # The node-agent takes the Firecracker snapshots. The chart pins
             # it to kata-deploy's node label, which this cluster does not
@@ -666,14 +650,14 @@ jobs:
             2>&1 | tee "${PASS}.log"
           status="${PIPESTATUS[0]}"
           [ -n "${sampler}" ] && kill "${sampler}" 2>/dev/null
-          kill "${session_sampler2}" 2>/dev/null
+          kill "${session_sampler}" 2>/dev/null
           scripts/e2e-summary.sh "The ${PASS} scenarios" "${PASS}.log" "$status"
 
       - name: Collect diagnostics
         if: failure()
         run: |
           set -uo pipefail
-          echo "::group::session-pods.log (continuous sampler, setec#91)"
+          echo "::group::session-pods.log (crictl sampler)"
           cat session-pods.log 2>/dev/null || echo "session-pods.log missing"
           echo "::endgroup::"
           kubectl get nodes -o wide --show-labels || true
