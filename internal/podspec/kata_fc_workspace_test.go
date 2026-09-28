@@ -153,14 +153,14 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 		}
 	}
 
-	// mount(2) needs CAP_SYS_ADMIN, and opening the raw block device
-	// (which a Block-mode volume plugin may not have chgrp'd to the
-	// workload's own fsGroup) needs CAP_DAC_OVERRIDE; nothing else in
-	// the Pod needs either.
-	for _, want := range []string{"SYS_ADMIN", "DAC_OVERRIDE"} {
+	// The wrapper formats and mounts as root, then drops to the sandbox
+	// user. A non-root container never gets an added capability in its
+	// effective set (setec#91), so the container itself runs as root
+	// with exactly the capabilities that step needs.
+	for _, want := range blockWorkspaceCapabilities {
 		var has bool
 		for _, cap := range c.SecurityContext.Capabilities.Add {
-			if cap == corev1.Capability(want) {
+			if cap == want {
 				has = true
 			}
 		}
@@ -168,15 +168,24 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 			t.Errorf("workload container capabilities.add = %v, want %s", c.SecurityContext.Capabilities.Add, want)
 		}
 	}
-
-	// AllowPrivilegeEscalation must be true: the kernel ignores file
-	// capabilities on the setec-keepalive binary (Dockerfile,
-	// CMD=setec-keepalive) under no_new_privs, and Kata's guest-side
-	// agent does not otherwise carry securityContext.capabilities.add
-	// into a non-root container's effective/permitted set — a real run
-	// against kata-fc confirmed this via /proc/self/status.
+	if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 0 {
+		t.Errorf("workload container runAsUser = %v, want 0 for the format-and-mount step", c.SecurityContext.RunAsUser)
+	}
+	if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot {
+		t.Errorf("workload container runAsNonRoot = %v, want false (the pod-level true would refuse UID 0)", c.SecurityContext.RunAsNonRoot)
+	}
+	// Kubernetes refuses CAP_SYS_ADMIN next to allowPrivilegeEscalation:
+	// false. The wrapper sets no_new_privs itself after the drop.
 	if c.SecurityContext.AllowPrivilegeEscalation == nil || !*c.SecurityContext.AllowPrivilegeEscalation {
 		t.Errorf("workload container allowPrivilegeEscalation = %v, want true", c.SecurityContext.AllowPrivilegeEscalation)
+	}
+	if c.SecurityContext.Privileged == nil || *c.SecurityContext.Privileged {
+		t.Errorf("workload container privileged = %v, want false (sandbox-namespace-host-guard refuses it)", c.SecurityContext.Privileged)
+	}
+	// The drop and the chown both need the sandbox identity.
+	uidArg, gidArg := argAfter(c.Command, "--format-workspace-uid"), argAfter(c.Command, "--format-workspace-gid")
+	if uidArg != "65532" || gidArg != "65532" {
+		t.Errorf("wrapper uid/gid = %q/%q, want 65532/65532: %v", uidArg, gidArg, c.Command)
 	}
 
 	// The keepalive-install init container must exist (it carries the
@@ -272,9 +281,14 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 		t.Errorf("command = %v, want the Sandbox's own command %v unwrapped", c.Command, sb.Spec.Command)
 	}
 	for _, cap := range c.SecurityContext.Capabilities.Add {
-		if cap == "SYS_ADMIN" || cap == "DAC_OVERRIDE" {
-			t.Errorf("gvisor workload container carries %s; only kata-fc needs it", cap)
+		for _, blockOnly := range blockWorkspaceCapabilities {
+			if cap == blockOnly {
+				t.Errorf("gvisor workload container carries %s; only kata-fc needs it", cap)
+			}
 		}
+	}
+	if c.SecurityContext.RunAsUser != nil {
+		t.Errorf("gvisor workload container runAsUser = %d; only kata-fc's wrapper runs as root", *c.SecurityContext.RunAsUser)
 	}
 	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Errorf("gvisor workload container allowPrivilegeEscalation = %v, want false", c.SecurityContext.AllowPrivilegeEscalation)
@@ -307,4 +321,14 @@ func TestBuild_SessionWithNoRuntimeSelectionKeepsFilesystemWorkspace(t *testing.
 	if len(pod.Spec.Containers[0].VolumeDevices) != 0 {
 		t.Errorf("pod with no RuntimeSelection carries VolumeDevices: %+v", pod.Spec.Containers[0].VolumeDevices)
 	}
+}
+
+// argAfter returns the element after flag in args, or "".
+func argAfter(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
 }

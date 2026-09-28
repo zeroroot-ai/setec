@@ -72,3 +72,36 @@ func TestExecInto_UnknownCommandErrors(t *testing.T) {
 		t.Fatalf("execInto(unknown command) = nil error, want an error")
 	}
 }
+
+// TestDropPrivileges_SameIdentitySetsNoNewPrivs asserts that a process
+// already running as the target user skips setuid and still sets
+// no_new_privs, which the Pod spec cannot promise for this container.
+func TestDropPrivileges_SameIdentitySetsNoNewPrivs(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("runs as a non-root user; root would really change identity")
+	}
+	if err := dropPrivileges(os.Getuid(), os.Getgid()); err != nil {
+		t.Fatalf("dropPrivileges(own uid/gid) = %v, want nil", err)
+	}
+	// This goroutine's thread: the flag is per thread, and the cgo
+	// fallback pins this goroutine to the thread that set it.
+	status, err := os.ReadFile("/proc/thread-self/status")
+	if err != nil {
+		t.Fatalf("read /proc/thread-self/status: %v", err)
+	}
+	if !strings.Contains(string(status), "NoNewPrivs:\t1") {
+		t.Errorf("NoNewPrivs is not 1 after dropPrivileges:\n%s", status)
+	}
+}
+
+// TestDropPrivileges_NonRootCannotBecomeAnotherUser asserts that the
+// drop fails loudly, not silently, when the process lacks the
+// capabilities to change identity.
+func TestDropPrivileges_NonRootCannotBecomeAnotherUser(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("runs as a non-root user; root holds CAP_SETUID")
+	}
+	if err := dropPrivileges(os.Getuid()+1, os.Getgid()+1); err == nil {
+		t.Fatal("dropPrivileges to another uid/gid as non-root = nil, want an error")
+	}
+}

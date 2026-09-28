@@ -59,28 +59,6 @@ RUN set -eux; \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
       go build -trimpath -ldflags="-s -w" -o /out/${CMD} ${SOURCE}
 
-# setec-keepalive only: file capabilities on the binary itself, so the
-# kernel grants them at execve() regardless of how the container
-# runtime's own process setup handles a non-root init process
-# (setec#91). Kata Containers' guest-side agent sets
-# CapBnd correctly from securityContext.capabilities.add but leaves
-# CapPrm/CapEff/CapAmb empty for a non-root container — verified
-# against a real kata-fc Pod via /proc/self/status — so a plain
-# Kubernetes capability grant never reaches this binary's actual
-# process; a file capability does, because it is the kernel's own
-# execve() that grants it, not the container runtime's setup code.
-# libcap2-bin's setcap only needs to run natively on the build platform
-# (a file capability is architecture-independent metadata on the
-# target binary, not machine code), so this needs no QEMU regardless
-# of TARGETARCH.
-RUN if [ "${CMD}" = "setec-keepalive" ]; then \
-      apt-get update; \
-      apt-get install -y --no-install-recommends libcap2-bin; \
-      rm -rf /var/lib/apt/lists/*; \
-      setcap 'cap_sys_admin,cap_dac_override+ep' /out/${CMD}; \
-      getcap /out/${CMD}; \
-    fi
-
 # ----------------------------------------------------------------------------
 # Runtime stage
 # ----------------------------------------------------------------------------

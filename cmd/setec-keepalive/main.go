@@ -30,7 +30,7 @@
 // formats DEV as ext4 — only if it is not already formatted, since a
 // session's workspace PVC re-attaches to a fresh Pod on every VM
 // restart, and reformatting it would silently destroy the workload's
-// corpus — mounts it at DIR, chowns it to UID:GID, and then either execs
+// corpus — mounts it at DIR, chowns it to UID:GID, drops to UID:GID, and then either execs
 // CMD (a session with its own spec.command) or, with no trailing
 // command, falls into the same reap loop as a plain `setec-keepalive`
 // invocation (a session with none). Doing the format, mount and exec
@@ -56,8 +56,8 @@ func main() {
 	device := flag.String("format-workspace-device", "",
 		"format this block device as ext4 (only if unformatted) and mount it at --format-workspace-target")
 	target := flag.String("format-workspace-target", "", "mount point for --format-workspace-device")
-	uid := flag.Int("format-workspace-uid", -1, "chown the mounted workspace to this uid, required with --format-workspace-device")
-	gid := flag.Int("format-workspace-gid", -1, "chown the mounted workspace to this gid, required with --format-workspace-device")
+	uid := flag.Int("format-workspace-uid", -1, "chown the mounted workspace to this uid and run as it afterwards, required with --format-workspace-device")
+	gid := flag.Int("format-workspace-gid", -1, "chown the mounted workspace to this gid and run as it afterwards, required with --format-workspace-device")
 	flag.Parse()
 
 	if *install != "" {
@@ -76,6 +76,10 @@ func main() {
 			os.Exit(2)
 		}
 		if err := formatWorkspace(*device, *target, *uid, *gid); err != nil {
+			fmt.Fprintln(os.Stderr, "setec-keepalive:", err)
+			os.Exit(1)
+		}
+		if err := dropPrivileges(*uid, *gid); err != nil {
 			fmt.Fprintln(os.Stderr, "setec-keepalive:", err)
 			os.Exit(1)
 		}

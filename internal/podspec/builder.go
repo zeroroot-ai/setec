@@ -222,6 +222,11 @@ func WorkspacePVCName(sandboxName string) string {
 // boundary was not already carrying. Everything else stays dropped.
 var sandboxCapabilities = []corev1.Capability{"NET_RAW", "NET_ADMIN"}
 
+// blockWorkspaceCapabilities are added to a kata-fc session's workload
+// container only, for the root format-and-mount step that runs before
+// the wrapper drops to the sandbox user (setec#91).
+var blockWorkspaceCapabilities = []corev1.Capability{"SYS_ADMIN", "DAC_OVERRIDE", "CHOWN", "SETUID", "SETGID"}
+
 // Build transforms a Sandbox custom resource into the corev1.Pod the
 // controller must create. The function is pure: it performs no I/O, makes no
 // Kubernetes API calls, and does not read or mutate any global state.
@@ -349,41 +354,36 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		})
 	}
 	if usesBlockWorkspace {
-		// mount(2) needs CAP_SYS_ADMIN, and opening the raw block device
-		// needs CAP_DAC_OVERRIDE (the workload runs as the unprivileged
-		// sandbox UID/GID, and a freshly attached Block-mode device node
-		// is not guaranteed to be group-writable by that GID on every
-		// volume plugin). securityContext.capabilities.add alone does
-		// not reach the process on kata-fc, though: a real run showed
-		// Kata's guest-side agent sets CapBnd correctly from it but
-		// leaves CapPrm/CapEff/CapAmb empty for a non-root container
-		// (/proc/self/status), so the two capabilities below are backed
-		// by a file capability on the setec-keepalive binary itself
-		// (Dockerfile, CMD=setec-keepalive) — the kernel grants
-		// CapEff/CapPrm from a file's `security.capability` xattr at
-		// execve() unconditionally, independent of whatever the
-		// container runtime's own non-root process setup does. That
-		// requires AllowPrivilegeEscalation: true below: the kernel
-		// ignores file capabilities under no_new_privs, by design, the
-		// same rule that blocks a setuid-root binary. Neither
-		// mechanism ever reaches full `privileged`, which the
-		// operator's own admission policy (charts/setec/templates/
-		// sandbox-namespace-host-guard.yaml, setec#159) refuses
-		// outright in a Sandbox namespace — a stricter, non-negotiable
-		// line than ADR-0052's "the microVM is the boundary" reasoning,
-		// which covers individual capabilities and privilege
-		// escalation, not full node access.
+		// The keepalive wrapper (cmd/setec-keepalive) formats and mounts
+		// the raw workspace device, then drops to the sandbox UID/GID
+		// before it runs the Sandbox's command. The format-and-mount
+		// step runs as root because Kubernetes grants an added
+		// capability to the effective set of a root process only: for a
+		// non-root container the runtime fills CapBnd from
+		// capabilities.add but sets no ambient capabilities, so
+		// CapEff stays empty (measured on kata-fc, setec#91).
 		//
-		// None of this reaches the Sandbox's own command: the keepalive
-		// wrapper (cmd/setec-keepalive) formats and mounts the
-		// workspace, then execs the Sandbox's command via
-		// syscall.Exec — a plain binary with no file capabilities of
-		// its own, which gets an empty effective/permitted set
-		// regardless of what the exec'ing process held or which file
-		// executed it.
+		// The capabilities are the minimum for that step. SYS_ADMIN is
+		// for mount(2). DAC_OVERRIDE opens a device node that a static
+		// local PersistentVolume does not chgrp to the Pod's fsGroup.
+		// CHOWN hands the mounted workspace to the sandbox user.
+		// SETUID and SETGID drop to that user. The setuid(2) to a
+		// non-zero UID clears the permitted and effective sets, so none
+		// of them reaches the Sandbox's command. Kubernetes refuses
+		// SYS_ADMIN together with allowPrivilegeEscalation: false, so
+		// the wrapper sets no_new_privs itself before the exec.
+		//
+		// Per ADR-0052 this costs nothing extra on kata-fc: the microVM
+		// the whole Pod runs in is the containment boundary. It never
+		// reaches `privileged`, which the chart's admission policy
+		// refuses in a Sandbox namespace (sandbox-namespace-host-guard,
+		// setec#159).
+		container.SecurityContext.RunAsUser = new(int64(0))
+		container.SecurityContext.RunAsGroup = new(int64(0))
+		container.SecurityContext.RunAsNonRoot = new(false)
 		container.SecurityContext.AllowPrivilegeEscalation = new(true)
 		container.SecurityContext.Capabilities.Add =
-			append(container.SecurityContext.Capabilities.Add, "SYS_ADMIN", "DAC_OVERRIDE")
+			append(container.SecurityContext.Capabilities.Add, blockWorkspaceCapabilities...)
 	}
 
 	rcName := effectiveRCName
