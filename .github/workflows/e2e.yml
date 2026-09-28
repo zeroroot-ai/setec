@@ -658,9 +658,9 @@ jobs:
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
                   --all-containers --previous --tail=60 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
-                  --all-containers --since=65s --prefix 2>&1
+                  --all-containers --since=65s --tail=-1 --prefix 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=operator \
-                  --all-containers --since=65s --prefix 2>&1
+                  --all-containers --since=65s --tail=-1 --prefix 2>&1
               done
             ) > node-agent.log &
             sampler=$!
