@@ -38,11 +38,6 @@
 name: e2e
 
 on:
-  # TEMPORARY, for setec#92 verification only. Remove this push trigger
-  # before merge (see the PR).
-  push:
-    branches:
-      - fix/nodeagent-dial-pod-ip
   workflow_dispatch: {}
   # Nightly. The suites are too long for the merge gate, but "not on every
   # merge" must not mean "never" (setec#298).
