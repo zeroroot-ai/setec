@@ -6,6 +6,7 @@ package katasandbox
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +16,7 @@ type fakeLookup map[string]string
 
 // resolveIn resolves testPodUID against a fake lookup under root.
 func resolveIn(root string) (Paths, error) {
-	r := Resolver{Lookup: fakeLookup{testPodUID: testSandboxID}, VCRoot: root}
+	r := Resolver{Lookup: fakeLookup{testPodUID: testSandboxID}, VCRoot: root, RootOf: jailedRoot}
 	return r.Resolve(context.Background(), testPodUID)
 }
 
@@ -93,7 +94,7 @@ func TestResolve_NoSocketIsNotFound(t *testing.T) {
 // TestResolve_UnknownPodIsNotFound asserts that the lookup's
 // ErrNotFound comes through.
 func TestResolve_UnknownPodIsNotFound(t *testing.T) {
-	_, err := Resolver{Lookup: fakeLookup{}, VCRoot: t.TempDir()}.Resolve(context.Background(), testPodUID)
+	_, err := Resolver{Lookup: fakeLookup{}, VCRoot: t.TempDir(), RootOf: jailedRoot}.Resolve(context.Background(), testPodUID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve for an unknown pod = %v, want ErrNotFound", err)
 	}
@@ -118,5 +119,82 @@ func TestResolve_RefusesNonUID(t *testing.T) {
 		if _, err := (Resolver{Lookup: fakeLookup{}, VCRoot: t.TempDir()}).Resolve(context.Background(), bad); err == nil {
 			t.Errorf("Resolve(%q) = nil error, want a refusal", bad)
 		}
+	}
+}
+
+// jailedRoot stands in for firecrackerRoot on a layout with no live
+// socket: a jailed Firecracker's root is the directory above run/.
+func jailedRoot(_ context.Context, hostSocket string) (string, error) {
+	return filepath.Dir(filepath.Dir(hostSocket)), nil
+}
+
+// TestResolve_ReportsTheFirecrackerRoot asserts that Paths carries the
+// chroot Firecracker resolves file paths in.
+func TestResolve_ReportsTheFirecrackerRoot(t *testing.T) {
+	root := t.TempDir()
+	vmRoot := makeKataSandbox(t, root, "firecracker", testSandboxID)
+	got, err := resolveIn(root)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.FCRoot != vmRoot {
+		t.Fatalf("FCRoot = %q, want the jailer root %q", got.FCRoot, vmRoot)
+	}
+}
+
+// TestFCRootFrom covers the jailed and unjailed socket layouts.
+func TestFCRootFrom(t *testing.T) {
+	const host = "/run/vc/firecracker/abc/root/run/firecracker.socket"
+	cases := []struct {
+		name, boundAs, want string
+		wantErr             bool
+	}{
+		{"jailed", "/run/firecracker.socket", "/run/vc/firecracker/abc/root", false},
+		{"unjailed", host, "/", false},
+		{"no address", "", "/", false},
+		{"not a suffix", "/other/firecracker.socket", "", true},
+		{"relative", "run/firecracker.socket", "", true},
+	}
+	for _, c := range cases {
+		got, err := fcRootFrom(host, c.boundAs)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("%s: fcRootFrom = (%q, %v), want (%q, error=%t)", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+// TestFCPath maps host paths into Firecracker's view and refuses a
+// path outside its root.
+func TestFCPath(t *testing.T) {
+	p := Paths{FCRoot: "/run/vc/firecracker/abc/root"}
+	got, err := p.FCPath("/run/vc/firecracker/abc/root/setec-snapshots/s1/state.bin")
+	if err != nil || got != "/setec-snapshots/s1/state.bin" {
+		t.Fatalf("FCPath = (%q, %v), want /setec-snapshots/s1/state.bin", got, err)
+	}
+	if _, err := p.FCPath("/var/lib/setec/tmp/state.bin"); err == nil {
+		t.Fatal("FCPath outside the root = nil error, want a refusal")
+	}
+	if got, err := (Paths{FCRoot: "/"}).FCPath("/var/lib/x"); err != nil || got != "/var/lib/x" {
+		t.Fatalf("unjailed FCPath = (%q, %v), want /var/lib/x", got, err)
+	}
+}
+
+// TestFirecrackerRoot_UnjailedSocket dials a real socket bound by its
+// full path, as an unjailed Firecracker binds it: the root is "/".
+func TestFirecrackerRoot_UnjailedSocket(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "fc.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			_ = c.Close()
+		}
+	}()
+	got, err := firecrackerRoot(context.Background(), sock)
+	if err != nil || got != "/" {
+		t.Fatalf("firecrackerRoot = (%q, %v), want /", got, err)
 	}
 }

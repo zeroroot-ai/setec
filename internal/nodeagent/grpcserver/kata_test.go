@@ -21,8 +21,9 @@ import (
 const testPodUID = "05c716c8-eae5-4540-9daf-5c0bb659810a"
 
 // fakeKata resolves a known Pod UID to kata-shaped paths under /kata,
-// and any other UID to katasandbox.ErrNotFound.
-type fakeKata struct{}
+// and any other UID to katasandbox.ErrNotFound. root is the directory
+// it reports as Firecracker's root, standing in for the jailer chroot.
+type fakeKata struct{ root string }
 
 func fakeKataPaths(podUID string) katasandbox.Paths {
 	vm := filepath.Join("/kata", podUID, "root")
@@ -32,11 +33,30 @@ func fakeKataPaths(podUID string) katasandbox.Paths {
 	}
 }
 
-func (fakeKata) Resolve(_ context.Context, podUID string) (katasandbox.Paths, error) {
+func (k fakeKata) Resolve(_ context.Context, podUID string) (katasandbox.Paths, error) {
 	if podUID != testPodUID {
 		return katasandbox.Paths{}, katasandbox.ErrNotFound
 	}
-	return fakeKataPaths(podUID), nil
+	p := fakeKataPaths(podUID)
+	p.FCRoot = k.root
+	return p, nil
+}
+
+// TestCreateSnapshot_HandsFirecrackerPathsInsideItsRoot asserts that
+// Firecracker gets the snapshot paths as it sees them from inside the
+// jailer chroot (setec#19: host paths made it fail with ENOENT).
+func TestCreateSnapshot_HandsFirecrackerPathsInsideItsRoot(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	if _, err := srv.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
+		SnapshotId: "snap-root", SourcePodUid: testPodUID,
+	}); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	want := "/" + snapshotWorkDir + "/snap-root/state.bin"
+	if fc.lastCreateState != want {
+		t.Fatalf("Firecracker got state path %q, want %q inside its root", fc.lastCreateState, want)
+	}
 }
 
 // TestCreateSnapshot_DialsTheResolvedKataSocket asserts that the

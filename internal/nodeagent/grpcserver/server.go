@@ -216,12 +216,19 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		return nil, status.Errorf(codes.Internal, "firecracker pause: %v", err)
 	}
 
-	dir := filepath.Join(s.tempDir(), in.GetSnapshotId())
+	// Firecracker writes the pair itself, and kata runs it chrooted
+	// into the VM's jailer root, so the files go under that root and
+	// Firecracker gets the paths as it sees them (setec#19).
+	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, status.Errorf(codes.Internal, "mkdir temp: %v", err)
 	}
 	statePath := filepath.Join(dir, "state.bin")
 	memPath := filepath.Join(dir, "memory.bin")
+	fcState, fcMem, err := fcPaths(kata, statePath, memPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Ensure we clean up the temp files even on error paths. The temp
 	// pair is the PLAINTEXT guest image (the durable copy written by
@@ -229,7 +236,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// treatment the storage backend applies before unlinking.
 	defer func() { shredDir(dir) }()
 
-	if err := fc.CreateSnapshot(ctx, statePath, memPath); err != nil {
+	if err := fc.CreateSnapshot(ctx, fcState, fcMem); err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker createSnapshot: %v", err)
 	}
 
@@ -295,7 +302,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	}
 	defer func() { _ = rc.Close() }()
 
-	dir := filepath.Join(s.tempDir(), in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, status.Errorf(codes.Internal, "mkdir: %v", err)
 	}
@@ -307,8 +314,12 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
 	}
 
+	fcState, fcMem, err := fcPaths(kata, statePath, memPath)
+	if err != nil {
+		return nil, err
+	}
 	fc := s.FirecrackerFactory(kata.APISocket)
-	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
+	if err := fc.LoadSnapshot(ctx, fcState, fcMem); err != nil {
 		return &setecgrpcv1.RestoreSandboxResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -446,6 +457,22 @@ func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest, kata katasan
 		out = append(out, kata.HybridVsock)
 	}
 	return out
+}
+
+// snapshotWorkDir is the directory, under a VM's Firecracker root, that
+// holds the state and memory files of a snapshot being written or
+// loaded. Firecracker reads and writes them itself.
+const snapshotWorkDir = "setec-snapshots"
+
+// fcPaths maps the host state and memory paths into Firecracker's view.
+func fcPaths(kata katasandbox.Paths, statePath, memPath string) (fcState, fcMem string, err error) {
+	if fcState, err = kata.FCPath(statePath); err != nil {
+		return "", "", status.Errorf(codes.Internal, "%v", err)
+	}
+	if fcMem, err = kata.FCPath(memPath); err != nil {
+		return "", "", status.Errorf(codes.Internal, "%v", err)
+	}
+	return fcState, fcMem, nil
 }
 
 // KataSandboxResolver finds a Pod's kata Firecracker files on this
@@ -617,7 +644,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	// LoadSnapshot. Plain RemoveAll on the temp pair — Firecracker may
 	// keep the restored memory file mapped, so it must be unlinked,
 	// never overwritten (same rationale as RestoreSandbox).
-	statePath, memPath, cleanup, decErr := s.decryptPoolEntry(entry.StorageRef, entry.ID)
+	statePath, memPath, cleanup, decErr := s.decryptPoolEntry(entry.StorageRef, entry.ID, filepath.Join(kata.FCRoot, snapshotWorkDir))
 	if decErr != nil {
 		s.observeClaim("restore_failed")
 		return &setecgrpcv1.ClaimPoolEntryResponse{
@@ -628,8 +655,13 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	}
 	defer cleanup()
 
+	fcState, fcMem, pathErr := fcPaths(kata, statePath, memPath)
+	if pathErr != nil {
+		s.observeClaim("restore_failed")
+		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: true, EntryId: entry.ID, Error: pathErr.Error()}, nil
+	}
 	fc := s.FirecrackerFactory(kata.APISocket)
-	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
+	if err := fc.LoadSnapshot(ctx, fcState, fcMem); err != nil {
 		s.observeClaim("restore_failed")
 		return &setecgrpcv1.ClaimPoolEntryResponse{
 			Claimed: true,
@@ -726,7 +758,7 @@ func (s *Server) observeClaim(outcome string) {
 // identity + provenance record) and streams the encrypted state/memory
 // pair into a fresh temp dir as the plaintext files Firecracker's
 // LoadSnapshot needs. The returned cleanup unlinks the temp tree.
-func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath string, cleanup func(), err error) {
+func (s *Server) decryptPoolEntry(entryDir, entryID, workDir string) (statePath, memPath string, cleanup func(), err error) {
 	kek, err := atrest.LoadOrCreateKEK(s.poolKEKPath())
 	if err != nil {
 		return "", "", nil, err
@@ -754,7 +786,7 @@ func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath 
 		return "", "", nil, err
 	}
 
-	dir := filepath.Join(s.tempDir(), "pool-claim-"+entryID+"-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	dir := filepath.Join(workDir, "pool-claim-"+entryID+"-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", nil, err
 	}

@@ -22,8 +22,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
 )
 
 // DefaultVCRoot is the kata Go runtime's run directory on the host.
@@ -52,6 +55,61 @@ type Paths struct {
 	// HybridVsock is the Firecracker hybrid vsock the guest agent
 	// listens behind.
 	HybridVsock string
+	// FCRoot is the host directory Firecracker sees as "/". kata runs
+	// Firecracker under the jailer, chrooted into <vm>/root, so a file
+	// path handed to the Firecracker API resolves inside that
+	// directory. It is "/" for an unjailed Firecracker.
+	FCRoot string
+}
+
+// FCPath returns the path Firecracker sees for hostPath, which must lie
+// under FCRoot.
+func (p Paths) FCPath(hostPath string) (string, error) {
+	root := p.FCRoot
+	if root == "" {
+		root = "/"
+	}
+	rel, err := filepath.Rel(root, hostPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("katasandbox: %s is outside the Firecracker root %s", hostPath, root)
+	}
+	return filepath.Join("/", rel), nil
+}
+
+// fcRootFrom derives Firecracker's root on the host from the host path
+// of its API socket and the address Firecracker bound the socket to,
+// which is the path as Firecracker sees it.
+func fcRootFrom(hostSocket, boundAs string) (string, error) {
+	if boundAs == "" || boundAs == hostSocket {
+		return "/", nil
+	}
+	if !filepath.IsAbs(boundAs) || !strings.HasSuffix(hostSocket, boundAs) {
+		return "", fmt.Errorf("katasandbox: socket %s is bound as %q, which is not a suffix of it", hostSocket, boundAs)
+	}
+	root := strings.TrimSuffix(hostSocket, boundAs)
+	if root == "" {
+		return "/", nil
+	}
+	return root, nil
+}
+
+// dialTimeout bounds the one connection Resolve opens to read the
+// socket's bound address.
+const dialTimeout = 5 * time.Second
+
+// firecrackerRoot connects to the API socket once and reads the address
+// Firecracker bound it to. getpeername on a Unix socket returns the path
+// the server passed to bind, so a jailed Firecracker reports
+// "/run/firecracker.socket" for a socket the host sees under its chroot.
+func firecrackerRoot(ctx context.Context, hostSocket string) (string, error) {
+	d := net.Dialer{Timeout: dialTimeout}
+	conn, err := d.DialContext(ctx, "unix", hostSocket)
+	if err != nil {
+		return "", fmt.Errorf("katasandbox: dial %s: %w", hostSocket, err)
+	}
+	boundAs := conn.RemoteAddr().String()
+	_ = conn.Close()
+	return fcRootFrom(hostSocket, boundAs)
 }
 
 // Resolver maps a Pod UID to its kata sandbox's Paths.
@@ -59,6 +117,16 @@ type Resolver struct {
 	Lookup SandboxIDLookup
 	// VCRoot is the kata run directory. Empty means DefaultVCRoot.
 	VCRoot string
+	// RootOf finds Firecracker's root from its API socket. Nil means
+	// firecrackerRoot, which dials the socket. Tests replace it.
+	RootOf func(ctx context.Context, hostSocket string) (string, error)
+}
+
+func (r Resolver) rootOf(ctx context.Context, hostSocket string) (string, error) {
+	if r.RootOf != nil {
+		return r.RootOf(ctx, hostSocket)
+	}
+	return firecrackerRoot(ctx, hostSocket)
 }
 
 // Resolve returns the Paths of the kata sandbox that runs the Pod with
@@ -97,5 +165,9 @@ func (r Resolver) Resolve(ctx context.Context, podUID string) (Paths, error) {
 			podUID, id, len(matches), matches)
 	}
 	vmRoot := filepath.Dir(filepath.Dir(matches[0]))
-	return Paths{APISocket: matches[0], HybridVsock: filepath.Join(vmRoot, "kata.hvsock")}, nil
+	fcRoot, err := r.rootOf(ctx, matches[0])
+	if err != nil {
+		return Paths{}, err
+	}
+	return Paths{APISocket: matches[0], HybridVsock: filepath.Join(vmRoot, "kata.hvsock"), FCRoot: fcRoot}, nil
 }

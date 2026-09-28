@@ -40,6 +40,10 @@ type fakeFirecracker struct {
 	pauseErr  error
 	createErr error
 	loadErr   error
+	// root is the directory the fake runs "chrooted" in: it resolves
+	// the paths it is handed under root, as a jailed Firecracker does.
+	root            string
+	lastCreateState string
 }
 
 func (f *fakeFirecracker) Pause(_ context.Context) error {
@@ -61,8 +65,9 @@ func (f *fakeFirecracker) CreateSnapshot(_ context.Context, state, mem string) e
 		return f.createErr
 	}
 	// Write plausible files so Storage.Save can read them.
-	_ = os.WriteFile(state, []byte("STATE"), 0o600)
-	_ = os.WriteFile(mem, []byte("MEMORY-PAYLOAD"), 0o600)
+	f.lastCreateState = state
+	_ = os.WriteFile(filepath.Join(f.root, state), []byte("STATE"), 0o600)
+	_ = os.WriteFile(filepath.Join(f.root, mem), []byte("MEMORY-PAYLOAD"), 0o600)
 	f.createOK = true
 	return nil
 }
@@ -81,10 +86,11 @@ func (f *fakeFirecracker) LoadSnapshot(_ context.Context, state, mem string) err
 func newServer(t *testing.T, fc *fakeFirecracker, p *pool.Manager) *Server {
 	t.Helper()
 	backend := &storage.LocalDiskBackend{Root: t.TempDir()}
+	fc.root = t.TempDir()
 	return &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
-		KataSandboxes:      fakeKata{},
+		KataSandboxes:      fakeKata{root: fc.root},
 		Pool:               p,
 		TempDir:            t.TempDir(),
 	}

@@ -6,6 +6,7 @@ package grpcserver
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,6 +26,10 @@ import (
 func sessionTestServer(t *testing.T, fc *fakeFirecracker) *Server {
 	t.Helper()
 	base := t.TempDir()
+	fc.root = filepath.Join(base, "fcroot")
+	if err := os.MkdirAll(fc.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	inner := &storage.LocalDiskBackend{Root: filepath.Join(base, "portable")}
 	return &Server{
 		Storage: &storage.EncryptedBackend{
@@ -40,7 +45,7 @@ func sessionTestServer(t *testing.T, fc *fakeFirecracker) *Server {
 			}
 		},
 		FirecrackerFactory: func(string) firecracker.Client { return fc },
-		KataSandboxes:      fakeKata{},
+		KataSandboxes:      fakeKata{root: fc.root},
 		TempDir:            filepath.Join(base, "tmp"),
 	}
 }
