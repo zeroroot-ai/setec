@@ -699,6 +699,12 @@ jobs:
       - name: Mutation-test the aggregation logic
         run: bash scripts/__tests__/ci-required-gate.test.sh
 
+      # scripts/e2e-summary.sh decides whether an e2e pass is green. It runs
+      # nightly, not on a PR, so a regression in it would otherwise surface
+      # only as a green nightly that verified nothing.
+      - name: Mutation-test the e2e pass verdict
+        run: bash scripts/__tests__/e2e-summary.test.sh
+
       - name: Every gate job is covered by ci-required's needs
         run: bash scripts/check-ci-required-coverage.sh .github/workflows/go-ci.yml
 

@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
-	utilexec "k8s.io/utils/exec"
+	clientexec "k8s.io/client-go/util/exec"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -252,9 +252,15 @@ func TestExec_Success(t *testing.T) {
 // TestExec_NonZeroExitReportsCode asserts a failing command yields
 // STATUS_EXITED with the command's real code — the case that must stay
 // distinguishable from every "no code was reported" outcome.
+//
+// The stub returns the type client-go's remotecommand really returns,
+// k8s.io/client-go/util/exec.CodeExitError. This test used to return the
+// look-alike from k8s.io/utils/exec, the type the classifier matched, so it
+// passed while every real non-zero exit read as STATUS_TRANSPORT_FAILED. The
+// kind e2e run found it (setec#22).
 func TestExec_NonZeroExitReportsCode(t *testing.T) {
 	sb := runningSession(execTestNS)
-	ex := &stubExecutor{err: utilexec.CodeExitError{Err: errors.New("exit 17"), Code: 17}}
+	ex := &stubExecutor{err: clientexec.CodeExitError{Err: errors.New("command terminated with exit code 17"), Code: 17}}
 	svc := execService(t, ex, sb)
 
 	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
@@ -331,6 +337,39 @@ func TestExec_SandboxGoneMidExec(t *testing.T) {
 	}
 	if exits[0].GetExitCode() != 0 {
 		t.Errorf("exit_code = %d, want 0", exits[0].GetExitCode())
+	}
+}
+
+// TestExec_KilledSessionIsGoneNotExited covers the Kill of a session with a
+// command in flight on a real cluster. The teardown kills the command, and
+// the kubelet reports that as a wait status: exit code 137, a genuine
+// CodeExitError. The session is gone, so the verdict is SANDBOX_GONE with no
+// exit code. A plugin reading EXITED/137 would take a reaped session for a
+// build that crashed (gibson#1183). The kind e2e run found it once non-zero
+// exits were classified at all (setec#22).
+func TestExec_KilledSessionIsGoneNotExited(t *testing.T) {
+	sb := runningSession(execTestNS)
+	ex := &stubExecutor{err: clientexec.CodeExitError{Err: errors.New("command terminated with exit code 137"), Code: 137}}
+	svc := execService(t, ex, sb)
+	ex.onExec = func() {
+		_ = svc.Client.Delete(context.Background(), sb)
+	}
+
+	st := &fakeExecStream{in: []*setecv1grpc.SandboxServiceExecRequest{
+		startMsg(execTestHandle, "sleep", "300"),
+	}}
+	if err := svc.Exec(st); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	exits := st.exits()
+	if len(exits) != 1 {
+		t.Fatalf("got %d exit messages, want exactly 1", len(exits))
+	}
+	if exits[0].GetStatus() != setecv1grpc.SessionExecExit_STATUS_SANDBOX_GONE {
+		t.Fatalf("status = %v, want STATUS_SANDBOX_GONE", exits[0].GetStatus())
+	}
+	if exits[0].GetExitCode() != 0 {
+		t.Errorf("exit_code = %d, want 0 (a gone sandbox has no code)", exits[0].GetExitCode())
 	}
 }
 

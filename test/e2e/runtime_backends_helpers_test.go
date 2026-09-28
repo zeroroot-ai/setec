@@ -38,6 +38,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -153,25 +154,58 @@ func skipIfNodeLabelMissing(t *testing.T, label string) {
 	}
 }
 
-// scrapeOperatorMetrics port-forwards the operator's metrics service and
-// returns the parsed Prometheus metric families.
+// operatorLeaseName is the operator's leader-election Lease
+// (cmd/main.go LeaderElectionID).
+const operatorLeaseName = "setec.zeroroot.ai"
+
+// scrapeOperatorMetrics port-forwards to the leading operator Pod's metrics
+// port and returns the parsed Prometheus metric families.
 //
-// The metrics service is expected to be named "setec-metrics" in testNamespace,
-// listening on port 8080 (controller-runtime default).
+// Two facts decide the target (setec#22):
+//
+//   - The chart renders no metrics Service for the operator. This used to
+//     name a "setec-metrics" Service that no release has, so every scrape
+//     failed and the cold-start and fallback metric checks never ran.
+//   - The chart runs two operator replicas, and only the leader reconciles,
+//     so only the leader records sandbox metrics. A port-forward to the
+//     Deployment picks either Pod and reads an empty set half the time. The
+//     leader is the Pod the leader-election Lease names.
 func scrapeOperatorMetrics(ctx context.Context) (map[string]*dto.MetricFamily, error) {
-	return scrapeServiceMetrics(ctx, "setec-metrics", "8080", "19090")
+	pod, err := operatorLeaderPod(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return scrapeServiceMetrics(ctx, "pod/"+pod, "8080", "19090")
 }
 
-// scrapeServiceMetrics port-forwards svc/<svcName>:<svcPort> in testNamespace
-// to 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed
-// Prometheus metric families. The port-forward subprocess is killed when ctx
-// is cancelled.
-func scrapeServiceMetrics(ctx context.Context, svcName, svcPort, localPort string) (map[string]*dto.MetricFamily, error) {
+// operatorLeaderPod returns the name of the operator Pod that holds the
+// leader-election Lease, the one replica that reconciles.
+func operatorLeaderPod(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "lease", operatorLeaseName,
+		"-n", testNamespace, "-o", "jsonpath={.spec.holderIdentity}").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("read the operator leader Lease %s/%s: %v (%s)", testNamespace, operatorLeaseName, err, out)
+	}
+	// controller-runtime writes the holder as <pod name>_<uuid>.
+	holder := strings.TrimSpace(string(out))
+	pod, _, found := strings.Cut(holder, "_")
+	if !found || pod == "" {
+		return "", fmt.Errorf("operator leader Lease %s/%s has holder %q, want <pod>_<uuid>", testNamespace, operatorLeaseName, holder)
+	}
+	return pod, nil
+}
+
+// scrapeServiceMetrics port-forwards <target>:<port> in testNamespace to
+// 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed Prometheus
+// metric families. target is a kubectl resource reference such as
+// svc/<name> or deploy/<name>. The port-forward subprocess is killed when
+// ctx is cancelled.
+func scrapeServiceMetrics(ctx context.Context, target, port, localPort string) (map[string]*dto.MetricFamily, error) {
 	pf := exec.CommandContext(ctx,
 		"kubectl", "port-forward",
 		"-n", testNamespace,
-		"svc/"+svcName,
-		localPort+":"+svcPort,
+		target,
+		localPort+":"+port,
 	)
 	pf.Stderr = io.Discard
 	if err := pf.Start(); err != nil {
@@ -194,12 +228,17 @@ func scrapeServiceMetrics(ctx context.Context, svcName, svcPort, localPort strin
 		resp = r
 		return true, nil
 	}); err != nil {
-		return nil, fmt.Errorf("port-forward to svc/%s not ready within 15s: %w", svcName, err)
+		return nil, fmt.Errorf("port-forward to %s not ready within 15s: %w", target, err)
 	}
 
 	defer resp.Body.Close()
 
-	var parser expfmt.TextParser
+	// A zero-value TextParser has no name validation scheme, and
+	// prometheus/common v0.71 panics on the first metric name it checks
+	// ("Invalid name validation scheme requested: unset"). The scrape never
+	// reached this line before setec#22, because the Service it asked for
+	// did not exist.
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	families, err := parser.TextToMetricFamilies(bufio.NewReader(resp.Body))
 	if err != nil && !isMetricParseEOF(err) {
 		return nil, fmt.Errorf("parse prometheus text: %w", err)

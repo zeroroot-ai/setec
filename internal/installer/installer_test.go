@@ -60,8 +60,10 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	root := t.TempDir()
 	payload := t.TempDir()
 
-	// KVM device + module.
+	// KVM device + module, and the thin-pool's device node, which udev
+	// creates on a real node when setec-thinpool.service activates the pool.
 	mustWrite(t, filepath.Join(root, "dev/kvm"), "")
+	mustWrite(t, filepath.Join(root, "dev/mapper/setec-thinpool"), "")
 	mustMkdir(t, filepath.Join(root, "sys/module/kvm_intel"))
 
 	// Host tools the preflight looks for.
@@ -205,6 +207,157 @@ func TestConvergeFreshStockContainerdNode(t *testing.T) {
 	}
 	if n := runner.called("systemctl start setec-thinpool.service") + runner.called("systemctl restart setec-thinpool.service"); n != 1 {
 		t.Errorf("thin-pool provisioning invocations = %d, want exactly 1", n)
+	}
+}
+
+// A node whose config.toml still says `version = 2` while its containerd
+// binary is 2.x (default schema 3 or later) is the kind node image, and any
+// host that upgraded containerd and kept its config. containerd refuses to
+// start when a drop-in declares a higher schema version than the root
+// config ("drop-in config version 4 higher than root config version 2"),
+// so the drop-in must follow the root config, not the binary's default.
+// Found on the setec e2e kind cluster (setec#22): the installer took the
+// node's containerd down and it never came back.
+func TestConvergeDropinFollowsRootConfigVersion(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustWrite(t, filepath.Join(fx.root, "etc/containerd/config.toml"),
+		"# kind node config\nversion = 2\n\n[plugins.\"io.containerd.grpc.v1.cri\".containerd]\n  snapshotter = \"overlayfs\"\n")
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 4\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	dropin := readFile(t, filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml"))
+	if !strings.Contains(dropin, "\nversion = 2\n") {
+		t.Errorf("drop-in must declare the root config's version 2, got:\n%s", dropin)
+	}
+	if !strings.Contains(dropin, `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`) {
+		t.Errorf("drop-in must use the version-2 runtime table, got:\n%s", dropin)
+	}
+	if !strings.Contains(dropin, "[plugins.\"io.containerd.grpc.v1.cri\".containerd]\n  discard_unpacked_layers = false") {
+		t.Errorf("drop-in must keep unpacked layers in the version-2 table, got:\n%s", dropin)
+	}
+}
+
+// With no config.toml at all, the installer creates one, and the binary's
+// default schema is the right version for both files.
+func TestConvergeNoRootConfigUsesBinaryDefaultVersion(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 3\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	dropin := readFile(t, filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml"))
+	if !strings.Contains(dropin, "\nversion = 3\n") ||
+		!strings.Contains(dropin, `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`) {
+		t.Errorf("drop-in must use version 3 and its runtime table, got:\n%s", dropin)
+	}
+	if !strings.Contains(dropin, "[plugins.\"io.containerd.cri.v1.images\"]\n  discard_unpacked_layers = false") {
+		t.Errorf("drop-in must keep unpacked layers in the version-3 images table, got:\n%s", dropin)
+	}
+	mainCfg := readFile(t, filepath.Join(fx.root, "etc/containerd/config.toml"))
+	if !strings.Contains(mainCfg, "version = 3") {
+		t.Errorf("created config.toml must declare version 3, got:\n%s", mainCfg)
+	}
+}
+
+// The kind node image ships a containerd built without the devmapper
+// snapshotter. The installer used to report converged on it, and every
+// kata-fc Pod then failed to unpack its image (setec#22). With ctr on the
+// host the installer now asks containerd, and a missing plugin fails the
+// convergence.
+func TestConvergeFailsWhenContainerdLacksDevmapper(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "TYPE                            ID          PLATFORMS      STATUS\n" +
+		"io.containerd.snapshotter.v1    native      linux/amd64    ok\n" +
+		"io.containerd.snapshotter.v1    overlayfs   linux/amd64    ok\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err == nil {
+		t.Fatalf("Converge succeeded with outcome %s on a containerd without devmapper; want an error", res.Outcome)
+	}
+	if !strings.Contains(err.Error(), "no devmapper snapshotter plugin") {
+		t.Errorf("error does not name the missing plugin: %v", err)
+	}
+}
+
+func TestConvergeFailsWhenDevmapperDidNotLoad(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "io.containerd.snapshotter.v1    devmapper   linux/amd64    error\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	if _, err := inst.Converge(context.Background()); err == nil || !strings.Contains(err.Error(), `plugin status "error"`) {
+		t.Fatalf("Converge error = %v, want the devmapper plugin status named", err)
+	}
+}
+
+func TestConvergeConfirmsDevmapperLoaded(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	mustExecutable(t, filepath.Join(fx.root, "usr/bin/ctr"))
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	runner.respond["ctr plugins ls"] = fakeResponse{out: "io.containerd.snapshotter.v1    devmapper   linux/amd64    ok\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	res, err := inst.Converge(context.Background())
+	if err != nil || res.Outcome != OutcomeConverged {
+		t.Fatalf("Converge = %s, %v; want converged", res.Outcome, err)
+	}
+	if runner.called("ctr plugins ls") == 0 {
+		t.Error("the installer never asked containerd for its plugins")
+	}
+}
+
+// A node without udev (a kind node) activates the pool but gets no
+// /dev/mapper node, and containerd opens that path. Registering devmapper
+// there stops containerd for every Pod on the node (setec#22).
+func TestConvergeCreatesMissingPoolNode(t *testing.T) {
+	fx := newHostFixture(t, flavorContainerd)
+	node := filepath.Join(fx.root, "dev/mapper/setec-thinpool")
+	if err := os.Remove(node); err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeRunner(t)
+	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
+	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "active\n"}
+	inst := newTestInstaller(t, fx, runner)
+
+	// mknodes does not produce the node: the installer must stop before it
+	// touches containerd.
+	if _, err := inst.Converge(context.Background()); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("Converge error = %v, want the missing device node named", err)
+	}
+	if runner.called("dmsetup mknodes setec-thinpool") != 1 {
+		t.Error("the installer did not try dmsetup mknodes")
+	}
+	if n := runner.called("systemctl restart containerd.service"); n != 0 {
+		t.Errorf("containerd restarted %d time(s) with no pool device node; want 0", n)
+	}
+	if _, err := os.Stat(filepath.Join(fx.root, "etc/containerd/config.d/99-setec-kata-fc.toml")); err == nil {
+		t.Error("the devmapper drop-in was written with no pool device node")
+	}
+
+	// mknodes produces the node: convergence goes on.
+	mustWrite(t, node, "")
+	if res, err := inst.Converge(context.Background()); err != nil || res.Outcome != OutcomeConverged {
+		t.Fatalf("Converge after the node appeared = %s, %v; want converged", res.Outcome, err)
 	}
 }
 

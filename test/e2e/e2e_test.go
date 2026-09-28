@@ -413,21 +413,22 @@ func TestSandbox_OperatorRestartMidRun(t *testing.T) {
 		setecv1alpha1.SandboxPhaseFailed,
 	)
 
-	// Snapshot the current operator pod name so we can watch for a
-	// different one to appear.
-	origPod, err := currentOperatorPodName()
+	// Delete the operator Pod that reconciles: the leader. The chart runs
+	// two replicas, so "the operator Pod" is whichever one holds the
+	// leader-election Lease, and deleting the standby would prove nothing.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	origPod, err := operatorLeaderPod(ctx)
+	cancel()
 	if err != nil {
-		t.Fatalf("find operator pod: %v", err)
+		t.Fatalf("find the operator leader: %v", err)
 	}
-
-	// Delete the operator Pod. The Deployment controller will spin up a
-	// replacement within seconds.
 	if err := k8sClient.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: origPod}}); err != nil {
 		t.Fatalf("delete operator pod: %v", err)
 	}
 
-	// Wait for a new operator Pod to be Ready.
-	if err := waitForOperatorReady(origPod, defaultWait); err != nil {
+	// Wait for another Pod to take the Lease: the standby, or the
+	// Deployment's replacement.
+	if err := waitForNewOperatorLeader(origPod, defaultWait); err != nil {
 		t.Fatalf("operator did not recover: %v", err)
 	}
 
@@ -454,51 +455,36 @@ func operatorLabels() client.MatchingLabels {
 	}
 }
 
-// currentOperatorPodName returns the name of the Ready operator Pod in the
-// test namespace. It fails if there is not exactly one such Pod.
-func currentOperatorPodName() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var pods corev1.PodList
-	if err := k8sClient.List(ctx, &pods, client.InNamespace(testNamespace), operatorLabels()); err != nil {
-		return "", err
-	}
-	var names []string
-	for _, p := range pods.Items {
-		if p.DeletionTimestamp != nil {
-			continue
-		}
-		names = append(names, p.Name)
-	}
-	if len(names) != 1 {
-		return "", fmt.Errorf("expected 1 operator pod, got %d (%v)", len(names), names)
-	}
-	return names[0], nil
-}
-
-// waitForOperatorReady blocks until an operator Pod whose name differs from
-// `prev` is Ready, or until `timeout` elapses.
-func waitForOperatorReady(prev string, timeout time.Duration) error {
+// waitForNewOperatorLeader blocks until an operator Pod other than prev
+// holds the leader-election Lease and is Ready, or until timeout elapses.
+func waitForNewOperatorLeader(prev string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	last := "no leader read yet"
 	for time.Now().Before(deadline) {
-		var pods corev1.PodList
-		if err := k8sClient.List(context.Background(), &pods, client.InNamespace(testNamespace), operatorLabels()); err != nil {
-			return err
-		}
-		for _, p := range pods.Items {
-			if p.Name == prev || p.DeletionTimestamp != nil {
-				continue
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		leader, err := operatorLeaderPod(ctx)
+		cancel()
+		switch {
+		case err != nil:
+			last = err.Error()
+		case leader == prev:
+			last = "the deleted Pod " + prev + " still holds the Lease"
+		default:
+			var pod corev1.Pod
+			if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: leader}, &pod); err != nil {
+				last = fmt.Sprintf("get leader Pod %s: %v", leader, err)
+				break
 			}
-			for _, c := range p.Status.Conditions {
+			for _, c := range pod.Status.Conditions {
 				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
 					return nil
 				}
 			}
+			last = "leader Pod " + leader + " is not Ready"
 		}
 		time.Sleep(defaultPoll)
 	}
-	return fmt.Errorf("no Ready operator pod appeared within %s", timeout)
+	return fmt.Errorf("no new operator leader within %s: %s", timeout, last)
 }
 
 // -- Scenario 5 (runs last; mutates cluster RuntimeClass) --------------------

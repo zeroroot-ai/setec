@@ -212,26 +212,38 @@ func k3sTemplateCandidates() []string {
 }
 
 // detectConfigVersion determines the containerd config schema version
-// (2 for containerd 1.x, 3 for containerd 2.x). It prefers asking the
-// host's containerd binary for its default config; when that fails (no
-// `containerd` on PATH — k3s embeds it) it falls back to the version
-// line of the rendered config, then to 2.
+// the installer writes (2 for the containerd 1.x schema, 3 and later for
+// containerd 2.x).
+//
+// The version line of the node's own config wins. containerd refuses to
+// start when a drop-in declares a higher version than the root config
+// ("drop-in config version 4 higher than root config version 2"), and a
+// containerd 2.x binary still runs a version-2 root config by migrating it.
+// So on a node that upgraded containerd and kept its config (the kind node
+// image is one), the binary's default schema is the wrong answer: the
+// installer took that node's containerd down for good (setec#22).
+//
+// Only when the config has no version line, or does not exist (the
+// installer then creates it), does the host's containerd binary decide,
+// through its default config. k3s embeds containerd and has no binary on
+// PATH, so its flavor reads the rendered config alone. The last fallback
+// is 2.
 var versionLineRe = regexp.MustCompile(`(?m)^\s*version\s*=\s*(\d+)`)
 
 func (in *Installer) detectConfigVersion(ctx context.Context, flavor runtimeFlavor) int {
+	if content, err := os.ReadFile(in.hostPath(flavor.configPath)); err == nil {
+		if m := versionLineRe.FindSubmatch(content); m != nil {
+			if v, err := strconv.Atoi(string(m[1])); err == nil {
+				return v
+			}
+		}
+	}
 	if flavor.name == "containerd" {
 		if out, err := in.cfg.Runner.Run(ctx, "containerd", "config", "default"); err == nil {
 			if m := versionLineRe.FindSubmatch(out); m != nil {
 				if v, err := strconv.Atoi(string(m[1])); err == nil {
 					return v
 				}
-			}
-		}
-	}
-	if content, err := os.ReadFile(in.hostPath(flavor.configPath)); err == nil {
-		if m := versionLineRe.FindSubmatch(content); m != nil {
-			if v, err := strconv.Atoi(string(m[1])); err == nil {
-				return v
 			}
 		}
 	}
@@ -245,6 +257,36 @@ func runtimeTableName(version int) string {
 		return `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`
 	}
 	return `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata-fc`
+}
+
+// keepUnpackedLayersTOML turns discard_unpacked_layers off. The kata-fc
+// handler unpacks into the devmapper snapshotter, every other handler into
+// the node's default one, and an image already unpacked for one of them has
+// to be unpacked again for the other. With discard_unpacked_layers = true
+// (the kind node image sets it) the second unpack finds no layer to read and
+// fails with "failed to get reader from content store ... not found"
+// (setec#22).
+//
+// Stock containerd only. The drop-in is a file of its own, and containerd
+// merges it over the root config. k3s renders one config from a template
+// whose base already declares the images table, and a second declaration of
+// a table in one TOML file does not parse.
+func keepUnpackedLayersTOML(version int) string {
+	return fmt.Sprintf(`
+# Keep compressed layers after unpacking, so an image unpacked for one
+# snapshotter can be unpacked again for the other.
+[%s]
+  discard_unpacked_layers = false
+`, imagesTableName(version))
+}
+
+// imagesTableName returns the CRI table that holds discard_unpacked_layers
+// for the config schema version.
+func imagesTableName(version int) string {
+	if version >= 3 {
+		return `plugins."io.containerd.cri.v1.images"`
+	}
+	return `plugins."io.containerd.grpc.v1.cri".containerd`
 }
 
 // registrationTOML renders what this installer registers with containerd
@@ -306,7 +348,8 @@ func (in *Installer) ensureContainerdConfig(ctx context.Context, flavor runtimeF
 func (in *Installer) ensureStockDropin(version int, mode convergeMode) (bool, error) {
 	changed := false
 
-	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s", version, in.registrationTOML(version, mode))
+	dropin := fmt.Sprintf("# Managed by the setec installer DaemonSet (zeroroot-ai/setec) — DO NOT EDIT.\nversion = %d\n\n%s%s",
+		version, in.registrationTOML(version, mode), keepUnpackedLayersTOML(version))
 	c, err := writeFileIfChanged(in.hostPath(stockDropinPath), []byte(dropin), 0o644)
 	if err != nil {
 		return changed, err
@@ -513,6 +556,9 @@ func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor, mode conv
 	if _, err := in.cfg.Runner.Run(ctx, "dmsetup", "info", in.cfg.PoolName); err != nil {
 		return fmt.Errorf("thin-pool %s not active: %w", in.cfg.PoolName, err)
 	}
+	if err := in.verifyDevmapperPlugin(ctx, flavor); err != nil {
+		return err
+	}
 	if mode == modeDevmapper {
 		// The shim belongs to the handler's owner.
 		return nil
@@ -536,4 +582,69 @@ func (in *Installer) verify(ctx context.Context, flavor runtimeFlavor, mode conv
 		return fmt.Errorf("kata-fc shim target missing at %s: %w", kataShimBin, err)
 	}
 	return nil
+}
+
+// devmapperPluginType and devmapperPluginID name the containerd snapshotter
+// the kata-fc handler asks for, as `ctr plugins ls` prints them.
+const (
+	devmapperPluginType = "io.containerd.snapshotter.v1"
+	devmapperPluginID   = "devmapper"
+)
+
+// verifyDevmapperPlugin asks the running containerd whether it loaded the
+// devmapper snapshotter. A pool and a drop-in on disk prove nothing when the
+// binary was built without the plugin: the kind node image ships such a
+// build, so the installer reported "converged" while every kata-fc Pod died
+// with "inspection service could not find snapshotter devmapper plugin"
+// (setec#22). A plugin that is present but failed to initialise is the same
+// failure, one step later.
+//
+// When the host has no ctr to ask (k3s without its multicall binary, a
+// minimal image), the check is skipped out loud rather than guessed.
+func (in *Installer) verifyDevmapperPlugin(ctx context.Context, flavor runtimeFlavor) error {
+	var name string
+	var args []string
+	switch {
+	case flavor.name == flavorK3s && hostHas(in.cfg.HostRoot, "k3s"):
+		name, args = "k3s", []string{"ctr", "plugins", "ls"}
+	case hostHas(in.cfg.HostRoot, "ctr"):
+		name, args = "ctr", []string{"plugins", "ls"}
+	default:
+		in.log("no ctr on the host, so the installer cannot confirm that %s loaded the devmapper snapshotter", flavor.name)
+		return nil
+	}
+	out, err := in.cfg.Runner.Run(ctx, name, args...)
+	if err != nil {
+		return fmt.Errorf("listing %s plugins to confirm the devmapper snapshotter: %w", flavor.name, err)
+	}
+	status, found := devmapperPluginStatus(out)
+	if !found {
+		return fmt.Errorf(
+			"%s on this node has no devmapper snapshotter plugin: the binary was built without it "+
+				"(the kind node image is one), so no kata-fc Pod can unpack its image here. "+
+				"Install a containerd build that includes devmapper", flavor.name)
+	}
+	if status != "ok" {
+		return fmt.Errorf("%s did not load the devmapper snapshotter (plugin status %q), inspect `journalctl -u %s` on the node",
+			flavor.name, status, flavor.unit)
+	}
+	return nil
+}
+
+// devmapperPluginStatus finds the devmapper snapshotter row in `ctr plugins
+// ls` output (TYPE ID PLATFORMS STATUS) and returns its status.
+func devmapperPluginStatus(out []byte) (string, bool) {
+	for line := range strings.SplitSeq(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 3 && f[0] == devmapperPluginType && f[1] == devmapperPluginID {
+			return f[len(f)-1], true
+		}
+	}
+	return "", false
+}
+
+// hostHas reports whether name resolves on the host's PATH.
+func hostHas(root, name string) bool {
+	_, err := lookPathIn(root, name)
+	return err == nil
 }

@@ -21,7 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
-	utilexec "k8s.io/utils/exec"
+	clientexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -219,8 +219,28 @@ func (s *Service) classifyExecOutcome(
 	}
 
 	// A reported wait status is the only source of an exit code.
-	var coded utilexec.CodeExitError
+	//
+	// The type is client-go's own, k8s.io/client-go/util/exec, which is
+	// what remotecommand returns for a non-zero exit. k8s.io/utils/exec
+	// has a look-alike CodeExitError that errors.As does not match: with
+	// that one here, every failing command read as a broken channel
+	// (setec#22).
+	//
+	// A reported status still loses to a session that is gone. Tearing a
+	// session down kills its commands, and the kubelet reports that as a
+	// wait status too (137 for SIGKILL). That code describes the teardown,
+	// not the command, so the teardown is the verdict. The Sandbox read
+	// happens only on a non-zero exit, never on the success path above.
+	var coded clientexec.CodeExitError
 	if errors.As(execErr, &coded) {
+		if gone, why := s.sessionGone(ctx, ns, name); gone {
+			return &setecv1grpc.SessionExecExit{
+				Status: setecv1grpc.SessionExecExit_STATUS_SANDBOX_GONE,
+				Message: fmt.Sprintf(
+					"the session's microVM stopped existing while the command was running (%s); "+
+						"the exit status it reported (%d) came from the teardown: %v", why, coded.ExitStatus(), execErr),
+			}
+		}
 		return &setecv1grpc.SessionExecExit{
 			Status:   setecv1grpc.SessionExecExit_STATUS_EXITED,
 			ExitCode: int32(coded.ExitStatus()), //nolint:gosec // a wait status is always in int32 range

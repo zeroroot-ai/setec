@@ -1517,6 +1517,24 @@ func (r *SandboxReconciler) applyNetworkPolicy(ctx context.Context, sb *setecv1a
 	return ctrl.Result{}, nil
 }
 
+// podRunningSince returns the earliest running start among the Pod's
+// containers: the moment the Pod first ran a process.
+func podRunningSince(pod *corev1.Pod) (time.Time, bool) {
+	if pod == nil {
+		return time.Time{}, false
+	}
+	var earliest time.Time
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() {
+			continue
+		}
+		if t := cs.State.Running.StartedAt.Time; earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	return earliest, !earliest.IsZero()
+}
+
 // recordTransition emits metrics for Sandbox phase transitions observed
 // this reconcile. Safe to call with a nil MetricsCollector (no-op).
 func (r *SandboxReconciler) recordTransition(
@@ -1548,15 +1566,23 @@ func (r *SandboxReconciler) recordTransition(
 	if prev != curr.Phase {
 		r.MetricsCollector.RecordPhaseTransition(tenantID, className, curr.Phase)
 
-		// Cold-start: Pending → Running uses Pod's Running timestamp
-		// minus Sandbox creation time. Emits with both new runtime label
-		// and legacy vmm label during the dual-write transition period.
+		// Cold-start: Sandbox creation to the moment the Pod runs. Emits
+		// with both new runtime label and legacy vmm label during the
+		// dual-write transition period.
+		//
+		// The Running moment is the workload container's running start.
+		// status.startedAt is pod.Status.StartTime, when the kubelet
+		// accepted the Pod: before the image pull and the VM boot, and in
+		// the same second as the Sandbox's creation on any quick cluster.
+		// Timestamps are second-precision, so that difference was 0, and a
+		// 0 was dropped, so the histogram stayed empty (setec#22). A start
+		// within the creation second is a real sample and is kept.
 		if curr.Phase == setecv1alpha1.SandboxPhaseRunning && !sb.CreationTimestamp.IsZero() {
-			startTime := pod.CreationTimestamp.Time
-			if curr.StartedAt != nil {
-				startTime = curr.StartedAt.Time
+			startTime := time.Now()
+			if t, ok := podRunningSince(pod); ok {
+				startTime = t
 			}
-			if d := startTime.Sub(sb.CreationTimestamp.Time); d > 0 {
+			if d := startTime.Sub(sb.CreationTimestamp.Time); d >= 0 {
 				r.MetricsCollector.ObserveColdStart(runtimeLabel, vmm, className, d)
 			}
 		}

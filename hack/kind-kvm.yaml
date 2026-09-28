@@ -1,0 +1,42 @@
+# kind topology for the Go e2e suites (.github/workflows/e2e.yml, job `suites`).
+#
+# The job runs on a GitHub-hosted ubuntu-latest runner, which exposes
+# /dev/kvm (nested virtualization).
+#
+# Two nodes, for the reason hack/kind-chain6.yaml gives: a Sandbox requests a
+# whole CPU, and the control-plane node has little CPU left. The worker is
+# the only node that hosts microVMs. It carries the e2e-role label, and the
+# suite pins the installer DaemonSet to that label. So the installer never
+# restarts containerd under the API server on the control-plane node, and
+# only the worker ever reads as kata-fc capable.
+#
+# The worker mounts the runner's /dev. A kind node's own /dev is a tmpfs that
+# docker fills once, at container start, and nothing adds to it later. But
+# kata-fc needs device nodes that appear at run time: containerd's devmapper
+# snapshotter activates a thin device per container rootfs, and the kata
+# shim resolves it as /dev/dm-<n> before it hands the block device to
+# Firecracker. Without the mount every kata-fc Pod failed with "Could not
+# resolve symlink for source /dev/dm-1". The runner's /dev is a devtmpfs,
+# where the kernel creates /dev/dm-<n> and /dev/loop<n> itself. It also
+# carries /dev/kvm with the mode the workflow sets.
+#
+# Calico replaces kindnet. The egress scenarios assert that a Sandbox
+# cannot reach what its NetworkPolicy denies, so the CNI has to enforce
+# policy the way the production CNIs do (Calico, Cilium, VPC CNI with the
+# policy agent). With kindnet, a kata-fc Sandbox under mode=none still
+# reached 1.1.1.1:443 and a plain class still reached Service ClusterIPs
+# (setec#22). The workflow installs Calico from a pinned manifest. Its
+# default IP pool is 192.168.0.0/16, so the pod subnet matches it.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      setec.zeroroot.ai/e2e-role: sandbox-host
+    extraMounts:
+      - hostPath: /dev
+        containerPath: /dev

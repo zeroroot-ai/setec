@@ -28,9 +28,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/zeroroot-ai/setec/internal/runtimeagent"
 )
 
 // kataFCNodeLabel is the capability label the runtime-agent DaemonSet applies
@@ -102,20 +105,37 @@ func requireLocalKVM(t *testing.T) {
 // requireKataFCCapableNode fails when no node in the target cluster advertises
 // the kata-fc capability label, which is what the runtime-agent sets once the
 // node's kata-fc stack probes healthy.
+// kataFCLabelWait bounds how long the guard waits for the runtime-agent to
+// label a node. The label is written by an asynchronous probe loop, so an
+// instant check races it: on a fresh node the agent's first probe can land
+// before the installer has registered kata-fc (observed on the kind e2e run
+// for setec#22), and the next probe is one probe interval later. The suites
+// job installs with a 30s interval. The wait covers a few probes, and a node
+// that never becomes capable still fails the guard.
+const kataFCLabelWait = 3 * time.Minute
+
 func requireKataFCCapableNode(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 
-	var nodes corev1.NodeList
-	if err := k8sClient.List(ctx, &nodes, client.MatchingLabels{kataFCNodeLabel: "true"}); err != nil {
-		t.Fatalf("list nodes labelled %s=true: %v", kataFCNodeLabel, err)
-	}
-	if len(nodes.Items) > 0 {
-		return
+	deadline := time.Now().Add(kataFCLabelWait)
+	for {
+		var nodes corev1.NodeList
+		if err := k8sClient.List(ctx, &nodes, client.MatchingLabels{kataFCNodeLabel: "true"}); err != nil {
+			t.Fatalf("list nodes labelled %s=true: %v", kataFCNodeLabel, err)
+		}
+		if len(nodes.Items) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Second)
 	}
 
 	// Nothing is capable. Report what the cluster actually looks like, because
-	// the usual causes are distinguishable and lead to different places.
+	// the usual causes are distinguishable and lead to different places. The
+	// runtime-agent's probe annotation carries the reason for each backend.
 	var all corev1.NodeList
 	if err := k8sClient.List(ctx, &all); err != nil {
 		t.Fatalf("no node carries %s=true, and listing all nodes failed: %v", kataFCNodeLabel, err)
@@ -132,12 +152,16 @@ func requireKataFCCapableNode(t *testing.T) {
 			runtimeLabels = []string{"<no setec runtime labels>"}
 		}
 		detail.WriteString(fmt.Sprintf("\n  %s: %s", n.Name, strings.Join(runtimeLabels, " ")))
+		if probe, ok := n.Annotations[runtimeagent.ResultAnnotation]; ok {
+			detail.WriteString(fmt.Sprintf("\n    %s: %s", runtimeagent.ResultAnnotation, probe))
+		}
 	}
 
-	t.Fatalf("FATAL: no node carries %s=true, so no Firecracker microVM can boot and "+
+	t.Fatalf("FATAL: no node carries %s=true after %s, so no Firecracker microVM can boot and "+
 		"Phase 3 would silently skip into a green run. Do NOT bypass this check.\n"+
 		"Nodes seen (%d):%s\n"+
-		"Likely causes: the metal NodePool is scaled to zero and nothing has provisioned it; "+
-		"kata-deploy has not run on the node; or the runtime-agent probe has not labelled it yet.",
-		kataFCNodeLabel, len(all.Items), detail.String())
+		"Likely causes: no KVM node is in the cluster, the installer (or kata-deploy) has not "+
+		"registered kata-fc with containerd on it, or the runtime-agent probe cannot read that "+
+		"registration (see the probe annotation above).",
+		kataFCNodeLabel, kataFCLabelWait, len(all.Items), detail.String())
 }
