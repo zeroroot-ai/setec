@@ -75,11 +75,32 @@ design needs `CAP_SYS_ADMIN` for the `mount(2)` call and `CAP_DAC_OVERRIDE` to
 open the raw block device — a static local PersistentVolume (the kind e2e
 cluster's stand-in for a CSI driver) does not chgrp the device node to the
 Pod's fsGroup the way a Block-capable CSI driver does, so the workload's own
-unprivileged GID cannot open it without this — both added to the same
-capability set that already carries NET_RAW/NET_ADMIN, and neither reaches
-the Sandbox's own command: an exec'd binary with no file capabilities of its
-own gets an empty effective/permitted set regardless of what the exec'ing
-process held, because nothing here populates the ambient capability set.
+unprivileged GID cannot open it without this.
+
+Getting either capability to actually reach the process took one more round
+of empirical correction: `securityContext.capabilities.add` alone is not
+enough on kata-fc. A real run showed Kata's guest-side agent sets `CapBnd`
+correctly from it but leaves `CapPrm`/`CapEff`/`CapAmb` empty for a non-root
+container (read from `/proc/self/status` inside the failing Pod), so the
+Kubernetes-level grant never reaches the running process. The two
+capabilities are instead backed by a file capability
+(`cap_sys_admin,cap_dac_override+ep`) baked into the `setec-keepalive` binary
+itself at build time (`Dockerfile`, `CMD=setec-keepalive`): the kernel grants
+`CapEff`/`CapPrm` from a file's `security.capability` extended attribute at
+`execve()` unconditionally, independent of whatever the container runtime's
+own non-root process setup does. That in turn requires
+`allowPrivilegeEscalation: true` on the container — the kernel ignores file
+capabilities under `no_new_privs`, the same rule that blocks a setuid-root
+binary — which is itself an individual, scoped grant ADR-0052 already treats
+as costing nothing extra on kata-fc, not the `privileged: true` the admission
+guard refuses.
+
+None of this reaches the Sandbox's own command: an exec'd binary with no file
+capabilities of its own — true of an ordinary user command — gets an empty
+effective/permitted set regardless of what the exec'ing process held or
+which file executed it, because nothing here populates the ambient
+capability set and the Sandbox's own binary carries no
+`security.capability` xattr.
 
 gVisor and runc keep the original filesystem-mode PVC unchanged: neither has
 kata-fc's virtio-fs gap, and this addendum introduces no new code path for

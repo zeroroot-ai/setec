@@ -169,6 +169,16 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 		}
 	}
 
+	// AllowPrivilegeEscalation must be true: the kernel ignores file
+	// capabilities on the setec-keepalive binary (Dockerfile,
+	// CMD=setec-keepalive) under no_new_privs, and Kata's guest-side
+	// agent does not otherwise carry securityContext.capabilities.add
+	// into a non-root container's effective/permitted set — a real run
+	// against kata-fc confirmed this via /proc/self/status.
+	if c.SecurityContext.AllowPrivilegeEscalation == nil || !*c.SecurityContext.AllowPrivilegeEscalation {
+		t.Errorf("workload container allowPrivilegeEscalation = %v, want true", c.SecurityContext.AllowPrivilegeEscalation)
+	}
+
 	// The keepalive-install init container must exist (it carries the
 	// binary the workload command above resolves to), and must not be
 	// privileged either.
@@ -265,6 +275,9 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 		if cap == "SYS_ADMIN" || cap == "DAC_OVERRIDE" {
 			t.Errorf("gvisor workload container carries %s; only kata-fc needs it", cap)
 		}
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+		t.Errorf("gvisor workload container allowPrivilegeEscalation = %v, want false", c.SecurityContext.AllowPrivilegeEscalation)
 	}
 
 	for _, v := range pod.Spec.Volumes {

@@ -350,33 +350,38 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 	}
 	if usesBlockWorkspace {
 		// mount(2) needs CAP_SYS_ADMIN, and opening the raw block device
-		// needs CAP_DAC_OVERRIDE: the workload runs as the unprivileged
-		// sandbox UID/GID (podspec keeps every Sandbox non-root), and a
-		// freshly attached Block-mode device node is not guaranteed to
-		// be group-writable by that GID on every volume plugin (a real
-		// run against a kind e2e cluster's static local PVs hit "open
-		// /dev/setec-workspace: permission denied" without it; the
-		// device's ownership there never reflects the pod's fsGroup the
-		// way a CSI driver's would). These are the two extra
-		// capabilities a kata-fc session workload carries beyond every
-		// other Sandbox (NET_RAW/NET_ADMIN, above): added, never full
-		// `privileged`, because the operator's own admission policy
-		// (charts/setec/templates/sandbox-namespace-host-guard.yaml,
-		// setec#159) refuses any privileged container in a Sandbox
-		// namespace outright — a stricter, non-negotiable line than
-		// ADR-0052's "the microVM is the boundary" reasoning, which
-		// covers individual capabilities, not full node access.
+		// needs CAP_DAC_OVERRIDE (the workload runs as the unprivileged
+		// sandbox UID/GID, and a freshly attached Block-mode device node
+		// is not guaranteed to be group-writable by that GID on every
+		// volume plugin). securityContext.capabilities.add alone does
+		// not reach the process on kata-fc, though: a real run showed
+		// Kata's guest-side agent sets CapBnd correctly from it but
+		// leaves CapPrm/CapEff/CapAmb empty for a non-root container
+		// (/proc/self/status), so the two capabilities below are backed
+		// by a file capability on the setec-keepalive binary itself
+		// (Dockerfile, CMD=setec-keepalive) — the kernel grants
+		// CapEff/CapPrm from a file's `security.capability` xattr at
+		// execve() unconditionally, independent of whatever the
+		// container runtime's own non-root process setup does. That
+		// requires AllowPrivilegeEscalation: true below: the kernel
+		// ignores file capabilities under no_new_privs, by design, the
+		// same rule that blocks a setuid-root binary. Neither
+		// mechanism ever reaches full `privileged`, which the
+		// operator's own admission policy (charts/setec/templates/
+		// sandbox-namespace-host-guard.yaml, setec#159) refuses
+		// outright in a Sandbox namespace — a stricter, non-negotiable
+		// line than ADR-0052's "the microVM is the boundary" reasoning,
+		// which covers individual capabilities and privilege
+		// escalation, not full node access.
 		//
-		// Neither capability reaches the Sandbox's own command: the
-		// keepalive wrapper (cmd/setec-keepalive) formats and mounts the
-		// workspace, then execs the Sandbox's command via syscall.Exec.
-		// Per the Linux capability model, an exec'd binary with no file
-		// capabilities of its own starts with an empty effective/
-		// permitted set regardless of what the exec'ing process held,
-		// unless the process populated its ambient set — which nothing
-		// here does. So these capabilities are held only for the
-		// format+mount step, never by the workload the Sandbox actually
-		// runs.
+		// None of this reaches the Sandbox's own command: the keepalive
+		// wrapper (cmd/setec-keepalive) formats and mounts the
+		// workspace, then execs the Sandbox's command via
+		// syscall.Exec — a plain binary with no file capabilities of
+		// its own, which gets an empty effective/permitted set
+		// regardless of what the exec'ing process held or which file
+		// executed it.
+		container.SecurityContext.AllowPrivilegeEscalation = new(true)
 		container.SecurityContext.Capabilities.Add =
 			append(container.SecurityContext.Capabilities.Add, "SYS_ADMIN", "DAC_OVERRIDE")
 	}
