@@ -517,11 +517,21 @@ jobs:
         # reuse instead of a fresh unpack to race on.
         run: |
           set -euo pipefail
-          kubectl run setec-keepalive-warmup \
-            --image="${KEEPALIVE_IMAGE}" \
-            --restart=Never \
-            --overrides='{"spec":{"runtimeClassName":"kata-fc","nodeSelector":{"setec.zeroroot.ai/e2e-role":"sandbox-host"}}}' \
-            -- --install /tmp
+          printf '%s\n' \
+            "apiVersion: v1" \
+            "kind: Pod" \
+            "metadata:" \
+            "  name: setec-keepalive-warmup" \
+            "spec:" \
+            "  runtimeClassName: kata-fc" \
+            "  restartPolicy: Never" \
+            "  nodeSelector:" \
+            "    setec.zeroroot.ai/e2e-role: sandbox-host" \
+            "  containers:" \
+            "    - name: warmup" \
+            "      image: ${KEEPALIVE_IMAGE}" \
+            "      args: [\"--install\", \"/tmp\"]" \
+            | kubectl apply -f -
           kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/setec-keepalive-warmup --timeout=180s
           kubectl logs pod/setec-keepalive-warmup || true
           kubectl delete pod/setec-keepalive-warmup --ignore-not-found
