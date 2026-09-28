@@ -136,12 +136,24 @@ jobs:
       # setec-keepalive, not the chart's own released default — the
       # "session scenarios" step below overrides sessionKeepalive.image
       # to point at it.
+      # provenance: false — buildx's default provenance attestation adds a
+      # second manifest (not a real filesystem layer) to the pushed image
+      # index. containerd's devmapper snapshotter is the one snapshotter
+      # this image now runs under (setec#91, every kata-fc session), and
+      # unpacking hit "failed to get reader from content store: content
+      # digest ... not found" on its very first pull, alone, with no
+      # other pod racing it — the shape of resolving the wrong manifest
+      # entry, not a full thin-pool or a concurrency race. Every other
+      # image this workflow builds runs under the node's default
+      # snapshotter, which tolerates the extra manifest, so this is the
+      # one build that needs the plain image index.
       - name: Build + push setec-keepalive (CMD=setec-keepalive)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           build-args: CMD=setec-keepalive
           push: true
+          provenance: false
           tags: ${{ steps.tags.outputs.keepalive_image_repo }}:${{ steps.tags.outputs.sha_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
