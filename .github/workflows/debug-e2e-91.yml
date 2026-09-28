@@ -389,24 +389,33 @@ jobs:
           docker cp "${dir}/bin/." "${KVM_NODE}:/usr/local/bin/"
           docker exec "${KVM_NODE}" /usr/local/bin/runsc --version
           # discard_unpacked_layers = false here, before this node ever pulls
-          # any image, not only in the installer'"'"'s own drop-in it writes
-          # later (setec#91): setec'"'"'s own images (manager, runtime-agent,
+          # any image, not only in the installer's own drop-in it writes
+          # later (setec#91): setec's own images (manager, runtime-agent,
           # node-agent) share layers with setec-keepalive (same distroless
-          # base, ADR-0003-adjacent), and the guard'"'"'s own Helm install
-          # pulls the first of them concurrently with the installer
-          # converging. Left at the kind image'"'"'s default (true) for even
-          # that first pull, containerd discards the shared layer content
-          # right after unpacking it into the default snapshotter, and no
-          # later config change un-discards it: every subsequent devmapper
-          # unpack of the same shared layer (any kata-fc session on this
-          # backend, including the first, since setec-keepalive is the
-          # workspace-format binary now) fails with "failed to get reader
-          # from content store ... not found" for the rest of the job. Set
-          # here, before that first pull happens, not after.
-          docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
-
+          # base), and the guard's own Helm install pulls the first of them
+          # concurrently with the installer converging. Left at the kind
+          # image's default (true) for even that first pull, containerd
+          # discards the shared layer content right after unpacking it into
+          # the default snapshotter, and no later config change un-discards
+          # it: every subsequent devmapper unpack of the same shared layer
+          # (any kata-fc session on this backend, since setec-keepalive is
+          # the workspace-format binary now) fails with "failed to get
+          # reader from content store ... not found" for the rest of the
+          # job. Set here, before that first pull happens, not after — as
+          # its own config.d drop-in (the kind image's stock config.toml
+          # already declares [plugins."...".containerd], so appending a
+          # second copy of that same table header is invalid TOML; the
+          # installer's own ensureImportsLine treats an existing glob entry
+          # as a no-op, so this and the installer's later identical drop-in
+          # never conflict).
+          docker exec "${KVM_NODE}" sh -c 'set -e
+            mkdir -p /etc/containerd/config.d
+            cat > /etc/containerd/config.d/00-keep-unpacked-layers.toml <<EOF
           [plugins."io.containerd.grpc.v1.cri".containerd]
             discard_unpacked_layers = false
+          EOF
+            grep -q "config.d/\*.toml" /etc/containerd/config.toml || sed -i "1i imports = [\"/etc/containerd/config.d/*.toml\"]" /etc/containerd/config.toml'
+          docker exec "${KVM_NODE}" sh -c 'cat >> /etc/containerd/config.toml <<EOF
 
           [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
             runtime_type = "io.containerd.runsc.v1"
