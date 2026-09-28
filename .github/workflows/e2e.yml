@@ -561,14 +561,18 @@ jobs:
         # images import` on the node over stdin (no intermediate file —
         # a `docker cp` of the same tarball to a file first left `ctr`
         # unable to find it moments later, cause unconfirmed) sidesteps
-        # the registry-fetch path entirely; `ctr images unpack`
-        # afterward only has to read content this same import already
-        # committed in full.
+        # the registry-fetch path entirely; mounting the image afterward
+        # (containerd 2.x dropped the old `images unpack` verb — `images
+        # mount` unpacks into the named snapshotter as a side effect of
+        # mounting, verified locally) only has to read content this same
+        # import already committed in full.
         run: |
           set -euo pipefail
           docker pull "${KEEPALIVE_IMAGE}"
           docker save "${KEEPALIVE_IMAGE}" | docker exec -i "${KVM_NODE}" ctr -n k8s.io images import -
-          docker exec "${KVM_NODE}" ctr -n k8s.io images unpack --snapshotter devmapper "${KEEPALIVE_IMAGE}"
+          docker exec "${KVM_NODE}" mkdir -p /tmp/setec-keepalive-mount
+          docker exec "${KVM_NODE}" ctr -n k8s.io images mount --snapshotter devmapper "${KEEPALIVE_IMAGE}" /tmp/setec-keepalive-mount
+          docker exec "${KVM_NODE}" ctr -n k8s.io images unmount /tmp/setec-keepalive-mount
 
       - name: The ${{ matrix.pass }} scenarios
         env:
