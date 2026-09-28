@@ -212,9 +212,14 @@ jobs:
             # kata-qemu here. That subtest would SKIP on its own, and a SKIP
             # fails the step. kata-qemu coverage is setec#93.
             skip: '^TestRuntimeBackends_Smoke/backend=kata-qemu$'
+          # TestPhase3_PoolWarmStartLifecycle and
+          # TestGate_UnverifiedWarmStartFailsClosed are not in this pass:
+          # the warm pool has never booted an entry and is rebuilt after
+          # launch from real kata-fc Pods (owner decision 2026-09-28,
+          # setec#103). Add them back with that work.
           - pass: phase3
             snapshots: "1"
-            run: '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$'
+            run: '^TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|StorageFillProtection)$'
             skip: ''
     env:
       KIND_CLUSTER: setec-kvm
