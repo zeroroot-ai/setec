@@ -65,7 +65,7 @@ func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 	ca := newCA(t)
 	port, _ := servePool(t, testNodeAgentIP, ca, ca)
 
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	client, err := d.Dial(t.Context(), testNodeName)
@@ -87,7 +87,7 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	// under test can fail.
 	port, _ := servePool(t, testNodeAgentIP, foreign, ca)
 
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	client, err := d.Dial(t.Context(), testNodeName)
@@ -109,7 +109,7 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	foreign := newCA(t)
 	port, _ := servePool(t, testNodeAgentIP, ca, foreign)
 
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	client, err := d.Dial(t.Context(), testNodeName)
@@ -126,7 +126,7 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	ca := newCA(t)
 	port, _ := servePlaintextPool(t, testNodeAgentIP)
 
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	client, err := d.Dial(t.Context(), testNodeName)
@@ -143,7 +143,7 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 // credential module exists. A nil credential must never mean plaintext.
 func TestGRPCDialer_RefusesToDialWithoutCredentials(t *testing.T) {
 	t.Parallel()
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), unusedAuthorityPattern, nil)
+	d := NewGRPCDialer(fixedPod(), unusedAuthorityPattern, nil)
 	t.Cleanup(func() { _ = d.Close() })
 
 	_, err := d.Dial(t.Context(), testNodeName)
@@ -176,7 +176,7 @@ func TestGRPCDialer_RequiresAResolver(t *testing.T) {
 func TestGRPCDialer_RejectsAnEmptyNodeName(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	d := NewGRPCDialer(fixedPod(testNodeAgentIP), unusedAuthorityPattern, operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(), unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	if _, err := d.Dial(t.Context(), ""); err == nil {
@@ -313,9 +313,10 @@ func (f *fakeResolver) set(pod *corev1.Pod) {
 }
 
 // fixedPod is a fakeResolver that always resolves to a Running, Ready
-// Pod at the given IP with a stable UID.
-func fixedPod(ip string) *fakeResolver {
-	return &fakeResolver{pod: podWithUID("fixed-uid", ip)}
+// Pod at testNodeAgentIP with a stable UID. Every test that uses it
+// dials that same address, so it takes no parameter.
+func fixedPod() *fakeResolver {
+	return &fakeResolver{pod: podWithUID("fixed-uid", testNodeAgentIP)}
 }
 
 // podWithUID returns a Running, Ready node-agent Pod fixture with the
