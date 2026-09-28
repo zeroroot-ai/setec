@@ -531,7 +531,7 @@ jobs:
           set +e
           set -uo pipefail
           SETEC_E2E_EXTRA_SET="${NODE_SET}" \
-            go test -tags=e2e ./test/e2e/... -v -timeout 20m \
+            go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 20m \
             -run '^(TestEnv_KVMPresent|TestInstaller_Converges)$' \
             2>&1 | tee guard.log
           status="${PIPESTATUS[0]}"
@@ -645,7 +645,7 @@ jobs:
             skip_args=(-skip "${SKIP_PATTERN}")
           fi
           SETEC_E2E_EXTRA_SET="${extra_set}" \
-            go test -tags=e2e ./test/e2e/... -v -timeout 70m \
+            go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 70m \
             -run "${RUN_PATTERN}" "${skip_args[@]}" \
             2>&1 | tee "${PASS}.log"
           status="${PIPESTATUS[0]}"

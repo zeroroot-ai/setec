@@ -198,7 +198,7 @@ jobs:
           # for it.
           set +e
           set -uo pipefail
-          go test -tags=e2e ./test/e2e/... -v -timeout 25m \
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6.log
           status="${PIPESTATUS[0]}"
           {
@@ -248,7 +248,7 @@ jobs:
           # (observed on run 32166512990).
           set +e
           set -uo pipefail
-          go test -tags=e2e ./test/e2e/... -v -timeout 25m \
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
           status="${PIPESTATUS[0]}"
           {
