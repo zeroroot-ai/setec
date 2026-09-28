@@ -10,6 +10,7 @@ package podspec
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -62,6 +63,16 @@ var (
 	// place. The operator refuses the Pod rather than booting a command
 	// it does not have.
 	ErrNoKeepaliveImage = errors.New("podspec: session sandbox has no spec.command and no keepalive image is configured")
+
+	// ErrNoWorkspaceFormatImage is returned when a kata-fc session
+	// Sandbox needs its workspace formatted and mounted (Firecracker has
+	// no virtio-fs, so the workspace PVC is Block-mode and reaches the
+	// guest as a raw device, setec#91) but no keepalive image is
+	// configured. The same static binary that installs the keepalive
+	// command also formats and mounts the workspace block device, so
+	// this reuses BuildOptions.KeepaliveImage rather than adding a
+	// second image knob.
+	ErrNoWorkspaceFormatImage = errors.New("podspec: kata-fc session sandbox needs its workspace formatted and no keepalive image is configured")
 
 	// ErrInvalidVCPU is returned when Sandbox.spec.resources.vcpu is less
 	// than 1. The CRD validation caps the upper bound; we only double-check
@@ -121,6 +132,11 @@ type BuildOptions struct {
 	// from this image installs it into a shared volume, and the workload
 	// container runs it as its command. Empty is an error for such a
 	// Sandbox and is ignored for every other one.
+	//
+	// The same binary also formats and mounts a kata-fc session's
+	// workspace block device (setec#91): every kata-fc session Sandbox,
+	// regardless of spec.command, runs an init container from this image
+	// to prepare /workspace. Empty is an error for a kata-fc session.
 	KeepaliveImage string
 }
 
@@ -171,6 +187,25 @@ const (
 	// WorkspacePVCSuffix is appended to the Sandbox name to derive the
 	// workspace PVC name (e.g. Sandbox "foo" → PVC "foo-workspace").
 	WorkspacePVCSuffix = "-workspace"
+
+	// workspaceMountVolumeName is the emptyDir the kata-fc
+	// workspace-format init container mounts the formatted block
+	// device onto (Bidirectional propagation), and the workload
+	// container mounts at the same path (HostToContainer propagation)
+	// to see the result (setec#91). Every other backend mounts the
+	// workspace PVC directly and never uses this volume.
+	workspaceMountVolumeName = "workspace-mount"
+
+	// kataFCWorkspaceDevicePath is where the workspace PVC's raw block
+	// device appears inside the workspace-format init container, via
+	// Kubernetes VolumeDevices. It is a Pod-internal convention: no
+	// host or CSI driver has to agree on this path.
+	kataFCWorkspaceDevicePath = "/dev/setec-workspace"
+
+	// KataFCWorkspaceFormatInitContainerName names the init container
+	// that formats and mounts a kata-fc session's workspace block
+	// device (setec#91).
+	KataFCWorkspaceFormatInitContainerName = "workspace-format"
 )
 
 // WorkspacePVCName derives the deterministic name of the workspace PVC
@@ -265,6 +300,19 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 	usesKeepalive := sb.Spec.IsSession() && len(sb.Spec.Command) == 0
 	if usesKeepalive && opts.KeepaliveImage == "" {
 		return nil, ErrNoKeepaliveImage
+	}
+
+	// kata-fc has no virtio-fs (setec#91): the workspace PVC reaches the
+	// guest as a raw block device instead of a mounted filesystem, so a
+	// session on this backend needs the workspace-format init container
+	// (built from the same image as the keepalive) rather than a plain
+	// PVC mount. Decided once here, alongside usesKeepalive, so every
+	// place that touches the workspace volume agrees on which shape it
+	// takes.
+	usesBlockWorkspace := sb.Spec.IsSession() &&
+		opts.RuntimeSelection != nil && opts.RuntimeSelection.Backend == runtimepkg.BackendKataFC
+	if usesBlockWorkspace && opts.KeepaliveImage == "" {
+		return nil, ErrNoWorkspaceFormatImage
 	}
 
 	container := corev1.Container{
@@ -362,10 +410,37 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			},
 		})
 		c := &pod.Spec.Containers[0]
-		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
-			Name:      WorkspaceVolumeName,
-			MountPath: WorkspaceMountPath,
-		})
+		if usesBlockWorkspace {
+			// Firecracker has no virtio-fs (setec#91), so kata cannot
+			// share a host directory with the guest: the controller
+			// provisions this backend's workspace PVC with
+			// volumeMode: Block, and a Block-mode PVC must be consumed
+			// via VolumeDevices, never VolumeMounts. The workload
+			// container still just wants an ordinary writable directory
+			// at /workspace, so an init container formats the raw
+			// device (once) and mounts it onto a Bidirectional-
+			// propagated emptyDir that the workload mounts at the same
+			// path with the ordinary HostToContainer propagation —
+			// the ADR-0007 contract (PVC mounted at /workspace) holds
+			// for the workload either way; only how it gets there
+			// differs per backend.
+			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+				Name:         workspaceMountVolumeName,
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			})
+			pod.Spec.InitContainers = append(pod.Spec.InitContainers, kataFCWorkspaceFormatter(opts.KeepaliveImage))
+			hostToContainer := corev1.MountPropagationHostToContainer
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+				Name:             workspaceMountVolumeName,
+				MountPath:        WorkspaceMountPath,
+				MountPropagation: &hostToContainer,
+			})
+		} else {
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+				Name:      WorkspaceVolumeName,
+				MountPath: WorkspaceMountPath,
+			})
+		}
 		// Root the session in its durable workspace. This is what makes
 		// SandboxService.Exec land there: the container runtime's exec
 		// primitive takes no working directory, so an exec'd command
@@ -546,6 +621,71 @@ func keepaliveInstaller(image string) corev1.Container {
 			Privileged:               new(false),
 			ReadOnlyRootFilesystem:   new(true),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+	}
+}
+
+// kataFCWorkspaceFormatter is the init container that turns a kata-fc
+// session's raw workspace block device into the mounted filesystem the
+// workload expects at /workspace (setec#91).
+//
+// Kata Containers + Firecracker has no virtio-fs, so the workspace PVC
+// is provisioned with volumeMode: Block on this backend (the
+// controller sets PersistentVolumeClaimSpec.VolumeMode, ADR-0007
+// addendum) and reaches this container as a raw device via
+// VolumeDevices rather than a mounted filesystem via VolumeMounts.
+//
+// It formats the device as ext4 only if it carries no filesystem yet
+// (internal/workspace.FormatOnce never reformats an existing one, so a
+// session VM that restarts against the same PVC keeps its corpus), then
+// mounts it onto the workspace-mount emptyDir with Bidirectional
+// propagation so the mount is visible to the workload container that
+// starts after this one exits (Kubernetes shared-volume mount
+// propagation: a mount made with Bidirectional propagation on one
+// container's volumeMount is visible to any other container of the
+// same Pod mounting the same volume with HostToContainer or
+// Bidirectional propagation).
+//
+// mount(2) needs CAP_SYS_ADMIN, and the Kubernetes API itself refuses
+// Bidirectional mount propagation on anything less than a fully
+// privileged container ("Bidirectional mount propagation is available
+// only to privileged containers" — a hard admission-time validation
+// rule, not a policy this operator chooses). This costs nothing extra
+// on kata-fc per ADR-0052: the containment boundary is the microVM the
+// whole Pod runs inside, not this container's privilege — the same
+// reasoning that already re-adds NET_RAW/NET_ADMIN to the kata-fc
+// workload container for raw-socket tooling.
+func kataFCWorkspaceFormatter(image string) corev1.Container {
+	res := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("50m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+	bidirectional := corev1.MountPropagationBidirectional
+	return corev1.Container{
+		Name:  KataFCWorkspaceFormatInitContainerName,
+		Image: image,
+		Args: []string{
+			"--format-workspace-device", kataFCWorkspaceDevicePath,
+			"--format-workspace-target", WorkspaceMountPath,
+			"--format-workspace-uid", strconv.Itoa(int(sandboxUID)),
+			"--format-workspace-gid", strconv.Itoa(int(sandboxGID)),
+		},
+		VolumeDevices: []corev1.VolumeDevice{{
+			Name:       WorkspaceVolumeName,
+			DevicePath: kataFCWorkspaceDevicePath,
+		}},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:             workspaceMountVolumeName,
+			MountPath:        WorkspaceMountPath,
+			MountPropagation: &bidirectional,
+		}},
+		Resources: corev1.ResourceRequirements{Requests: res, Limits: res.DeepCopy()},
+		SecurityContext: &corev1.SecurityContext{
+			Privileged:             new(true),
+			ReadOnlyRootFilesystem: new(true),
+			RunAsNonRoot:           new(false),
+			RunAsUser:              new(int64(0)),
+			RunAsGroup:             new(int64(0)),
 		},
 	}
 }

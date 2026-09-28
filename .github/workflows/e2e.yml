@@ -205,6 +205,16 @@ jobs:
       # would add nothing, so consent is explicit instead (setec#298).
       SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
       SETEC_E2E_RUNTIMECLASS: kata-fc
+      # kata-fc's session workspace PVC is volumeMode: Block (setec#91):
+      # Firecracker has no virtio-fs, so a filesystem-mode volume's guest
+      # writes never reach the PVC. kind's default StorageClass
+      # (rancher.io/local-path) provisions Filesystem-mode volumes only,
+      # so the "Provision Block-mode PersistentVolumes" step below hand-
+      # provisions a small pool of Block-mode local PersistentVolumes
+      # under this StorageClass name instead, and the session scenarios
+      # (test/e2e/session_lifecycle_test.go and friends) request it by
+      # name via this variable.
+      SETEC_E2E_WORKSPACE_STORAGE_CLASS: setec-e2e-workspace-block
       # This build's images, pulled from ghcr (the packages are public).
       SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
       SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
@@ -369,6 +379,78 @@ jobs:
             exit 1
           }
 
+      - name: Provision Block-mode PersistentVolumes for kata-fc session workspaces
+        # setec#91: kata-fc's session workspace PVC is volumeMode: Block, and
+        # kind's default StorageClass (rancher.io/local-path) cannot provision
+        # one. This is the standard Kubernetes static "local volume" recipe —
+        # no extra controller needed for a cluster that lives one job run:
+        # a handful of loop devices, one PersistentVolume each, and a
+        # StorageClass that names no provisioner because nothing dynamic ever
+        # provisions against it.
+        #
+        # The loop devices are created on the RUNNER, not inside `docker exec
+        # ${KVM_NODE}`: hack/kind-kvm.yaml bind-mounts the runner's real /dev
+        # into the worker node (the same reason containerd's devmapper
+        # /dev/dm-<n> nodes are visible to it), so a /dev/loopN attached here
+        # appears inside the node's container under the identical path.
+        #
+        # Six volumes: the suite's session scenarios in this pass
+        # (TestSession_WorkspaceSurvivesPodKill, TestSession_ReattachByHandle,
+        # and the three TestSessionExec_* scenarios launchSession starts) each
+        # create exactly one session Sandbox and run strictly sequentially, so
+        # five distinct never-reused PVs is the true minimum; one spare avoids
+        # a retry starving the pool. 1200Mi each clears the 1Gi every scenario
+        # requests with room for the ext4 filesystem's own overhead.
+        run: |
+          set -euo pipefail
+          node_name="${KVM_NODE}"
+          backing_dir="/var/lib/setec-e2e-block-pv"
+          sudo mkdir -p "${backing_dir}"
+          for i in 0 1 2 3 4 5; do
+            img="${backing_dir}/vol${i}.img"
+            sudo truncate -s 1200M "${img}"
+            dev="$(sudo losetup --show -f "${img}")"
+            echo "loop device ${i}: ${dev} (${img})"
+            docker exec "${KVM_NODE}" test -b "${dev}" || {
+              echo "::error::${dev} is not visible as a block device inside ${KVM_NODE}"
+              exit 1
+            }
+            cat <<PV | kubectl apply -f -
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: setec-e2e-workspace-block-${i}
+          spec:
+            capacity:
+              storage: 1200Mi
+            volumeMode: Block
+            accessModes:
+              - ReadWriteOnce
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+            local:
+              path: ${dev}
+            nodeAffinity:
+              required:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                          - ${node_name}
+          PV
+          done
+          cat <<SC | kubectl apply -f -
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+          provisioner: kubernetes.io/no-provisioner
+          volumeBindingMode: WaitForFirstConsumer
+          SC
+          kubectl get pv -o wide
+          kubectl get storageclass "${SETEC_E2E_WORKSPACE_STORAGE_CLASS}"
+
       - name: Create the chart's RuntimeClasses
         # The suite requires the RuntimeClass to exist before it installs,
         # and installs with runtimes.<backend>.install=false. So the objects
@@ -457,6 +539,8 @@ jobs:
           kubectl get nodes -o wide --show-labels || true
           kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.metadata.annotations.setec\.zeroroot\.ai/runtime-probe}{"\n"}{end}' || true
           kubectl get runtimeclass,sandboxclasses -o wide || true
+          kubectl get pv,storageclass -o wide || true
+          kubectl get pvc -A -o wide || true
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
           echo "::group::containerd on ${KVM_NODE}"

@@ -79,7 +79,7 @@ spec:
             - --reserved-cidrs={{ join "," .Values.netpol.reservedCIDRs }}
             - --sandbox-resolvers={{ join "," .Values.netpol.resolvers }}
             {{- if not .Values.sessionKeepalive.image.repository }}
-            {{- fail "sessionKeepalive.image.repository must not be empty: a session Sandbox with no spec.command boots this image's keepalive, and the operator refuses such a Sandbox without it." }}
+            {{- fail "sessionKeepalive.image.repository must not be empty: a session Sandbox with no spec.command boots this image's keepalive, a kata-fc session of any kind uses it to format and mount its workspace (setec#91), and the operator refuses such a Sandbox without it." }}
             {{- end }}
             - --session-keepalive-image={{ .Values.sessionKeepalive.image.repository }}:{{ .Values.sessionKeepalive.image.tag | default .Chart.AppVersion }}
             {{- if .Values.snapshots.enabled }}

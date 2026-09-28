@@ -148,7 +148,7 @@ func launchSession(t *testing.T, name string) string {
 	spec.SandboxClassName = sessionClassName()
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
-		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
+		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size, StorageClassName: workspaceStorageClassName()},
 	}
 	sb := newSandbox(name, spec)
 	createAndCleanup(t, sb)

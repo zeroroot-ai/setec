@@ -151,7 +151,16 @@ Sandbox, or `Kill` on the gRPC frontend):
   `/workspace`. Data written there survives VM restart and node loss —
   on node failure the CSI driver re-attaches the claim to the failover
   node (ADR-0007). Any CSI driver works; there is no cloud-specific
-  storage dependency.
+  storage dependency. On the kata-fc backend the claim is `volumeMode:
+  Block` instead of the default `Filesystem`: Kata Containers +
+  Firecracker has no virtio-fs, so a filesystem-mode volume's guest
+  writes never reach the PVC, and a raw block device is the one volume
+  type Firecracker can attach to the guest. A workspace-format init
+  container formats the device as ext4 (once — never reformatting an
+  existing filesystem) and mounts it, so the workload still just sees
+  an ordinary writable directory at `/workspace` (ADR-0007 addendum,
+  setec#91). gVisor and runc are unaffected and keep the filesystem-mode
+  claim.
 - **VM restart, not completion.** The workload exiting (any exit code)
   does not finish a session. The controller deletes the dead Pod and
   recreates it; the fresh microVM re-mounts the workspace and continues.

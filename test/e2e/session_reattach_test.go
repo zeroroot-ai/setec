@@ -106,7 +106,7 @@ func TestSession_ReattachByHandle(t *testing.T) {
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
-		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
+		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size, StorageClassName: workspaceStorageClassName()},
 	}
 	sb := newSandbox("e2e-reattach", spec)
 	createAndCleanup(t, sb)

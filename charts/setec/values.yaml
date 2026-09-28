@@ -993,8 +993,15 @@ snapshots:
 # Sandbox that declares no spec.command (setec#7). An init container from
 # it installs the static setec-keepalive binary into a shared volume and
 # the workload boots that binary, so the session outlives every Exec
-# without a shell or a sleep binary in the user's image. Built from this
-# repo's Dockerfile with CMD=setec-keepalive. tag empty means appVersion.
+# without a shell or a sleep binary in the user's image.
+#
+# The same binary also formats and mounts a kata-fc session's workspace
+# block device (setec#91): Kata Containers + Firecracker has no
+# virtio-fs, so every kata-fc session — regardless of spec.command —
+# runs an init container from this image to prepare /workspace.
+#
+# Built from this repo's Dockerfile with CMD=setec-keepalive. tag empty
+# means appVersion.
 sessionKeepalive:
   image:
     repository: ghcr.io/zeroroot-ai/setec-keepalive
