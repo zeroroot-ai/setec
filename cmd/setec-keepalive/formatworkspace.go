@@ -6,6 +6,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/zeroroot-ai/setec/internal/workspace"
@@ -38,6 +40,32 @@ func formatWorkspace(device, target string, uid, gid int) error {
 	}
 	if err := os.Chown(target, uid, gid); err != nil {
 		return fmt.Errorf("chown %s to %d:%d: %w", target, uid, gid, err)
+	}
+	return nil
+}
+
+// execInto replaces the current process with args[0] (resolved against
+// PATH), passing args as its argv and the current environment. On
+// success it never returns.
+//
+// This is how a kata-fc session hands off from the format/mount step to
+// the Sandbox's own command (setec#91) without leaving a supervisor
+// process in between: the Sandbox's command becomes PID 1 directly,
+// exactly as it would on any other backend. It also means any
+// capability this process held (CAP_SYS_ADMIN, for the mount(2) call)
+// does not reach the Sandbox's command: per the Linux capability model,
+// an exec'd binary with no file capabilities of its own — true of an
+// ordinary user command — starts with an empty effective/permitted
+// capability set regardless of what the exec'ing process held, unless
+// the exec'ing process populated its ambient set, which nothing here
+// does.
+func execInto(args []string) error {
+	path, err := exec.LookPath(args[0])
+	if err != nil {
+		return fmt.Errorf("look up %s: %w", args[0], err)
+	}
+	if err := syscall.Exec(path, args, os.Environ()); err != nil { //nolint:gosec // args come from the operator-built Pod spec, not external input
+		return fmt.Errorf("exec %s: %w", path, err)
 	}
 	return nil
 }

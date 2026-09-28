@@ -231,9 +231,9 @@ type SandboxReconciler struct {
 
 	// KeepaliveImage is the image the pod builder pulls the static
 	// setec-keepalive binary from for a session Sandbox that declares no
-	// spec.command (setec#7), and from which every kata-fc session's
-	// workspace-format init container runs regardless of spec.command
-	// (setec#91). Set from --session-keepalive-image.
+	// spec.command (setec#7), and which every kata-fc session boots
+	// first, regardless of spec.command, to format and mount its
+	// workspace (setec#91). Set from --session-keepalive-image.
 	KeepaliveImage string
 
 	// --- Phase 2 optional dependencies ---

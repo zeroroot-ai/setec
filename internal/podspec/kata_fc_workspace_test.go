@@ -33,10 +33,18 @@ func gvisorSelection() *runtimepkg.Selection {
 // TestBuild_KataFCSessionUsesBlockWorkspace asserts that a session
 // Sandbox scheduled on kata-fc gets the block-device workspace shape
 // (setec#91): the container consumes the workspace PVC via
-// VolumeDevices rather than VolumeMounts, a workspace-format init
-// container formats and mounts it onto a Bidirectional emptyDir, and
-// the workload container mounts that same emptyDir at /workspace with
-// HostToContainer propagation.
+// VolumeDevices rather than VolumeMounts, gets an ordinary emptyDir at
+// /workspace, and its command is the keepalive binary wrapping the
+// Sandbox's own command with the format/mount flags.
+//
+// No init container does the formatting: the operator's own
+// ValidatingAdmissionPolicy (sandbox-namespace-host-guard, setec#159)
+// refuses ANY privileged container in a Sandbox namespace, and
+// Kubernetes itself refuses Bidirectional mount propagation — the
+// mechanism an init-container design would need to share its mount
+// with the workload container — on anything less than privileged. So
+// the same container that will run the workload also does the format
+// and mount, in its own mount namespace, before exec-ing into it.
 func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 	t.Parallel()
 	sb := newSandbox(withLifecycleMode(setecv1alpha1.LifecycleModeSession))
@@ -50,15 +58,28 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 
 	c := pod.Spec.Containers[0]
 
-	// The container must NOT mount the workspace PVC directly.
+	// No container in the pod may be privileged (setec#159): the
+	// operator's own admission policy rejects the Pod outright.
+	for _, cc := range append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...) {
+		if cc.SecurityContext != nil && cc.SecurityContext.Privileged != nil && *cc.SecurityContext.Privileged {
+			t.Fatalf("container %q is privileged; the Sandbox namespace admission policy forbids this", cc.Name)
+		}
+	}
+
+	// The workload container consumes the PVC via VolumeDevices.
+	if len(c.VolumeDevices) != 1 || c.VolumeDevices[0].Name != WorkspaceVolumeName {
+		t.Fatalf("workload container VolumeDevices = %+v, want one entry for %q", c.VolumeDevices, WorkspaceVolumeName)
+	}
 	for _, m := range c.VolumeMounts {
 		if m.Name == WorkspaceVolumeName {
 			t.Fatalf("kata-fc workload container mounts %q directly via VolumeMounts; "+
 				"a Block-mode PVC must be consumed via VolumeDevices: %+v", WorkspaceVolumeName, m)
 		}
 	}
-	// It must instead mount the shared emptyDir at /workspace with
-	// HostToContainer propagation, to see the init container's mount.
+
+	// It mounts a plain emptyDir at /workspace — the keepalive wrapper
+	// mounts the formatted device onto it from inside this same
+	// container, so no MountPropagation is needed at all.
 	var mount *corev1.VolumeMount
 	for i, m := range c.VolumeMounts {
 		if m.Name == workspaceMountVolumeName {
@@ -71,8 +92,9 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 	if mount.MountPath != WorkspaceMountPath {
 		t.Errorf("workspace mountPath = %q, want %q", mount.MountPath, WorkspaceMountPath)
 	}
-	if mount.MountPropagation == nil || *mount.MountPropagation != corev1.MountPropagationHostToContainer {
-		t.Errorf("workspace mount propagation = %v, want HostToContainer", mount.MountPropagation)
+	if mount.MountPropagation != nil {
+		t.Errorf("workspace mount propagation = %v, want none (same-container mount needs no propagation)",
+			*mount.MountPropagation)
 	}
 
 	// The pod-level workspace Volume is still the PVC (ADR-0007 is
@@ -87,63 +109,101 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 		t.Fatalf("pod has no PVC-backed %q volume: %+v", WorkspaceVolumeName, pod.Spec.Volumes)
 	}
 
-	// The shared emptyDir volume must exist.
-	var found bool
+	var foundEmptyDir bool
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == workspaceMountVolumeName {
-			found = true
+			foundEmptyDir = true
 			if v.EmptyDir == nil {
 				t.Errorf("%q volume is not an emptyDir: %+v", workspaceMountVolumeName, v)
 			}
 		}
 	}
-	if !found {
+	if !foundEmptyDir {
 		t.Fatalf("pod has no %q volume: %+v", workspaceMountVolumeName, pod.Spec.Volumes)
 	}
 
-	// The workspace-format init container must exist, consume the PVC
-	// via VolumeDevices (never VolumeMounts — that would be a k8s
-	// validation error against a Block-mode PVC), and mount the
-	// emptyDir with Bidirectional propagation so its mount is visible
-	// to the workload container started after it.
+	// The command is the keepalive binary, wrapping the Sandbox's own
+	// command after the format/mount flags.
+	wantPrefix := []string{
+		KeepalivePath,
+		"--format-workspace-device", kataFCWorkspaceDevicePath,
+		"--format-workspace-target", WorkspaceMountPath,
+	}
+	if len(c.Command) < len(wantPrefix) {
+		t.Fatalf("command = %v, too short to carry the format flags", c.Command)
+	}
+	for i, want := range wantPrefix {
+		if c.Command[i] != want {
+			t.Fatalf("command[%d] = %q, want %q (full command: %v)", i, c.Command[i], want, c.Command)
+		}
+	}
+	// After the uid/gid flags (2 flag+value pairs, 4 more tokens) comes
+	// "--" then the Sandbox's own command, unchanged.
+	sep := len(wantPrefix) + 4
+	if sep >= len(c.Command) || c.Command[sep] != "--" {
+		t.Fatalf("command = %v, want a \"--\" separator at index %d before the Sandbox's own command", c.Command, sep)
+	}
+	gotCmd := c.Command[sep+1:]
+	if len(gotCmd) != len(sb.Spec.Command) {
+		t.Fatalf("wrapped command = %v, want %v", gotCmd, sb.Spec.Command)
+	}
+	for i := range gotCmd {
+		if gotCmd[i] != sb.Spec.Command[i] {
+			t.Fatalf("wrapped command = %v, want %v", gotCmd, sb.Spec.Command)
+		}
+	}
+
+	// mount(2) needs CAP_SYS_ADMIN; nothing else in the Pod needs it.
+	var hasSysAdmin bool
+	for _, cap := range c.SecurityContext.Capabilities.Add {
+		if cap == "SYS_ADMIN" {
+			hasSysAdmin = true
+		}
+	}
+	if !hasSysAdmin {
+		t.Errorf("workload container capabilities.add = %v, want SYS_ADMIN (needed for mount(2))",
+			c.SecurityContext.Capabilities.Add)
+	}
+
+	// The keepalive-install init container must exist (it carries the
+	// binary the workload command above resolves to), and must not be
+	// privileged either.
 	var initC *corev1.Container
 	for i := range pod.Spec.InitContainers {
-		if pod.Spec.InitContainers[i].Name == KataFCWorkspaceFormatInitContainerName {
+		if pod.Spec.InitContainers[i].Name == KeepaliveInitContainerName {
 			initC = &pod.Spec.InitContainers[i]
 		}
 	}
 	if initC == nil {
-		t.Fatalf("pod has no %q init container: %+v", KataFCWorkspaceFormatInitContainerName, pod.Spec.InitContainers)
+		t.Fatalf("pod has no %q init container: %+v", KeepaliveInitContainerName, pod.Spec.InitContainers)
 	}
 	if initC.Image != testKeepaliveImage {
-		t.Errorf("workspace-format init container image = %q, want %q (reuses the keepalive image)",
-			initC.Image, testKeepaliveImage)
+		t.Errorf("keepalive init container image = %q, want %q", initC.Image, testKeepaliveImage)
 	}
-	if len(initC.VolumeDevices) != 1 || initC.VolumeDevices[0].Name != WorkspaceVolumeName {
-		t.Fatalf("workspace-format init container VolumeDevices = %+v, want one entry for %q",
-			initC.VolumeDevices, WorkspaceVolumeName)
+}
+
+// TestBuild_KataFCSessionNoCommandFallsIntoKeepalive asserts that a
+// kata-fc session with no spec.command still boots the plain keepalive
+// (setec#7) after formatting its workspace — no "--" separator, no
+// trailing command, because there is nothing to hand off to.
+func TestBuild_KataFCSessionNoCommandFallsIntoKeepalive(t *testing.T) {
+	t.Parallel()
+	sb := newSandbox(withLifecycleMode(setecv1alpha1.LifecycleModeSession), withNoCommand())
+	pod, err := BuildWithOptions(sb, "kata-fc", BuildOptions{
+		RuntimeSelection: kataFCSelection(),
+		KeepaliveImage:   testKeepaliveImage,
+	})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
 	}
-	for _, m := range initC.VolumeMounts {
-		if m.Name == WorkspaceVolumeName {
-			t.Fatalf("workspace-format init container mounts the PVC via VolumeMounts, not VolumeDevices: %+v", m)
+	c := pod.Spec.Containers[0]
+	for _, tok := range c.Command {
+		if tok == "--" {
+			t.Fatalf("command = %v carries a \"--\" separator with no Sandbox command to run after it", c.Command)
 		}
 	}
-	var initMount *corev1.VolumeMount
-	for i := range initC.VolumeMounts {
-		if initC.VolumeMounts[i].Name == workspaceMountVolumeName {
-			initMount = &initC.VolumeMounts[i]
-		}
-	}
-	if initMount == nil {
-		t.Fatalf("workspace-format init container has no %q mount: %+v", workspaceMountVolumeName, initC.VolumeMounts)
-	}
-	if initMount.MountPropagation == nil || *initMount.MountPropagation != corev1.MountPropagationBidirectional {
-		t.Errorf("workspace-format init container mount propagation = %v, want Bidirectional", initMount.MountPropagation)
-	}
-	if initC.SecurityContext == nil || initC.SecurityContext.Privileged == nil || !*initC.SecurityContext.Privileged {
-		t.Fatalf("workspace-format init container is not privileged: %+v; "+
-			"the Kubernetes API refuses Bidirectional mount propagation on anything less",
-			initC.SecurityContext)
+	if c.Command[len(c.Command)-1] == "--" {
+		t.Fatalf("command = %v ends with a bare separator", c.Command)
 	}
 }
 
@@ -162,9 +222,10 @@ func TestBuild_KataFCSessionNeedsWorkspaceFormatImage(t *testing.T) {
 
 // TestBuild_GVisorSessionKeepsFilesystemWorkspace asserts that a
 // non-kata-fc backend is completely unaffected by setec#91: the session
-// workspace is still a plain PVC mount, with no workspace-format init
-// container and no extra emptyDir, matching the Pod every backend built
-// before kata-fc grew the Block-mode path.
+// workspace is still a plain PVC mount via VolumeMounts, the Sandbox's
+// own command runs directly (no keepalive wrapper, no extra
+// capability), and no workspace-mount emptyDir exists — the Pod every
+// backend built before kata-fc grew the Block-mode path.
 func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 	t.Parallel()
 	sb := newSandbox(withLifecycleMode(setecv1alpha1.LifecycleModeSession))
@@ -177,6 +238,9 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 	}
 
 	c := pod.Spec.Containers[0]
+	if len(c.VolumeDevices) != 0 {
+		t.Errorf("gvisor workload container has VolumeDevices: %+v; only kata-fc uses raw block devices", c.VolumeDevices)
+	}
 	var mount *corev1.VolumeMount
 	for i := range c.VolumeMounts {
 		if c.VolumeMounts[i].Name == WorkspaceVolumeName {
@@ -190,15 +254,22 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 		t.Errorf("workspace mountPath = %q, want %q", mount.MountPath, WorkspaceMountPath)
 	}
 
+	if len(c.Command) != len(sb.Spec.Command) || c.Command[0] != sb.Spec.Command[0] {
+		t.Errorf("command = %v, want the Sandbox's own command %v unwrapped", c.Command, sb.Spec.Command)
+	}
+	for _, cap := range c.SecurityContext.Capabilities.Add {
+		if cap == "SYS_ADMIN" {
+			t.Errorf("gvisor workload container carries SYS_ADMIN; only kata-fc needs it")
+		}
+	}
+
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == workspaceMountVolumeName {
 			t.Errorf("gvisor session pod carries the kata-fc-only %q volume: %+v", workspaceMountVolumeName, v)
 		}
 	}
-	for _, ic := range pod.Spec.InitContainers {
-		if ic.Name == KataFCWorkspaceFormatInitContainerName {
-			t.Errorf("gvisor session pod carries the kata-fc-only workspace-format init container: %+v", ic)
-		}
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Errorf("gvisor session pod carries init containers: %+v; it needs no keepalive/format binary", pod.Spec.InitContainers)
 	}
 }
 
@@ -213,9 +284,10 @@ func TestBuild_SessionWithNoRuntimeSelectionKeepsFilesystemWorkspace(t *testing.
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	for _, ic := range pod.Spec.InitContainers {
-		if ic.Name == KataFCWorkspaceFormatInitContainerName {
-			t.Errorf("pod with no RuntimeSelection carries a workspace-format init container: %+v", ic)
-		}
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Errorf("pod with no RuntimeSelection carries init containers: %+v", pod.Spec.InitContainers)
+	}
+	if len(pod.Spec.Containers[0].VolumeDevices) != 0 {
+		t.Errorf("pod with no RuntimeSelection carries VolumeDevices: %+v", pod.Spec.Containers[0].VolumeDevices)
 	}
 }

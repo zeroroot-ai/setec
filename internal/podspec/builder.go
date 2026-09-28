@@ -135,8 +135,9 @@ type BuildOptions struct {
 	//
 	// The same binary also formats and mounts a kata-fc session's
 	// workspace block device (setec#91): every kata-fc session Sandbox,
-	// regardless of spec.command, runs an init container from this image
-	// to prepare /workspace. Empty is an error for a kata-fc session.
+	// regardless of spec.command, boots this binary first to prepare
+	// /workspace, then either execs its own command or falls into the
+	// reap loop above. Empty is an error for a kata-fc session.
 	KeepaliveImage string
 }
 
@@ -188,24 +189,18 @@ const (
 	// workspace PVC name (e.g. Sandbox "foo" → PVC "foo-workspace").
 	WorkspacePVCSuffix = "-workspace"
 
-	// workspaceMountVolumeName is the emptyDir the kata-fc
-	// workspace-format init container mounts the formatted block
-	// device onto (Bidirectional propagation), and the workload
-	// container mounts at the same path (HostToContainer propagation)
-	// to see the result (setec#91). Every other backend mounts the
+	// workspaceMountVolumeName is the emptyDir a kata-fc session's
+	// workload container mounts at /workspace and then, from inside its
+	// own command (the keepalive binary), mounts the formatted workspace
+	// block device onto (setec#91). Every other backend mounts the
 	// workspace PVC directly and never uses this volume.
 	workspaceMountVolumeName = "workspace-mount"
 
 	// kataFCWorkspaceDevicePath is where the workspace PVC's raw block
-	// device appears inside the workspace-format init container, via
-	// Kubernetes VolumeDevices. It is a Pod-internal convention: no
-	// host or CSI driver has to agree on this path.
+	// device appears inside the workload container, via Kubernetes
+	// VolumeDevices. It is a Pod-internal convention: no host or CSI
+	// driver has to agree on this path.
 	kataFCWorkspaceDevicePath = "/dev/setec-workspace"
-
-	// KataFCWorkspaceFormatInitContainerName names the init container
-	// that formats and mounts a kata-fc session's workspace block
-	// device (setec#91).
-	KataFCWorkspaceFormatInitContainerName = "workspace-format"
 )
 
 // WorkspacePVCName derives the deterministic name of the workspace PVC
@@ -304,16 +299,21 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 
 	// kata-fc has no virtio-fs (setec#91): the workspace PVC reaches the
 	// guest as a raw block device instead of a mounted filesystem, so a
-	// session on this backend needs the workspace-format init container
-	// (built from the same image as the keepalive) rather than a plain
-	// PVC mount. Decided once here, alongside usesKeepalive, so every
-	// place that touches the workspace volume agrees on which shape it
-	// takes.
+	// session on this backend needs to format and mount it itself before
+	// running the caller's actual command. Decided once here, alongside
+	// usesKeepalive, so every place that touches the workspace volume
+	// agrees on which shape it takes.
 	usesBlockWorkspace := sb.Spec.IsSession() &&
 		opts.RuntimeSelection != nil && opts.RuntimeSelection.Backend == runtimepkg.BackendKataFC
 	if usesBlockWorkspace && opts.KeepaliveImage == "" {
 		return nil, ErrNoWorkspaceFormatImage
 	}
+	// Both usesKeepalive and usesBlockWorkspace boot the same static
+	// setec-keepalive binary (as the whole command, or as a wrapper that
+	// execs into the Sandbox's own command after preparing the
+	// workspace), so both need it installed into the shared volume by
+	// the same init container.
+	needsKeepaliveBinary := usesKeepalive || usesBlockWorkspace
 
 	container := corev1.Container{
 		Name:      ContainerName,
@@ -340,11 +340,36 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 
 	if usesKeepalive {
 		container.Command = []string{KeepalivePath}
+	}
+	if needsKeepaliveBinary {
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name:      keepaliveVolumeName,
 			MountPath: keepaliveMountPath,
 			ReadOnly:  true,
 		})
+	}
+	if usesBlockWorkspace {
+		// mount(2) needs CAP_SYS_ADMIN. This is the one extra capability
+		// a kata-fc session workload carries beyond every other Sandbox
+		// (NET_RAW/NET_ADMIN, above): it is added, never full
+		// `privileged`, because the operator's own admission policy
+		// (charts/setec/templates/sandbox-namespace-host-guard.yaml,
+		// setec#159) refuses any privileged container in a Sandbox
+		// namespace outright — a stricter, non-negotiable line than
+		// ADR-0052's "the microVM is the boundary" reasoning, which
+		// covers individual capabilities, not full node access.
+		//
+		// The capability does not reach the Sandbox's own command: the
+		// keepalive wrapper (cmd/setec-keepalive) formats and mounts the
+		// workspace, then execs the Sandbox's command via syscall.Exec.
+		// Per the Linux capability model, an exec'd binary with no file
+		// capabilities of its own starts with an empty effective/
+		// permitted set regardless of what the exec'ing process held,
+		// unless the process populated its ambient set — which nothing
+		// here does. So CAP_SYS_ADMIN is held only for the format+mount
+		// step, never by the workload the Sandbox actually runs.
+		container.SecurityContext.Capabilities.Add =
+			append(container.SecurityContext.Capabilities.Add, "SYS_ADMIN")
 	}
 
 	rcName := effectiveRCName
@@ -380,7 +405,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		},
 	}
 
-	if usesKeepalive {
+	if needsKeepaliveBinary {
 		pod.Spec.InitContainers = []corev1.Container{keepaliveInstaller(opts.KeepaliveImage)}
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: keepaliveVolumeName,
@@ -416,25 +441,42 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			// provisions this backend's workspace PVC with
 			// volumeMode: Block, and a Block-mode PVC must be consumed
 			// via VolumeDevices, never VolumeMounts. The workload
-			// container still just wants an ordinary writable directory
-			// at /workspace, so an init container formats the raw
-			// device (once) and mounts it onto a Bidirectional-
-			// propagated emptyDir that the workload mounts at the same
-			// path with the ordinary HostToContainer propagation —
-			// the ADR-0007 contract (PVC mounted at /workspace) holds
-			// for the workload either way; only how it gets there
-			// differs per backend.
+			// container gets the raw device on kataFCWorkspaceDevicePath
+			// and an ordinary emptyDir at /workspace; its command is the
+			// keepalive binary (see below), which formats and mounts the
+			// device onto that emptyDir — all inside this one
+			// container's own mount namespace, so no cross-container
+			// mount propagation (and the `privileged: true` Kubernetes
+			// requires for it) is ever needed.
 			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 				Name:         workspaceMountVolumeName,
 				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			})
-			pod.Spec.InitContainers = append(pod.Spec.InitContainers, kataFCWorkspaceFormatter(opts.KeepaliveImage))
-			hostToContainer := corev1.MountPropagationHostToContainer
-			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
-				Name:             workspaceMountVolumeName,
-				MountPath:        WorkspaceMountPath,
-				MountPropagation: &hostToContainer,
+			c.VolumeDevices = append(c.VolumeDevices, corev1.VolumeDevice{
+				Name:       WorkspaceVolumeName,
+				DevicePath: kataFCWorkspaceDevicePath,
 			})
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+				Name:      workspaceMountVolumeName,
+				MountPath: WorkspaceMountPath,
+			})
+			// The keepalive binary formats (once — never reformatting an
+			// existing filesystem, internal/workspace.FormatOnce) and
+			// mounts the workspace, then either falls into its own
+			// reap loop (usesKeepalive: no Sandbox command to hand off
+			// to) or execs the Sandbox's own command (setec#91).
+			formatArgs := []string{
+				KeepalivePath,
+				"--format-workspace-device", kataFCWorkspaceDevicePath,
+				"--format-workspace-target", WorkspaceMountPath,
+				"--format-workspace-uid", strconv.Itoa(int(sandboxUID)),
+				"--format-workspace-gid", strconv.Itoa(int(sandboxGID)),
+			}
+			if !usesKeepalive {
+				formatArgs = append(formatArgs, "--")
+				formatArgs = append(formatArgs, sb.Spec.Command...)
+			}
+			c.Command = formatArgs
 		} else {
 			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
 				Name:      WorkspaceVolumeName,
@@ -621,71 +663,6 @@ func keepaliveInstaller(image string) corev1.Container {
 			Privileged:               new(false),
 			ReadOnlyRootFilesystem:   new(true),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
-	}
-}
-
-// kataFCWorkspaceFormatter is the init container that turns a kata-fc
-// session's raw workspace block device into the mounted filesystem the
-// workload expects at /workspace (setec#91).
-//
-// Kata Containers + Firecracker has no virtio-fs, so the workspace PVC
-// is provisioned with volumeMode: Block on this backend (the
-// controller sets PersistentVolumeClaimSpec.VolumeMode, ADR-0007
-// addendum) and reaches this container as a raw device via
-// VolumeDevices rather than a mounted filesystem via VolumeMounts.
-//
-// It formats the device as ext4 only if it carries no filesystem yet
-// (internal/workspace.FormatOnce never reformats an existing one, so a
-// session VM that restarts against the same PVC keeps its corpus), then
-// mounts it onto the workspace-mount emptyDir with Bidirectional
-// propagation so the mount is visible to the workload container that
-// starts after this one exits (Kubernetes shared-volume mount
-// propagation: a mount made with Bidirectional propagation on one
-// container's volumeMount is visible to any other container of the
-// same Pod mounting the same volume with HostToContainer or
-// Bidirectional propagation).
-//
-// mount(2) needs CAP_SYS_ADMIN, and the Kubernetes API itself refuses
-// Bidirectional mount propagation on anything less than a fully
-// privileged container ("Bidirectional mount propagation is available
-// only to privileged containers" — a hard admission-time validation
-// rule, not a policy this operator chooses). This costs nothing extra
-// on kata-fc per ADR-0052: the containment boundary is the microVM the
-// whole Pod runs inside, not this container's privilege — the same
-// reasoning that already re-adds NET_RAW/NET_ADMIN to the kata-fc
-// workload container for raw-socket tooling.
-func kataFCWorkspaceFormatter(image string) corev1.Container {
-	res := corev1.ResourceList{
-		corev1.ResourceCPU:    resource.MustParse("50m"),
-		corev1.ResourceMemory: resource.MustParse("32Mi"),
-	}
-	bidirectional := corev1.MountPropagationBidirectional
-	return corev1.Container{
-		Name:  KataFCWorkspaceFormatInitContainerName,
-		Image: image,
-		Args: []string{
-			"--format-workspace-device", kataFCWorkspaceDevicePath,
-			"--format-workspace-target", WorkspaceMountPath,
-			"--format-workspace-uid", strconv.Itoa(int(sandboxUID)),
-			"--format-workspace-gid", strconv.Itoa(int(sandboxGID)),
-		},
-		VolumeDevices: []corev1.VolumeDevice{{
-			Name:       WorkspaceVolumeName,
-			DevicePath: kataFCWorkspaceDevicePath,
-		}},
-		VolumeMounts: []corev1.VolumeMount{{
-			Name:             workspaceMountVolumeName,
-			MountPath:        WorkspaceMountPath,
-			MountPropagation: &bidirectional,
-		}},
-		Resources: corev1.ResourceRequirements{Requests: res, Limits: res.DeepCopy()},
-		SecurityContext: &corev1.SecurityContext{
-			Privileged:             new(true),
-			ReadOnlyRootFilesystem: new(true),
-			RunAsNonRoot:           new(false),
-			RunAsUser:              new(int64(0)),
-			RunAsGroup:             new(int64(0)),
 		},
 	}
 }

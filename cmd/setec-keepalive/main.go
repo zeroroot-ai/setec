@@ -2,9 +2,9 @@
 // Copyright 2026 Zero Root AI
 
 // Command setec-keepalive is the boot command of a session Sandbox that
-// declares no spec.command (setec#7, ADR-0006), and also carries the
-// workspace-format init container the kata-fc backend runs to prepare
-// a session's durable workspace (setec#91).
+// declares no spec.command (setec#7, ADR-0006), and also the command
+// every kata-fc session boots first to prepare its durable workspace
+// before running its own command, if it has one (setec#91).
 //
 // A session's microVM lives as long as its boot process. When that
 // process is the caller's work, the session ends the moment the work
@@ -18,14 +18,29 @@
 // which copies the executable into a shared volume, so the session
 // never depends on a shell or a sleep binary in the user's image.
 //
-// The same static binary also runs as the workspace-format init
-// container on kata-fc: `setec-keepalive --format-workspace-device DEV
-// --format-workspace-target DIR` formats DEV as ext4 (only if it is not
-// already formatted — a session's workspace PVC re-attaches to a fresh
-// Pod on every VM restart, and reformatting it would silently destroy
-// the workload's corpus) and mounts it at DIR. Reusing this binary
-// means a kata-fc session never depends on a shell or mkfs/mount
-// binaries in the user's image either.
+// The same static binary is also the workload command of every kata-fc
+// session (setec#91), because kata-fc's workspace PVC is a raw block
+// device (Firecracker has no virtio-fs) and something has to turn it
+// into a mounted filesystem before the session's own command can use
+// it:
+//
+//	setec-keepalive --format-workspace-device DEV --format-workspace-target DIR \
+//	  --format-workspace-uid UID --format-workspace-gid GID [-- CMD ARGS...]
+//
+// formats DEV as ext4 — only if it is not already formatted, since a
+// session's workspace PVC re-attaches to a fresh Pod on every VM
+// restart, and reformatting it would silently destroy the workload's
+// corpus — mounts it at DIR, chowns it to UID:GID, and then either execs
+// CMD (a session with its own spec.command) or, with no trailing
+// command, falls into the same reap loop as a plain `setec-keepalive`
+// invocation (a session with none). Doing the format, mount and exec
+// from inside the one container that will run the workload — rather
+// than a separate init container sharing its mount via Bidirectional
+// propagation — is what lets this run without `privileged: true`, which
+// the chart's own admission policy forbids in a Sandbox namespace
+// (setec#159): Kubernetes requires a privileged container for
+// Bidirectional propagation, but a container mounting into its own
+// mount namespace, for its own later exec, needs no propagation at all.
 package main
 
 import (
@@ -64,7 +79,19 @@ func main() {
 			fmt.Fprintln(os.Stderr, "setec-keepalive:", err)
 			os.Exit(1)
 		}
-		return
+		if cmdArgs := flag.Args(); len(cmdArgs) > 0 {
+			// The Sandbox declared its own command: hand off to it. On
+			// success execInto never returns — the Sandbox's command
+			// replaces this process as PID 1, exactly as it would
+			// without the workspace-format step on any other backend.
+			if err := execInto(cmdArgs); err != nil {
+				fmt.Fprintln(os.Stderr, "setec-keepalive:", err)
+				os.Exit(1)
+			}
+		}
+		// No trailing command: this is a session that declared none
+		// (setec#7), so fall into the same reap loop below as a plain
+		// `setec-keepalive` invocation.
 	}
 
 	sigs := make(chan os.Signal, 16)

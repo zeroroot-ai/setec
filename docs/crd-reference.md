@@ -155,11 +155,13 @@ Sandbox, or `Kill` on the gRPC frontend):
   Block` instead of the default `Filesystem`: Kata Containers +
   Firecracker has no virtio-fs, so a filesystem-mode volume's guest
   writes never reach the PVC, and a raw block device is the one volume
-  type Firecracker can attach to the guest. A workspace-format init
-  container formats the device as ext4 (once — never reformatting an
-  existing filesystem) and mounts it, so the workload still just sees
-  an ordinary writable directory at `/workspace` (ADR-0007 addendum,
-  setec#91). gVisor and runc are unaffected and keep the filesystem-mode
+  type Firecracker can attach to the guest. The workload container's
+  command becomes the static keepalive binary, which formats the device
+  as ext4 (once — never reformatting an existing filesystem), mounts it,
+  and then execs the Sandbox's own command (or falls into its usual
+  no-command reap loop), so the workload still just sees an ordinary
+  writable directory at `/workspace` (ADR-0007 addendum, setec#91).
+  gVisor and runc are unaffected and keep the filesystem-mode
   claim.
 - **VM restart, not completion.** The workload exiting (any exit code)
   does not finish a session. The controller deletes the dead Pod and

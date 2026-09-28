@@ -134,9 +134,9 @@ func Mount(device, target string) error {
 	return nil
 }
 
-// FormatAndMount is the single entry point a kata-fc session's
-// workspace-format init container runs: format device once — never
-// reformatting an existing filesystem — then mount it at target.
+// FormatAndMount is the single entry point a kata-fc session's workload
+// container runs, before running its own command: format device once —
+// never reformatting an existing filesystem — then mount it at target.
 // Idempotent: a Pod that runs this again against an already-formatted
 // device skips straight to mount, which is exactly what happens every
 // time a session's Pod is recreated against its durable workspace PVC.
