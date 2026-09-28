@@ -68,9 +68,13 @@ func NewClientFromSocket(socketPath string) Client {
 					d := net.Dialer{Timeout: 5 * time.Second}
 					return d.DialContext(ctx, "unix", socketPath)
 				},
-				// Keep the pool small; one FC socket == one VM.
-				MaxIdleConns:    2,
-				IdleConnTimeout: 30 * time.Second,
+				// One connection per call, closed when the call ends.
+				// Firecracker's API server caps open connections, and
+				// the kata shim holds one of them. The node-agent builds
+				// a client per RPC and the coordinator retries, so kept-
+				// alive idle connections piled up until Firecracker
+				// answered 503 "Too many open connections" (setec#19).
+				DisableKeepAlives: true,
 			},
 			// Per-request timeout is controlled via the passed ctx;
 			// we still provide a global cap so a truly hung socket

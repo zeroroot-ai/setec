@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -207,5 +208,60 @@ func TestDialFailureSurfaced(t *testing.T) {
 	c := NewClientFromSocket(filepath.Join(t.TempDir(), "missing.sock"))
 	if err := c.Pause(context.Background()); err == nil {
 		t.Fatalf("expected dial error")
+	}
+}
+
+// TestClientLeavesNoConnectionOpen asserts that each API call closes
+// its connection. Firecracker caps open API connections, and the kata
+// shim holds one; kept-alive idle connections from repeated RPCs made
+// Firecracker answer 503 "Too many open connections" (setec#19).
+func TestClientLeavesNoConnectionOpen(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "fc.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var mu sync.Mutex
+	open := 0
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		// The server must not close idle connections itself, or the
+		// test cannot tell a leaking client from a closing one.
+		ReadHeaderTimeout: 2 * time.Second,
+		IdleTimeout:       time.Minute,
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch st {
+			case http.StateNew:
+				open++
+			case http.StateClosed, http.StateHijacked:
+				open--
+			}
+		},
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// A client per call, as the node-agent builds one per RPC.
+	for i := 0; i < 5; i++ {
+		if err := NewClientFromSocket(sock).Pause(context.Background()); err != nil {
+			t.Fatalf("Pause %d: %v", i, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := open
+		mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d API connections still open after the calls returned; want 0", n)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
