@@ -44,15 +44,31 @@ import (
 // Every refusal below is paired with the acceptance case it is
 // measured against.
 
+const (
+	// testNodeName is the node most tests dial. Its value never
+	// matters. What matters is that fixedPod's fake resolver answers
+	// for it.
+	testNodeName = "node-1"
+	// testNodeAgentIP is the loopback address fixedPod's fake
+	// node-agent Pod reports, and the address every non-restart test
+	// listens on.
+	testNodeAgentIP = "127.0.0.1"
+	// unusedAuthorityPattern is an AuthorityPattern for tests that
+	// never reach the point of dialing (they fail earlier, on a nil
+	// Credentials, a nil Resolver, a failing Resolver, or a Pod with
+	// no IP), so its value never matters either.
+	unusedAuthorityPattern = "%s.setec-node-agent.setec-system.svc:50052"
+)
+
 func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	port, _ := servePool(t, "127.0.0.1", ca, ca)
+	port, _ := servePool(t, testNodeAgentIP, ca, ca)
 
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	client, err := d.Dial(t.Context(), "node-1")
+	client, err := d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -69,12 +85,12 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	// The server's identity comes from a CA the operator does not
 	// trust. It still trusts the operator, so only the direction
 	// under test can fail.
-	port, _ := servePool(t, "127.0.0.1", foreign, ca)
+	port, _ := servePool(t, testNodeAgentIP, foreign, ca)
 
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	client, err := d.Dial(t.Context(), "node-1")
+	client, err := d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -91,12 +107,12 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
 	foreign := newCA(t)
-	port, _ := servePool(t, "127.0.0.1", ca, foreign)
+	port, _ := servePool(t, testNodeAgentIP, ca, foreign)
 
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	client, err := d.Dial(t.Context(), "node-1")
+	client, err := d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -108,12 +124,12 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	port, _ := servePlaintextPool(t, "127.0.0.1")
+	port, _ := servePlaintextPool(t, testNodeAgentIP)
 
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), authorityPattern(port), operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	client, err := d.Dial(t.Context(), "node-1")
+	client, err := d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -127,10 +143,10 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 // credential module exists. A nil credential must never mean plaintext.
 func TestGRPCDialer_RefusesToDialWithoutCredentials(t *testing.T) {
 	t.Parallel()
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), "%s.setec-node-agent.setec-system.svc:50052", nil)
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), unusedAuthorityPattern, nil)
 	t.Cleanup(func() { _ = d.Close() })
 
-	_, err := d.Dial(t.Context(), "node-1")
+	_, err := d.Dial(t.Context(), testNodeName)
 	if err == nil {
 		t.Fatal("Dial with no credentials: want error, got nil")
 	}
@@ -145,10 +161,10 @@ func TestGRPCDialer_RefusesToDialWithoutCredentials(t *testing.T) {
 func TestGRPCDialer_RequiresAResolver(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	d := NewGRPCDialer(nil, "%s.setec-node-agent.setec-system.svc:50052", operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(nil, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	_, err := d.Dial(t.Context(), "node-1")
+	_, err := d.Dial(t.Context(), testNodeName)
 	if err == nil {
 		t.Fatal("Dial with no Resolver: want error, got nil")
 	}
@@ -160,7 +176,7 @@ func TestGRPCDialer_RequiresAResolver(t *testing.T) {
 func TestGRPCDialer_RejectsAnEmptyNodeName(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	d := NewGRPCDialer(fixedPod("node-1", "127.0.0.1"), "%s.setec-node-agent.setec-system.svc:50052", operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(fixedPod(testNodeAgentIP), unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
 	if _, err := d.Dial(t.Context(), ""); err == nil {
@@ -176,10 +192,10 @@ func TestGRPCDialer_PropagatesResolverFailure(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
 	resolveErr := errors.New("podresolver: no Running and Ready node-agent pod found on node \"node-1\"")
-	d := NewGRPCDialer(&fakeResolver{err: resolveErr}, "%s.setec-node-agent.setec-system.svc:50052", operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(&fakeResolver{err: resolveErr}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	_, err := d.Dial(t.Context(), "node-1")
+	_, err := d.Dial(t.Context(), testNodeName)
 	if err == nil {
 		t.Fatal("Dial with a failing Resolver: want error, got nil")
 	}
@@ -195,10 +211,10 @@ func TestGRPCDialer_RejectsAPodWithNoIP(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("no-ip")}}
-	d := NewGRPCDialer(&fakeResolver{pod: pod}, "%s.setec-node-agent.setec-system.svc:50052", operatorCredentials(t, ca, ca))
+	d := NewGRPCDialer(&fakeResolver{pod: pod}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	_, err := d.Dial(t.Context(), "node-1")
+	_, err := d.Dial(t.Context(), testNodeName)
 	if err == nil {
 		t.Fatal("Dial against a Pod with no PodIP: want error, got nil")
 	}
@@ -233,7 +249,7 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 	d := NewGRPCDialer(resolver, authorityPattern(port), operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
-	client, err := d.Dial(t.Context(), "node-1")
+	client, err := d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial (old node-agent): %v", err)
 	}
@@ -247,7 +263,7 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 	oldSrv.Stop()
 	resolver.set(podWithUID("new-uid", "127.0.0.3"))
 
-	client, err = d.Dial(t.Context(), "node-1")
+	client, err = d.Dial(t.Context(), testNodeName)
 	if err != nil {
 		t.Fatalf("Dial (new node-agent): %v", err)
 	}
@@ -296,10 +312,10 @@ func (f *fakeResolver) set(pod *corev1.Pod) {
 	f.pod = pod
 }
 
-// fixedPod is a fakeResolver that always resolves nodeName to a
-// Running, Ready Pod at the given IP with a stable UID.
-func fixedPod(nodeName, ip string) *fakeResolver {
-	return &fakeResolver{pod: podWithUID(nodeName+"-uid", ip)}
+// fixedPod is a fakeResolver that always resolves to a Running, Ready
+// Pod at the given IP with a stable UID.
+func fixedPod(ip string) *fakeResolver {
+	return &fakeResolver{pod: podWithUID("fixed-uid", ip)}
 }
 
 // podWithUID returns a Running, Ready node-agent Pod fixture with the

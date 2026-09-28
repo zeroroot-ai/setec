@@ -22,6 +22,20 @@ import (
 // which node-agent Pod is on the node. These tests pin the three ways
 // that lookup can go wrong plus the case where it must succeed.
 
+const (
+	// testNamespace is the namespace every test's PodResolver watches,
+	// unless a test is specifically proving the namespace scope.
+	testNamespace = "setec-system"
+	// testWorkerNode is the node under test in every case that is not
+	// specifically about a different node.
+	testWorkerNode = "worker-1"
+	// testPodName and testPodIP are the acceptance-case Pod's name and
+	// address. Tests that need a different Pod name or IP say so
+	// explicitly.
+	testPodName = "node-agent-abc"
+	testPodIP   = "10.0.0.5"
+)
+
 func newPodResolverScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -57,21 +71,21 @@ func nodeAgentPod(name, namespace, node string, phase corev1.PodPhase, ready cor
 // refusal below is measured against.
 func TestPodResolver_FindsTheRunningReadyPod(t *testing.T) {
 	t.Parallel()
-	pod := nodeAgentPod("node-agent-abc", "setec-system", "worker-1", corev1.PodRunning, corev1.ConditionTrue, "10.0.0.5")
+	pod := nodeAgentPod(testPodName, testNamespace, testWorkerNode, corev1.PodRunning, corev1.ConditionTrue, testPodIP)
 	r := &PodResolver{
 		Client:    newFakePodClient(t, pod),
-		Namespace: "setec-system",
+		Namespace: testNamespace,
 	}
 
-	got, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	got, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err != nil {
 		t.Fatalf("ResolveNodeAgentPod: %v", err)
 	}
-	if got.Name != "node-agent-abc" {
-		t.Fatalf("resolved pod = %q, want %q", got.Name, "node-agent-abc")
+	if got.Name != testPodName {
+		t.Fatalf("resolved pod = %q, want %q", got.Name, testPodName)
 	}
-	if got.Status.PodIP != "10.0.0.5" {
-		t.Fatalf("resolved PodIP = %q, want %q", got.Status.PodIP, "10.0.0.5")
+	if got.Status.PodIP != testPodIP {
+		t.Fatalf("resolved PodIP = %q, want %q", got.Status.PodIP, testPodIP)
 	}
 }
 
@@ -82,17 +96,17 @@ func TestPodResolver_FindsTheRunningReadyPod(t *testing.T) {
 func TestPodResolver_NoPodOnNode(t *testing.T) {
 	t.Parallel()
 	// A node-agent Pod exists, but on a different node.
-	pod := nodeAgentPod("node-agent-abc", "setec-system", "worker-2", corev1.PodRunning, corev1.ConditionTrue, "10.0.0.5")
+	pod := nodeAgentPod(testPodName, testNamespace, "worker-2", corev1.PodRunning, corev1.ConditionTrue, testPodIP)
 	r := &PodResolver{
 		Client:    newFakePodClient(t, pod),
-		Namespace: "setec-system",
+		Namespace: testNamespace,
 	}
 
-	_, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	_, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err == nil {
 		t.Fatal("ResolveNodeAgentPod with no pod on the node: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), `"worker-1"`) {
+	if !strings.Contains(err.Error(), `"`+testWorkerNode+`"`) {
 		t.Fatalf("error = %q, want it to name the node", err)
 	}
 }
@@ -103,13 +117,13 @@ func TestPodResolver_NoPodOnNode(t *testing.T) {
 // anyway is a slower, more confusing way to fail than refusing here.
 func TestPodResolver_RefusesANotReadyPod(t *testing.T) {
 	t.Parallel()
-	pod := nodeAgentPod("node-agent-abc", "setec-system", "worker-1", corev1.PodPending, corev1.ConditionFalse, "")
+	pod := nodeAgentPod(testPodName, testNamespace, testWorkerNode, corev1.PodPending, corev1.ConditionFalse, "")
 	r := &PodResolver{
 		Client:    newFakePodClient(t, pod),
-		Namespace: "setec-system",
+		Namespace: testNamespace,
 	}
 
-	_, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	_, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err == nil {
 		t.Fatal("ResolveNodeAgentPod against a not-Ready pod: want error, got nil")
 	}
@@ -120,13 +134,13 @@ func TestPodResolver_RefusesANotReadyPod(t *testing.T) {
 // started) before its readiness probe has passed once.
 func TestPodResolver_RefusesARunningButNotReadyPod(t *testing.T) {
 	t.Parallel()
-	pod := nodeAgentPod("node-agent-abc", "setec-system", "worker-1", corev1.PodRunning, corev1.ConditionFalse, "10.0.0.5")
+	pod := nodeAgentPod(testPodName, testNamespace, testWorkerNode, corev1.PodRunning, corev1.ConditionFalse, testPodIP)
 	r := &PodResolver{
 		Client:    newFakePodClient(t, pod),
-		Namespace: "setec-system",
+		Namespace: testNamespace,
 	}
 
-	_, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	_, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err == nil {
 		t.Fatal("ResolveNodeAgentPod against a Running-but-not-Ready pod: want error, got nil")
 	}
@@ -141,11 +155,11 @@ func TestPodResolver_RefusesARunningButNotReadyPod(t *testing.T) {
 // not report the one it used to know about, and it must not error.
 func TestPodResolver_FindsTheNewPodAfterARestart(t *testing.T) {
 	t.Parallel()
-	oldPod := nodeAgentPod("node-agent-old", "setec-system", "worker-1", corev1.PodRunning, corev1.ConditionTrue, "10.0.0.5")
+	oldPod := nodeAgentPod("node-agent-old", testNamespace, testWorkerNode, corev1.PodRunning, corev1.ConditionTrue, testPodIP)
 	c := newFakePodClient(t, oldPod)
-	r := &PodResolver{Client: c, Namespace: "setec-system"}
+	r := &PodResolver{Client: c, Namespace: testNamespace}
 
-	before, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	before, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err != nil {
 		t.Fatalf("ResolveNodeAgentPod before restart: %v", err)
 	}
@@ -159,12 +173,12 @@ func TestPodResolver_FindsTheNewPodAfterARestart(t *testing.T) {
 	if err := c.Delete(t.Context(), oldPod); err != nil {
 		t.Fatalf("delete old pod: %v", err)
 	}
-	newPod := nodeAgentPod("node-agent-new", "setec-system", "worker-1", corev1.PodRunning, corev1.ConditionTrue, "10.0.0.9")
+	newPod := nodeAgentPod("node-agent-new", testNamespace, testWorkerNode, corev1.PodRunning, corev1.ConditionTrue, "10.0.0.9")
 	if err := c.Create(t.Context(), newPod); err != nil {
 		t.Fatalf("create new pod: %v", err)
 	}
 
-	after, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	after, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err != nil {
 		t.Fatalf("ResolveNodeAgentPod after restart: %v", err)
 	}
@@ -182,13 +196,13 @@ func TestPodResolver_FindsTheNewPodAfterARestart(t *testing.T) {
 // label collision) must never be dialed.
 func TestPodResolver_IgnoresPodsInOtherNamespaces(t *testing.T) {
 	t.Parallel()
-	pod := nodeAgentPod("node-agent-abc", "other-namespace", "worker-1", corev1.PodRunning, corev1.ConditionTrue, "10.0.0.5")
+	pod := nodeAgentPod(testPodName, "other-namespace", testWorkerNode, corev1.PodRunning, corev1.ConditionTrue, testPodIP)
 	r := &PodResolver{
 		Client:    newFakePodClient(t, pod),
-		Namespace: "setec-system",
+		Namespace: testNamespace,
 	}
 
-	_, err := r.ResolveNodeAgentPod(t.Context(), "worker-1")
+	_, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode)
 	if err == nil {
 		t.Fatal("ResolveNodeAgentPod against a pod in another namespace: want error, got nil")
 	}
@@ -198,7 +212,7 @@ func TestPodResolver_IgnoresPodsInOtherNamespaces(t *testing.T) {
 // the same mistake cannot slip in below it.
 func TestPodResolver_RequiresANodeName(t *testing.T) {
 	t.Parallel()
-	r := &PodResolver{Client: newFakePodClient(t), Namespace: "setec-system"}
+	r := &PodResolver{Client: newFakePodClient(t), Namespace: testNamespace}
 	if _, err := r.ResolveNodeAgentPod(t.Context(), ""); err == nil {
 		t.Fatal("ResolveNodeAgentPod with an empty node name: want error, got nil")
 	}
