@@ -570,6 +570,22 @@ jobs:
           set -euo pipefail
           docker pull "${KEEPALIVE_IMAGE}"
           docker save "${KEEPALIVE_IMAGE}" | docker exec -i "${KVM_NODE}" ctr -n k8s.io images import -
+          # The guard's installer creates the thin-pool and restarts
+          # containerd, and devmapper reports "skip" or an error until it
+          # reloads with the pool. Mount only once it reports "ok"
+          # (run 36491111490 raced it: "snapshotter not loaded:
+          # devmapper: invalid argument").
+          for _ in $(seq 1 60); do
+            if docker exec "${KVM_NODE}" ctr plugins ls | grep -qE 'io\.containerd\.snapshotter\.v1 +devmapper +\S+ +ok'; then
+              break
+            fi
+            sleep 3
+          done
+          docker exec "${KVM_NODE}" ctr plugins ls | grep -E 'io\.containerd\.snapshotter\.v1 +devmapper +\S+ +ok' || {
+            echo "::error::the devmapper snapshotter on ${KVM_NODE} is not ok after 3 minutes"
+            docker exec "${KVM_NODE}" ctr plugins ls | grep devmapper || true
+            exit 1
+          }
           docker exec "${KVM_NODE}" mkdir -p /tmp/setec-keepalive-mount
           docker exec "${KVM_NODE}" ctr -n k8s.io images mount --snapshotter devmapper "${KEEPALIVE_IMAGE}" /tmp/setec-keepalive-mount
           docker exec "${KVM_NODE}" ctr -n k8s.io images unmount /tmp/setec-keepalive-mount
