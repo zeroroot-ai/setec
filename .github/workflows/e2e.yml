@@ -549,24 +549,14 @@ jobs:
         # RuntimeClass before then just sits Pending.
         run: |
           set -euo pipefail
-          printf '%s\n' \
-            "apiVersion: v1" \
-            "kind: Pod" \
-            "metadata:" \
-            "  name: setec-keepalive-warmup" \
-            "spec:" \
-            "  runtimeClassName: kata-fc" \
-            "  restartPolicy: Never" \
-            "  nodeSelector:" \
-            "    setec.zeroroot.ai/e2e-role: sandbox-host" \
-            "  containers:" \
-            "    - name: warmup" \
-            "      image: ${KEEPALIVE_IMAGE}" \
-            "      args: [\"--install\", \"/tmp\"]" \
-            | kubectl apply -f -
-          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/setec-keepalive-warmup --timeout=180s
-          kubectl logs pod/setec-keepalive-warmup || true
-          kubectl delete pod/setec-keepalive-warmup --ignore-not-found
+          echo "::group::containerd's own drop-in (discard_unpacked_layers)"
+          docker exec "${KVM_NODE}" find /etc/containerd/config.d -type f -exec sh -c 'echo "--- {} ---"; cat "{}"' \; || true
+          echo "::endgroup::"
+          echo "::group::ctr pull + unpack directly against devmapper (bypasses CRI's wrapped error)"
+          docker exec "${KVM_NODE}" ctr -n k8s.io images pull "${KEEPALIVE_IMAGE}"
+          docker exec "${KVM_NODE}" ctr -n k8s.io content ls | grep a5789fc40e828c4e7467626e3f69ec5dea8e5da22fe660db8ae6d16f777b0bbf || echo "layer not in content store after pull"
+          docker exec "${KVM_NODE}" ctr -n k8s.io images unpack --snapshotter devmapper "${KEEPALIVE_IMAGE}"
+          echo "::endgroup::"
 
       - name: The ${{ matrix.pass }} scenarios
         env:
