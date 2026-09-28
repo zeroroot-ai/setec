@@ -72,11 +72,11 @@ func (c *Coordinator) CheckpointSession(
 	}
 
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		SnapshotId:       SessionCheckpointID(sb, sequence),
-		StorageBackend:   backendName,
-		SourceKataSocket: c.socketForPod(pod),
-		SessionKek:       sessionKEK,
+		SandboxId:      sb.Namespace + "/" + sb.Name,
+		SnapshotId:     SessionCheckpointID(sb, sequence),
+		StorageBackend: backendName,
+		SourcePodUid:   string(pod.UID),
+		SessionKek:     sessionKEK,
 	})
 	if rpcErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonCheckpointCreateFailed, rpcErr.Error())
@@ -159,14 +159,14 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	// fresh machine identity, reconciles to its new Pod IP, and takes
 	// a node-unique vsock CID — fail-closed like the E10 path.
 	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       ref,
-		StorageRef:       ref,
-		StorageBackend:   backendName,
-		KataSocketTarget: c.socketForPod(pod),
-		SessionKek:       sessionKEK,
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		PodIp:            pod.Status.PodIP,
-		Hostname:         sb.Name,
+		SnapshotId:     ref,
+		StorageRef:     ref,
+		StorageBackend: backendName,
+		TargetPodUid:   string(pod.UID),
+		SessionKek:     sessionKEK,
+		SandboxId:      sb.Namespace + "/" + sb.Name,
+		PodIp:          pod.Status.PodIP,
+		Hostname:       sb.Name,
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -194,8 +194,8 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	if !decision.Allowed {
 		msg := c.gateRefusalMsg("session checkpoint "+ref, decision, gateErr)
 		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-			SandboxId:        sb.Namespace + "/" + sb.Name,
-			KataSocketTarget: c.socketForPod(pod),
+			SandboxId:    sb.Namespace + "/" + sb.Name,
+			TargetPodUid: string(pod.UID),
 		}); pauseErr != nil {
 			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
 		}

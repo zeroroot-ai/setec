@@ -86,8 +86,8 @@ func TestWarmStartFromPool_Restored(t *testing.T) {
 	if na.lastClaim.GetImageRef() != "ghcr.io/org/app:v1" {
 		t.Fatalf("claim image = %q", na.lastClaim.GetImageRef())
 	}
-	if !strings.Contains(na.lastClaim.GetKataSocketTarget(), "pod-uid-123") {
-		t.Fatalf("claim socket = %q, want pod-UID-derived path", na.lastClaim.GetKataSocketTarget())
+	if na.lastClaim.GetTargetPodUid() != "pod-uid-123" {
+		t.Fatalf("claim target_pod_uid = %q, want the Pod UID pod-uid-123", na.lastClaim.GetTargetPodUid())
 	}
 
 	evs := strings.Join(drainEvents(rec), "\n")

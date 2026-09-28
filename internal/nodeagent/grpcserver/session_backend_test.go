@@ -40,6 +40,7 @@ func sessionTestServer(t *testing.T, fc *fakeFirecracker) *Server {
 			}
 		},
 		FirecrackerFactory: func(string) firecracker.Client { return fc },
+		KataSandboxes:      fakeKata{},
 		TempDir:            filepath.Join(base, "tmp"),
 	}
 }
@@ -53,10 +54,10 @@ func TestSessionKEKRouting(t *testing.T) {
 
 	// session_kek with the local-disk backend is rejected.
 	_, err := srv.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SnapshotId:       "bad",
-		StorageBackend:   "local-disk",
-		SourceKataSocket: "/tmp/sock",
-		SessionKek:       testKEK(1),
+		SnapshotId:     "bad",
+		StorageBackend: "local-disk",
+		SourcePodUid:   testPodUID,
+		SessionKek:     testKEK(1),
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("session_kek+local-disk = %v, want InvalidArgument", err)
@@ -64,7 +65,7 @@ func TestSessionKEKRouting(t *testing.T) {
 
 	// Unknown backend is rejected.
 	_, err = srv.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SnapshotId: "bad2", StorageBackend: "nfs", SourceKataSocket: "/tmp/sock",
+		SnapshotId: "bad2", StorageBackend: "nfs", SourcePodUid: testPodUID,
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unknown backend = %v, want InvalidArgument", err)
@@ -74,7 +75,7 @@ func TestSessionKEKRouting(t *testing.T) {
 	srvNoS3 := sessionTestServer(t, fc)
 	srvNoS3.SessionStorage = nil
 	_, err = srvNoS3.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SnapshotId: "x", StorageBackend: "s3", SourceKataSocket: "/tmp/sock", SessionKek: testKEK(1),
+		SnapshotId: "x", StorageBackend: "s3", SourcePodUid: testPodUID, SessionKek: testKEK(1),
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("s3 unconfigured = %v, want FailedPrecondition", err)
@@ -88,11 +89,11 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 	kek := testKEK(7)
 
 	resp, err := srv.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        "ns/sb",
-		SnapshotId:       "ns-sb-ckpt-1",
-		StorageBackend:   "s3",
-		SourceKataSocket: "/tmp/sock",
-		SessionKek:       kek,
+		SandboxId:      "ns/sb",
+		SnapshotId:     "ns-sb-ckpt-1",
+		StorageBackend: "s3",
+		SourcePodUid:   testPodUID,
+		SessionKek:     kek,
 	})
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
@@ -103,11 +104,11 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 
 	// Restore with the right KEK succeeds and reaches LoadSnapshot.
 	rresp, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-sb-ckpt-1",
-		StorageRef:       resp.GetStorageRef(),
-		StorageBackend:   "s3",
-		KataSocketTarget: "/tmp/target-sock",
-		SessionKek:       kek,
+		SnapshotId:     "ns-sb-ckpt-1",
+		StorageRef:     resp.GetStorageRef(),
+		StorageBackend: "s3",
+		TargetPodUid:   testPodUID,
+		SessionKek:     kek,
 	})
 	if err != nil || !rresp.GetSuccess() {
 		t.Fatalf("RestoreSandbox = (%v,%v), want success", rresp, err)
@@ -118,11 +119,11 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 
 	// Restore with the wrong KEK fails closed (corrupted, DataLoss).
 	_, err = srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-sb-ckpt-1",
-		StorageRef:       resp.GetStorageRef(),
-		StorageBackend:   "s3",
-		KataSocketTarget: "/tmp/target-sock",
-		SessionKek:       testKEK(9),
+		SnapshotId:     "ns-sb-ckpt-1",
+		StorageRef:     resp.GetStorageRef(),
+		StorageBackend: "s3",
+		TargetPodUid:   testPodUID,
+		SessionKek:     testKEK(9),
 	})
 	if status.Code(err) != codes.DataLoss {
 		t.Fatalf("wrong-KEK restore = %v, want DataLoss", err)
@@ -138,11 +139,11 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 		t.Fatalf("DeleteSnapshot = (%v,%v), want success", dresp, err)
 	}
 	_, err = srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-sb-ckpt-1",
-		StorageRef:       resp.GetStorageRef(),
-		StorageBackend:   "s3",
-		KataSocketTarget: "/tmp/target-sock",
-		SessionKek:       kek,
+		SnapshotId:     "ns-sb-ckpt-1",
+		StorageRef:     resp.GetStorageRef(),
+		StorageBackend: "s3",
+		TargetPodUid:   testPodUID,
+		SessionKek:     kek,
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("restore after delete = %v, want NotFound", err)

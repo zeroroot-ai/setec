@@ -84,13 +84,6 @@ type Coordinator struct {
 	// Tracer is optional; nil disables span emission.
 	Tracer trace.Tracer
 
-	// KataSocketPattern is a format string for the per-Sandbox
-	// Firecracker API socket. The format receives a single string
-	// argument: the Pod UID (which Kata uses as the sandbox id). The
-	// default "/run/kata-containers/%s/firecracker.socket" matches
-	// the documented Kata 3.x layout; custom Kata builds may override.
-	KataSocketPattern string
-
 	// StorageBackendName is the backend identifier forwarded to the
 	// node-agent in CreateSnapshotRequest.StorageBackend. Defaults to
 	// "local-disk".
@@ -157,10 +150,6 @@ const (
 	// Sandbox.
 	WarmStartRejected WarmStartOutcome = "rejected"
 )
-
-// defaultKataSocketPattern is used when the Coordinator's
-// KataSocketPattern field is empty.
-const defaultKataSocketPattern = "/run/kata-containers/%s/firecracker.socket"
 
 // actionRecordSnapshotPhase is the action constant for events emitted
 // by the Coordinator. Defined locally to avoid an import cycle with
@@ -244,12 +233,11 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 
 	// 3. Issue the CreateSnapshot RPC.
-	socket := c.socketForPod(pod)
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		SnapshotId:       sb.Namespace + "-" + sb.Spec.Snapshot.Name,
-		StorageBackend:   c.backendName(),
-		SourceKataSocket: socket,
+		SandboxId:      sb.Namespace + "/" + sb.Name,
+		SnapshotId:     sb.Namespace + "-" + sb.Spec.Snapshot.Name,
+		StorageBackend: c.backendName(),
+		SourcePodUid:   string(pod.UID),
 	})
 	if rpcErr != nil {
 		reason := EventReasonSnapshotCreateFailed
@@ -395,13 +383,13 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 
 	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       snap.Namespace + "-" + snap.Name,
-		StorageRef:       snap.Spec.StorageRef,
-		StorageBackend:   snap.Spec.StorageBackend,
-		KataSocketTarget: c.socketForPod(pod),
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		PodIp:            pod.Status.PodIP,
-		Hostname:         sb.Name,
+		SnapshotId:     snap.Namespace + "-" + snap.Name,
+		StorageRef:     snap.Spec.StorageRef,
+		StorageBackend: snap.Spec.StorageBackend,
+		TargetPodUid:   string(pod.UID),
+		SandboxId:      sb.Namespace + "/" + sb.Name,
+		PodIp:          pod.Status.PodIP,
+		Hostname:       sb.Name,
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -429,8 +417,8 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	if !decision.Allowed {
 		msg := c.gateRefusalMsg("snapshot "+snap.Name, decision, gateErr)
 		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-			SandboxId:        sb.Namespace + "/" + sb.Name,
-			KataSocketTarget: c.socketForPod(pod),
+			SandboxId:    sb.Namespace + "/" + sb.Name,
+			TargetPodUid: string(pod.UID),
 		}); pauseErr != nil {
 			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
 		}
@@ -519,12 +507,12 @@ func (c *Coordinator) WarmStartFromPool(
 	}
 
 	resp, rpcErr := na.ClaimPoolEntry(ctx, &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     cls.Name,
-		ImageRef:         cls.Spec.PreWarmImage,
-		KataSocketTarget: c.socketForPod(pod),
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		PodIp:            pod.Status.PodIP,
-		Hostname:         sb.Name,
+		SandboxClass: cls.Name,
+		ImageRef:     cls.Spec.PreWarmImage,
+		TargetPodUid: string(pod.UID),
+		SandboxId:    sb.Namespace + "/" + sb.Name,
+		PodIp:        pod.Status.PodIP,
+		Hostname:     sb.Name,
 	})
 	switch {
 	case rpcErr != nil:
@@ -563,8 +551,8 @@ func (c *Coordinator) WarmStartFromPool(
 	if !decision.Allowed {
 		msg := c.gateRefusalMsg(fmt.Sprintf("pool entry %q", resp.GetEntryId()), decision, gateErr)
 		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-			SandboxId:        sb.Namespace + "/" + sb.Name,
-			KataSocketTarget: c.socketForPod(pod),
+			SandboxId:    sb.Namespace + "/" + sb.Name,
+			TargetPodUid: string(pod.UID),
 		}); pauseErr != nil {
 			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
 		}
@@ -622,8 +610,8 @@ func (c *Coordinator) Pause(ctx context.Context, sb *setecv1alpha1.Sandbox) erro
 		return dialErr
 	}
 	resp, rpcErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		KataSocketTarget: c.socketForPod(pod),
+		SandboxId:    sb.Namespace + "/" + sb.Name,
+		TargetPodUid: string(pod.UID),
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -689,8 +677,8 @@ func (c *Coordinator) Resume(ctx context.Context, sb *setecv1alpha1.Sandbox) err
 		return dialErr
 	}
 	resp, rpcErr := na.ResumeSandbox(ctx, &setecgrpcv1.ResumeSandboxRequest{
-		SandboxId:        sb.Namespace + "/" + sb.Name,
-		KataSocketTarget: c.socketForPod(pod),
+		SandboxId:    sb.Namespace + "/" + sb.Name,
+		TargetPodUid: string(pod.UID),
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -743,21 +731,6 @@ func (c *Coordinator) getPod(ctx context.Context, sb *setecv1alpha1.Sandbox) (*c
 		return nil, fmt.Errorf("coordinator: get Pod %q: %w", name, err)
 	}
 	return pod, nil
-}
-
-// socketForPod renders the KataSocketPattern for the given Pod using
-// the Pod UID (which Kata uses as the sandbox id). An empty UID
-// returns an empty string so callers can detect the error.
-func (c *Coordinator) socketForPod(pod *corev1.Pod) string {
-	uid := string(pod.UID)
-	if uid == "" {
-		return ""
-	}
-	pattern := c.KataSocketPattern
-	if pattern == "" {
-		pattern = defaultKataSocketPattern
-	}
-	return fmt.Sprintf(pattern, uid)
 }
 
 // backendName returns the configured storage backend identifier,

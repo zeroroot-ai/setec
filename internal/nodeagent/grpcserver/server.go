@@ -29,6 +29,7 @@ import (
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
@@ -60,6 +61,11 @@ type Server struct {
 	// firecracker.NewClientFromSocket.
 	FirecrackerFactory func(sockPath string) firecracker.Client
 
+	// KataSandboxes finds a Pod's kata Firecracker socket and hybrid
+	// vsock on this node from the Pod UID (setec#19). Production wires
+	// a katasandbox.Resolver backed by containerd.
+	KataSandboxes KataSandboxResolver
+
 	// Pool is the pre-warm pool manager. When nil, QueryPool returns
 	// an empty list (no pool feature).
 	Pool *pool.Manager
@@ -80,7 +86,7 @@ type Server struct {
 
 	// ReseedVsockPaths returns candidate host paths for the restored
 	// VM's vsock Unix socket. nil uses defaultReseedVsockPaths.
-	ReseedVsockPaths func(in *setecgrpcv1.RestoreSandboxRequest) []string
+	ReseedVsockPaths func(in *setecgrpcv1.RestoreSandboxRequest, kata katasandbox.Paths) []string
 
 	// ReseedObserver, when non-nil, receives "success" or "failure"
 	// after each reseed attempt (metrics hook).
@@ -195,15 +201,16 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	if err := storage.ValidateSnapshotID(in.GetSnapshotId()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "snapshot_id: %v", err)
 	}
-	if in.GetSourceKataSocket() == "" {
-		return nil, status.Error(codes.InvalidArgument, "source_kata_socket required")
+	kata, err := s.kataPaths(ctx, in.GetSourcePodUid(), "source_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
 	if err != nil {
 		return nil, err
 	}
 
-	fc := s.FirecrackerFactory(in.GetSourceKataSocket())
+	fc := s.FirecrackerFactory(kata.APISocket)
 
 	if err := fc.Pause(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker pause: %v", err)
@@ -267,8 +274,9 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	if in.GetStorageRef() == "" {
 		return nil, status.Error(codes.InvalidArgument, "storage_ref required")
 	}
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
 	if err != nil {
@@ -299,7 +307,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
 	}
 
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
 		return &setecgrpcv1.RestoreSandboxResponse{
 			Success: false,
@@ -307,9 +315,9 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		}, status.Errorf(codes.Internal, "firecracker loadSnapshot: %v", err)
 	}
 
-	candidates := defaultReseedVsockPaths(in)
+	candidates := defaultReseedVsockPaths(in, kata)
 	if s.ReseedVsockPaths != nil {
-		candidates = s.ReseedVsockPaths(in)
+		candidates = s.ReseedVsockPaths(in, kata)
 	}
 
 	// Active entropy reseed (setec#72). The snapshot's CSPRNG state is
@@ -423,21 +431,47 @@ func (s *Server) observeReseed(outcome string) {
 //     an absolute on-node directory, and setec-pool-vm binds the vsock
 //     device there (vsockUDSPath); non-absolute (opaque backend) refs
 //     contribute nothing.
-//   - <dir(kataSocketTarget)>/vsock.sock — the sibling of the target
-//     Firecracker API socket, for restores into Kata-managed pods.
+//   - the target kata sandbox's hybrid vsock, <vm>/root/kata.hvsock
+//     (katasandbox), for restores into kata-managed pods.
 //
 // Candidate probing is not a fail-open: whichever path connects must
 // still complete the digest-verified reseed, and if none does the
 // restore fails closed.
-func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest) []string {
+func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest, kata katasandbox.Paths) []string {
 	var out []string
 	if ref := in.GetStorageRef(); ref != "" && filepath.IsAbs(ref) {
 		out = append(out, filepath.Join(ref, "vsock.sock"))
 	}
-	if ks := in.GetKataSocketTarget(); ks != "" {
-		out = append(out, filepath.Join(filepath.Dir(ks), "vsock.sock"))
+	if kata.HybridVsock != "" {
+		out = append(out, kata.HybridVsock)
 	}
 	return out
+}
+
+// KataSandboxResolver finds a Pod's kata Firecracker files on this
+// node from the Pod UID.
+type KataSandboxResolver interface {
+	Resolve(ctx context.Context, podUID string) (katasandbox.Paths, error)
+}
+
+// kataPaths resolves the kata sandbox of the Pod with podUID, mapping
+// the failure to a gRPC status. field names the request field for an
+// InvalidArgument.
+func (s *Server) kataPaths(ctx context.Context, podUID, field string) (katasandbox.Paths, error) {
+	if podUID == "" {
+		return katasandbox.Paths{}, status.Errorf(codes.InvalidArgument, "%s required", field)
+	}
+	if s.KataSandboxes == nil {
+		return katasandbox.Paths{}, status.Error(codes.FailedPrecondition, "no kata sandbox resolver configured")
+	}
+	p, err := s.KataSandboxes.Resolve(ctx, podUID)
+	if errors.Is(err, katasandbox.ErrNotFound) {
+		return katasandbox.Paths{}, status.Errorf(codes.NotFound, "%v", err)
+	}
+	if err != nil {
+		return katasandbox.Paths{}, status.Errorf(codes.Internal, "resolve kata sandbox: %v", err)
+	}
+	return p, nil
 }
 
 // PauseSandbox is a direct wrap of firecracker.Pause.
@@ -446,10 +480,11 @@ func (s *Server) PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxR
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
 
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.Pause(ctx); err != nil {
 		return &setecgrpcv1.PauseSandboxResponse{
 			Success: false,
@@ -465,10 +500,11 @@ func (s *Server) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandbo
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
 
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.Resume(ctx); err != nil {
 		return &setecgrpcv1.ResumeSandboxResponse{
 			Success: false,
@@ -552,8 +588,9 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	if in.GetSandboxClass() == "" {
 		return nil, status.Error(codes.InvalidArgument, "sandbox_class required")
 	}
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	if s.Pool == nil {
 		s.observeClaim("miss")
@@ -591,7 +628,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	}
 	defer cleanup()
 
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
 		s.observeClaim("restore_failed")
 		return &setecgrpcv1.ClaimPoolEntryResponse{
@@ -603,7 +640,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 
 	candidates := []string{
 		filepath.Join(entry.StorageRef, "vsock.sock"),
-		filepath.Join(filepath.Dir(in.GetKataSocketTarget()), "vsock.sock"),
+		kata.HybridVsock,
 	}
 
 	// Active entropy reseed (setec#72), identical fail-closed contract

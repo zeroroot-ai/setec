@@ -84,7 +84,6 @@ spec:
             - --session-keepalive-image={{ .Values.sessionKeepalive.image.repository }}:{{ .Values.sessionKeepalive.image.tag | default .Chart.AppVersion }}
             {{- if .Values.snapshots.enabled }}
             - --snapshots-enabled
-            - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
             - --nodeagent-authority-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
             - --nodeagent-namespace={{ .Values.namespace }}
             {{- if eq .Values.credentials.mode "spiffe" }}

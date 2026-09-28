@@ -17,9 +17,9 @@ release exposes the capability.
 Setec cannot wait for upstream Kata to catch up, so the node-agent
 does the Firecracker work itself:
 
-1. When the operator calls `CreateSnapshot`, the node-agent resolves
-   the target Pod's Firecracker API socket (the path is predictable:
-   Kata exposes it under `/run/kata-containers/<sandbox-id>/firecracker.socket`).
+1. When the operator calls `CreateSnapshot` with the target Pod's UID,
+   the node-agent resolves that Pod's Firecracker API socket on the
+   node (see [Socket path resolution](#socket-path-resolution)).
 2. The node-agent speaks the documented Firecracker REST API —
    `PATCH /vm` for pause/resume and `PUT /snapshot/{create,load}` —
    directly over the Unix socket.
@@ -28,20 +28,25 @@ does the Firecracker work itself:
 
 ## Socket path resolution
 
-The socket path is a Helm-value-configurable format string:
+The operator names the target of every snapshot, restore, pause and
+pool-claim call by its Pod UID. The node-agent finds the files on the
+node (setec#19):
 
-```yaml
-snapshots:
-  kataSocketPattern: "/run/kata-containers/%s/firecracker.socket"
-```
+1. It asks containerd (namespace `k8s.io`) for the container that the
+   CRI plugin labels with `io.kubernetes.pod.uid=<uid>` and
+   `io.cri-containerd.kind=sandbox`. That container's id is the CRI
+   sandbox id, which kata uses as its sandbox id. The Pod object does
+   not carry it.
+2. The kata Go runtime keeps the Firecracker API socket at
+   `/run/vc/<hypervisor binary>/<first 32 characters of the sandbox
+   id>/root/run/firecracker.socket`, and the hybrid vsock at
+   `.../root/kata.hvsock` (kata-containers
+   `src/runtime/virtcontainers/fc.go`, `setPaths`).
 
-`%s` is substituted with the Pod UID (which Kata uses as the
-sandbox id). Custom Kata distributions may use a different layout;
-override the pattern to match.
-
-The node-agent container mounts `/run` from the host so the sockets
-are reachable. The mount is scoped to `/run/kata-containers`
-whenever the cluster operator layers on a mountPropagation restriction.
+The node-agent mounts the host's `/run`, so it reads both paths and
+containerd's socket directly. There is no path setting: an earlier
+`snapshots.kataSocketPattern` assumed `/run/kata-containers/<pod
+uid>/firecracker.socket`, a path the kata Go runtime never creates.
 
 ## How Setec detects Kata with Firecracker
 
@@ -91,16 +96,17 @@ Firecracker socket path for snapshots. Setec does not set a Node
 condition, emit an Event, or reject a Sandbox in the webhook because of
 the Kata version.
 
-If your Kata distribution puts the Firecracker socket in a different
-location, set `snapshots.kataSocketPattern` to match it (see
+The node-agent resolves the Firecracker socket itself (see
 [Socket path resolution](#socket-path-resolution)).
 
 ## Security posture
 
 The node-agent container mounts:
 
-- `/run/kata-containers/` (required for socket access) — read-write
-  because Firecracker's UDS requires write access for the client.
+- The host's `/run`, read-write. It holds the kata Go runtime's
+  `/run/vc` tree (Firecracker's UDS needs write access for the client)
+  and containerd's socket, which the node-agent queries to map a Pod
+  UID to its CRI sandbox id.
 - The configured `snapshots.localDisk.root` on the host — owned by
   the node-agent runtime user with mode 0700.
 

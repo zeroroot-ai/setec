@@ -218,8 +218,10 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if na.lastCreate.SandboxId != "t-a/s" {
 		t.Fatalf("sandbox_id = %q", na.lastCreate.SandboxId)
 	}
-	if na.lastCreate.SourceKataSocket == "" {
-		t.Fatalf("expected kata socket path to be populated")
+	// The node-agent resolves the kata socket itself; the operator
+	// names the Pod by UID (setec#19).
+	if na.lastCreate.GetSourcePodUid() != string(pod.UID) {
+		t.Fatalf("source_pod_uid = %q, want the Pod UID %q", na.lastCreate.GetSourcePodUid(), pod.UID)
 	}
 
 	// Snapshot CR was created with the node-agent's response.
@@ -471,23 +473,6 @@ func TestPauseSandbox_DialFailure(t *testing.T) {
 	coord := newCoord(c, &fakeDialer{dialErr: errors.New("no route")})
 	if err := coord.Pause(context.Background(), sb); err == nil {
 		t.Fatalf("expected error")
-	}
-}
-
-func TestSocketForPod_Fallback(t *testing.T) {
-	coord := &Coordinator{}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "abc"}}
-	if got := coord.socketForPod(pod); got != "/run/kata-containers/abc/firecracker.socket" {
-		t.Fatalf("socketForPod = %q", got)
-	}
-	// Empty UID returns empty string.
-	if got := coord.socketForPod(&corev1.Pod{}); got != "" {
-		t.Fatalf("empty UID should yield empty string, got %q", got)
-	}
-	// Custom pattern honoured.
-	coord.KataSocketPattern = "/var/run/kata/%s/sock"
-	if got := coord.socketForPod(pod); got != "/var/run/kata/abc/sock" {
-		t.Fatalf("custom pattern: %q", got)
 	}
 }
 

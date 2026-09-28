@@ -94,15 +94,16 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 	srv := &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
+		KataSandboxes:      fakeKata{},
 		TempDir:            filepath.Join(base, "tmp"),
 	}
 	ctx := context.Background()
 
 	// 1. Create a snapshot whose guest memory holds a known secret.
 	resp, err := srv.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        "ns/sb",
-		SnapshotId:       "ns-snap",
-		SourceKataSocket: "/run/fake.socket",
+		SandboxId:    "ns/sb",
+		SnapshotId:   "ns-snap",
+		SourcePodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
@@ -119,9 +120,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 	// 3. The legitimate restore path still recovers the exact guest
 	// memory (decryption through the sealed per-snapshot DEK).
 	rresp, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-snap",
-		StorageRef:       resp.GetStorageRef(),
-		KataSocketTarget: "/run/fake-target.socket",
+		SnapshotId:   "ns-snap",
+		StorageRef:   resp.GetStorageRef(),
+		TargetPodUid: testPodUID,
 	})
 	if err != nil || !rresp.GetSuccess() {
 		t.Fatalf("RestoreSandbox: %v / %+v", err, rresp)
@@ -140,9 +141,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		t.Fatalf("shred sealed DEK: %v", err)
 	}
 	if _, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-snap",
-		StorageRef:       resp.GetStorageRef(),
-		KataSocketTarget: "/run/fake-target.socket",
+		SnapshotId:   "ns-snap",
+		StorageRef:   resp.GetStorageRef(),
+		TargetPodUid: testPodUID,
 	}); err == nil {
 		t.Fatal("restore must fail once the snapshot's key is destroyed")
 	}

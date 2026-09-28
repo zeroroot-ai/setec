@@ -34,7 +34,6 @@ snapshots:
   localDisk:
     root: /var/lib/setec/snapshots
     fillThreshold: 0.85
-  kataSocketPattern: "/run/kata-containers/%s/firecracker.socket"
   mTLS:
     operatorCertSecret: setec-nodeagent-client-tls
     nodeAgentCertSecret: setec-nodeagent-server-tls

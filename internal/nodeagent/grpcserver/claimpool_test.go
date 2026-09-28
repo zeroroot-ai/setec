@@ -128,10 +128,10 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		ImageRef:         "img:v1",
-		KataSocketTarget: filepath.Join(t.TempDir(), "firecracker.socket"),
-		SandboxId:        "t-a/sb",
+		SandboxClass: "std",
+		ImageRef:     "img:v1",
+		TargetPodUid: testPodUID,
+		SandboxId:    "t-a/sb",
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -189,9 +189,9 @@ func TestClaimPoolEntry_MissIsNotAnError(t *testing.T) {
 
 	// Wrong image: the pool holds img:v1 only.
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		ImageRef:         "other:v2",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		ImageRef:     "other:v2",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -211,8 +211,8 @@ func TestClaimPoolEntry_MissIsNotAnError(t *testing.T) {
 func TestClaimPoolEntry_NilPoolMisses(t *testing.T) {
 	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -232,8 +232,8 @@ func TestClaimPoolEntry_LoadFailureConsumesEntry(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry must not fail the RPC on a restore error: %v", err)
@@ -260,8 +260,8 @@ func TestClaimPoolEntry_MissingStateFilesConsumesEntry(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -295,8 +295,8 @@ func TestClaimPoolEntry_MissingScanVerdictRefused(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -381,8 +381,8 @@ func TestClaimPoolEntry_VerdictDigestMismatchFailsClosed(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		KataSocketTarget: "/tmp/x.socket",
+		SandboxClass: "std",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -405,7 +405,7 @@ func TestClaimPoolEntry_MissingArgs(t *testing.T) {
 	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
 
 	for name, req := range map[string]*setecgrpcv1.ClaimPoolEntryRequest{
-		"no class":  {KataSocketTarget: "/tmp/x.socket"},
+		"no class":  {TargetPodUid: testPodUID},
 		"no socket": {SandboxClass: "std"},
 	} {
 		_, err := cli.ClaimPoolEntry(context.Background(), req)
