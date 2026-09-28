@@ -626,16 +626,20 @@ jobs:
             # TestMain uninstalls the release on the way out, so the logs of
             # the node-agent and the operator, the two halves of a snapshot,
             # are gone by the time a diagnostics step could read them.
-            # Sample them while the pass runs.
+            # Sample them while the pass runs. Each sample takes every line
+            # of the last minute (--since), not the last 60 lines: with
+            # --tail a busy minute dropped the lines that explained a
+            # failure (setec#19, roundtrip-snap never went Ready). The
+            # 5 s overlap may repeat a line but never skips one.
             (
               while sleep 60; do
                 echo "--- $(date -u +%H:%M:%S)"
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
                   --all-containers --previous --tail=60 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
-                  --all-containers --tail=60 2>&1
+                  --all-containers --since=65s --prefix 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=operator \
-                  --all-containers --tail=60 --prefix 2>&1
+                  --all-containers --since=65s --prefix 2>&1
               done
             ) > node-agent.log &
             sampler=$!
