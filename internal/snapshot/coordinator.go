@@ -111,6 +111,7 @@ const (
 	EventReasonInsufficientStorage    = "InsufficientStorage"
 	EventReasonNodeAgentUnreachable   = "NodeAgentUnreachable"
 	EventReasonSnapshotNameConflict   = "SnapshotNameConflict"
+	EventReasonSnapshotNodeGone       = "SnapshotNodeGone"
 	EventReasonWarmStartRestored      = "WarmStartRestored"
 	EventReasonWarmStartColdBoot      = "WarmStartColdBoot"
 	// EventReasonInvariantGateViolation is the typed reason surfaced
@@ -639,6 +640,21 @@ func (c *Coordinator) DeleteSnapshot(ctx context.Context, snap *setecv1alpha1.Sn
 	if snap.Spec.Node == "" {
 		return errors.New("coordinator: Snapshot has no node; cannot delete without a routing target")
 	}
+	// A local-disk snapshot lives on its node's disk. When that Node no
+	// longer exists, the state went with it, and no node-agent can ever
+	// answer for it. Retrying forever kept the finalizer on and the
+	// Snapshot undeletable (setec#19: TestPhase3_SnapshotTTL).
+	if gone, err := c.nodeGone(ctx, snap); err != nil {
+		setSpanErr(span, err.Error())
+		return err
+	} else if gone {
+		if c.Recorder != nil {
+			c.Recorder.Eventf(snap, nil, corev1.EventTypeNormal, EventReasonSnapshotNodeGone, "DeleteSnapshot",
+				"node %q no longer exists; its local-disk state went with it", snap.Spec.Node)
+		}
+		c.recordDelete(snap, time.Since(start))
+		return nil
+	}
 	na, dialErr := c.Dialer.Dial(ctx, snap.Spec.Node)
 	if dialErr != nil {
 		setSpanErr(span, dialErr.Error())
@@ -657,6 +673,28 @@ func (c *Coordinator) DeleteSnapshot(ctx context.Context, snap *setecv1alpha1.Sn
 	}
 	c.recordDelete(snap, time.Since(start))
 	return nil
+}
+
+// nodeGone reports whether snap is node-local (local-disk) and its Node
+// no longer exists. A Snapshot on any other backend is never gone this
+// way: its state does not live on the node.
+func (c *Coordinator) nodeGone(ctx context.Context, snap *setecv1alpha1.Snapshot) (bool, error) {
+	backend := snap.Spec.StorageBackend
+	if backend == "" {
+		backend = defaultStorageBackend
+	}
+	if backend != defaultStorageBackend || c.Client == nil {
+		return false, nil
+	}
+	var node corev1.Node
+	err := c.Client.Get(ctx, client.ObjectKey{Name: snap.Spec.Node}, &node)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("coordinator: get node %q: %w", snap.Spec.Node, err)
+	}
+	return false, nil
 }
 
 // Resume invokes the node-agent Firecracker resume RPC.
