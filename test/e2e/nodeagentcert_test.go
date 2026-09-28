@@ -116,11 +116,12 @@ type nodeAgentMTLS struct {
 // generateNodeAgentMTLS mints a CA and the operator/node-agent leaf pair.
 //
 // The server leaf's SANs mirror the chart's own nodeagent-server Certificate
-// exactly, because the operator dials per-node DNS names off the headless
-// Service — `--nodeagent-endpoint-pattern=%s.<fullname>-node-agent.<ns>.svc:50052`
-// (charts/setec/templates/deployment.yaml) — so the WILDCARD entry is the one
-// that actually gets verified at dial time and the bare Service name is there
-// for parity with the chart.
+// exactly, because the operator dials the node-agent Pod's IP directly and
+// sends the per-node name as the gRPC authority (`--nodeagent-authority-
+// pattern=%s.<fullname>-node-agent.<ns>.svc:50052` in
+// charts/setec/templates/deployment.yaml). The WILDCARD entry is the one that
+// actually gets verified at dial time. The bare Service name is there for
+// parity with the chart.
 func generateNodeAgentMTLS(fullname, namespace string) (*nodeAgentMTLS, error) {
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -229,11 +230,13 @@ func issueLeaf(
 // that a bespoke check would silently omit. It is also why this file needs no
 // credguard exemption: it builds no credential of its own.
 //
-// The dialled name is a PER-NODE one (`node-1.<svc>`) rather than the bare
-// Service name, because `--nodeagent-endpoint-pattern=%s.<fullname>-node-agent.<ns>.svc:50052`
-// (charts/setec/templates/deployment.yaml) substitutes the node name. The
-// wildcard SAN is what carries the channel; a certificate with only the bare
-// Service name passes a naive check and fails every real dial.
+// The authority under test is a PER-NODE one (`node-1.<svc>`) rather than the
+// bare Service name, because `--nodeagent-authority-pattern=%s.<fullname>-
+// node-agent.<ns>.svc:50052` (charts/setec/templates/deployment.yaml)
+// substitutes the node name into the gRPC authority the operator sends, even
+// though it dials the Pod's IP. The wildcard SAN is what carries the
+// channel. A certificate with only the bare Service name passes a naive
+// check and fails every real dial.
 func verifyNodeAgentMTLS(m *nodeAgentMTLS, fullname, namespace string) error {
 	dir, err := os.MkdirTemp("", "setec-e2e-nodeagent-mtls")
 	if err != nil {

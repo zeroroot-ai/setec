@@ -85,7 +85,8 @@ spec:
             {{- if .Values.snapshots.enabled }}
             - --snapshots-enabled
             - --kata-socket-pattern={{ .Values.snapshots.kataSocketPattern }}
-            - --nodeagent-endpoint-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
+            - --nodeagent-authority-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
+            - --nodeagent-namespace={{ .Values.namespace }}
             {{- if eq .Values.credentials.mode "spiffe" }}
             - --nodeagent-spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
             {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentServers }}
