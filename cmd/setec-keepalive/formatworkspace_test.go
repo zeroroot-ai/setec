@@ -105,3 +105,21 @@ func TestDropPrivileges_NonRootCannotBecomeAnotherUser(t *testing.T) {
 		t.Fatal("dropPrivileges to another uid/gid as non-root = nil, want an error")
 	}
 }
+
+// TestWorkspaceReady_NonExt4IsNotReady asserts that the probe refuses a
+// directory that is not an ext4 filesystem, as the emptyDir a kata-fc
+// session sees at /workspace before the wrapper mounts the device over
+// it. /proc is procfs on every Linux host, so this never skips.
+func TestWorkspaceReady_NonExt4IsNotReady(t *testing.T) {
+	if err := workspaceReady("/proc"); err == nil {
+		t.Fatal("workspaceReady(/proc) = nil, want an error: procfs is not the ext4 workspace")
+	}
+}
+
+// TestWorkspaceReady_MissingDirIsNotReady asserts that a missing
+// directory is an error, not a pass.
+func TestWorkspaceReady_MissingDirIsNotReady(t *testing.T) {
+	if err := workspaceReady(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("workspaceReady(missing dir) = nil, want an error")
+	}
+}

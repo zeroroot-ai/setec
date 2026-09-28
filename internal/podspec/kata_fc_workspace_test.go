@@ -5,6 +5,7 @@ package podspec
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -182,6 +183,14 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 	if c.SecurityContext.Privileged == nil || *c.SecurityContext.Privileged {
 		t.Errorf("workload container privileged = %v, want false (sandbox-namespace-host-guard refuses it)", c.SecurityContext.Privileged)
 	}
+	// The Sandbox reports Running only once the workspace is mounted.
+	if c.ReadinessProbe == nil || c.ReadinessProbe.Exec == nil {
+		t.Fatalf("workload container has no exec readiness probe: %+v", c.ReadinessProbe)
+	}
+	if got, want := strings.Join(c.ReadinessProbe.Exec.Command, " "), KeepalivePath+" --workspace-ready "+WorkspaceMountPath; got != want {
+		t.Errorf("readiness probe = %q, want %q", got, want)
+	}
+
 	// The drop and the chown both need the sandbox identity.
 	uidArg, gidArg := argAfter(c.Command, "--format-workspace-uid"), argAfter(c.Command, "--format-workspace-gid")
 	if uidArg != "65532" || gidArg != "65532" {
@@ -289,6 +298,9 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 	}
 	if c.SecurityContext.RunAsUser != nil {
 		t.Errorf("gvisor workload container runAsUser = %d; only kata-fc's wrapper runs as root", *c.SecurityContext.RunAsUser)
+	}
+	if c.ReadinessProbe != nil {
+		t.Errorf("gvisor workload container has a readiness probe %+v; only kata-fc mounts its workspace after start", c.ReadinessProbe)
 	}
 	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Errorf("gvisor workload container allowPrivilegeEscalation = %v, want false", c.SecurityContext.AllowPrivilegeEscalation)

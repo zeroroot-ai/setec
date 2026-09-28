@@ -58,7 +58,16 @@ func main() {
 	target := flag.String("format-workspace-target", "", "mount point for --format-workspace-device")
 	uid := flag.Int("format-workspace-uid", -1, "chown the mounted workspace to this uid and run as it afterwards, required with --format-workspace-device")
 	gid := flag.Int("format-workspace-gid", -1, "chown the mounted workspace to this gid and run as it afterwards, required with --format-workspace-device")
+	ready := flag.String("workspace-ready", "", "exit 0 only if DIR is the mounted ext4 workspace; the kata-fc readiness probe")
 	flag.Parse()
+
+	if *ready != "" {
+		if err := workspaceReady(*ready); err != nil {
+			fmt.Fprintln(os.Stderr, "setec-keepalive:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *install != "" {
 		if err := installTo(*install); err != nil {

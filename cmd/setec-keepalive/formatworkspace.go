@@ -115,6 +115,27 @@ func execInto(args []string) error {
 	return nil
 }
 
+// ext4SuperMagic is statfs(2)'s f_type for an ext2/3/4 filesystem.
+const ext4SuperMagic = 0xEF53
+
+// workspaceReady is the --workspace-ready readiness probe of a kata-fc
+// session (setec#91). The container starts, and so the Pod reports
+// Running, before the wrapper has formatted and mounted the workspace
+// device over the emptyDir at dir. A write in that window lands in the
+// emptyDir, and the mount then hides it for good. The Sandbox reports
+// Running only once this probe passes, which is once dir is the ext4
+// filesystem on the durable device.
+func workspaceReady(dir string) error {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		return fmt.Errorf("statfs %s: %w", dir, err)
+	}
+	if st.Type != ext4SuperMagic {
+		return fmt.Errorf("%s is not the mounted workspace yet (filesystem type 0x%x, want ext4 0x%x)", dir, st.Type, ext4SuperMagic)
+	}
+	return nil
+}
+
 // waitForDevice polls until path exists, or returns an error once
 // timeout elapses. Any stat error other than "not found" is returned
 // immediately.

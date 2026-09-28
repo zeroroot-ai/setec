@@ -155,6 +155,16 @@ func Derive(
 		return out
 
 	case corev1.PodRunning:
+		// A container that declares a readiness probe is not usable until
+		// the probe passes. A kata-fc session's wrapper mounts the durable
+		// workspace after the container starts, and a turn that runs
+		// before the mount writes into an emptyDir the mount then hides
+		// (setec#91). Such a Pod stays Pending until it is Ready. A Pod
+		// with no probe is unchanged.
+		if declaresReadiness(pod) && !podReady(pod) {
+			out = setPhase(out, setecv1alpha1.SandboxPhasePending, "", now)
+			return out
+		}
 		// Populate startedAt the first time we see the Pod Running.
 		if out.StartedAt == nil {
 			if pod.Status.StartTime != nil {
@@ -301,4 +311,25 @@ func timedOut(sb *setecv1alpha1.Sandbox, startedAt *metav1.Time, now time.Time) 
 		return false
 	}
 	return now.Sub(startedAt.Time) > d
+}
+
+// declaresReadiness reports whether any container of pod has a
+// readiness probe.
+func declaresReadiness(pod *corev1.Pod) bool {
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].ReadinessProbe != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// podReady reports whether pod's Ready condition is True.
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }

@@ -491,6 +491,19 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 				formatArgs = append(formatArgs, sb.Spec.Command...)
 			}
 			c.Command = formatArgs
+			// The container starts before the wrapper mounts the device
+			// over the emptyDir at /workspace, and a write in that window
+			// is hidden by the mount. The Sandbox reports Running only
+			// once this probe passes (internal/status), so no turn runs
+			// before the workspace is the durable volume (setec#91).
+			c.ReadinessProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{
+					Command: []string{KeepalivePath, "--workspace-ready", WorkspaceMountPath},
+				}},
+				PeriodSeconds:    1,
+				TimeoutSeconds:   5,
+				FailureThreshold: 1,
+			}
 		} else {
 			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
 				Name:      WorkspaceVolumeName,

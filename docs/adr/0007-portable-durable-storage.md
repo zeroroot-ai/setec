@@ -90,6 +90,15 @@ the reap loop, runs with no capability. Kubernetes refuses
 `allowPrivilegeEscalation: false` next to `CAP_SYS_ADMIN`, so the wrapper
 sets `no_new_privs` on every thread itself before it execs the command.
 
+**The Sandbox reports Running only once the workspace is mounted.** The
+container starts, and the Pod reports Running, before the wrapper mounts the
+device over the emptyDir at `/workspace`. A turn that ran in that window
+wrote into the emptyDir, and the mount then hid the write for good. The
+kata-fc container therefore carries a readiness probe,
+`setec-keepalive --workspace-ready /workspace`, which passes only when
+`/workspace` is an ext4 filesystem. The status reconciler keeps a Sandbox
+Pending while a probed Pod is not Ready. A Pod with no probe is unchanged.
+
 A file capability on the `setec-keepalive` binary was tried first and
 rejected. The keepalive installer init container runs the same binary with
 every capability dropped, and the kernel refuses to exec a binary whose
