@@ -55,6 +55,12 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
   **Status (2026-09-28):** the durable workspace works (a session's files
   survive a VM restart); memory-checkpoint resume does not and is
   post-launch, since it restores through the same path (setec#105).
+- **Snapshot restore, checkpoints and the pool (post-launch).** Owner
+  decision 2026-09-29: the whole question waits until after launch,
+  including whether to remove `snapshotRef` and `sessionCheckpoint`. Restoring
+  a *running* sandbox needs kata to adopt a container it did not start, which
+  stock kata cannot do (ADR-0003); a *clean-base* snapshot (a VM just booted)
+  can serve fast starts. See setec#105 and setec#103.
 - **Storage** — durable workspace on a **portable CSI volume** (continuous data
   safety), memory checkpoints on **S3-compatible object storage** (S3 or MinIO;
   process continuity). Both node-independent and portable; no AWS lock (ADR-0007).

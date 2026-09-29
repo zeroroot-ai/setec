@@ -234,7 +234,7 @@ The point of Setec is that the interface to microVM isolation is the same interf
 ## Next Steps
 
 - [Multi-tenancy](./multitenancy.md) &mdash; tenant labels and per-tenant policy.
-- [Snapshots](./snapshots.md) &mdash; pre-warm pool and snapshot-restore for sub-second cold starts.
+- [Snapshots](./snapshots.md) &mdash; snapshot capture and pause/resume. Restore and the pre-warm pool are not available yet.
 - [Observability](./observability.md) &mdash; the metrics you should scrape and the alerts we ship.
 - [gRPC Frontend API](./frontend-api.md) &mdash; launch Sandboxes programmatically from a client.
 - [Examples](../examples/) &mdash; three reference consumer programs (AI code execution, CI sandbox, security research).

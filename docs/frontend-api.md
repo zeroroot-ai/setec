@@ -462,6 +462,8 @@ for {
 
 ## Warm-pool lease layer (`setec.v1.LeaseService`)
 
+> **Not available yet.** The pre-warm pool is being redesigned ([setec#103](https://github.com/zeroroot-ai/setec/issues/103)).
+
 `SandboxService.Launch` cold-boots a fresh microVM per call. For latency-
 sensitive callers the frontend also serves `setec.v1.LeaseService`, a
 warm-pool lease layer over the same isolation ABI. It keeps a pool of

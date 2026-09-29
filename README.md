@@ -29,8 +29,8 @@ Setec is a Kubernetes operator that runs workloads inside isolated runtimes — 
 - **Single-CRD API.** `kubectl apply -f sandbox.yaml` and you have a sandbox. No separate CLI, no dashboard, no SaaS.
 - **Four runtime backends.** `kata-fc` (Firecracker microVMs, the default), `kata-qemu` (QEMU microVMs where nested-virt is available but Firecracker isn't), `gvisor` (user-space kernel, no KVM needed), and `runc` (dev clusters only). See [`docs/runtime-backends/`](docs/runtime-backends/README.md) for the isolation / CVE-surface / overhead matrix and platform-specific playbooks for EKS / AKS / GKE.
 - **Node-level capability detection.** A lightweight DaemonSet (`runtime-agent`) probes each node for backend prerequisites and labels it `setec.zeroroot.ai/runtime.<backend>=true`. The scheduler picks the highest-isolation backend a node supports from the `SandboxClass` fallback chain.
-- **Firecracker snapshots.** Capture, restore, and reuse paused VM state through the `Snapshot` resource (kata-fc / kata-qemu only).
-- **Pre-warm pool.** Each node keeps a configurable pool of paused sandboxes ready; pool-claimed sandboxes target sub-100ms P50 cold start on prepared hosts.
+- **Firecracker snapshots and pause/resume.** Capture paused VM state through the `Snapshot` resource, and pause or resume a live Sandbox (kata-fc / kata-qemu only). Restoring from a snapshot is not available yet ([#105](https://github.com/zeroroot-ai/setec/issues/105)).
+- **Pre-warm pool (not available yet).** A per-node pool of paused sandboxes for sub-100ms cold starts. It is being redesigned on top of a working restore ([#103](https://github.com/zeroroot-ai/setec/issues/103)).
 - **Multi-tenant.** Tenant identity from namespace labels or mTLS; per-Sandbox `NetworkPolicy`; tenant scoping on the gRPC frontend.
 - **Observability shipped.** Prometheus metrics and OpenTelemetry traces emitted by default; Grafana dashboard and alert rules ship with the chart.
 - **gRPC frontend.** `SandboxService` with mTLS for programmatic consumers. See [examples](examples/).
