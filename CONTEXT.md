@@ -40,7 +40,10 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
 - **Warm-start** — a declarative SandboxClass knob (`PreWarmPoolSize`); setec
   automates the whole snapshot pool. **Operator manages zero templates.**
   Restore lands in a real `kata-fc` Pod via the node-agent's FC-socket path
-  (ADR-0004), gated on the isolation invariants (ADR-0005).
+  (ADR-0004), gated on the isolation invariants (ADR-0005). **Status
+  (2026-09-28): not working, post-launch.** Firecracker loads a snapshot only
+  before its VM boots, so the FC-socket path cannot restore into a kata-booted
+  VM (setec#105); the pool is rebuilt on a working restore (setec#103).
 
 - **Lifecycle** — a Sandbox is **ephemeral** (run-to-completion, auto-destroy,
   stateless; snapshot fast-start) or **session** (long-lived, reattach by
@@ -49,6 +52,9 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
   (never lose corpus/findings) plus **memory checkpoints** for suspend-idle and
   resume-on-node-loss (process continues). Isolation: **one session per VM,
   wiped at session end**; intra-session suspend/resume ok (ADR-0005/0006).
+  **Status (2026-09-28):** the durable workspace works (a session's files
+  survive a VM restart); memory-checkpoint resume does not and is
+  post-launch, since it restores through the same path (setec#105).
 - **Storage** — durable workspace on a **portable CSI volume** (continuous data
   safety), memory checkpoints on **S3-compatible object storage** (S3 or MinIO;
   process continuity). Both node-independent and portable; no AWS lock (ADR-0007).

@@ -212,14 +212,19 @@ jobs:
             # kata-qemu here. That subtest would SKIP on its own, and a SKIP
             # fails the step. kata-qemu coverage is setec#93.
             skip: '^TestRuntimeBackends_Smoke/backend=kata-qemu$'
-          # TestPhase3_PoolWarmStartLifecycle and
-          # TestGate_UnverifiedWarmStartFailsClosed are not in this pass:
-          # the warm pool has never booted an entry and is rebuilt after
-          # launch from real kata-fc Pods (owner decision 2026-09-28,
-          # setec#103). Add them back with that work.
+          # Not in this pass, by owner decision 2026-09-28 (both post-launch):
+          #   - TestPhase3_PoolWarmStartLifecycle and
+          #     TestGate_UnverifiedWarmStartFailsClosed: the warm pool has
+          #     never booted an entry (setec#103).
+          #   - TestPhase3_SnapshotRoundtrip,
+          #     TestPhase3_RestoredClonesDivergeInRNG and
+          #     TestPhase3_RestoredClonesHaveUniqueIdentity: nothing calls
+          #     restore, and Firecracker cannot load a snapshot into a VM
+          #     kata has booted (setec#105).
+          # Add each back with its work.
           - pass: phase3
             snapshots: "1"
-            run: '^TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|StorageFillProtection)$'
+            run: '^TestPhase3_(PauseResume|SnapshotTTL|StorageFillProtection)$'
             skip: ''
     env:
       KIND_CLUSTER: setec-kvm
