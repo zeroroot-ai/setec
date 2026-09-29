@@ -1,5 +1,16 @@
 # Sandbox CRD Reference
 
+> **Status (2026-09-29): not available until after launch.** Snapshot
+> restore (`spec.snapshotRef`), session memory checkpoints
+> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
+> Snapshot creation, pause/resume and TTL expiry work. The API still
+> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
+> instead of restoring, and a checkpointed session cannot resume. The
+> reasons and the open design are in
+> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
+> and checkpoints) and
+> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
+
 `Sandbox` is the sole custom resource Setec defines. This document is the
 authoritative field reference. It is derived from the generated
 `config/crd/bases/setec.zeroroot.ai_sandboxes.yaml` and the Go types in

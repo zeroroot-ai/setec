@@ -14,7 +14,7 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 ## User Guides
 
 - [Multi-tenancy](./multitenancy.md) &mdash; tenant labels, per-tenant policies, namespace scoping.
-- [Snapshots](./snapshots.md) &mdash; point-in-time capture, restore, and the pre-warm pool.
+- [Snapshots](./snapshots.md) &mdash; point-in-time capture and pause/resume. Restore and the pre-warm pool are not available yet.
 - [Observability](./observability.md) &mdash; metrics, traces, dashboard, and alerting.
 - [gRPC Frontend API](./frontend-api.md) &mdash; the external API used by programmatic consumers.
 - [Node Agent](./node-agent.md) &mdash; what runs on each node and how it interacts with the operator.

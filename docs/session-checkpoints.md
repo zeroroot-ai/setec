@@ -1,5 +1,16 @@
 # Session checkpoints on real infrastructure
 
+> **Status (2026-09-29): not available until after launch.** Snapshot
+> restore (`spec.snapshotRef`), session memory checkpoints
+> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
+> Snapshot creation, pause/resume and TTL expiry work. The API still
+> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
+> instead of restoring, and a checkpointed session cannot resume. The
+> reasons and the open design are in
+> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
+> and checkpoints) and
+> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
+
 How to run the session-lifecycle e2e against a
 real cluster and a real object store, and what each scenario costs.
 

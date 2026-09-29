@@ -54,3 +54,13 @@ life.
 - The snapshot machinery serves *both* lifecycles: fast-start (ephemeral) and
   suspend/resume/migrate (session).
 - Cost control: idle sessions suspend to disk instead of holding a live microVM.
+
+## Addendum (2026-09-29): session memory checkpoints are post-launch
+
+Resuming a session from a memory checkpoint does not work: it loads the
+checkpoint into the VM kata has already booted, which Firecracker refuses, and
+kata cannot adopt a container it did not start (setec#105). The durable
+workspace works, so a session keeps its files across VM loss and its processes
+restart. The owner deferred the redesign, and whether to remove the checkpoint
+API, until after launch (2026-09-29).
+

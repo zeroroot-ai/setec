@@ -122,3 +122,13 @@ from the same StorageClass, since the mode is a property of the PVC request,
 not the class), still re-attaches to a fresh Pod on node loss, and still
 holds the corpus/findings/worktree with continuous persistence. Only how the
 guest turns that block device back into a mounted filesystem is new.
+
+## Addendum (2026-09-29): memory-checkpoint resume are post-launch
+
+Resuming a session from a memory checkpoint does not work: it loads the
+checkpoint into the VM kata has already booted, which Firecracker refuses, and
+kata cannot adopt a container it did not start (setec#105). The durable
+workspace works, so a session keeps its files across VM loss and its processes
+restart. The owner deferred the redesign, and whether to remove the checkpoint
+API, until after launch (2026-09-29).
+
