@@ -46,7 +46,6 @@ func sessionTestServer(t *testing.T, fc *fakeFirecracker) *Server {
 		},
 		FirecrackerFactory: func(string) firecracker.Client { return fc },
 		KataSandboxes:      fakeKata{root: fc.root},
-		TempDir:            filepath.Join(base, "tmp"),
 	}
 }
 

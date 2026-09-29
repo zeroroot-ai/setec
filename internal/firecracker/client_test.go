@@ -252,7 +252,7 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 
 	// A client per call, as the node-agent builds one per RPC.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := NewClientFromSocket(sock).Pause(context.Background()); err != nil {
 			t.Fatalf("Pause %d: %v", i, err)
 		}

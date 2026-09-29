@@ -101,7 +101,6 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
 		KataSandboxes:      fakeKata{root: fc.root},
-		TempDir:            filepath.Join(base, "tmp"),
 	}
 	ctx := context.Background()
 

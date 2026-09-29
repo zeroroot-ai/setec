@@ -34,11 +34,11 @@ const (
 	testSandboxID = "9f3c2a1b7e6d5c4b3a291807f6e5d4c3b2a19087f6e5d4c3b2a1908f7e6d5c4b"
 )
 
-// makeKataSandbox lays out the kata Go runtime's files for one sandbox
-// under root, as fc.go setPaths does, and returns its VM root.
-func makeKataSandbox(t *testing.T, root, hypervisor, sandboxID string) string {
+// makeKataSandbox lays out the kata Go runtime's files for the test
+// sandbox under root, as fc.go setPaths does, and returns its VM root.
+func makeKataSandbox(t *testing.T, root, hypervisor string) string {
 	t.Helper()
-	vmRoot := filepath.Join(root, hypervisor, sandboxID[:kataIDLen], "root")
+	vmRoot := filepath.Join(root, hypervisor, testSandboxID[:kataIDLen], "root")
 	if err := os.MkdirAll(filepath.Join(vmRoot, "run"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func makeKataSandbox(t *testing.T, root, hypervisor, sandboxID string) string {
 // ENOENT on every pause and snapshot).
 func TestResolve_KataGoRuntimeLayout(t *testing.T) {
 	root := t.TempDir()
-	vmRoot := makeKataSandbox(t, root, "firecracker", testSandboxID)
+	vmRoot := makeKataSandbox(t, root, "firecracker")
 
 	got, err := resolveIn(root)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestResolve_KataGoRuntimeLayout(t *testing.T) {
 // directory follows the configured binary's name.
 func TestResolve_AnyHypervisorBinaryName(t *testing.T) {
 	root := t.TempDir()
-	vmRoot := makeKataSandbox(t, root, "firecracker-v1.12", testSandboxID)
+	vmRoot := makeKataSandbox(t, root, "firecracker-v1.12")
 	got, err := resolveIn(root)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -104,8 +104,8 @@ func TestResolve_UnknownPodIsNotFound(t *testing.T) {
 // refused rather than resolved to one of them.
 func TestResolve_TwoSocketsIsAnError(t *testing.T) {
 	root := t.TempDir()
-	makeKataSandbox(t, root, "firecracker", testSandboxID)
-	makeKataSandbox(t, root, "firecracker-other", testSandboxID)
+	makeKataSandbox(t, root, "firecracker")
+	makeKataSandbox(t, root, "firecracker-other")
 	_, err := resolveIn(root)
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve with two sockets = %v, want an ambiguity error", err)
@@ -132,7 +132,7 @@ func jailedRoot(_ context.Context, hostSocket string) (string, error) {
 // chroot Firecracker resolves file paths in.
 func TestResolve_ReportsTheFirecrackerRoot(t *testing.T) {
 	root := t.TempDir()
-	vmRoot := makeKataSandbox(t, root, "firecracker", testSandboxID)
+	vmRoot := makeKataSandbox(t, root, "firecracker")
 	got, err := resolveIn(root)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

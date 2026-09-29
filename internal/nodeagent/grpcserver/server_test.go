@@ -92,7 +92,6 @@ func newServer(t *testing.T, fc *fakeFirecracker, p *pool.Manager) *Server {
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
 		KataSandboxes:      fakeKata{root: fc.root},
 		Pool:               p,
-		TempDir:            t.TempDir(),
 	}
 }
 
@@ -650,23 +649,27 @@ func TestDefaultReseedVsockPaths(t *testing.T) {
 	}
 }
 
-// traversalTempDir returns a TempDir nested four levels under root, so
-// a snapshot_id of ../../../../var/lib/kubelet resolves to
-// root/a/var/lib/kubelet and never leaves the test directory. The
-// returned tempDir does not exist yet, so its absence after the RPC
-// proves the server made no directory at all.
-func traversalTempDir(t *testing.T) (root, tempDir string) {
+// traversalFCRoot points srv and fc at a Firecracker root nested four
+// levels under a fresh test directory. Snapshot files are written under
+// <fcroot>/setec-snapshots, so a snapshot_id of ../../../../var/lib/kubelet
+// would resolve to root/a/b/var/lib/kubelet and never leave the test
+// directory. The work directory does not exist yet, so its absence after
+// the RPC proves the server made no directory at all.
+func traversalFCRoot(t *testing.T, srv *Server, fc *fakeFirecracker) (root, workDir string) {
 	t.Helper()
 	root = t.TempDir()
-	return root, filepath.Join(root, "a", "b", "c", "d", "tmp")
+	fcRoot := filepath.Join(root, "a", "b", "c", "d", "fcroot")
+	fc.root = fcRoot
+	srv.KataSandboxes = fakeKata{root: fcRoot}
+	return root, filepath.Join(fcRoot, snapshotWorkDir)
 }
 
-func assertNoDirCreated(t *testing.T, root, tempDir string) {
+func assertNoDirCreated(t *testing.T, root, workDir string) {
 	t.Helper()
-	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
-		t.Fatalf("temp dir %s exists after a rejected request (err=%v)", tempDir, err)
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+		t.Fatalf("work dir %s exists after a rejected request (err=%v)", workDir, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "a", "var")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "a", "b", "var")); !os.IsNotExist(err) {
 		t.Fatalf("traversal target created under %s (err=%v)", root, err)
 	}
 }
@@ -676,8 +679,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			fc := &fakeFirecracker{}
 			srv := newServer(t, fc, nil)
-			root, tempDir := traversalTempDir(t)
-			srv.TempDir = tempDir
+			root, workDir := traversalFCRoot(t, srv, fc)
 			cli := newBufconnClient(t, srv)
 
 			_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
@@ -692,7 +694,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 			if fc.pauseCalls != 0 {
 				t.Fatalf("VM paused %d times for a rejected snapshot_id", fc.pauseCalls)
 			}
-			assertNoDirCreated(t, root, tempDir)
+			assertNoDirCreated(t, root, workDir)
 		})
 	}
 }
@@ -700,8 +702,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	fc := &fakeFirecracker{}
 	srv := newServer(t, fc, nil)
-	root, tempDir := traversalTempDir(t)
-	srv.TempDir = tempDir
+	root, workDir := traversalFCRoot(t, srv, fc)
 	// A real saved snapshot, so the only thing wrong with the request
 	// is the snapshot_id.
 	if _, _, err := srv.Storage.Save(context.Background(), "snap-1", bytes.NewReader(makeFramedPayload(t, []byte("STATE"), []byte("MEM")))); err != nil {
@@ -721,5 +722,5 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	if len(fc.loadCalls) != 0 {
 		t.Fatalf("LoadSnapshot called %d times for a rejected snapshot_id", len(fc.loadCalls))
 	}
-	assertNoDirCreated(t, root, tempDir)
+	assertNoDirCreated(t, root, workDir)
 }

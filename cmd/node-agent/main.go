@@ -439,7 +439,6 @@ func main() {
 			KataSandboxes:      kataSandboxes,
 			Pool:               poolMgr,
 			PoolKEKPath:        snapshotKeyFile,
-			TempDir:            snapshotRoot + "/tmp",
 			CIDs:               cids,
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()

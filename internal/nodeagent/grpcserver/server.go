@@ -70,10 +70,6 @@ type Server struct {
 	// an empty list (no pool feature).
 	Pool *pool.Manager
 
-	// TempDir is the directory temp state files are written to during
-	// CreateSnapshot/RestoreSandbox. Defaults to /var/lib/setec/tmp.
-	TempDir string
-
 	// Reseeder actively reseeds the restored guest's CSPRNG over the
 	// Firecracker vsock UDS after every successful LoadSnapshot
 	// (setec#72). When non-nil the restore FAILS CLOSED: the RPC only
@@ -129,15 +125,6 @@ type Server struct {
 
 	// Tracer is optional.
 	Tracer trace.Tracer
-}
-
-// tempDir returns the configured TempDir, falling back to the
-// default.
-func (s *Server) tempDir() string {
-	if s.TempDir != "" {
-		return s.TempDir
-	}
-	return "/var/lib/setec/tmp"
 }
 
 func (s *Server) tracer() trace.Tracer {
