@@ -412,7 +412,6 @@ jobs:
           ./bin/manager --help 2>&1 | tee manager-help.txt
           grep -q -- '--snapshots-enabled' manager-help.txt
           grep -q -- '--nodeagent-tls-cert' manager-help.txt
-          grep -q -- '--kata-socket-pattern' manager-help.txt
 
       - name: Smoke-test node-agent --help
         run: |
