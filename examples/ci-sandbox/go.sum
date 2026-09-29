@@ -2,8 +2,8 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
-github.com/zeroroot-ai/setec v0.114.4 h1:yAQCVP2B6Uy0x0VABHbf13ROmewTO0UDx11redDHf2Q=
-github.com/zeroroot-ai/setec v0.114.4/go.mod h1:Due/JgPm3j8qxu2KeMRvn25I7DOdePSYZ8lI5pvulH8=
+github.com/zeroroot-ai/setec v0.115.0 h1:EDVmcziOdEcSvjc2TbMsvfN1aU7tB+Sp2FzoWGxVnA8=
+github.com/zeroroot-ai/setec v0.115.0/go.mod h1:vgMVWPsQP7fLMgST7Bhv1mgy71JdUMD20Judmw/WBx0=
 golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=
 golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
