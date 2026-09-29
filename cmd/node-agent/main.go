@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	containerdclient "github.com/containerd/containerd/v2/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
@@ -42,6 +43,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/reaper"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -84,7 +86,6 @@ func main() {
 		snapshotKeyFile      string
 		snapshotDEKDir       string
 		snapshotFillFraction float64
-		kataSocketPattern    string
 		poolReconcileTick    time.Duration
 		orphanReapTick       time.Duration
 		entropyReseedMode    string
@@ -150,8 +151,6 @@ func main() {
 			"snapshot root so artifact-tree copies carry no key material.")
 	flag.Float64Var(&snapshotFillFraction, "snapshot-fill-threshold", 0.85,
 		"Phase 3: refuse new snapshots when the snapshot-root filesystem's used fraction exceeds this value.")
-	flag.StringVar(&kataSocketPattern, "kata-socket-pattern", "/run/kata-containers/%s/firecracker.socket",
-		"Phase 3: format string used to render the Firecracker API socket path for a given sandbox id.")
 	flag.DurationVar(&poolReconcileTick, "pool-reconcile-interval", 30*time.Second,
 		"Phase 3: interval between pre-warm pool reconciles. 0 disables the pool loop.")
 	flag.DurationVar(&orphanReapTick, "orphan-reap-interval", time.Minute,
@@ -289,6 +288,24 @@ func main() {
 		}
 	}()
 
+	// Kata sandbox resolver (setec#19): snapshot, restore, pause and
+	// pool-claim RPCs name the target by Pod UID, and the node finds
+	// that Pod's CRI sandbox in containerd, then its Firecracker files
+	// under the kata Go runtime's /run/vc.
+	kataClient, err := containerdclient.New(containerdSocket)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "node-agent: dial containerd %q for the kata sandbox resolver: %v\n", containerdSocket, err)
+		os.Exit(1)
+	}
+	defer func() {
+		if cerr := kataClient.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "node-agent: close containerd client: %v\n", cerr)
+		}
+	}()
+	kataSandboxes := katasandbox.Resolver{
+		Lookup: katasandbox.ContainerdLookup{Client: kataClient, Namespace: containerdNamespace},
+	}
+
 	// Orphan-sandbox reaper: force-remove NotReady kata sandboxes whose
 	// microVM leaked on a failed teardown ("Agent did not stop sandbox") and
 	// still holds a containerd name reservation. Independent of the pool/gRPC
@@ -360,9 +377,6 @@ func main() {
 		launcher.ExtraArgs = append(launcher.ExtraArgs, "--key-file", snapshotKeyFile)
 		poolMgr.Launcher = launcher
 		poolMgr.CIDs = cids
-		if kataSocketPattern != "" {
-			poolMgr.SocketPattern = kataSocketPattern
-		}
 
 		// S3-compatible session-checkpoint backend (setec#194,
 		// ADR-0007). Checkpoints are node-independent so a session can
@@ -422,9 +436,9 @@ func main() {
 			Storage:            backend,
 			SessionStorage:     sessionStorage,
 			FirecrackerFactory: ffactory,
+			KataSandboxes:      kataSandboxes,
 			Pool:               poolMgr,
 			PoolKEKPath:        snapshotKeyFile,
-			TempDir:            snapshotRoot + "/tmp",
 			CIDs:               cids,
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()

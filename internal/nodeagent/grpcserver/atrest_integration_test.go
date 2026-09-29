@@ -33,18 +33,21 @@ var guestSecret = bytes.Repeat([]byte("INTEGRATION-GUEST-SECRET-"), 128)
 type capturingFC struct {
 	mu       sync.Mutex
 	restored []byte
+	// root is where the fake resolves the paths it is handed, as a
+	// jailed Firecracker resolves them inside its chroot.
+	root string
 }
 
 func (f *capturingFC) Pause(context.Context) error  { return nil }
 func (f *capturingFC) Resume(context.Context) error { return nil }
 func (f *capturingFC) CreateSnapshot(_ context.Context, state, mem string) error {
-	if err := os.WriteFile(state, []byte("STATE-HEADER"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.root, state), []byte("STATE-HEADER"), 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(mem, guestSecret, 0o600)
+	return os.WriteFile(filepath.Join(f.root, mem), guestSecret, 0o600)
 }
 func (f *capturingFC) LoadSnapshot(_ context.Context, _, mem string) error {
-	b, err := os.ReadFile(mem)
+	b, err := os.ReadFile(filepath.Join(f.root, mem))
 	if err != nil {
 		return err
 	}
@@ -90,19 +93,22 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		KEK:   &storage.FileKEKSource{Path: filepath.Join(base, "keys", "node.key")},
 		DEKs:  &storage.DirDEKStore{Dir: keyDir},
 	}
-	fc := &capturingFC{}
+	fc := &capturingFC{root: filepath.Join(base, "fcroot")}
+	if err := os.MkdirAll(fc.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	srv := &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
-		TempDir:            filepath.Join(base, "tmp"),
+		KataSandboxes:      fakeKata{root: fc.root},
 	}
 	ctx := context.Background()
 
 	// 1. Create a snapshot whose guest memory holds a known secret.
 	resp, err := srv.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        "ns/sb",
-		SnapshotId:       "ns-snap",
-		SourceKataSocket: "/run/fake.socket",
+		SandboxId:    "ns/sb",
+		SnapshotId:   "ns-snap",
+		SourcePodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
@@ -110,7 +116,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 
 	// 2. At rest, NOTHING durable contains the secret: not the
 	// artifact tree, not the key material, not the temp dir.
-	for _, dir := range []string{root, filepath.Join(base, "keys"), filepath.Join(base, "tmp")} {
+	// fc.root holds the plaintext temp pair while Firecracker writes and
+	// reads it (setec#19), so it must be empty of the secret afterwards.
+	for _, dir := range []string{root, filepath.Join(base, "keys"), fc.root} {
 		if grepDir(t, dir, guestSecret[:25]) {
 			t.Fatalf("plaintext guest secret found at rest under %s", dir)
 		}
@@ -119,9 +127,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 	// 3. The legitimate restore path still recovers the exact guest
 	// memory (decryption through the sealed per-snapshot DEK).
 	rresp, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-snap",
-		StorageRef:       resp.GetStorageRef(),
-		KataSocketTarget: "/run/fake-target.socket",
+		SnapshotId:   "ns-snap",
+		StorageRef:   resp.GetStorageRef(),
+		TargetPodUid: testPodUID,
 	})
 	if err != nil || !rresp.GetSuccess() {
 		t.Fatalf("RestoreSandbox: %v / %+v", err, rresp)
@@ -140,9 +148,9 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		t.Fatalf("shred sealed DEK: %v", err)
 	}
 	if _, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "ns-snap",
-		StorageRef:       resp.GetStorageRef(),
-		KataSocketTarget: "/run/fake-target.socket",
+		SnapshotId:   "ns-snap",
+		StorageRef:   resp.GetStorageRef(),
+		TargetPodUid: testPodUID,
 	}); err == nil {
 		t.Fatal("restore must fail once the snapshot's key is destroyed")
 	}

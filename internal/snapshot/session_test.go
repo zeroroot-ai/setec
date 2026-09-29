@@ -61,8 +61,8 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	if !bytes.Equal(na.lastCreate.GetSessionKek(), kek) {
 		t.Fatal("session KEK not forwarded")
 	}
-	if na.lastCreate.GetSourceKataSocket() == "" {
-		t.Fatal("kata socket not rendered")
+	if na.lastCreate.GetSourcePodUid() == "" {
+		t.Fatal("source_pod_uid not set")
 	}
 }
 

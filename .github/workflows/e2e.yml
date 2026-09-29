@@ -212,9 +212,14 @@ jobs:
             # kata-qemu here. That subtest would SKIP on its own, and a SKIP
             # fails the step. kata-qemu coverage is setec#93.
             skip: '^TestRuntimeBackends_Smoke/backend=kata-qemu$'
+          # TestPhase3_PoolWarmStartLifecycle and
+          # TestGate_UnverifiedWarmStartFailsClosed are not in this pass:
+          # the warm pool has never booted an entry and is rebuilt after
+          # launch from real kata-fc Pods (owner decision 2026-09-28,
+          # setec#103). Add them back with that work.
           - pass: phase3
             snapshots: "1"
-            run: '^(TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|PoolWarmStartLifecycle|StorageFillProtection)|TestGate_UnverifiedWarmStartFailsClosed)$'
+            run: '^TestPhase3_(SnapshotRoundtrip|PauseResume|SnapshotTTL|RestoredClonesDivergeInRNG|RestoredClonesHaveUniqueIdentity|StorageFillProtection)$'
             skip: ''
     env:
       KIND_CLUSTER: setec-kvm
@@ -570,6 +575,22 @@ jobs:
           set -euo pipefail
           docker pull "${KEEPALIVE_IMAGE}"
           docker save "${KEEPALIVE_IMAGE}" | docker exec -i "${KVM_NODE}" ctr -n k8s.io images import -
+          # The guard's installer creates the thin-pool and restarts
+          # containerd, and devmapper reports "skip" or an error until it
+          # reloads with the pool. Mount only once it reports "ok"
+          # (run 36491111490 raced it: "snapshotter not loaded:
+          # devmapper: invalid argument").
+          for _ in $(seq 1 60); do
+            if docker exec "${KVM_NODE}" ctr plugins ls | grep -qE 'io\.containerd\.snapshotter\.v1 +devmapper +\S+ +ok'; then
+              break
+            fi
+            sleep 3
+          done
+          docker exec "${KVM_NODE}" ctr plugins ls | grep -E 'io\.containerd\.snapshotter\.v1 +devmapper +\S+ +ok' || {
+            echo "::error::the devmapper snapshotter on ${KVM_NODE} is not ok after 3 minutes"
+            docker exec "${KVM_NODE}" ctr plugins ls | grep devmapper || true
+            exit 1
+          }
           docker exec "${KVM_NODE}" mkdir -p /tmp/setec-keepalive-mount
           docker exec "${KVM_NODE}" ctr -n k8s.io images mount --snapshotter devmapper "${KEEPALIVE_IMAGE}" /tmp/setec-keepalive-mount
           docker exec "${KVM_NODE}" ctr -n k8s.io images unmount /tmp/setec-keepalive-mount
@@ -626,16 +647,20 @@ jobs:
             # TestMain uninstalls the release on the way out, so the logs of
             # the node-agent and the operator, the two halves of a snapshot,
             # are gone by the time a diagnostics step could read them.
-            # Sample them while the pass runs.
+            # Sample them while the pass runs. Each sample takes every line
+            # of the last minute (--since), not the last 60 lines: with
+            # --tail a busy minute dropped the lines that explained a
+            # failure (setec#19, roundtrip-snap never went Ready). The
+            # 5 s overlap may repeat a line but never skips one.
             (
               while sleep 60; do
                 echo "--- $(date -u +%H:%M:%S)"
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
                   --all-containers --previous --tail=60 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
-                  --all-containers --tail=60 2>&1
+                  --all-containers --since=65s --tail=-1 --prefix 2>&1
                 kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=operator \
-                  --all-containers --tail=60 --prefix 2>&1
+                  --all-containers --since=65s --tail=-1 --prefix 2>&1
               done
             ) > node-agent.log &
             sampler=$!

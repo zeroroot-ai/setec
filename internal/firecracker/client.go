@@ -68,9 +68,13 @@ func NewClientFromSocket(socketPath string) Client {
 					d := net.Dialer{Timeout: 5 * time.Second}
 					return d.DialContext(ctx, "unix", socketPath)
 				},
-				// Keep the pool small; one FC socket == one VM.
-				MaxIdleConns:    2,
-				IdleConnTimeout: 30 * time.Second,
+				// One connection per call, closed when the call ends.
+				// Firecracker's API server caps open connections, and
+				// the kata shim holds one of them. The node-agent builds
+				// a client per RPC and the coordinator retries, so kept-
+				// alive idle connections piled up until Firecracker
+				// answered 503 "Too many open connections" (setec#19).
+				DisableKeepAlives: true,
 			},
 			// Per-request timeout is controlled via the passed ctx;
 			// we still provide a global cap so a truly hung socket
@@ -144,26 +148,30 @@ func (c *httpClient) Resume(ctx context.Context) error {
 }
 
 // CreateSnapshot issues PUT /snapshot/create with a Full snapshot
-// specification. version is pinned to "1.0.0" — callers who want a
-// different on-disk version should extend the client rather than
-// hard-coding in the coordinator layer.
+// specification. The fields match SnapshotCreateParams of the
+// Firecracker that kata ships (v1.12.1 for kata 4.2.0). That version
+// rejects unknown fields, and it has no "version" field (setec#19: a
+// "version" made every snapshot fail with 400 Bad Request).
 func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
 		"snapshot_type": "Full",
 		"snapshot_path": statePath,
 		"mem_file_path": memPath,
-		"version":       "1.0.0",
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/create", body)
 }
 
 // LoadSnapshot issues PUT /snapshot/load and asks Firecracker to
 // resume the VM on success (enable_diff_snapshots=false; Phase 3 uses
-// full snapshots only).
+// full snapshots only). The guest memory comes from a File
+// mem_backend: Firecracker v1.12.1 deprecates mem_file_path for loads.
 func (c *httpClient) LoadSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
-		"snapshot_path":         statePath,
-		"mem_file_path":         memPath,
+		"snapshot_path": statePath,
+		"mem_backend": map[string]string{
+			"backend_type": "File",
+			"backend_path": memPath,
+		},
 		"enable_diff_snapshots": false,
 		"resume_vm":             true,
 	}

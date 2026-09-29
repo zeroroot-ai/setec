@@ -40,6 +40,10 @@ type fakeFirecracker struct {
 	pauseErr  error
 	createErr error
 	loadErr   error
+	// root is the directory the fake runs "chrooted" in: it resolves
+	// the paths it is handed under root, as a jailed Firecracker does.
+	root            string
+	lastCreateState string
 }
 
 func (f *fakeFirecracker) Pause(_ context.Context) error {
@@ -61,8 +65,9 @@ func (f *fakeFirecracker) CreateSnapshot(_ context.Context, state, mem string) e
 		return f.createErr
 	}
 	// Write plausible files so Storage.Save can read them.
-	_ = os.WriteFile(state, []byte("STATE"), 0o600)
-	_ = os.WriteFile(mem, []byte("MEMORY-PAYLOAD"), 0o600)
+	f.lastCreateState = state
+	_ = os.WriteFile(filepath.Join(f.root, state), []byte("STATE"), 0o600)
+	_ = os.WriteFile(filepath.Join(f.root, mem), []byte("MEMORY-PAYLOAD"), 0o600)
 	f.createOK = true
 	return nil
 }
@@ -81,11 +86,12 @@ func (f *fakeFirecracker) LoadSnapshot(_ context.Context, state, mem string) err
 func newServer(t *testing.T, fc *fakeFirecracker, p *pool.Manager) *Server {
 	t.Helper()
 	backend := &storage.LocalDiskBackend{Root: t.TempDir()}
+	fc.root = t.TempDir()
 	return &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
+		KataSandboxes:      fakeKata{root: fc.root},
 		Pool:               p,
-		TempDir:            t.TempDir(),
 	}
 }
 
@@ -122,10 +128,10 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := cli.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:        "ns/s",
-		SnapshotId:       "snap-1",
-		StorageBackend:   "local-disk",
-		SourceKataSocket: "/tmp/fc.sock",
+		SandboxId:      "ns/s",
+		SnapshotId:     "snap-1",
+		StorageBackend: "local-disk",
+		SourcePodUid:   testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
@@ -158,7 +164,7 @@ func TestCreateSnapshot_MissingSnapshotID(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
-		SourceKataSocket: "/s",
+		SourcePodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument", s.Code())
@@ -180,7 +186,7 @@ func TestCreateSnapshot_PauseErrorPropagates(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("already paused")}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
-		SnapshotId: "s", SourceKataSocket: "/s",
+		SnapshotId: "s", SourcePodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
 		t.Fatalf("code = %v", s.Code())
@@ -194,7 +200,7 @@ func TestCreateSnapshot_InsufficientStorage(t *testing.T) {
 	srv.Storage = &stubBackend{saveErr: storage.ErrInsufficientStorage}
 	cli := newBufconnClient(t, srv)
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
-		SnapshotId: "x", SourceKataSocket: "/s",
+		SnapshotId: "x", SourcePodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.ResourceExhausted {
 		t.Fatalf("code = %v, want ResourceExhausted", s.Code())
@@ -213,10 +219,10 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-r",
-		StorageRef:       "snap-r",
-		StorageBackend:   "local-disk",
-		KataSocketTarget: "/tmp/fc-target.sock",
+		SnapshotId:     "snap-r",
+		StorageRef:     "snap-r",
+		StorageBackend: "local-disk",
+		TargetPodUid:   testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -256,10 +262,10 @@ func TestRestoreSandbox_ReportsEncryptedAtRest(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-enc",
-		StorageRef:       "snap-enc",
-		StorageBackend:   "local-disk",
-		KataSocketTarget: "/tmp/fc-target.sock",
+		SnapshotId:     "snap-enc",
+		StorageRef:     "snap-enc",
+		StorageBackend: "local-disk",
+		TargetPodUid:   testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -286,7 +292,7 @@ func TestRestoreSandbox_NotFound(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId: "ghost", StorageRef: "ghost", KataSocketTarget: "/s",
+		SnapshotId: "ghost", StorageRef: "ghost", TargetPodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.NotFound {
 		t.Fatalf("code = %v", s.Code())
@@ -299,7 +305,7 @@ func TestRestoreSandbox_Corrupted(t *testing.T) {
 	srv.Storage = &stubBackend{openErr: storage.ErrCorrupted}
 	cli := newBufconnClient(t, srv)
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId: "s", StorageRef: "r", KataSocketTarget: "/s",
+		SnapshotId: "s", StorageRef: "r", TargetPodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.DataLoss {
 		t.Fatalf("code = %v, want DataLoss", s.Code())
@@ -316,7 +322,7 @@ func TestRestoreSandbox_LoadSnapshotError(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId: "snap-b", StorageRef: "snap-b", KataSocketTarget: "/s",
+		SnapshotId: "snap-b", StorageRef: "snap-b", TargetPodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
 		t.Fatalf("code = %v", s.Code())
@@ -327,7 +333,7 @@ func TestPauseSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	resp, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
-		SandboxId: "ns/s", KataSocketTarget: "/s",
+		SandboxId: "ns/s", TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("Pause: %v", err)
@@ -352,7 +358,7 @@ func TestPauseSandbox_FirecrackerError(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("nope")}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
-		KataSocketTarget: "/s",
+		TargetPodUid: testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.Internal {
 		t.Fatalf("code = %v", s.Code())
@@ -363,7 +369,7 @@ func TestResumeSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
 	cli := newBufconnClient(t, newServer(t, fc, nil))
 	resp, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1.ResumeSandboxRequest{
-		KataSocketTarget: "/s",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil || !resp.Success {
 		t.Fatalf("Resume: %v %v", err, resp)
@@ -530,9 +536,9 @@ func TestRestoreSandbox_ReseedSuccessIsReported(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-e",
-		StorageRef:       "snap-e",
-		KataSocketTarget: "/run/kata-containers/pod-1/firecracker.socket",
+		SnapshotId:   "snap-e",
+		StorageRef:   "snap-e",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -568,9 +574,9 @@ func TestRestoreSandbox_ReseedFailureFailsClosed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-f",
-		StorageRef:       "snap-f",
-		KataSocketTarget: "/run/kata-containers/pod-2/firecracker.socket",
+		SnapshotId:   "snap-f",
+		StorageRef:   "snap-f",
+		TargetPodUid: testPodUID,
 	})
 	if err == nil {
 		t.Fatal("restore must FAIL when the reseed cannot be confirmed")
@@ -604,9 +610,9 @@ func TestRestoreSandbox_NilReseederSkipsActiveReseed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-n",
-		StorageRef:       "snap-n",
-		KataSocketTarget: "/s",
+		SnapshotId:   "snap-n",
+		StorageRef:   "snap-n",
+		TargetPodUid: testPodUID,
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -620,14 +626,15 @@ func TestRestoreSandbox_NilReseederSkipsActiveReseed(t *testing.T) {
 }
 
 func TestDefaultReseedVsockPaths(t *testing.T) {
+	kata := fakeKataPaths(testPodUID)
 	in := &setecgrpcv1.RestoreSandboxRequest{
-		StorageRef:       "/var/lib/setec/pool/entry-1",
-		KataSocketTarget: "/run/kata-containers/pod-uid/firecracker.socket",
+		StorageRef:   "/var/lib/setec/pool/entry-1",
+		TargetPodUid: testPodUID,
 	}
-	got := defaultReseedVsockPaths(in)
+	got := defaultReseedVsockPaths(in, kata)
 	want := []string{
 		"/var/lib/setec/pool/entry-1/vsock.sock",
-		"/run/kata-containers/pod-uid/vsock.sock",
+		kata.HybridVsock,
 	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("candidates = %v, want %v", got, want)
@@ -636,29 +643,33 @@ func TestDefaultReseedVsockPaths(t *testing.T) {
 	// A non-absolute storage ref (opaque backend id) contributes no
 	// filesystem candidate.
 	in.StorageRef = "ns-snap"
-	got = defaultReseedVsockPaths(in)
+	got = defaultReseedVsockPaths(in, kata)
 	if len(got) != 1 || got[0] != want[1] {
-		t.Fatalf("candidates = %v, want only the kata-socket sibling", got)
+		t.Fatalf("candidates = %v, want only the kata hybrid vsock", got)
 	}
 }
 
-// traversalTempDir returns a TempDir nested four levels under root, so
-// a snapshot_id of ../../../../var/lib/kubelet resolves to
-// root/a/var/lib/kubelet and never leaves the test directory. The
-// returned tempDir does not exist yet, so its absence after the RPC
-// proves the server made no directory at all.
-func traversalTempDir(t *testing.T) (root, tempDir string) {
+// traversalFCRoot points srv and fc at a Firecracker root nested four
+// levels under a fresh test directory. Snapshot files are written under
+// <fcroot>/setec-snapshots, so a snapshot_id of ../../../../var/lib/kubelet
+// would resolve to root/a/b/var/lib/kubelet and never leave the test
+// directory. The work directory does not exist yet, so its absence after
+// the RPC proves the server made no directory at all.
+func traversalFCRoot(t *testing.T, srv *Server, fc *fakeFirecracker) (root, workDir string) {
 	t.Helper()
 	root = t.TempDir()
-	return root, filepath.Join(root, "a", "b", "c", "d", "tmp")
+	fcRoot := filepath.Join(root, "a", "b", "c", "d", "fcroot")
+	fc.root = fcRoot
+	srv.KataSandboxes = fakeKata{root: fcRoot}
+	return root, filepath.Join(fcRoot, snapshotWorkDir)
 }
 
-func assertNoDirCreated(t *testing.T, root, tempDir string) {
+func assertNoDirCreated(t *testing.T, root, workDir string) {
 	t.Helper()
-	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
-		t.Fatalf("temp dir %s exists after a rejected request (err=%v)", tempDir, err)
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+		t.Fatalf("work dir %s exists after a rejected request (err=%v)", workDir, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "a", "var")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "a", "b", "var")); !os.IsNotExist(err) {
 		t.Fatalf("traversal target created under %s (err=%v)", root, err)
 	}
 }
@@ -668,15 +679,14 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			fc := &fakeFirecracker{}
 			srv := newServer(t, fc, nil)
-			root, tempDir := traversalTempDir(t)
-			srv.TempDir = tempDir
+			root, workDir := traversalFCRoot(t, srv, fc)
 			cli := newBufconnClient(t, srv)
 
 			_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
-				SandboxId:        "ns/s",
-				SnapshotId:       id,
-				StorageBackend:   "local-disk",
-				SourceKataSocket: "/tmp/fc.sock",
+				SandboxId:      "ns/s",
+				SnapshotId:     id,
+				StorageBackend: "local-disk",
+				SourcePodUid:   testPodUID,
 			})
 			if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 				t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
@@ -684,7 +694,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 			if fc.pauseCalls != 0 {
 				t.Fatalf("VM paused %d times for a rejected snapshot_id", fc.pauseCalls)
 			}
-			assertNoDirCreated(t, root, tempDir)
+			assertNoDirCreated(t, root, workDir)
 		})
 	}
 }
@@ -692,8 +702,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	fc := &fakeFirecracker{}
 	srv := newServer(t, fc, nil)
-	root, tempDir := traversalTempDir(t)
-	srv.TempDir = tempDir
+	root, workDir := traversalFCRoot(t, srv, fc)
 	// A real saved snapshot, so the only thing wrong with the request
 	// is the snapshot_id.
 	if _, _, err := srv.Storage.Save(context.Background(), "snap-1", bytes.NewReader(makeFramedPayload(t, []byte("STATE"), []byte("MEM")))); err != nil {
@@ -702,10 +711,10 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "../../../../var/lib/kubelet",
-		StorageRef:       "snap-1",
-		StorageBackend:   "local-disk",
-		KataSocketTarget: "/tmp/fc.sock",
+		SnapshotId:     "../../../../var/lib/kubelet",
+		StorageRef:     "snap-1",
+		StorageBackend: "local-disk",
+		TargetPodUid:   testPodUID,
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
@@ -713,5 +722,5 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	if len(fc.loadCalls) != 0 {
 		t.Fatalf("LoadSnapshot called %d times for a rejected snapshot_id", len(fc.loadCalls))
 	}
-	assertNoDirCreated(t, root, tempDir)
+	assertNoDirCreated(t, root, workDir)
 }

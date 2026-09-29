@@ -152,7 +152,6 @@ func main() {
 		nodeAgentAuthorityPattern string
 		nodeAgentNamespace        string
 		nodeAgentCreds            nodeAgentCredentialFlags
-		kataSocketPattern         string
 	)
 
 	pflag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080",
@@ -259,9 +258,6 @@ func main() {
 		"Full SPIFFE ID a node-agent must present, e.g. "+
 			"spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent. Repeat for each. Required in SPIFFE "+
 			"mode; there is no accept-any-server setting.")
-	pflag.StringVar(&kataSocketPattern, "kata-socket-pattern",
-		"/run/kata-containers/%s/firecracker.socket",
-		"Phase 3: format string used by the Coordinator to render a Firecracker socket path from a Pod UID.")
 
 	// Controller-runtime's zap helper registers its flags on the stdlib
 	// flag.CommandLine. We bridge the stdlib set into pflag so --help
@@ -464,12 +460,11 @@ func main() {
 		dialer := snapshot.NewGRPCDialer(nodeAgentPodResolver, nodeAgentAuthorityPattern, creds)
 		snapshotCoordRecorder := mgr.GetEventRecorder("snapshot-coordinator")
 		coordinator = &snapshot.Coordinator{
-			Client:            mgr.GetClient(),
-			Dialer:            dialer,
-			Recorder:          snapshotCoordRecorder,
-			Metrics:           collectors,
-			Tracer:            tracer,
-			KataSocketPattern: kataSocketPattern,
+			Client:   mgr.GetClient(),
+			Dialer:   dialer,
+			Recorder: snapshotCoordRecorder,
+			Metrics:  collectors,
+			Tracer:   tracer,
 			// ADR-0005 invariant gate: enforcement is unconditional
 			// inside the Coordinator; this only wires the dev-mode
 			// opt-out lookup (class annotation + gate-namespace label).

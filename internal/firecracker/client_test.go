@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -125,9 +126,7 @@ func TestCreateSnapshotSuccess(t *testing.T) {
 			if m["mem_file_path"] != "/tmp/m.bin" {
 				t.Fatalf("mem_file_path = %v", m["mem_file_path"])
 			}
-			if m["version"] != "1.0.0" {
-				t.Fatalf("version = %v", m["version"])
-			}
+			assertOnlyFields(t, m, snapshotCreateFields)
 		},
 	}})
 	c := NewClientFromSocket(sock)
@@ -148,6 +147,14 @@ func TestLoadSnapshotSuccess(t *testing.T) {
 			if m["resume_vm"] != true {
 				t.Fatalf("resume_vm = %v", m["resume_vm"])
 			}
+			mb, _ := m["mem_backend"].(map[string]any)
+			if mb["backend_type"] != "File" || mb["backend_path"] != "/tmp/m.bin" {
+				t.Fatalf("mem_backend = %v, want a File backend at /tmp/m.bin", m["mem_backend"])
+			}
+			if _, deprecated := m["mem_file_path"]; deprecated {
+				t.Fatal("load body carries the deprecated mem_file_path")
+			}
+			assertOnlyFields(t, m, snapshotLoadFields)
 		},
 	}})
 	c := NewClientFromSocket(sock)
@@ -207,5 +214,86 @@ func TestDialFailureSurfaced(t *testing.T) {
 	c := NewClientFromSocket(filepath.Join(t.TempDir(), "missing.sock"))
 	if err := c.Pause(context.Background()); err == nil {
 		t.Fatalf("expected dial error")
+	}
+}
+
+// TestClientLeavesNoConnectionOpen asserts that each API call closes
+// its connection. Firecracker caps open API connections, and the kata
+// shim holds one; kept-alive idle connections from repeated RPCs made
+// Firecracker answer 503 "Too many open connections" (setec#19).
+func TestClientLeavesNoConnectionOpen(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "fc.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var mu sync.Mutex
+	open := 0
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		// The server must not close idle connections itself, or the
+		// test cannot tell a leaking client from a closing one.
+		ReadHeaderTimeout: 2 * time.Second,
+		IdleTimeout:       time.Minute,
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch st {
+			case http.StateNew:
+				open++
+			case http.StateClosed, http.StateHijacked:
+				open--
+			}
+		},
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// A client per call, as the node-agent builds one per RPC.
+	for i := range 5 {
+		if err := NewClientFromSocket(sock).Pause(context.Background()); err != nil {
+			t.Fatalf("Pause %d: %v", i, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := open
+		mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d API connections still open after the calls returned; want 0", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The request fields Firecracker v1.12.1 accepts (the version kata
+// 4.2.0 ships), from its swagger definitions SnapshotCreateParams and
+// SnapshotLoadParams. Firecracker rejects any other field with 400 Bad
+// Request, so the client must never send one (setec#19).
+var (
+	snapshotCreateFields = []string{"mem_file_path", "snapshot_path", "snapshot_type"}
+	snapshotLoadFields   = []string{
+		"enable_diff_snapshots", "mem_file_path", "mem_backend",
+		"snapshot_path", "resume_vm", "network_overrides",
+	}
+)
+
+// assertOnlyFields fails the test if body has a field outside allowed.
+func assertOnlyFields(t *testing.T, body map[string]any, allowed []string) {
+	t.Helper()
+	ok := map[string]bool{}
+	for _, f := range allowed {
+		ok[f] = true
+	}
+	for f := range body {
+		if !ok[f] {
+			t.Errorf("request body has field %q, which Firecracker v1.12.1 rejects", f)
+		}
 	}
 }

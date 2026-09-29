@@ -908,9 +908,6 @@ snapshots:
   # separate from localDisk.root so copies/backups of the artifact tree
   # carry no key material.
   keysDir: /var/lib/setec/keys
-  # kataSocketPattern is the format string the Coordinator and node-agent
-  # share to render a Firecracker API socket path from a Pod UID.
-  kataSocketPattern: /run/kata-containers/%s/firecracker.socket
   # entropyReseed controls the ACTIVE entropy reseed on snapshot restore
   # (setec#72). "require" (default, fail-closed): a restore only succeeds
   # once the in-guest setec-guest-agent has acknowledged fresh entropy

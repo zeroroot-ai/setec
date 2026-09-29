@@ -77,8 +77,8 @@ func DefaultExecLauncher() *ExecLauncher {
 }
 
 // Launch execs the setec-pool-vm binary with the flags derived from
-// opts. The child's stdout/stderr is forwarded so operators can see
-// Firecracker boot output in node-agent logs.
+// opts. The child's stdout and stderr are captured and returned in the
+// error when the launch fails.
 func (l *ExecLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	if opts.SocketPath == "" || opts.StorageRoot == "" || opts.EntryID == "" {
 		return fmt.Errorf("pool: launcher requires socket/storage/entry-id")
@@ -106,22 +106,17 @@ func (l *ExecLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 		bin = "setec-pool-vm"
 	}
 
+	// CombinedOutput captures stdout and stderr for the error below. It
+	// refuses to run when either is already set: an earlier version set
+	// both to a discard writer, and every launch failed with "exec:
+	// Stdout already set", so no pool entry ever booted (setec#19).
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = execDiscard{}
-	cmd.Stderr = execDiscard{}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pool: setec-pool-vm for %s/%s: %w (output: %s)", opts.ClassName, opts.EntryID, err, string(out))
 	}
 	return nil
 }
-
-// execDiscard swallows child output. In production the node-agent
-// reaches inside the child with cmd.Stdout/Stderr = log files, but
-// keeping the surface trivial is sufficient for v0.1.0.
-type execDiscard struct{}
-
-func (execDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 // LaunchOptionsFrom is a small helper the Manager uses to translate a
 // SandboxClass plus node-agent config into a LaunchOptions. Defined

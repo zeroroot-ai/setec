@@ -29,6 +29,7 @@ import (
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
@@ -60,13 +61,14 @@ type Server struct {
 	// firecracker.NewClientFromSocket.
 	FirecrackerFactory func(sockPath string) firecracker.Client
 
+	// KataSandboxes finds a Pod's kata Firecracker socket and hybrid
+	// vsock on this node from the Pod UID (setec#19). Production wires
+	// a katasandbox.Resolver backed by containerd.
+	KataSandboxes KataSandboxResolver
+
 	// Pool is the pre-warm pool manager. When nil, QueryPool returns
 	// an empty list (no pool feature).
 	Pool *pool.Manager
-
-	// TempDir is the directory temp state files are written to during
-	// CreateSnapshot/RestoreSandbox. Defaults to /var/lib/setec/tmp.
-	TempDir string
 
 	// Reseeder actively reseeds the restored guest's CSPRNG over the
 	// Firecracker vsock UDS after every successful LoadSnapshot
@@ -80,7 +82,7 @@ type Server struct {
 
 	// ReseedVsockPaths returns candidate host paths for the restored
 	// VM's vsock Unix socket. nil uses defaultReseedVsockPaths.
-	ReseedVsockPaths func(in *setecgrpcv1.RestoreSandboxRequest) []string
+	ReseedVsockPaths func(in *setecgrpcv1.RestoreSandboxRequest, kata katasandbox.Paths) []string
 
 	// ReseedObserver, when non-nil, receives "success" or "failure"
 	// after each reseed attempt (metrics hook).
@@ -123,15 +125,6 @@ type Server struct {
 
 	// Tracer is optional.
 	Tracer trace.Tracer
-}
-
-// tempDir returns the configured TempDir, falling back to the
-// default.
-func (s *Server) tempDir() string {
-	if s.TempDir != "" {
-		return s.TempDir
-	}
-	return "/var/lib/setec/tmp"
 }
 
 func (s *Server) tracer() trace.Tracer {
@@ -195,26 +188,34 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	if err := storage.ValidateSnapshotID(in.GetSnapshotId()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "snapshot_id: %v", err)
 	}
-	if in.GetSourceKataSocket() == "" {
-		return nil, status.Error(codes.InvalidArgument, "source_kata_socket required")
+	kata, err := s.kataPaths(ctx, in.GetSourcePodUid(), "source_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
 	if err != nil {
 		return nil, err
 	}
 
-	fc := s.FirecrackerFactory(in.GetSourceKataSocket())
+	fc := s.FirecrackerFactory(kata.APISocket)
 
 	if err := fc.Pause(ctx); err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker pause: %v", err)
 	}
 
-	dir := filepath.Join(s.tempDir(), in.GetSnapshotId())
+	// Firecracker writes the pair itself, and kata runs it chrooted
+	// into the VM's jailer root, so the files go under that root and
+	// Firecracker gets the paths as it sees them (setec#19).
+	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, status.Errorf(codes.Internal, "mkdir temp: %v", err)
 	}
 	statePath := filepath.Join(dir, "state.bin")
 	memPath := filepath.Join(dir, "memory.bin")
+	fcState, fcMem, err := fcPaths(kata, statePath, memPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Ensure we clean up the temp files even on error paths. The temp
 	// pair is the PLAINTEXT guest image (the durable copy written by
@@ -222,7 +223,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// treatment the storage backend applies before unlinking.
 	defer func() { shredDir(dir) }()
 
-	if err := fc.CreateSnapshot(ctx, statePath, memPath); err != nil {
+	if err := fc.CreateSnapshot(ctx, fcState, fcMem); err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker createSnapshot: %v", err)
 	}
 
@@ -267,8 +268,9 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	if in.GetStorageRef() == "" {
 		return nil, status.Error(codes.InvalidArgument, "storage_ref required")
 	}
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	backend, err := s.backendFor(in.GetStorageBackend(), in.GetSessionKek())
 	if err != nil {
@@ -287,7 +289,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	}
 	defer func() { _ = rc.Close() }()
 
-	dir := filepath.Join(s.tempDir(), in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, status.Errorf(codes.Internal, "mkdir: %v", err)
 	}
@@ -299,17 +301,21 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
 	}
 
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
-	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
+	fcState, fcMem, err := fcPaths(kata, statePath, memPath)
+	if err != nil {
+		return nil, err
+	}
+	fc := s.FirecrackerFactory(kata.APISocket)
+	if err := fc.LoadSnapshot(ctx, fcState, fcMem); err != nil {
 		return &setecgrpcv1.RestoreSandboxResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, status.Errorf(codes.Internal, "firecracker loadSnapshot: %v", err)
 	}
 
-	candidates := defaultReseedVsockPaths(in)
+	candidates := defaultReseedVsockPaths(in, kata)
 	if s.ReseedVsockPaths != nil {
-		candidates = s.ReseedVsockPaths(in)
+		candidates = s.ReseedVsockPaths(in, kata)
 	}
 
 	// Active entropy reseed (setec#72). The snapshot's CSPRNG state is
@@ -423,21 +429,63 @@ func (s *Server) observeReseed(outcome string) {
 //     an absolute on-node directory, and setec-pool-vm binds the vsock
 //     device there (vsockUDSPath); non-absolute (opaque backend) refs
 //     contribute nothing.
-//   - <dir(kataSocketTarget)>/vsock.sock — the sibling of the target
-//     Firecracker API socket, for restores into Kata-managed pods.
+//   - the target kata sandbox's hybrid vsock, <vm>/root/kata.hvsock
+//     (katasandbox), for restores into kata-managed pods.
 //
 // Candidate probing is not a fail-open: whichever path connects must
 // still complete the digest-verified reseed, and if none does the
 // restore fails closed.
-func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest) []string {
+func defaultReseedVsockPaths(in *setecgrpcv1.RestoreSandboxRequest, kata katasandbox.Paths) []string {
 	var out []string
 	if ref := in.GetStorageRef(); ref != "" && filepath.IsAbs(ref) {
 		out = append(out, filepath.Join(ref, "vsock.sock"))
 	}
-	if ks := in.GetKataSocketTarget(); ks != "" {
-		out = append(out, filepath.Join(filepath.Dir(ks), "vsock.sock"))
+	if kata.HybridVsock != "" {
+		out = append(out, kata.HybridVsock)
 	}
 	return out
+}
+
+// snapshotWorkDir is the directory, under a VM's Firecracker root, that
+// holds the state and memory files of a snapshot being written or
+// loaded. Firecracker reads and writes them itself.
+const snapshotWorkDir = "setec-snapshots"
+
+// fcPaths maps the host state and memory paths into Firecracker's view.
+func fcPaths(kata katasandbox.Paths, statePath, memPath string) (fcState, fcMem string, err error) {
+	if fcState, err = kata.FCPath(statePath); err != nil {
+		return "", "", status.Errorf(codes.Internal, "%v", err)
+	}
+	if fcMem, err = kata.FCPath(memPath); err != nil {
+		return "", "", status.Errorf(codes.Internal, "%v", err)
+	}
+	return fcState, fcMem, nil
+}
+
+// KataSandboxResolver finds a Pod's kata Firecracker files on this
+// node from the Pod UID.
+type KataSandboxResolver interface {
+	Resolve(ctx context.Context, podUID string) (katasandbox.Paths, error)
+}
+
+// kataPaths resolves the kata sandbox of the Pod with podUID, mapping
+// the failure to a gRPC status. field names the request field for an
+// InvalidArgument.
+func (s *Server) kataPaths(ctx context.Context, podUID, field string) (katasandbox.Paths, error) {
+	if podUID == "" {
+		return katasandbox.Paths{}, status.Errorf(codes.InvalidArgument, "%s required", field)
+	}
+	if s.KataSandboxes == nil {
+		return katasandbox.Paths{}, status.Error(codes.FailedPrecondition, "no kata sandbox resolver configured")
+	}
+	p, err := s.KataSandboxes.Resolve(ctx, podUID)
+	if errors.Is(err, katasandbox.ErrNotFound) {
+		return katasandbox.Paths{}, status.Errorf(codes.NotFound, "%v", err)
+	}
+	if err != nil {
+		return katasandbox.Paths{}, status.Errorf(codes.Internal, "resolve kata sandbox: %v", err)
+	}
+	return p, nil
 }
 
 // PauseSandbox is a direct wrap of firecracker.Pause.
@@ -446,10 +494,11 @@ func (s *Server) PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxR
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
 
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.Pause(ctx); err != nil {
 		return &setecgrpcv1.PauseSandboxResponse{
 			Success: false,
@@ -465,10 +514,11 @@ func (s *Server) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandbo
 	defer span.End()
 	span.SetAttributes(attribute.String("setec.sandbox_id", in.GetSandboxId()))
 
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
+	fc := s.FirecrackerFactory(kata.APISocket)
 	if err := fc.Resume(ctx); err != nil {
 		return &setecgrpcv1.ResumeSandboxResponse{
 			Success: false,
@@ -552,8 +602,9 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	if in.GetSandboxClass() == "" {
 		return nil, status.Error(codes.InvalidArgument, "sandbox_class required")
 	}
-	if in.GetKataSocketTarget() == "" {
-		return nil, status.Error(codes.InvalidArgument, "kata_socket_target required")
+	kata, err := s.kataPaths(ctx, in.GetTargetPodUid(), "target_pod_uid")
+	if err != nil {
+		return nil, err
 	}
 	if s.Pool == nil {
 		s.observeClaim("miss")
@@ -580,7 +631,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	// LoadSnapshot. Plain RemoveAll on the temp pair — Firecracker may
 	// keep the restored memory file mapped, so it must be unlinked,
 	// never overwritten (same rationale as RestoreSandbox).
-	statePath, memPath, cleanup, decErr := s.decryptPoolEntry(entry.StorageRef, entry.ID)
+	statePath, memPath, cleanup, decErr := s.decryptPoolEntry(entry.StorageRef, entry.ID, filepath.Join(kata.FCRoot, snapshotWorkDir))
 	if decErr != nil {
 		s.observeClaim("restore_failed")
 		return &setecgrpcv1.ClaimPoolEntryResponse{
@@ -591,8 +642,13 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	}
 	defer cleanup()
 
-	fc := s.FirecrackerFactory(in.GetKataSocketTarget())
-	if err := fc.LoadSnapshot(ctx, statePath, memPath); err != nil {
+	fcState, fcMem, pathErr := fcPaths(kata, statePath, memPath)
+	if pathErr != nil {
+		s.observeClaim("restore_failed")
+		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: true, EntryId: entry.ID, Error: pathErr.Error()}, nil
+	}
+	fc := s.FirecrackerFactory(kata.APISocket)
+	if err := fc.LoadSnapshot(ctx, fcState, fcMem); err != nil {
 		s.observeClaim("restore_failed")
 		return &setecgrpcv1.ClaimPoolEntryResponse{
 			Claimed: true,
@@ -603,7 +659,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 
 	candidates := []string{
 		filepath.Join(entry.StorageRef, "vsock.sock"),
-		filepath.Join(filepath.Dir(in.GetKataSocketTarget()), "vsock.sock"),
+		kata.HybridVsock,
 	}
 
 	// Active entropy reseed (setec#72), identical fail-closed contract
@@ -689,7 +745,7 @@ func (s *Server) observeClaim(outcome string) {
 // identity + provenance record) and streams the encrypted state/memory
 // pair into a fresh temp dir as the plaintext files Firecracker's
 // LoadSnapshot needs. The returned cleanup unlinks the temp tree.
-func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath string, cleanup func(), err error) {
+func (s *Server) decryptPoolEntry(entryDir, entryID, workDir string) (statePath, memPath string, cleanup func(), err error) {
 	kek, err := atrest.LoadOrCreateKEK(s.poolKEKPath())
 	if err != nil {
 		return "", "", nil, err
@@ -717,7 +773,7 @@ func (s *Server) decryptPoolEntry(entryDir, entryID string) (statePath, memPath 
 		return "", "", nil, err
 	}
 
-	dir := filepath.Join(s.tempDir(), "pool-claim-"+entryID+"-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	dir := filepath.Join(workDir, "pool-claim-"+entryID+"-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", nil, err
 	}

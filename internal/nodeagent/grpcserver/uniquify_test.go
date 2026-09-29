@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -70,12 +69,12 @@ func TestRestoreSandbox_UniquifySuccessIsReported(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-u",
-		StorageRef:       "snap-u",
-		KataSocketTarget: "/run/kata-containers/pod-u/firecracker.socket",
-		SandboxId:        "ns/sb-u",
-		PodIp:            "10.2.3.4",
-		Hostname:         "sb-u",
+		SnapshotId:   "snap-u",
+		StorageRef:   "snap-u",
+		TargetPodUid: testPodUID,
+		SandboxId:    "ns/sb-u",
+		PodIp:        "10.2.3.4",
+		Hostname:     "sb-u",
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -120,10 +119,10 @@ func TestRestoreSandbox_UniquifyFailureFailsClosed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:       "snap-uf",
-		StorageRef:       "snap-uf",
-		KataSocketTarget: "/run/kata-containers/pod-uf/firecracker.socket",
-		SandboxId:        "ns/sb-uf",
+		SnapshotId:   "snap-uf",
+		StorageRef:   "snap-uf",
+		TargetPodUid: testPodUID,
+		SandboxId:    "ns/sb-uf",
 	})
 	if err == nil {
 		t.Fatal("restore must FAIL when the uniquification cannot be confirmed")
@@ -162,10 +161,10 @@ func TestRestoreSandbox_CIDCollisionFailsClosed(t *testing.T) {
 			t.Fatalf("Save: %v", err)
 		}
 		_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-			SnapshotId:       snap,
-			StorageRef:       snap,
-			KataSocketTarget: "/run/kata-containers/pod-c/firecracker.socket",
-			SandboxId:        []string{"ns/sb-c1", "ns/sb-c2"}[i],
+			SnapshotId:   snap,
+			StorageRef:   snap,
+			TargetPodUid: testPodUID,
+			SandboxId:    []string{"ns/sb-c1", "ns/sb-c2"}[i],
 		})
 		if i == 0 && err != nil {
 			t.Fatalf("first restore must succeed: %v", err)
@@ -187,12 +186,12 @@ func TestClaimPoolEntry_UniquifyFailureConsumesEntryAndFallsBack(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		ImageRef:         "img:v1",
-		KataSocketTarget: filepath.Join(t.TempDir(), "firecracker.socket"),
-		SandboxId:        "t-a/sb",
-		PodIp:            "10.5.6.7",
-		Hostname:         "sb",
+		SandboxClass: "std",
+		ImageRef:     "img:v1",
+		TargetPodUid: testPodUID,
+		SandboxId:    "t-a/sb",
+		PodIp:        "10.5.6.7",
+		Hostname:     "sb",
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
@@ -235,12 +234,12 @@ func TestClaimPoolEntry_UniquifySuccessReportsAndAdoptsCID(t *testing.T) {
 	cli := newBufconnClient(t, srv)
 
 	resp, err := cli.ClaimPoolEntry(context.Background(), &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass:     "std",
-		ImageRef:         "img:v1",
-		KataSocketTarget: filepath.Join(t.TempDir(), "firecracker.socket"),
-		SandboxId:        "t-a/sb-ok",
-		PodIp:            "10.5.6.8",
-		Hostname:         "sb-ok",
+		SandboxClass: "std",
+		ImageRef:     "img:v1",
+		TargetPodUid: testPodUID,
+		SandboxId:    "t-a/sb-ok",
+		PodIp:        "10.5.6.8",
+		Hostname:     "sb-ok",
 	})
 	if err != nil {
 		t.Fatalf("ClaimPoolEntry: %v", err)
