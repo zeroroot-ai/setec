@@ -73,7 +73,7 @@ jobs:
   # ---- fast tier (pull_request): reusable mod-tidy/vet/build/test ----
   fast:
     if: github.event_name == 'pull_request'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@c06ea08fddecc754ac6faf06f9fc0511d13cb955 # v0.5.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@87e85db6be9e1b5031523d6a96774bf5495344f8 # v0.8.1
     with:
       tier: fast
       skip-lint: true # setec runs its own pinned golangci-lint below (make lint)
@@ -81,7 +81,7 @@ jobs:
   # ---- heavy tier (merge_group): reusable race test + govulncheck ----
   heavy:
     if: github.event_name == 'merge_group'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@c06ea08fddecc754ac6faf06f9fc0511d13cb955 # v0.5.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@87e85db6be9e1b5031523d6a96774bf5495344f8 # v0.8.1
     with:
       tier: heavy
 
@@ -587,8 +587,21 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # v1.1.4 vendors an x/tools whose SSA builder cannot handle Go 1.27 and
+      # panics part-way through the scan:
+      #
+      #   panic: unexpected expr: *ast.KeyValueExpr
+      #   created by golang.org/x/tools/go/ssa.(*Program).Build
+      #
+      # A panic exits 2, so the job reads as a scan failure rather than as a
+      # tool that never ran. v1.8.0 vendors x/tools v0.50.0, which handles it.
+      # Same class as golangci-lint below v2.14.0 and deadcode below v0.49.0:
+      # the vendored x/tools decides this, not the toolchain that builds the
+      # tool, so rebuilding v1.1.4 on go1.27.1 does not help.
+      #
+      # Keep at or above the x/tools that the org's Go floor needs.
       - name: install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       # Same ephemeral replace as examples-build: scan the example against the
       # tree that is about to merge, not the last released setec tag.
