@@ -28,7 +28,13 @@ WORKDIR /workspace
 
 COPY go.mod go.mod
 COPY go.sum go.sum
-RUN go mod download
+# Through the retry wrapper: proxy.golang.org resets an in-flight HTTP/2
+# stream from time to time, and Go reports that as a build failure. It is the
+# same wrapper the Makefile uses for `go install`, and it still never retries a
+# checksum mismatch. It is COPYed separately so this layer's cache key stays
+# go.mod + go.sum + the wrapper, and does not become the whole tree.
+COPY scripts/go-retry.sh scripts/go-retry.sh
+RUN ./scripts/go-retry.sh go mod download
 
 COPY . .
 
