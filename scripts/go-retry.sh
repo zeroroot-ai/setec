@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# go-install-retry.sh — `go install`, retried past a transient checksum-database blip.
+# go-retry.sh — `go install`, retried past a transient checksum-database blip.
 #
 # `go build` and `go install` verify every module against the public Go
 # checksum database. sum.golang.org occasionally resets an in-flight HTTP/2
@@ -25,8 +25,8 @@
 # repeating it three times would delay it and bury it under two more copies.
 # It fails on the first attempt, loudly.
 #
-#   go-install-retry.sh <package@version>
-#   go-install-retry.sh --selftest
+#   go-retry.sh <package@version>
+#   go-retry.sh --selftest
 set -uo pipefail
 
 ATTEMPTS="${GO_INSTALL_ATTEMPTS:-3}"
