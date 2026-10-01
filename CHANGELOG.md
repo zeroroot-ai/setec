@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.116.0](https://github.com/zeroroot-ai/setec/compare/v0.115.0...v0.116.0) (2026-10-01)
+
+
+### Features
+
+* **go:** move the toolchain floor to 1.27.1 ([#117](https://github.com/zeroroot-ai/setec/issues/117)) ([3451dee](https://github.com/zeroroot-ai/setec/commit/3451dee2be0dec591857d2f1ca08709cd516b7ef))
+
+
+### Bug Fixes
+
+* **ci:** link-check checks only the Markdown a PR touched (.github v0.7.2) ([#112](https://github.com/zeroroot-ai/setec/issues/112)) ([d5444c5](https://github.com/zeroroot-ai/setec/commit/d5444c5a6dab2bc70dd537ff81e36c7dd5b3793c))
+* **ci:** retry go mod download too, and make the backoff knob work ([#119](https://github.com/zeroroot-ai/setec/issues/119)) ([46bc76c](https://github.com/zeroroot-ai/setec/commit/46bc76cbed698ae2baab17efe5d9d2506bd0936f))
+* **ci:** survive a sum.golang.org blip instead of failing the job ([#114](https://github.com/zeroroot-ai/setec/issues/114)) ([a70ab17](https://github.com/zeroroot-ai/setec/commit/a70ab1733f20376d8ac70dae56b614e56fc2be69)), closes [#98](https://github.com/zeroroot-ai/setec/issues/98)
+* **dev:** install gVisor from the release tarball, and fail closed on the checksum ([#113](https://github.com/zeroroot-ai/setec/issues/113)) ([5d3176d](https://github.com/zeroroot-ai/setec/commit/5d3176d9cdaac9e3dd0679968082e014671b72ec)), closes [#90](https://github.com/zeroroot-ai/setec/issues/90)
+* **e2e:** run the kata-fc e2e suites on a hosted runner with nested KVM ([#94](https://github.com/zeroroot-ai/setec/issues/94)) ([d3bc173](https://github.com/zeroroot-ai/setec/commit/d3bc173eb71586667fbed61c0bfa157c18997d8a))
+* **installer:** the payload gate is a positive inventory, proven to fail ([#79](https://github.com/zeroroot-ai/setec/issues/79)) ([5279237](https://github.com/zeroroot-ai/setec/commit/5279237d602605bd54ab8c208325000565b6e11a))
+* **kata-fc:** a session's workspace survives a VM restart ([#100](https://github.com/zeroroot-ai/setec/issues/100)) ([4719261](https://github.com/zeroroot-ai/setec/commit/47192619ab9e87f636012cf57e183f74f1c6c816))
+* **snapshot:** dial the node-agent Pod IP instead of a DNS name that never resolves ([#95](https://github.com/zeroroot-ai/setec/issues/95)) ([8467643](https://github.com/zeroroot-ai/setec/commit/84676436bf7bf4f9329c81894da8e0fdefda678f))
+* **snapshot:** pause, snapshot and TTL work against kata's Firecracker ([#104](https://github.com/zeroroot-ai/setec/issues/104)) ([a09aaaa](https://github.com/zeroroot-ai/setec/commit/a09aaaaf4357160299679c2a6820e2f10081b4c6))
+
 ## [0.115.0](https://github.com/zeroroot-ai/setec/compare/v0.114.6...v0.115.0) (2026-09-19)
 
 
