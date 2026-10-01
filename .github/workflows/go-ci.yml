@@ -704,6 +704,12 @@ jobs:
       - name: Mutation-test the e2e pass verdict
         run: bash scripts/__tests__/e2e-summary.test.sh
 
+      # scripts/go-install-retry.sh wraps every `go install` the Makefile
+      # runs. It must retry a transient sum.golang.org blip and must NOT
+      # retry a checksum mismatch, which is a security signal.
+      - name: Mutation-test the go install retry
+        run: bash scripts/__tests__/go-install-retry.test.sh
+
       - name: Every gate job is covered by ci-required's needs
         run: bash scripts/check-ci-required-coverage.sh .github/workflows/go-ci.yml
 
