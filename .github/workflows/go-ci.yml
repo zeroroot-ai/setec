@@ -73,7 +73,7 @@ jobs:
   # ---- fast tier (pull_request): reusable mod-tidy/vet/build/test ----
   fast:
     if: github.event_name == 'pull_request'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@82522c83b5bef5c671e5da4e276238b175f3b2bd # v0.8.0
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@87e85db6be9e1b5031523d6a96774bf5495344f8 # v0.8.1
     with:
       tier: fast
       skip-lint: true # setec runs its own pinned golangci-lint below (make lint)
@@ -81,7 +81,7 @@ jobs:
   # ---- heavy tier (merge_group): reusable race test + govulncheck ----
   heavy:
     if: github.event_name == 'merge_group'
-    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@82522c83b5bef5c671e5da4e276238b175f3b2bd # v0.8.0
+    uses: zeroroot-ai/.github/.github/workflows/reusable-go-ci.yml@87e85db6be9e1b5031523d6a96774bf5495344f8 # v0.8.1
     with:
       tier: heavy
 
