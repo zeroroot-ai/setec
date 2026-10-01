@@ -12,8 +12,11 @@
 # Build stage
 # ----------------------------------------------------------------------------
 # Base images are mirror-sourced and digest-pinned for reproducibility
-# (RESTRUCTURE-QUALITY-BARS §1). Toolchain pinned to go 1.26.4 to match
-# go.mod / .tool-versions and the rest of the platform (gibson#777). To
+# (RESTRUCTURE-QUALITY-BARS §1). The toolchain is whatever the FROM line below
+# names, which must match go.mod and .tool-versions (gibson#777). The version
+# is deliberately not repeated here: this comment said 1.26.4 while the FROM
+# line said 1.26.8, and before that 1.26.6, so the prose copy only ever drifted.
+# check-go-toolchain.sh (.github#22) is what actually holds them together. To
 # refresh, mirror the new tag in zeroroot-ai/.github mirror-list.yaml,
 # then re-resolve the digest with:
 #   docker buildx imagetools inspect ghcr.io/zeroroot-ai/mirror/golang:<tag> --format '{{.Manifest.Digest}}'
@@ -39,7 +42,13 @@ WORKDIR /workspace
 # Cache module downloads.
 COPY go.mod go.mod
 COPY go.sum go.sum
-RUN go mod download
+# Through the retry wrapper: proxy.golang.org resets an in-flight HTTP/2
+# stream from time to time, and Go reports that as a build failure. It is the
+# same wrapper the Makefile uses for `go install`, and it still never retries a
+# checksum mismatch. It is COPYed separately so this layer's cache key stays
+# go.mod + go.sum + the wrapper, and does not become the whole tree.
+COPY scripts/go-retry.sh scripts/go-retry.sh
+RUN ./scripts/go-retry.sh go mod download
 
 # Copy the rest of the source tree. .dockerignore narrows this.
 COPY . .
