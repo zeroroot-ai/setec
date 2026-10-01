@@ -22,7 +22,7 @@
 # so multi-arch builds (linux/amd64,linux/arm64 — setec#132) never emulate
 # the Go toolchain. The distroless runtime stage below is a multi-arch
 # index, and it has no RUN steps, so no QEMU is needed anywhere.
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.26.8@sha256:9d2f36f06329b2a141b9db99ffa32765cf695ee57b813ca29e245e8670bcbfff AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
 # The builder image carries exactly the Go that go.mod names, and the org
 # guard (check-go-toolchain.sh, .github#22) fails a PR where they differ.
 # GOTOOLCHAIN=local makes a mismatch fail the build instead of downloading a
