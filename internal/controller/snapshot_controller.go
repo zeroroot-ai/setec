@@ -12,7 +12,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -197,10 +196,9 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if sb == nil || sb.Spec.SnapshotRef == nil || sb.Spec.SnapshotRef.Name == "" {
 					return nil
 				}
-				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+				return []reconcile.Request{{
 					Namespace: sb.Namespace,
-					Name:      sb.Spec.SnapshotRef.Name,
-				}}}
+					Name:      sb.Spec.SnapshotRef.Name}}
 			}),
 		)).
 		Complete(r)

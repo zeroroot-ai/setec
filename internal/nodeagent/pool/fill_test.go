@@ -18,7 +18,7 @@ func TestFillByClass_ReportsPerClassCounts(t *testing.T) {
 	m := newTestManager(newFakeStorage(), &countingPrefetcher{}, &fakeFirecracker{}, 4)
 	classA := newClass("img:v1", 2, time.Hour)
 	classB := setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "beta"},
+		Name: "beta",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:             setecv1alpha1.VMMFirecracker,
 			PreWarmPoolSize: 3,

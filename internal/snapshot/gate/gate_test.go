@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -104,15 +103,13 @@ func fakeReader(t *testing.T, objs ...client.Object) client.Reader {
 
 func annotatedClass() *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "dev",
-			Annotations: map[string]string{AllowUnverifiedRestoresAnnotation: "true"},
-		},
+		Name:        "dev",
+		Annotations: map[string]string{AllowUnverifiedRestoresAnnotation: "true"},
 	}
 }
 
 func devNamespace(labelled bool) *corev1.Namespace {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultGateNamespace}}
+	ns := &corev1.Namespace{Name: DefaultGateNamespace}
 	if labelled {
 		ns.Labels = map[string]string{DefaultAllowDevLabel: "true"}
 	}

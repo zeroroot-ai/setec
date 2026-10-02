@@ -57,8 +57,8 @@ func edgeAllowance() setecv1alpha1.EgressAllowSelector {
 // nothing else that affects the policy.
 func classWith(allowances ...setecv1alpha1.EgressAllowSelector) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "agent"},
-		Spec:       setecv1alpha1.SandboxClassSpec{EgressAllowSelectors: allowances},
+		Name: "agent",
+		Spec: setecv1alpha1.SandboxClassSpec{EgressAllowSelectors: allowances},
 	}
 }
 
@@ -333,8 +333,8 @@ func TestResolversFor_ClusterDNSNeedsAnAllowance(t *testing.T) {
 			name: "an exempted resolver is outside the effective reserved ranges and gets an ipBlock",
 			cfg:  clusterCfg(),
 			class: &setecv1alpha1.SandboxClass{
-				ObjectMeta: metav1.ObjectMeta{Name: "corp"},
-				Spec:       setecv1alpha1.SandboxClassSpec{EgressExemptCIDRs: []string{"10.0.0.0/8"}},
+				Name: "corp",
+				Spec: setecv1alpha1.SandboxClassSpec{EgressExemptCIDRs: []string{"10.0.0.0/8"}},
 			},
 			wantPod: []string{clusterDNSIP, "8.8.8.8"},
 			wantDNS: []string{clusterDNSIP, "8.8.8.8"},

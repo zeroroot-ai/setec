@@ -45,19 +45,21 @@ linters:
     # --- per-repo additions (kubebuilder / controller-runtime conventions) ---
     - ginkgolinter  # Ginkgo/Gomega test idioms
     - lll           # line-length for API types
-    # - modernize   # OFF, temporarily: 140 findings that golangci-lint
-    #               v2.14.0 sees and v2.8.0 did not. v2.14.0 is forced by
-    #               the Go 1.27.1 floor (#117) — nothing older can read
-    #               1.27 export data. Backlog and re-enable condition in
-    #               #118. Disabled 2026-10-01.
+    - modernize     # newer stdlib idioms; autofixable
     - misspell      # spelling
     - nakedret      # naked return
     - unconvert     # redundant conversions
     - unparam       # unused params
-    # - goconst     # OFF, temporarily: 216 findings, same cause as
-    #               modernize above. See #118. Disabled 2026-10-01.
+    - goconst       # repeated literals; see settings.goconst below
 
   settings:
+    goconst:
+      # ignore-tests, not 216 named constants. Measured on this tree with
+      # v2.14.0: 216 findings, 212 of them in _test.go and 4 in production.
+      # A repeated literal in a table-driven test case reads better inline
+      # than behind a constant, and the 4 production findings are fixed
+      # either way, so the 212 buy no coverage (#118).
+      ignore-tests: true
     staticcheck:
       checks: ["all"]
     gosec:

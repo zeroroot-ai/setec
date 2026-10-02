@@ -26,7 +26,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -80,7 +79,7 @@ func newRSReconciler(
 // newSandboxForRS builds a minimal Sandbox with the given class name.
 func newSandboxForRS(className string) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default"},
+		Name: "sb", Namespace: "default",
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:            "img:v1",
 			Command:          []string{"sh"},
@@ -96,14 +95,14 @@ func newSandboxForRS(className string) *setecv1alpha1.Sandbox {
 // newNodeWithLabels builds a Node object with the given labels.
 func newNodeWithLabels(name string, labels map[string]string) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Name: name, Labels: labels,
 	}
 }
 
 // newSandboxClassForRS builds a SandboxClass with an optional Runtime spec.
 func newSandboxClassForRS(name, backend string, fallback []string) *setecv1alpha1.SandboxClass {
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker,
 			MaxResources: &setecv1alpha1.Resources{
@@ -161,7 +160,7 @@ func TestSelectRuntime_Legacy_WithClassRCName(t *testing.T) {
 	g := NewWithT(t)
 
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "typed-class"},
+		Name: "typed-class",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:              setecv1alpha1.VMMFirecracker,
 			RuntimeClassName: "my-kata",

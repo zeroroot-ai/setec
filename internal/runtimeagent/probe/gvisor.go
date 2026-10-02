@@ -56,8 +56,8 @@ func (p *gvisorProbe) Check(_ context.Context) CapabilityResult {
 			Available: false,
 			Reason:    "gvisor is not runnable on this node: " + hc.Reason,
 			Details: map[string]string{
-				"runsc":              binPath,
-				"containerd_handler": hc.State,
+				"runsc":                    binPath,
+				detailKeyContainerdHandler: hc.State,
 			},
 		}
 	}
@@ -65,8 +65,8 @@ func (p *gvisorProbe) Check(_ context.Context) CapabilityResult {
 	return CapabilityResult{
 		Available: true,
 		Details: map[string]string{
-			"runsc":              binPath,
-			"containerd_handler": handlerConfigured,
+			"runsc":                    binPath,
+			detailKeyContainerdHandler: handlerConfigured,
 		},
 	}
 }

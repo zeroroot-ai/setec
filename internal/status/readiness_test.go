@@ -16,9 +16,8 @@ import (
 func withReadinessProbe(p *corev1.Pod) {
 	p.Spec.Containers = []corev1.Container{{
 		Name: "workload",
-		ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
-			Exec: &corev1.ExecAction{Command: []string{"/setec/keepalive/setec-keepalive", "--workspace-ready", "/workspace"}},
-		}},
+		ReadinessProbe: &corev1.Probe{
+			Exec: &corev1.ExecAction{Command: []string{"/setec/keepalive/setec-keepalive", "--workspace-ready", "/workspace"}}},
 	}}
 }
 

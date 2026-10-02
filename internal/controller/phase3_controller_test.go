@@ -27,10 +27,8 @@ func bindPodToNode(t *testing.T, pod *corev1.Pod) {
 	const nodeName = "kata-node-1"
 	t.Helper()
 	binding := &corev1.Binding{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: pod.Namespace,
-			Name:      pod.Name,
-		},
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
 		Target: corev1.ObjectReference{
 			Kind: "Node",
 			Name: nodeName,
@@ -46,7 +44,7 @@ func bindPodToNode(t *testing.T, pod *corev1.Pod) {
 // the caller to customise snapshot fields.
 func newPhase3Sandbox(name, ns string, mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Name: name, Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "alpine:3.19",
 			Command: []string{"sh"},
@@ -171,7 +169,7 @@ func TestPhase3_SnapshotCreateHappyPath(t *testing.T) {
 	// copies Sandbox.spec.sandboxClassName verbatim and relies on
 	// the class validator to reject mismatches elsewhere.
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "p3-std-" + ns},
+		Name: "p3-std-" + ns,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker,
 		},
@@ -227,7 +225,7 @@ func TestSnapshotFinalizer_BlocksDeleteWhileReferenced(t *testing.T) {
 	ns := newNamespace(t, "p3-fin")
 
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "snap-1"},
+		Namespace: ns, Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
 			StorageBackend: "local-disk", StorageRef: "snap-1", Node: "node-a",
@@ -290,7 +288,7 @@ func TestSnapshotFinalizer_AllowsDeleteWhenFree(t *testing.T) {
 	ns := newNamespace(t, "p3-free")
 
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "solo"},
+		Namespace: ns, Name: "solo",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
 			StorageBackend: "local-disk", StorageRef: "solo", Node: "node-a",

@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -41,13 +40,11 @@ func newCRBackend(c client.Client) *crBackend {
 // Launch creates a warm Sandbox for the template and returns its ref.
 func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (leasepool.SandboxRef, error) {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "warm-",
-			Namespace:    tmpl.Namespace,
-			Labels: map[string]string{
-				leaseClassLabel: tmpl.SandboxClass,
-				leasePoolLabel:  "true",
-			},
+		GenerateName: "warm-",
+		Namespace:    tmpl.Namespace,
+		Labels: map[string]string{
+			leaseClassLabel: tmpl.SandboxClass,
+			leasePoolLabel:  "true",
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: tmpl.SandboxClass,
@@ -102,7 +99,7 @@ func (b *crBackend) Ready(ctx context.Context, ref leasepool.SandboxRef) (ready,
 // Destroy deletes the Sandbox CR. NotFound is a success (already gone).
 func (b *crBackend) Destroy(ctx context.Context, ref leasepool.SandboxRef) error {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ref.Namespace, Name: ref.Name},
+		Namespace: ref.Namespace, Name: ref.Name,
 	}
 	if err := b.client.Delete(ctx, sb); err != nil && !apiIsNotFound(err) {
 		return fmt.Errorf("delete Sandbox: %w", err)

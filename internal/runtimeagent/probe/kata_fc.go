@@ -61,12 +61,12 @@ func (p *kataFCProbe) Check(_ context.Context) CapabilityResult {
 		return CapabilityResult{
 			Available: false,
 			Reason:    "kata-fc is not runnable on this node: " + hc.Reason,
-			Details:   map[string]string{"kvm_module": mod, "containerd_handler": hc.State},
+			Details:   map[string]string{"kvm_module": mod, detailKeyContainerdHandler: hc.State},
 		}
 	}
 
 	return CapabilityResult{
 		Available: true,
-		Details:   map[string]string{"kvm_module": mod, "containerd_handler": handlerConfigured},
+		Details:   map[string]string{"kvm_module": mod, detailKeyContainerdHandler: handlerConfigured},
 	}
 }

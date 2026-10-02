@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -22,7 +21,7 @@ const (
 
 func sessionSandbox() *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "sess"},
+		Namespace: "t-a", Name: "sess",
 		Spec: setecv1alpha1.SandboxSpec{
 			Image: "ghcr.io/org/app:v1",
 			Lifecycle: &setecv1alpha1.Lifecycle{
@@ -111,10 +110,8 @@ func TestRestoreSessionCheckpointFailurePropagates(t *testing.T) {
 func TestDeleteSessionCheckpointFallsBackToAnyNode(t *testing.T) {
 	sb := sessionSandbox()
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "node-c",
-			Labels: map[string]string{"setec.zeroroot.ai/runtime.kata-fc": "true"},
-		},
+		Name:   "node-c",
+		Labels: map[string]string{"setec.zeroroot.ai/runtime.kata-fc": "true"},
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 		},

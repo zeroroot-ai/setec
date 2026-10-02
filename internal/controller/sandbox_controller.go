@@ -688,11 +688,9 @@ func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.Persiste
 	}
 
 	return &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: sb.Namespace,
-			Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
-		},
+		Name:      name,
+		Namespace: sb.Namespace,
+		Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
@@ -2107,7 +2105,7 @@ func (r *SandboxReconciler) sandboxesOnCordonedNode(ctx context.Context, obj cli
 		}
 		if sbName, ok := p.Labels[podspec.SandboxLabelKey]; ok && sbName != "" {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{Namespace: p.Namespace, Name: sbName},
+				Namespace: p.Namespace, Name: sbName,
 			})
 		}
 	}

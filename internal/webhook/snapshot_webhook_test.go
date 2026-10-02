@@ -35,7 +35,7 @@ func newFakeClientSnapshot(t *testing.T, objs ...client.Object) client.Client {
 
 func mkSnapshotCR(ns, name string, ttl *time.Duration) *setecv1alpha1.Snapshot {
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass:   "standard",
 			ImageRef:       "img:v1",
@@ -100,7 +100,7 @@ func TestSnapshotValidator_QuotaEnforced(t *testing.T) {
 	// One existing snapshot; quota allows exactly 1.
 	existing := mkSnapshotCR("team-a", "s-existing", nil)
 	quota := &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "q"},
+		Namespace: "team-a", Name: "q",
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
 				SnapshotResourceName: resource.MustParse("1"),
@@ -118,7 +118,7 @@ func TestSnapshotValidator_QuotaEnforced(t *testing.T) {
 func TestSnapshotValidator_QuotaHeadroom(t *testing.T) {
 	t.Parallel()
 	quota := &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "q"},
+		Namespace: "team-a", Name: "q",
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
 				SnapshotResourceName: resource.MustParse("5"),

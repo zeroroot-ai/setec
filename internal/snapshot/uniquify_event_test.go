@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -27,8 +26,8 @@ func TestRestoreSandbox_PassesIdentityFieldsToNodeAgent(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	pod.Status.PodIP = "10.7.8.9"
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a", StorageRef: "t-a-snap-1"},
+		Namespace: "t-a", Name: "snap-1",
+		Spec: setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a", StorageRef: "t-a-snap-1"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
@@ -60,8 +59,8 @@ func TestRestoreSandbox_EmitsSandboxUniquifiedEvent(t *testing.T) {
 		sb := newSandboxForCoord()
 		pod := newPodForSandbox(sb, "node-a")
 		snap := &setecv1alpha1.Snapshot{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-			Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
+			Namespace: "t-a", Name: "snap-1",
+			Spec: setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 		}
 		c := newFakeClient(t, sb, pod, snap)
 		res := verifiedRestoreRes()
@@ -109,7 +108,7 @@ func TestWarmStart_PassesIdentityFieldsToClaim(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	pod.Status.PodIP = "10.7.8.10"
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "standard"},
+		Name: "standard",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			PreWarmPoolSize: 1,
 			PreWarmImage:    "ghcr.io/org/app:v1",

@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,10 +41,8 @@ func newNode(extraLabels map[string]string) *corev1.Node {
 	labels := make(map[string]string, len(extraLabels))
 	maps.Copy(labels, extraLabels)
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   testNodeName,
-			Labels: labels,
-		},
+		Name:   testNodeName,
+		Labels: labels,
 	}
 }
 

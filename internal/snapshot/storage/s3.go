@@ -542,8 +542,7 @@ func (s *S3DEKStore) Destroy(ctx context.Context, snapshotID string) error {
 // isS3NotFound matches the assorted shapes an S3-compatible service
 // uses for "no such key/object".
 func isS3NotFound(err error) bool {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "NoSuchKey", "NotFound", "NoSuchBucket":
 			return true
@@ -561,8 +560,7 @@ func isS3NotFound(err error) bool {
 // NOT a 404, and treating it as one would turn a broken IAM policy into a
 // silent "no such checkpoint".
 func isS3AccessDenied(err error) bool {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "AccessDenied", "AccessDeniedException", "Forbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch":
 			return true
@@ -580,8 +578,7 @@ func isS3AccessDenied(err error) bool {
 // practice. Absence of the API means there is nothing for us to clean up, not
 // that cleanup failed.
 func isS3NotImplemented(err error) bool {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "NotImplemented", "MethodNotAllowed":
 			return true

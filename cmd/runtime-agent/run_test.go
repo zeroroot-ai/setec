@@ -11,7 +11,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -51,10 +50,8 @@ func newTestScheme() *runtime.Scheme {
 // newTestNode returns a minimal Node object suitable for seeding the fake client.
 func newTestNode(name string) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{},
-		},
+		Name:   name,
+		Labels: map[string]string{},
 	}
 }
 

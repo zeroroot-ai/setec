@@ -12,7 +12,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -46,8 +45,8 @@ func newScheme(t *testing.T) *runtime.Scheme {
 // carrying the required Handler field.
 func runtimeClassObj(name string) *nodev1.RuntimeClass {
 	return &nodev1.RuntimeClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Handler:    "kata-fc",
+		Name:    name,
+		Handler: "kata-fc",
 	}
 }
 
@@ -56,10 +55,8 @@ func runtimeClassObj(name string) *nodev1.RuntimeClass {
 // unambiguous.
 func nodeObj(name string, labels map[string]string) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: labels,
-		},
+		Name:   name,
+		Labels: labels,
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -17,7 +16,7 @@ import (
 
 func snapshotOn(node, backend string) *setecv1alpha1.Snapshot {
 	return &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "s"},
+		Namespace: "t-a", Name: "s",
 		Spec: setecv1alpha1.SnapshotSpec{
 			Node: node, StorageBackend: backend, StorageRef: "ref",
 		},
@@ -39,7 +38,7 @@ func TestDeleteSnapshot_LocalDiskOnAVanishedNodeIsDeleted(t *testing.T) {
 // TestDeleteSnapshot_LocalDiskOnALiveNodeStillDials asserts that an
 // existing node keeps the secure-erase path through its node-agent.
 func TestDeleteSnapshot_LocalDiskOnALiveNodeStillDials(t *testing.T) {
-	c := newFakeClient(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}})
+	c := newFakeClient(t, &corev1.Node{Name: "node-1"})
 	coord := newCoord(c, &fakeDialer{dialErr: errors.New("node-agent down")})
 	if err := coord.DeleteSnapshot(context.Background(), snapshotOn("node-1", "local-disk")); err == nil {
 		t.Fatal("DeleteSnapshot on a live node with its node-agent down = nil, want the dial error")

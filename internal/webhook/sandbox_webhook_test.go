@@ -12,7 +12,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,7 +51,7 @@ func (s *stubNamespaceGetter) GetNamespaceLabels(_ context.Context, name string)
 // allowed modes. Helpers keep table cases focused on inputs.
 func mkClass(name string, isDefault bool, maxMem string, modes ...setecv1alpha1.NetworkMode) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:     setecv1alpha1.VMMFirecracker, //nolint:staticcheck // back-compat: VMM retained until v2
 			Default: isDefault,
@@ -72,7 +71,7 @@ func mkSandbox(className string, vcpu int32, mem string, mode setecv1alpha1.Netw
 		netSpec = &setecv1alpha1.Network{Mode: mode}
 	}
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a"},
+		Name: "sb", Namespace: "team-a",
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
 			Image:            "alpine:3.19",
@@ -274,7 +273,7 @@ func mkSandboxWithSnapshotRef(refName string) *setecv1alpha1.Sandbox {
 // mkSnapshot returns a ready Snapshot CR for admission tests.
 func mkSnapshot(ns, name, classObj, image string, vmm setecv1alpha1.VMM) *setecv1alpha1.Snapshot {
 	return &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: classObj, ImageRef: image, VMM: vmm,
 			StorageBackend: "local-disk", StorageRef: name,
@@ -392,10 +391,8 @@ func TestClientNamespaceGetter_HappyPath(t *testing.T) {
 	utilruntime.Must(setecv1alpha1.AddToScheme(s))
 	utilruntime.Must(corev1.AddToScheme(s))
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "team-a",
-			Labels: map[string]string{"setec.zeroroot.ai/tenant": "team-a"},
-		},
+		Name:   "team-a",
+		Labels: map[string]string{"setec.zeroroot.ai/tenant": "team-a"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ns).Build()
 	g := &ClientNamespaceGetter{Client: c}

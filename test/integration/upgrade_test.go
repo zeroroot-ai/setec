@@ -26,7 +26,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -205,7 +204,7 @@ func TestMain(m *testing.M) {
 func seedDefaultNamespace() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	ns := &corev1.Namespace{Name: "default"}
 	if err := upgradeClient.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		fmt.Fprintf(os.Stderr, "integration: seed default namespace: %v\n", err)
 	}
@@ -216,7 +215,7 @@ func seedDefaultNamespace() {
 // nil to simulate a pre-upgrade manifest.
 func mkLegacySandboxClass(name string, vmm setecv1alpha1.VMM) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: vmm,
 		},
@@ -226,10 +225,8 @@ func mkLegacySandboxClass(name string, vmm setecv1alpha1.VMM) *setecv1alpha1.San
 // mkSandboxWithClass builds a minimal Sandbox referencing the named class.
 func mkSandboxWithClass(ns, name, className string) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
+		Name:      name,
+		Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
 			Image:            "busybox:1.36",
@@ -342,9 +339,8 @@ func TestUpgrade_RunningSandbox_StatusUntouched(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a namespace for this scenario.
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name: "upgrade-running-test",
-	}}
+	ns := &corev1.Namespace{
+		Name: "upgrade-running-test"}
 	if err := upgradeClient.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -420,7 +416,7 @@ func TestUpgrade_LegacyAndNewCoexist(t *testing.T) {
 
 	// New-style object: explicit Runtime.Backend=gvisor.
 	modern := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "upgrade-coexist-modern"},
+		Name: "upgrade-coexist-modern",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker,
 			Runtime: &setecv1alpha1.SandboxClassRuntime{
@@ -462,7 +458,7 @@ func TestUpgrade_RuntimeFieldOptional(t *testing.T) {
 	ctx := context.Background()
 
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "upgrade-no-runtime"},
+		Name: "upgrade-no-runtime",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker,
 			// Runtime is intentionally absent.

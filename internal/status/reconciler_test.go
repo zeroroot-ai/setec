@@ -31,10 +31,8 @@ func ptrInt32(v int32) *int32 {
 // newSandbox builds a Sandbox with reasonable defaults. Mutators customize.
 func newSandbox(mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "demo",
-			Namespace: "default",
-		},
+		Name:      "demo",
+		Namespace: "default",
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "docker.io/library/python:3.12-slim",
 			Command: []string{"python", "-c", "print('hi')"},
@@ -53,11 +51,9 @@ func newSandbox(mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox
 // newPod builds a Pod skeleton. Mutators customize the status.
 func newPod(mutators ...func(*corev1.Pod)) *corev1.Pod {
 	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "demo-vm",
-			Namespace:         "default",
-			CreationTimestamp: metav1.NewTime(t0),
-		},
+		Name:              "demo-vm",
+		Namespace:         "default",
+		CreationTimestamp: metav1.NewTime(t0),
 	}
 	for _, m := range mutators {
 		m(p)
@@ -821,9 +817,7 @@ func TestInternalHelpers(t *testing.T) {
 	t.Run("imagePullStuck ignores containers with no Waiting state", func(t *testing.T) {
 		t.Parallel()
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				CreationTimestamp: metav1.NewTime(t0),
-			},
+			CreationTimestamp: metav1.NewTime(t0),
 			Status: corev1.PodStatus{
 				ContainerStatuses: []corev1.ContainerStatus{{
 					Name:  "workload",

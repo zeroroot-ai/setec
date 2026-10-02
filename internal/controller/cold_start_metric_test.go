@@ -58,13 +58,12 @@ func TestRecordTransitionObservesColdStartToContainerRunning(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	r := &SandboxReconciler{MetricsCollector: metrics.NewCollectorsWith(reg)}
-	sb := &setecv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-		Name: "sb", Namespace: "ns", CreationTimestamp: metav1.NewTime(created),
-	}}
-	cls := &setecv1alpha1.SandboxClass{ObjectMeta: metav1.ObjectMeta{Name: "cls"}}
+	sb := &setecv1alpha1.Sandbox{
+		Name: "sb", Namespace: "ns", CreationTimestamp: metav1.NewTime(created)}
+	cls := &setecv1alpha1.SandboxClass{Name: "cls"}
 	accepted := metav1.NewTime(created)
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(created)},
+		CreationTimestamp: metav1.NewTime(created),
 		Status: corev1.PodStatus{
 			StartTime: &accepted,
 			ContainerStatuses: []corev1.ContainerStatus{{
@@ -97,9 +96,9 @@ func TestRecordTransitionKeepsSubSecondColdStart(t *testing.T) {
 	created := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	reg := prometheus.NewRegistry()
 	r := &SandboxReconciler{MetricsCollector: metrics.NewCollectorsWith(reg)}
-	sb := &setecv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "sb", CreationTimestamp: metav1.NewTime(created)}}
+	sb := &setecv1alpha1.Sandbox{Name: "sb", CreationTimestamp: metav1.NewTime(created)}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(created)},
+		CreationTimestamp: metav1.NewTime(created),
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
 			Name:  "workload",
 			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(created)}},

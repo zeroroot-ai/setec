@@ -13,9 +13,12 @@ import (
 	"strings"
 )
 
-// Handler-check outcomes, published as Details["containerd_handler"] so the
-// node's runtime-probe annotation says which of the three cases produced the
-// label value.
+// detailKeyContainerdHandler is the Details key every backend probe publishes
+// its handler-check outcome under, so the node's runtime-probe annotation says
+// which of the three cases below produced the label value.
+const detailKeyContainerdHandler = "containerd_handler"
+
+// Handler-check outcomes, published as Details[detailKeyContainerdHandler].
 const (
 	handlerConfigured   = "configured"
 	handlerAbsent       = "absent"

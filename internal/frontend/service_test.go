@@ -12,7 +12,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -164,7 +163,7 @@ func TestLaunch_InvalidArgs(t *testing.T) {
 func TestKill_TenantScopingEnforced(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: types.UID("uid-1")},
+		Name: "sb", Namespace: "team-a", UID: types.UID("uid-1"),
 	}
 	c := newClient(t, sb)
 	s := &Service{
@@ -184,7 +183,7 @@ func TestKill_TenantScopingEnforced(t *testing.T) {
 func TestKill_HappyPath(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: types.UID("uid-1")},
+		Name: "sb", Namespace: "team-a", UID: types.UID("uid-1"),
 	}
 	c := newClient(t, sb)
 	s := &Service{
@@ -232,7 +231,7 @@ func TestWait_TerminalReturnsImmediately(t *testing.T) {
 	t.Parallel()
 	exit := int32(0)
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:    setecv1alpha1.SandboxPhaseCompleted,
 			ExitCode: &exit,
@@ -262,8 +261,8 @@ func TestWait_TerminalReturnsImmediately(t *testing.T) {
 func TestWait_ReportsChosenRuntime(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
-		Spec:       setecv1alpha1.SandboxSpec{SandboxClassName: testSandboxClass},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
+		Spec: setecv1alpha1.SandboxSpec{SandboxClassName: testSandboxClass},
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:   setecv1alpha1.SandboxPhaseCompleted,
 			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-qemu"},
@@ -289,7 +288,7 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 func TestWait_RuntimeEmptyWhenNeverResolved(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:  setecv1alpha1.SandboxPhaseFailed,
 			Reason: "RuntimeUnavailable",
@@ -312,8 +311,8 @@ func TestWait_RuntimeEmptyWhenNeverResolved(t *testing.T) {
 func TestWait_PollsUntilTerminal(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
-		Status:     setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
+		Status: setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning},
 	}
 	c := newClient(t, sb)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
@@ -342,8 +341,8 @@ func TestWait_PollsUntilTerminal(t *testing.T) {
 func TestWait_ContextCancellation(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
-		Status:     setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
+		Status: setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning},
 	}
 	c := newClient(t, sb)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
@@ -439,7 +438,7 @@ func TestStreamLogs_SandboxNotFound(t *testing.T) {
 func TestStreamLogs_PodNotYetCreated(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	c := newClient(t, sb)
 	s := &Service{
@@ -464,11 +463,11 @@ func TestStreamLogs_PodNotYetCreated(t *testing.T) {
 func TestStreamLogs_HappyPath(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	c := newClient(t, sb, pod)
 	cs := k8sfake.NewSimpleClientset(pod) //nolint:staticcheck // NewClientset needs --with-applyconfig wiring, tracked in issue N/A
@@ -513,11 +512,11 @@ func TestStreamLogs_HappyPath(t *testing.T) {
 func TestStreamLogs_ClientCancel(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	c := newClient(t, sb, pod)
 	cs := k8sfake.NewSimpleClientset(pod) //nolint:staticcheck // NewClientset needs --with-applyconfig wiring, tracked in issue N/A
@@ -549,7 +548,7 @@ func TestStreamLogs_ClientCancel(t *testing.T) {
 func TestStreamLogs_NoClientsetConfigured(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	c := newClient(t, sb)
 	s := &Service{
@@ -584,11 +583,11 @@ func joinChunks(chunks []*setecv1grpc.StreamLogsResponse) string {
 func TestStreamLogs_FollowPodTransitions(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
 	}
 	c := newClient(t, sb, pod)
 	cs := k8sfake.NewSimpleClientset(pod) //nolint:staticcheck // NewClientset needs --with-applyconfig wiring, tracked in issue N/A

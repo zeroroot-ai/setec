@@ -162,9 +162,7 @@ func TestApplySessionIdlePolicy(t *testing.T) {
 // matter how stale the activity clock is.
 func TestApplySessionIdlePolicy_CheckpointClassDefersToSuspend(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
-		},
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
 		Spec: setecv1alpha1.SandboxSpec{
 			Lifecycle: &setecv1alpha1.Lifecycle{Mode: setecv1alpha1.LifecycleModeSession},
 		},

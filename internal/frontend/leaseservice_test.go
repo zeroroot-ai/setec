@@ -9,7 +9,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -40,7 +39,7 @@ func leaseClient(t *testing.T, objs ...client.Object) client.Client {
 //nolint:unparam // name is a parameter for call-site clarity even though every current caller uses "fast".
 func warmClass(name, image string, size int32) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			PreWarmImage:    image,
 			PreWarmPoolSize: size,
@@ -86,7 +85,7 @@ func TestLease_NotFoundClass(t *testing.T) {
 
 func TestLease_ClassWithoutWarmImageRejected(t *testing.T) {
 	t.Parallel()
-	c := leaseClient(t, &setecv1alpha1.SandboxClass{ObjectMeta: metav1.ObjectMeta{Name: "bare"}})
+	c := leaseClient(t, &setecv1alpha1.SandboxClass{Name: "bare"})
 	s := &LeaseService{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
 
 	_, err := s.Lease(context.Background(), &setecv1grpc.LeaseRequest{SandboxClass: "bare"})

@@ -15,7 +15,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -54,7 +53,7 @@ func seedPool(t *testing.T, writeStateFiles bool) (*pool.Manager, string) {
 	pm.SocketPattern = filepath.Join(t.TempDir(), "pool-%s", "firecracker.socket")
 	pm.Launcher = noopLauncher{}
 	cls := setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Name: "std",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker, PreWarmPoolSize: 1, PreWarmImage: "img:v1",
 		},

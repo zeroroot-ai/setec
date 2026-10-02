@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -50,13 +49,11 @@ func newFakePodClient(t *testing.T, objs ...client.Object) client.Client {
 
 func nodeAgentPod(name, namespace, node string, phase corev1.PodPhase, ready corev1.ConditionStatus, ip string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			UID:       types.UID(name + "-uid"),
-			Labels:    map[string]string{NodeAgentComponentLabel: nodeAgentComponentValue},
-		},
-		Spec: corev1.PodSpec{NodeName: node},
+		Name:      name,
+		Namespace: namespace,
+		UID:       types.UID(name + "-uid"),
+		Labels:    map[string]string{NodeAgentComponentLabel: nodeAgentComponentValue},
+		Spec:      corev1.PodSpec{NodeName: node},
 		Status: corev1.PodStatus{
 			Phase: phase,
 			PodIP: ip,

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -133,7 +132,7 @@ func (s *Service) touchSessionActivity(ctx context.Context, ns, name string, t t
 		return fmt.Errorf("marshal activity patch: %w", err)
 	}
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 	}
 	return s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body))
 }

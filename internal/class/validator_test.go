@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
@@ -25,7 +24,7 @@ func TestValidate(t *testing.T) {
 	// override the fields they care about via a shallow copy.
 	standardClass := func() *setecv1alpha1.SandboxClass {
 		return &setecv1alpha1.SandboxClass{
-			ObjectMeta: metav1.ObjectMeta{Name: "standard"},
+			Name: "standard",
 			Spec: setecv1alpha1.SandboxClassSpec{
 				VMM: setecv1alpha1.VMMFirecracker,
 				MaxResources: &setecv1alpha1.Resources{
@@ -42,7 +41,7 @@ func TestValidate(t *testing.T) {
 
 	baseSandbox := func() *setecv1alpha1.Sandbox {
 		return &setecv1alpha1.Sandbox{
-			ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "ns"},
+			Name: "sb", Namespace: "ns",
 			Spec: setecv1alpha1.SandboxSpec{
 				Image:   "alpine:3.19",
 				Command: []string{"sh", "-c", "echo hi"},
