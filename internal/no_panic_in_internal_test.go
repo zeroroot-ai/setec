@@ -78,8 +78,19 @@ func TestNoPanicInInternal(t *testing.T) {
 
 	matchers := []astchecks.Matcher{panicMatcher{}}
 
-	// Existing-debt allowlist. Each entry is a "<file>:<line>" coordinate
-	// relative to the repo root. Add entries here only for pre-existing
+	// Existing-debt allowlist. Each entry is a Finding.ContentKey(): the
+	// repo-relative file joined to the rendered snippet by " :: ", for example
+	//
+	//	internal/foo/bar.go :: panic("unreachable")
+	//
+	// NOT a "<file>:<line>" coordinate, which is what this comment used to say.
+	// Content keying became the only keying in ast-checks v0.5.0, so a coordinate
+	// here would silently match nothing — and an allowlist entry that matches
+	// nothing is an exemption that reads as reviewed while tolerating something
+	// else. Keying by content is also why an unrelated edit above a violation no
+	// longer needs this list re-pinned.
+	//
+	// Add entries only for pre-existing
 	// violations that cannot be fixed in this PR; every new entry MUST have
 	// a follow-up issue reference in IssueURL.
 	//
