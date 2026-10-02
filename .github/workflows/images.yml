@@ -237,7 +237,7 @@ jobs:
   # and no reason to ride along here.
   setec-installer:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9dcb390bfdbb06fecb998baffb06992576c0042e # v0.10.3
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
