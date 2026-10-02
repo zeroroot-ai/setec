@@ -95,14 +95,25 @@ type SandboxClassSpec struct {
 	// +optional
 	Runtime *SandboxClassRuntime `json:"runtime,omitempty"`
 
-	// KernelImage is an optional OCI reference to a custom guest kernel
-	// image the node agent pre-pulls and hands to Kata. Empty means the
-	// Kata-packaged kernel for the selected VMM is used.
+	// KernelImage is NOT HONORED and the validating webhook refuses a class
+	// that sets it (setec#126).
+	//
+	// It read "an optional OCI reference to a custom guest kernel image the node
+	// agent pre-pulls and hands to Kata". No node agent pre-pulls it and no
+	// controller reads it, so a class naming a hardened or digest-pinned kernel
+	// was admitted and the sandbox booted the operator-wide default, reporting
+	// nothing. The microVM is the isolation boundary, so that substitution
+	// silently changed the boundary.
+	//
+	// Honouring it needs a Kata hypervisor path annotation, which Kata gates
+	// behind an operator-configured allowlist that is empty by default for the
+	// same reason. Pin the guest kernel on the node instead. The field stays
+	// served so an existing object still validates.
 	// +optional
 	KernelImage string `json:"kernelImage,omitempty"`
 
-	// RootfsImage is an optional OCI reference to a custom guest rootfs
-	// image. Empty means the Kata-packaged rootfs is used.
+	// RootfsImage is NOT HONORED and the validating webhook refuses a class
+	// that sets it. Same cause and same remedy as KernelImage (setec#126).
 	// +optional
 	RootfsImage string `json:"rootfsImage,omitempty"`
 

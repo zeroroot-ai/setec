@@ -6,7 +6,7 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-02: 91 of 1203 declarations across 97 packages and 225 files
+# measured 2026-10-02: 89 of 1203 declarations across 97 packages and 225 files
 
 const metrics.LabelNode	# internal/metrics/collectors.go:47
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
@@ -29,9 +29,7 @@ field poolentry.Provenance.RootfsPath	# internal/nodeagent/poolentry/poolentry.g
 field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:73
 field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:529
 field v1alpha1.SandboxClassRuntime.Params	# api/v1alpha1/sandboxclass_types.go:47
-field v1alpha1.SandboxClassSpec.KernelImage	# api/v1alpha1/sandboxclass_types.go:102
-field v1alpha1.SandboxClassSpec.RootfsImage	# api/v1alpha1/sandboxclass_types.go:107
-field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass_types.go:392
+field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass_types.go:403
 field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:580
 field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:575
 field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:585

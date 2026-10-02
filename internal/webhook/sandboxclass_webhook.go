@@ -165,6 +165,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validateRequests(class)...)
 	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
 	allErrs = append(allErrs, validateEgressAllowSelectors(class)...)
+	allErrs = append(allErrs, validateGuestImages(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
 	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
@@ -240,6 +241,56 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		return nil, nil
 	}
 	return nil, allErrs.ToAggregate()
+}
+
+// validateGuestImages refuses a SandboxClass that names its own guest kernel
+// or rootfs image, because nothing in this operator reads either field
+// (setec#126).
+//
+// Both are served CRD spec fields with no consumer. `grep -rn
+// "KernelImage\|RootfsImage"` finds the declaration, the generated deepcopy and
+// nothing else: no controller, no podspec builder, no node-agent call. A class
+// that named a hardened or digest-pinned kernel was admitted, the Sandbox
+// started, and it booted the operator-wide default instead. The CR applied
+// cleanly and the operator believed the pin took.
+//
+// That is the worst of the three possible behaviors. The microVM is the
+// isolation boundary and the kernel and rootfs are its contents, so a silent
+// substitution there is a silent change of the boundary. Refusing the field is
+// the only honest state until something honors it: an operator who cannot set
+// it knows where they stand, and one whose setting is ignored does not.
+//
+// Why this is not simply wired up instead. The path a value would have to take
+// is a Kata hypervisor annotation
+// (io.katacontainers.config.hypervisor.kernel / .image), and Kata gates those
+// behind enable_annotations plus kernel_path_list / image_path_list in the
+// node's configuration.toml — allowlists that are empty by default, precisely
+// because choosing the kernel path chooses the boundary. setec does not write
+// that file; it uses the one the Kata tarball ships. So honoring a free-form
+// per-class OCI reference would mean an operator-owned allowlist of permitted
+// images, which is a different shape from the field this CRD declares. That
+// decision is recorded on setec#126 rather than guessed at here.
+//
+// Not a deprecation: the fields stay served, so an existing object still
+// validates when read, and a cluster that never set them is unaffected.
+func validateGuestImages(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	specPath := field.NewPath("spec")
+
+	const how = "no component reads this field, so the sandbox would boot the " +
+		"operator-wide default and report nothing. Pin the guest kernel and rootfs " +
+		"on the node instead, through the Kata configuration the installer uses, " +
+		"and remove this field. Tracked in setec#126"
+
+	if class.Spec.KernelImage != "" {
+		errs = append(errs, field.Invalid(
+			specPath.Child("kernelImage"), class.Spec.KernelImage, how))
+	}
+	if class.Spec.RootfsImage != "" {
+		errs = append(errs, field.Invalid(
+			specPath.Child("rootfsImage"), class.Spec.RootfsImage, how))
+	}
+	return errs
 }
 
 // validatePreWarm enforces the coherence rules of the declarative
