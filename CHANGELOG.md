@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.117.0](https://github.com/zeroroot-ai/setec/compare/v0.116.0...v0.117.0) (2026-10-02)
+
+
+### Features
+
+* **installer:** the installer lays gvisor, so a plain helm install gives working sandboxes ([#131](https://github.com/zeroroot-ai/setec/issues/131)) ([5c34814](https://github.com/zeroroot-ai/setec/commit/5c3481459d6a61d26645f76e48a0a13877f3e4cb))
+
+
+### Bug Fixes
+
+* **adr-0027:** the legacy runtime-selection path goes, and the dead chart value fails loudly ([#128](https://github.com/zeroroot-ai/setec/issues/128)) ([6226a0b](https://github.com/zeroroot-ai/setec/commit/6226a0b198d68e908edcc95ce3b0fd4c7479134e))
+* **deps:** a published example selected a grpc release OSV reports as affected ([#122](https://github.com/zeroroot-ai/setec/issues/122)) ([d0b2a07](https://github.com/zeroroot-ai/setec/commit/d0b2a07bc9df141c7a5c5c6f3b0d595b58607194))
+* **lint:** goconst and modernize come back on, full-tree ([#127](https://github.com/zeroroot-ai/setec/issues/127)) ([a80715a](https://github.com/zeroroot-ai/setec/commit/a80715a953b27fd906b6f10f74ebbd5b5d4865d3)), closes [#118](https://github.com/zeroroot-ai/setec/issues/118)
+
 ## [0.116.0](https://github.com/zeroroot-ai/setec/compare/v0.115.0...v0.116.0) (2026-10-01)
 
 
