@@ -49,12 +49,10 @@ const BaselineManagedByValue = "setec-operator"
 // that needs ordinary egress belongs in a different namespace.
 func NamespaceBaseline(namespace string) *networkingv1.NetworkPolicy {
 	return &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      BaselineName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				BaselineManagedByLabel: BaselineManagedByValue,
-			},
+		Name:      BaselineName,
+		Namespace: namespace,
+		Labels: map[string]string{
+			BaselineManagedByLabel: BaselineManagedByValue,
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			// Empty selector: every Pod in the namespace.

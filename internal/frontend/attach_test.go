@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -24,11 +23,9 @@ import (
 // with a fixed UID, as the frontend would find it in the cluster.
 func sessionCR(ns, name, uid string, phase setecv1alpha1.SandboxPhase) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      name,
-			UID:       types.UID(uid),
-		},
+		Namespace: ns,
+		Name:      name,
+		UID:       types.UID(uid),
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "alpine:3.19",
 			Command: []string{"sh", "-c", "sleep infinity"},

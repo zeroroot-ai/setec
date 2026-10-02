@@ -550,12 +550,10 @@ func EffectiveMode(sb *setecv1alpha1.Sandbox, class *setecv1alpha1.SandboxClass)
 // that ties the policy to the Sandbox's backing Pod.
 func policyFor(sb *setecv1alpha1.Sandbox, policyTypes []networkingv1.PolicyType) *networkingv1.NetworkPolicy {
 	return &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      sb.Name + NetworkPolicySuffix,
-			Namespace: sb.Namespace,
-			Labels: map[string]string{
-				podspec.SandboxLabelKey: sb.Name,
-			},
+		Name:      sb.Name + NetworkPolicySuffix,
+		Namespace: sb.Namespace,
+		Labels: map[string]string{
+			podspec.SandboxLabelKey: sb.Name,
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{

@@ -11,7 +11,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -149,7 +148,7 @@ func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 // plus a backing Pod that's scheduled to node-a.
 func newSandboxForCoord() *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "s"},
+		Namespace: "t-a", Name: "s",
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: "standard",
 			Image:            "ghcr.io/org/app:v1",
@@ -168,12 +167,10 @@ func newSandboxForCoord() *setecv1alpha1.Sandbox {
 
 func newPodForSandbox(sb *setecv1alpha1.Sandbox, node string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: sb.Namespace,
-			Name:      sb.Status.PodName,
-			UID:       "pod-uid-123",
-		},
-		Spec: corev1.PodSpec{NodeName: node},
+		Namespace: sb.Namespace,
+		Name:      sb.Status.PodName,
+		UID:       "pod-uid-123",
+		Spec:      corev1.PodSpec{NodeName: node},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 		},
@@ -244,7 +241,7 @@ func TestCreateSnapshot_NameConflict(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	existing := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Namespace: "t-a", Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: "standard", ImageRef: "x", StorageBackend: "local-disk",
 			StorageRef: "x", Node: "node-a", VMM: setecv1alpha1.VMMFirecracker,
@@ -348,7 +345,7 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Namespace: "t-a", Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SourceSandbox: "s",
 			SandboxClass:  "standard", ImageRef: "ghcr.io/org/app:v1",
@@ -374,8 +371,8 @@ func TestRestoreSandbox_NodeMismatch(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{Node: "node-b"},
+		Namespace: "t-a", Name: "snap-1",
+		Spec: setecv1alpha1.SnapshotSpec{Node: "node-b"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	coord := newCoord(c, &fakeDialer{client: &fakeNodeAgentClient{}})
@@ -388,8 +385,8 @@ func TestRestoreSandbox_RPCError(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
+		Namespace: "t-a", Name: "snap-1",
+		Spec: setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	na := &fakeNodeAgentClient{
@@ -509,7 +506,7 @@ func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Namespace: "t-a", Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SourceSandbox: "s",
 			SandboxClass:  "standard", Node: "node-a",
@@ -559,8 +556,8 @@ func TestRestoreSandbox_NoReseedEventWithoutConfirmation(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
+		Namespace: "t-a", Name: "snap-1",
+		Spec: setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	res := verifiedRestoreRes()

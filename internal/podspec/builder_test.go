@@ -31,15 +31,11 @@ const (
 // tests only set what they care about.
 func newSandbox(mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
 	sb := &setecv1alpha1.Sandbox{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: setecv1alpha1.GroupVersion.String(),
-			Kind:       "Sandbox",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "demo",
-			Namespace: "default",
-			UID:       types.UID("11111111-2222-3333-4444-555555555555"),
-		},
+		APIVersion: setecv1alpha1.GroupVersion.String(),
+		Kind:       "Sandbox",
+		Name:       "demo",
+		Namespace:  "default",
+		UID:        types.UID("11111111-2222-3333-4444-555555555555"),
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "docker.io/library/python:3.12-slim",
 			Command: []string{"python", "-c", "print('hi')"},

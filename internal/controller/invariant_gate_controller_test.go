@@ -48,7 +48,7 @@ func TestWarmStart_GateRejectionDestroysSandbox(t *testing.T) {
 	t.Cleanup(func() { testDialer.client.ClaimRes = nil })
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: ns},
+		Name: "sb", Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: clsName,
 			Image:            image,

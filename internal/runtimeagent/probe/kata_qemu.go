@@ -77,7 +77,7 @@ func (p *kataQEMUProbe) Check(_ context.Context) CapabilityResult {
 	// Hardware is only half the question. Ask containerd whether it will
 	// accept the handler before claiming the node can run kata-qemu.
 	hc := checkContainerdHandler(p.cfg.FSRoot, p.Name())
-	details["containerd_handler"] = hc.State
+	details[detailKeyContainerdHandler] = hc.State
 	if !hc.Configured {
 		return CapabilityResult{
 			Available: false,

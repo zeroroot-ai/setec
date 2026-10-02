@@ -127,7 +127,7 @@ func sb(mode setecv1alpha1.NetworkMode, allow ...setecv1alpha1.NetworkAllow) *se
 		}
 	}
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-sb", Namespace: "team-a"},
+		Name: "my-sb", Namespace: "team-a",
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "alpine:3.19",
 			Command: []string{"sh"},
@@ -241,11 +241,9 @@ func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 	}
 
 	want := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-sb-netpol",
-			Namespace: "team-a",
-			Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
-		},
+		Name:      "my-sb-netpol",
+		Namespace: "team-a",
+		Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{podspec.SandboxLabelKey: "my-sb"},
@@ -277,11 +275,9 @@ func TestGenerate_ExternalOnlyShape(t *testing.T) {
 	}
 
 	want := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-sb-netpol",
-			Namespace: "team-a",
-			Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
-		},
+		Name:      "my-sb-netpol",
+		Namespace: "team-a",
+		Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{podspec.SandboxLabelKey: "my-sb"},
@@ -398,13 +394,11 @@ func TestGenerate_AllowListRuleShape(t *testing.T) {
 	}
 
 	want := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-sb-netpol",
-			Namespace: "team-a",
-			Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
-			Annotations: map[string]string{
-				"setec.zeroroot.ai/allow-443": "api.example.com",
-			},
+		Name:      "my-sb-netpol",
+		Namespace: "team-a",
+		Labels:    map[string]string{podspec.SandboxLabelKey: "my-sb"},
+		Annotations: map[string]string{
+			"setec.zeroroot.ai/allow-443": "api.example.com",
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
@@ -488,7 +482,7 @@ func TestGenerate_ClassExemptionReopensReservedRange(t *testing.T) {
 	t.Parallel()
 
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "connector"},
+		Name: "connector",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			EgressExemptCIDRs: []string{"10.0.0.0/8"},
 		},
@@ -834,7 +828,7 @@ func TestGenerate_ClassExemptionCannotStripAFamily(t *testing.T) {
 	t.Parallel()
 
 	class := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "wide"},
+		Name: "wide",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			DefaultNetworkMode: setecv1alpha1.NetworkModeEgressAllowList,
 			EgressExemptCIDRs:  []string{"::1/128", "fc00::/7", "fe80::/10", "ff00::/8"},

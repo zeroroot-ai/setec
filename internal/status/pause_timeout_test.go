@@ -16,7 +16,7 @@ import (
 // pointer (nil = knob absent).
 func pauseClass(max *time.Duration) *setecv1alpha1.SandboxClass {
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "pause-class"},
+		Name: "pause-class",
 	}
 	if max != nil {
 		cls.Spec.MaxPauseDuration = &metav1.Duration{Duration: *max}

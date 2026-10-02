@@ -388,12 +388,10 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 
 	rcName := effectiveRCName
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            podName,
-			Namespace:       sb.Namespace,
-			Labels:          labels,
-			OwnerReferences: []metav1.OwnerReference{ownerRef},
-		},
+		Name:            podName,
+		Namespace:       sb.Namespace,
+		Labels:          labels,
+		OwnerReferences: []metav1.OwnerReference{ownerRef},
 		Spec: corev1.PodSpec{
 			RuntimeClassName: &rcName,
 			RestartPolicy:    corev1.RestartPolicyNever,
@@ -413,8 +411,8 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			},
 
 			Volumes: []corev1.Volume{{
-				Name:         scratchVolumeName,
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				Name:     scratchVolumeName,
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			}},
 		},
 	}
@@ -423,9 +421,9 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		pod.Spec.InitContainers = []corev1.Container{keepaliveInstaller(opts.KeepaliveImage)}
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: keepaliveVolumeName,
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{
 				SizeLimit: resource.NewQuantity(16<<20, resource.BinarySI),
-			}},
+			},
 		})
 	}
 
@@ -442,10 +440,8 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		pod.Spec.SecurityContext.FSGroup = new(sandboxGID)
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: WorkspaceVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: WorkspacePVCName(sb.Name),
-				},
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: WorkspacePVCName(sb.Name),
 			},
 		})
 		c := &pod.Spec.Containers[0]
@@ -463,8 +459,8 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			// mount propagation (and the `privileged: true` Kubernetes
 			// requires for it) is ever needed.
 			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-				Name:         workspaceMountVolumeName,
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				Name:     workspaceMountVolumeName,
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			})
 			c.VolumeDevices = append(c.VolumeDevices, corev1.VolumeDevice{
 				Name:       WorkspaceVolumeName,
@@ -497,9 +493,9 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			// once this probe passes (internal/status), so no turn runs
 			// before the workspace is the durable volume (setec#91).
 			c.ReadinessProbe = &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{
+				Exec: &corev1.ExecAction{
 					Command: []string{KeepalivePath, "--workspace-ready", WorkspaceMountPath},
-				}},
+				},
 				PeriodSeconds:    1,
 				TimeoutSeconds:   5,
 				FailureThreshold: 1,

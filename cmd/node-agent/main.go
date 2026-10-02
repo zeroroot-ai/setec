@@ -53,6 +53,10 @@ import (
 // requireMode is the strict value of the node-identity mode flag.
 const requireMode = "require"
 
+// metricLabelOutcome is the one label every node-agent counter carries, so a
+// dashboard can group three different counters by the same dimension.
+const metricLabelOutcome = "outcome"
+
 const (
 	// sampleInterval controls how often the agent polls thin-pool
 	// status. 30s matches the cadence documented in the Helm chart
@@ -244,11 +248,11 @@ func main() {
 	entropyReseeds := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "setec_node_entropy_reseed_total",
 		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
-	}, []string{"outcome"})
+	}, []string{metricLabelOutcome})
 	restoreUniquifies := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "setec_node_restore_uniquify_total",
 		Help: "Post-restore identity uniquification attempts by outcome (success/failure); failures fail the restore closed.",
-	}, []string{"outcome"})
+	}, []string{metricLabelOutcome})
 	poolFill := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "setec_prewarm_pool_entries",
 		Help: "Number of pre-warmed pool entries currently paused on this node for a SandboxClass.",
@@ -256,7 +260,7 @@ func main() {
 	poolClaims := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "setec_prewarm_pool_claims_total",
 		Help: "Pool claim attempts by outcome (restored, miss, restore_failed).",
-	}, []string{"outcome"})
+	}, []string{metricLabelOutcome})
 	reg.MustRegister(
 		usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped,
 		orphanReapErrors, entropyReseeds, restoreUniquifies, poolFill, poolClaims,

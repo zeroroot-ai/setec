@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -438,20 +437,18 @@ func TestMain(m *testing.M) {
 // label (for the multi-backend prereq check and selectRuntime).
 func ensurePrereqs(ctx context.Context, c client.Client) error {
 	rc := &nodev1.RuntimeClass{
-		ObjectMeta: metav1.ObjectMeta{Name: testRuntimeClassName},
-		Handler:    "kata-fc",
+		Name:    testRuntimeClassName,
+		Handler: "kata-fc",
 	}
 	if err := c.Create(ctx, rc); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create RuntimeClass: %w", err)
 	}
 
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "kata-node-1",
-			Labels: map[string]string{
-				testNodeSelectorLabel:               "true",
-				"setec.zeroroot.ai/runtime.kata-fc": "true",
-			},
+		Name: "kata-node-1",
+		Labels: map[string]string{
+			testNodeSelectorLabel:               "true",
+			"setec.zeroroot.ai/runtime.kata-fc": "true",
 		},
 	}
 	if err := c.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -469,7 +466,7 @@ func newNamespace(t *testing.T, prefix string) string {
 	// hash; the t.Name() value is already lowercased and path-like so only
 	// light sanitization is needed.
 	name := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ns := &corev1.Namespace{Name: name}
 	if err := testClient.Create(testCtx, ns); err != nil {
 		t.Fatalf("create namespace %q: %v", name, err)
 	}
@@ -480,7 +477,7 @@ func newNamespace(t *testing.T, prefix string) string {
 		// own Sandboxes/Pods explicitly.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = testClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+		_ = testClient.Delete(ctx, &corev1.Namespace{Name: name})
 	})
 	return name
 }

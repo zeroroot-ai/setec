@@ -30,7 +30,7 @@ import (
 // Phase 1 scenarios continue to use only the plain Sandbox constructor.
 func newSandboxClass(name string, mods ...func(*setecv1alpha1.SandboxClass)) *setecv1alpha1.SandboxClass {
 	c := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:              setecv1alpha1.VMMFirecracker,
 			RuntimeClassName: testRuntimeClassName,
@@ -612,7 +612,7 @@ func TestPhase2_SandboxClassInstallsWithoutVMM(t *testing.T) {
 	g := NewWithT(t)
 
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "no-vmm-class"},
+		Name: "no-vmm-class",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			Runtime:            &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
 			DefaultNetworkMode: setecv1alpha1.NetworkModeExternalOnly,

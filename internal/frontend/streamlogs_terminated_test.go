@@ -12,7 +12,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -29,7 +28,7 @@ import (
 // a caller attaches its log stream (setec#263).
 func terminatedWorkloadPod(exitCode int32) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
+		Name: "sb-vm", Namespace: "team-a",
 		Status: corev1.PodStatus{
 			Phase: corev1.PodSucceeded,
 			ContainerStatuses: []corev1.ContainerStatus{{
@@ -107,7 +106,7 @@ func stamped(ts, line string) string { return ts + " " + line + "\n" }
 func TestStreamLogs_TerminatedContainerDropsFollow(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := terminatedWorkloadPod(0)
 	c := newClient(t, sb, pod)
@@ -176,11 +175,11 @@ func TestStreamLogs_TerminatedContainerDropsFollow(t *testing.T) {
 func TestStreamLogs_FollowAttachRaceFallsBack(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	opener := &recordingOpener{results: []openResult{
 		{err: errForTesting(`container "workload" in pod "sb-vm" is terminated`)},
@@ -224,11 +223,11 @@ func TestStreamLogs_FollowAttachRaceFallsBack(t *testing.T) {
 func TestStreamLogs_MidStreamTerminationYieldsRemainder(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	opener := &recordingOpener{results: []openResult{
 		{rc: &breakingReader{
@@ -284,11 +283,11 @@ func TestStreamLogs_MidStreamTerminationYieldsRemainder(t *testing.T) {
 func TestStreamLogs_FallbackFailureStillReportsInternal(t *testing.T) {
 	t.Parallel()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		Name: "sb-vm", Namespace: "team-a",
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	opener := &recordingOpener{results: []openResult{
 		{err: errForTesting("kubelet unreachable")},

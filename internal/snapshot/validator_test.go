@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
@@ -15,7 +14,7 @@ import (
 // newSandbox is a small builder keeping test cases readable.
 func newSandbox(image string) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "s"},
+		Namespace: "t-a", Name: "s",
 		Spec: setecv1alpha1.SandboxSpec{
 			Image: image,
 		},
@@ -24,7 +23,7 @@ func newSandbox(image string) *setecv1alpha1.Sandbox {
 
 func newSnapshot(ns, name, class, image string, vmm setecv1alpha1.VMM) *setecv1alpha1.Snapshot {
 	return &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: class,
 			ImageRef:     image,
@@ -37,7 +36,7 @@ func newSnapshot(ns, name, class, image string, vmm setecv1alpha1.VMM) *setecv1a
 
 func newClass(name string) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker, //nolint:staticcheck // back-compat: VMM retained until v2
 		},

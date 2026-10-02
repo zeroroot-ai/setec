@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -412,7 +411,7 @@ func TestQueryPool_ReturnsEntries(t *testing.T) {
 	pm.Launcher = noopLauncher{}
 	// Use ReconcilePools to seed the pool through the public API.
 	cls := setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Name: "std",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM: setecv1alpha1.VMMFirecracker, PreWarmPoolSize: 1, PreWarmImage: "img:v1",
 		},

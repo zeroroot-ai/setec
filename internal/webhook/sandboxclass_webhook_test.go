@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,10 +43,8 @@ func fakeClientWithNS(t *testing.T, objs ...client.Object) client.Client {
 // and whose labels carry the allow-dev-runtimes gate.
 func gateNamespaceLabelled(label string) *corev1.Namespace {
 	return &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   devGateNamespace,
-			Labels: map[string]string{label: "true"},
-		},
+		Name:   devGateNamespace,
+		Labels: map[string]string{label: "true"},
 	}
 }
 
@@ -55,7 +52,7 @@ func gateNamespaceLabelled(label string) *corev1.Namespace {
 // devGateNamespace but without the gate label.
 func gateNamespaceUnlabelled() *corev1.Namespace {
 	return &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: devGateNamespace},
+		Name: devGateNamespace,
 	}
 }
 
@@ -87,7 +84,7 @@ func webhookWith(c client.Client, cfg *setecruntime.RuntimeConfig) *SandboxClass
 // mkSandboxClass constructs a minimal SandboxClass for use in tests.
 func mkSandboxClass(name string, vmm setecv1alpha1.VMM, rt *setecv1alpha1.SandboxClassRuntime) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:     vmm,
 			Runtime: rt,

@@ -27,7 +27,6 @@ import (
 	grpccreds "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -210,7 +209,7 @@ func TestGRPCDialer_PropagatesResolverFailure(t *testing.T) {
 func TestGRPCDialer_RejectsAPodWithNoIP(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: types.UID("no-ip")}}
+	pod := &corev1.Pod{UID: types.UID("no-ip")}
 	d := NewGRPCDialer(&fakeResolver{pod: pod}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
@@ -323,12 +322,10 @@ func fixedPod() *fakeResolver {
 // given UID and PodIP.
 func podWithUID(uid, ip string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "node-agent-" + uid,
-			Namespace: "setec-system",
-			UID:       types.UID(uid),
-			Labels:    map[string]string{NodeAgentComponentLabel: nodeAgentComponentValue},
-		},
+		Name:      "node-agent-" + uid,
+		Namespace: "setec-system",
+		UID:       types.UID(uid),
+		Labels:    map[string]string{NodeAgentComponentLabel: nodeAgentComponentValue},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 			PodIP: ip,

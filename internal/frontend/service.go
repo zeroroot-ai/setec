@@ -185,10 +185,8 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 	}
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "sbx-",
-			Namespace:    ns,
-		},
+		GenerateName: "sbx-",
+		Namespace:    ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: req.GetSandboxClass(),
 			Image:            req.GetImage(),
@@ -365,7 +363,7 @@ func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*sete
 
 	if grace > 0 {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: podNameFor(name)},
+			Namespace: ns, Name: podNameFor(name),
 		}
 		if err := s.Client.Delete(ctx, pod, client.GracePeriodSeconds(grace)); err != nil &&
 			!apierrors.IsNotFound(err) {
@@ -374,7 +372,7 @@ func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*sete
 	}
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 	}
 	if err := s.Client.Delete(ctx, sb); err != nil {
 		if apierrors.IsNotFound(err) {

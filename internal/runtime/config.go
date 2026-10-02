@@ -26,6 +26,11 @@ const (
 	BackendRunc     = "runc"
 )
 
+// fieldDefaultsRuntimeBackend is the YAML key path a ConfigValidationError
+// points at when the configured default backend is unusable. Three separate
+// checks report against it, so the path is named once.
+const fieldDefaultsRuntimeBackend = "defaults.runtime.backend"
+
 // AllKnownBackends is the full set of backends Setec understands, sorted
 // alphabetically.  Callers may use this slice for validation without hard-
 // coding strings; it is not a registry of enabled backends.
@@ -195,17 +200,17 @@ func (c *RuntimeConfig) Validate() error {
 	defaultBackend := c.Defaults.Runtime.Backend
 	if defaultBackend == "" {
 		errs = append(errs, &ConfigValidationError{
-			Field:  "defaults.runtime.backend",
+			Field:  fieldDefaultsRuntimeBackend,
 			Detail: "must be non-empty and name an enabled backend",
 		})
 	} else if !enabled[defaultBackend] {
 		errs = append(errs, &ConfigValidationError{
-			Field:  "defaults.runtime.backend",
+			Field:  fieldDefaultsRuntimeBackend,
 			Detail: fmt.Sprintf("backend %q is not enabled; enable it via runtimes.%s.enabled=true", defaultBackend, defaultBackend),
 		})
 	} else if c.IsDevOnly(defaultBackend) {
 		errs = append(errs, &ConfigValidationError{
-			Field:  "defaults.runtime.backend",
+			Field:  fieldDefaultsRuntimeBackend,
 			Detail: devOnlyDefaultDetail(defaultBackend, "the cluster-default backend"),
 		})
 	}

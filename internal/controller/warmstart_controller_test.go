@@ -24,7 +24,7 @@ import (
 func newPreWarmSandboxClass(t *testing.T, name, image string) {
 	t.Helper()
 	cls := &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
 			PreWarmPoolSize: 2,
@@ -78,7 +78,7 @@ func TestWarmStart_PoolRestoredStampedOnce(t *testing.T) {
 	t.Cleanup(func() { testDialer.client.ClaimRes = nil })
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: ns},
+		Name: "sb", Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: clsName,
 			Image:            image,
@@ -119,7 +119,7 @@ func TestWarmStart_MissFallsBackToColdBoot(t *testing.T) {
 
 	// Default fake: ClaimRes nil → claimed=false (pool miss).
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: ns},
+		Name: "sb", Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: clsName,
 			Image:            image,
@@ -160,7 +160,7 @@ func TestWarmStart_ImageMismatchSkipsAttempt(t *testing.T) {
 	newPreWarmSandboxClass(t, clsName, "ghcr.io/org/prewarm:v3")
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: ns},
+		Name: "sb", Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: clsName,
 			Image:            "ghcr.io/org/other:v9",

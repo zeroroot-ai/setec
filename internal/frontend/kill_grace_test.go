@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -69,10 +68,10 @@ func recordingDeleteClient(t *testing.T, rec *[]deleteRecord, mu *sync.Mutex, ob
 
 func killGraceFixtures() (*setecv1alpha1.Sandbox, *corev1.Pod) {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: types.UID("uid-1")},
+		Name: "sb", Namespace: "team-a", UID: types.UID("uid-1"),
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
+		Name: "sb-vm", Namespace: "team-a",
 	}
 	return sb, pod
 }

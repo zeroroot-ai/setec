@@ -42,8 +42,8 @@ func TestSandboxClassSessionCheckpointValidation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cls := &setecv1alpha1.SandboxClass{
-				ObjectMeta: metav1.ObjectMeta{Name: "c"},
-				Spec:       setecv1alpha1.SandboxClassSpec{SessionCheckpoint: tc.spec},
+				Name: "c",
+				Spec: setecv1alpha1.SandboxClassSpec{SessionCheckpoint: tc.spec},
 			}
 			errs := validateSessionCheckpoint(cls)
 			if tc.wantErr == "" {

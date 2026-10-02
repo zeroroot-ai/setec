@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -21,7 +20,7 @@ import (
 // newPreWarmClass returns a SandboxClass with an active pre-warm pool.
 func newPreWarmClass() *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "standard"},
+		Name: "standard",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			PreWarmPoolSize: 2,
 			PreWarmImage:    "ghcr.io/org/app:v1",

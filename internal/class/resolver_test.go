@@ -8,7 +8,6 @@ import (
 	"errors"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,7 +43,7 @@ func newFakeClient(t *testing.T, classes ...*setecv1alpha1.SandboxClass) client.
 
 func mkClass(name string, isDefault bool) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:     setecv1alpha1.VMMFirecracker,
 			Default: isDefault,
@@ -54,7 +53,7 @@ func mkClass(name string, isDefault bool) *setecv1alpha1.SandboxClass {
 
 func mkSandbox(className string) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "ns"},
+		Name: "sb", Namespace: "ns",
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
 			Image:            "alpine:3.19",

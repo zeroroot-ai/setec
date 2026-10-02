@@ -17,7 +17,6 @@ import (
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
@@ -70,8 +69,8 @@ func TestStartSandboxSpan_InMemoryExporter(t *testing.T) {
 	tr := tp.Tracer(TracerName)
 
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-a", Namespace: "tenant-a"},
-		Spec:       setecv1alpha1.SandboxSpec{SandboxClassName: "standard"},
+		Name: "sb-a", Namespace: "tenant-a",
+		Spec: setecv1alpha1.SandboxSpec{SandboxClassName: "standard"},
 	}
 
 	_, span := StartSandboxSpan(context.Background(), tr, sb)

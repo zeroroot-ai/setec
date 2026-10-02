@@ -218,7 +218,7 @@ func newClass(image string, size int32, ttl time.Duration) setecv1alpha1.Sandbox
 		ttlPtr = &metav1.Duration{Duration: ttl}
 	}
 	return setecv1alpha1.SandboxClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "std"},
+		Name: "std",
 		Spec: setecv1alpha1.SandboxClassSpec{
 			VMM:             setecv1alpha1.VMMFirecracker,
 			PreWarmPoolSize: size,

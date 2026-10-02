@@ -14,7 +14,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
@@ -231,8 +230,7 @@ func (s *Service) classifyExecOutcome(
 	// wait status too (137 for SIGKILL). That code describes the teardown,
 	// not the command, so the teardown is the verdict. The Sandbox read
 	// happens only on a non-zero exit, never on the success path above.
-	var coded clientexec.CodeExitError
-	if errors.As(execErr, &coded) {
+	if coded, ok := errors.AsType[clientexec.CodeExitError](execErr); ok {
 		if gone, why := s.sessionGone(ctx, ns, name); gone {
 			return &setecv1grpc.SessionExecExit{
 				Status: setecv1grpc.SessionExecExit_STATUS_SANDBOX_GONE,
@@ -406,7 +404,7 @@ func (s *Service) requestSessionRunning(ctx context.Context, ns, name string) er
 		return fmt.Errorf("marshal resume patch: %w", err)
 	}
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 	}
 	return s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body))
 }

@@ -270,10 +270,8 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		className = sb.Name
 	}
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: sb.Namespace,
-			Name:      sb.Spec.Snapshot.Name,
-		},
+		Namespace: sb.Namespace,
+		Name:      sb.Spec.Snapshot.Name,
 		Spec: setecv1alpha1.SnapshotSpec{
 			SourceSandbox:  sb.Name,
 			SandboxClass:   className,

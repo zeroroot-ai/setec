@@ -133,13 +133,11 @@ func (r *SandboxReconciler) ensureSessionKEK(ctx context.Context, sb *setecv1alp
 		return fmt.Errorf("generate session KEK: %w", err)
 	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      sessionKEKName(sb),
-			Namespace: sb.Namespace,
-			Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{sessionKEKKey: kek},
+		Name:      sessionKEKName(sb),
+		Namespace: sb.Namespace,
+		Labels:    map[string]string{podspec.SandboxLabelKey: sb.Name},
+		Type:      corev1.SecretTypeOpaque,
+		Data:      map[string][]byte{sessionKEKKey: kek},
 	}
 	if err := controllerutil.SetControllerReference(sb, secret, r.Scheme); err != nil {
 		return fmt.Errorf("set owner on session KEK Secret: %w", err)

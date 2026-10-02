@@ -11,7 +11,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -92,10 +91,9 @@ func TestWarmStartFromPool_DevOptOutServesLoudly(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	cls := newPreWarmClass()
 	cls.Annotations = map[string]string{gate.AllowUnverifiedRestoresAnnotation: "true"}
-	devNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+	devNS := &corev1.Namespace{
 		Name:   gate.DefaultGateNamespace,
-		Labels: map[string]string{gate.DefaultAllowDevLabel: "true"},
-	}}
+		Labels: map[string]string{gate.DefaultAllowDevLabel: "true"}}
 	c := newFakeClient(t, sb, pod, cls, devNS)
 	na := &fakeNodeAgentClient{claimRes: res}
 	coord := &Coordinator{
@@ -128,7 +126,7 @@ func TestWarmStartFromPool_AnnotationAloneStillRejected(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	cls := newPreWarmClass()
 	cls.Annotations = map[string]string{gate.AllowUnverifiedRestoresAnnotation: "true"}
-	unlabelled := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: gate.DefaultGateNamespace}}
+	unlabelled := &corev1.Namespace{Name: gate.DefaultGateNamespace}
 	c := newFakeClient(t, sb, pod, cls, unlabelled)
 	na := &fakeNodeAgentClient{
 		claimRes: res,
@@ -157,7 +155,7 @@ func TestRestoreSandbox_CrossSandboxRefusedBeforeRPC(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
+		Namespace: "t-a", Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SourceSandbox: "some-other-sandbox",
 			Node:          "node-a",
@@ -238,8 +236,8 @@ func TestRestoreSandbox_UnencryptedAtRestRefused(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	snap := &setecv1alpha1.Snapshot{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "t-a", Name: "snap-1"},
-		Spec:       setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
+		Namespace: "t-a", Name: "snap-1",
+		Spec: setecv1alpha1.SnapshotSpec{SourceSandbox: "s", Node: "node-a"},
 	}
 	c := newFakeClient(t, sb, pod, snap)
 	res := verifiedRestoreRes()

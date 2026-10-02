@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -23,13 +22,13 @@ import (
 func longLivedSandbox(t *testing.T, results ...openResult) (*Service, *recordingOpener) {
 	t.Helper()
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "team-a", UID: "u-1"},
+		Name: "sb", Namespace: "team-a", UID: "u-1",
 		Spec: setecv1alpha1.SandboxSpec{
 			Lifecycle: &setecv1alpha1.Lifecycle{Mode: setecv1alpha1.LifecycleModeSession},
 		},
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sb-vm", Namespace: "team-a"},
+		Name: "sb-vm", Namespace: "team-a",
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 			ContainerStatuses: []corev1.ContainerStatus{{

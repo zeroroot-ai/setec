@@ -49,10 +49,8 @@ const (
 // timeouts without duplicating the boilerplate.
 func newSandbox(ns, name string, mods ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
 	sb := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
+		Name:      name,
+		Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
 			Image:   "docker.io/library/python:3.12-slim",
 			Command: []string{"python", "-c", "print('hi')"},
@@ -444,7 +442,7 @@ func deleteRuntimeClass(g Gomega, name string) {
 	ctx, cancel := context.WithTimeout(testCtx, 5*time.Second)
 	defer cancel()
 
-	rc := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	rc := &nodev1.RuntimeClass{Name: name}
 	if err := testClient.Delete(ctx, rc); err != nil && !apierrors.IsNotFound(err) {
 		g.Expect(err).NotTo(HaveOccurred(), "delete RuntimeClass %q", name)
 	}

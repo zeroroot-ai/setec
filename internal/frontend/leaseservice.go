@@ -12,7 +12,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -284,11 +283,9 @@ func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.Lea
 		return status.Errorf(grpcCodeFor(err), "get SandboxClass: %v", err)
 	}
 	workload := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "exec-",
-			Namespace:    ns,
-			Labels:       map[string]string{leaseClassLabel: className},
-		},
+		GenerateName: "exec-",
+		Namespace:    ns,
+		Labels:       map[string]string{leaseClassLabel: className},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
 			Image:            sc.Spec.PreWarmImage,

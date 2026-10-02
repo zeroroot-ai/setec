@@ -253,6 +253,6 @@ func newOrphanReconciler(
 
 func reconcileSandbox(r *SandboxReconciler, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
 	return r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name},
+		Namespace: sb.Namespace, Name: sb.Name,
 	})
 }

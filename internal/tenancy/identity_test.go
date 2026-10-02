@@ -16,7 +16,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newTestCert constructs a self-signed certificate with the given SANs and
@@ -72,10 +71,8 @@ func TestFromNamespace(t *testing.T) {
 		{
 			name: "label set",
 			ns: &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "tenant-a",
-					Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
-				},
+				Name:   "tenant-a",
+				Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
 			},
 			labelKey: "setec.zeroroot.ai/tenant",
 			want:     "tenant-a",
@@ -83,10 +80,8 @@ func TestFromNamespace(t *testing.T) {
 		{
 			name: "label missing",
 			ns: &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "nolabel",
-					Labels: map[string]string{"other": "value"},
-				},
+				Name:   "nolabel",
+				Labels: map[string]string{"other": "value"},
 			},
 			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantLabelMissing,
@@ -94,10 +89,8 @@ func TestFromNamespace(t *testing.T) {
 		{
 			name: "label present but empty",
 			ns: &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "empty",
-					Labels: map[string]string{"setec.zeroroot.ai/tenant": ""},
-				},
+				Name:   "empty",
+				Labels: map[string]string{"setec.zeroroot.ai/tenant": ""},
 			},
 			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantLabelMissing,
@@ -105,10 +98,8 @@ func TestFromNamespace(t *testing.T) {
 		{
 			name: "label value not a DNS label",
 			ns: &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "bad",
-					Labels: map[string]string{"setec.zeroroot.ai/tenant": "NOT_VALID"},
-				},
+				Name:   "bad",
+				Labels: map[string]string{"setec.zeroroot.ai/tenant": "NOT_VALID"},
 			},
 			labelKey:  "setec.zeroroot.ai/tenant",
 			wantErrIs: ErrTenantInvalid,
@@ -122,10 +113,8 @@ func TestFromNamespace(t *testing.T) {
 		{
 			name: "empty label key",
 			ns: &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "ns",
-					Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
-				},
+				Name:   "ns",
+				Labels: map[string]string{"setec.zeroroot.ai/tenant": "tenant-a"},
 			},
 			labelKey:  "",
 			wantErrIs: ErrTenantLabelMissing,
