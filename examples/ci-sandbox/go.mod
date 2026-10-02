@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/zeroroot-ai/setec v0.114.4
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.83.2
 )
 
 require (

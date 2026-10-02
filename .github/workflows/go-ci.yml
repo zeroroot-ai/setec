@@ -488,6 +488,34 @@ jobs:
       - name: Guard the diff
         run: bash scripts/check-silent-revert.sh
 
+  direct-require-advisories:
+    name: No direct require names an affected release
+    # Both lanes. OSV is a live database, so a new advisory can turn this red
+    # on a PR that changed nothing about dependencies. That is the point: the
+    # finding is about the tree that is about to merge, not about the diff.
+    #
+    # Version-based on purpose. `examples-govulncheck` is reachability-based and
+    # passed while examples/ci-sandbox selected grpc v1.84.0, a release inside a
+    # LATER affected range of GO-2026-6443 (setec#97). A published example is
+    # code a reader copies into a project where the symbol may well be reached.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Mutation-test the guard
+        run: bash scripts/__tests__/check-direct-requires-have-no-advisory.test.sh
+
+      - name: Guard every module's direct requires
+        run: bash scripts/check-direct-requires-have-no-advisory.sh
+
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
     if: github.event_name == 'pull_request'
@@ -764,6 +792,7 @@ jobs:
       - no-marker-in-source
       - kata-pin
       - no-silent-revert
+      - direct-require-advisories
       - no-insecure-flag-in-chart
       - no-unimplemented-in-frontend
       - examples-build
