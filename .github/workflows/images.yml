@@ -232,7 +232,7 @@ jobs:
 
   setec-installer:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@34a4373847e143c71c3b24a7eeb4bad43bb3966a # v0.9.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -253,6 +253,37 @@ jobs:
       # amd64 only: the bundled kata static payload is x86 (ADR-0001).
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
+      # Binaries this repo does NOT compile, so the vulnerability gate asks
+      # REACHABILITY for them instead of staleness (.github#163, v0.8.3).
+      #
+      # Why these five. A Go stdlib finding from an image scanner is a version
+      # comparison: the binary's Go is behind a patch. For a binary we build that
+      # is the right question, because bumping Go is ours to do. For these it is
+      # the wrong question and has no remedy — gVisor publishes every artifact
+      # built with the Go its own go.mod names (MODULE.bazel takes the SDK from
+      # it), so release-20260928.0, the GCS bucket, the bucket's latest and even
+      # the nightly built on 2026-10-02 are all go1.26.3. That produced 11 fixable
+      # HIGH stdlib findings setec could not act on in any way, and v0.117.0
+      # shipped a git tag and a published chart with NO installer image.
+      #
+      # This is NOT an allowlist. govulncheck -mode=binary reports a vulnerability
+      # only when the affected SYMBOL is in the binary; a reachable finding still
+      # blocks, and an analysis that does not run blocks. Checked before relying
+      # on it: these binaries are not stripped (runsc 67589 readable symbols,
+      # gvisor_sentry 63318), so binary mode runs at full precision rather than
+      # degrading to a module-level guess.
+      #
+      # Paths are as trivy names its Target: no leading slash. A path that is not
+      # in the image fails loudly rather than quietly tolerating anything — the
+      # collector writes .failed when docker cp misses, and .failed blocks.
+      #
+      # firecracker and jailer are deliberately absent: they are Rust, so they
+      # carry no Go stdlib to compare.
+      vendored_binaries: |
+        opt/gvisor/runsc
+        opt/gvisor/containerd-shim-runsc-v1
+        opt/gvisor/gvisor-bin/gvisor_sentry
+        opt/kata/bin/containerd-shim-kata-v2
       build_args: |
         KATA_VERSION=${{ needs.kata-pin.outputs.version }}
         KATA_SHA256=${{ needs.kata-pin.outputs.sha256 }}
