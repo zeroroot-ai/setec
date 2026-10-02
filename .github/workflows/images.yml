@@ -230,9 +230,14 @@ jobs:
       build_args: |
         CMD=setec-keepalive
 
+  # Pinned AHEAD of the other six image jobs, which stay on v0.7.2, and that is
+  # deliberate rather than drift: this is the only job that passes
+  # vendored_binaries, so it is the only one that needs a reusable new enough to
+  # accept it. Moving the other six is a separate change with its own blast radius
+  # and no reason to ride along here.
   setec-installer:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@34a4373847e143c71c3b24a7eeb4bad43bb3966a # v0.9.0
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@76842051ca980d343fe51b131a8e345db7e2c6b7 # v0.10.0
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
