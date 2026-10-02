@@ -125,7 +125,6 @@ func main() {
 		metricsBindAddr       string
 		probeBindAddr         string
 		enableLeaderElect     bool
-		runtimeClassName      string
 		runtimesConfig        string
 		nodeSelectorLabel     string
 		multiTenancyEnabled   bool
@@ -164,9 +163,6 @@ func main() {
 	pflag.StringVar(&runtimesConfig, "runtimes-config", "",
 		"Path to a YAML file describing enabled runtime backends (runtimes block). "+
 			"When set, --runtime-class-name is ignored. See charts/setec/templates/configmap-runtimes.yaml for the schema.")
-	pflag.StringVar(&runtimeClassName, "runtime-class-name", "kata-fc",
-		"Deprecated: use --runtimes-config instead. Name of the Kata RuntimeClass the Sandbox Pods will reference. "+
-			"When --runtimes-config is absent, this flag synthesizes a kata-fc-only RuntimeConfig.")
 	pflag.StringVar(&nodeSelectorLabel, "node-selector-label", "katacontainers.io/kata-runtime",
 		"Label key Nodes must carry to be considered Kata-capable. "+
 			"Used by the startup prerequisite check only; scheduling uses the RuntimeClass.")
@@ -272,41 +268,26 @@ func main() {
 
 	// --- Runtime backend configuration ---
 	//
-	// When --runtimes-config is provided, load the full multi-backend config.
-	// When only the legacy --runtime-class-name is set (no --runtimes-config),
-	// synthesize a minimal config that enables only kata-fc. This preserves
-	// full backward compatibility for existing deployments (REQ-6.1).
-	var (
-		runtimeCfg      *runtimepkg.RuntimeConfig
-		runtimeRegistry *runtimepkg.Registry
-	)
-	if runtimesConfig != "" {
-		var err error
-		runtimeCfg, err = runtimepkg.LoadFromFile(runtimesConfig)
-		if err != nil {
-			setupLog.Error(err, "unable to load runtimes config", "path", runtimesConfig)
-			os.Exit(1)
-		}
-	} else {
-		// Legacy path: synthesize a kata-fc-only config from --runtime-class-name.
-		setupLog.Info("DEPRECATION WARNING: --runtimes-config is not set; "+
-			"falling back to legacy --runtime-class-name flag. "+
-			"Please migrate to --runtimes-config for multi-backend support.",
-			"runtime-class-name", runtimeClassName,
-		)
-		runtimeCfg = &runtimepkg.RuntimeConfig{
-			Runtimes: map[string]runtimepkg.BackendConfig{
-				runtimepkg.BackendKataFC: {
-					Enabled:          true,
-					RuntimeClassName: runtimeClassName,
-				},
-			},
-			Defaults: runtimepkg.DefaultsConfig{
-				Runtime: runtimepkg.RuntimeDefaults{
-					Backend: runtimepkg.BackendKataFC,
-				},
-			},
-		}
+	// --runtimes-config is required. The chart has always passed it
+	// unconditionally, so the old "synthesize a kata-fc-only config from
+	// --runtime-class-name" fallback was unreachable for every chart install
+	// — and because `runtimeClassName` was read nowhere else, a customer's
+	// `--set runtimeClassName=…` was already silently inert: the chart passed
+	// the flag and the binary never looked at it (setec#115).
+	//
+	// Starting without the config is a startup failure rather than a
+	// synthesized default, because a silently assumed single-backend posture
+	// is the condition this configuration exists to make explicit.
+	var runtimeRegistry *runtimepkg.Registry
+	if runtimesConfig == "" {
+		setupLog.Error(nil, "--runtimes-config is required; "+
+			"it declares which isolation backends this operator may use and which are installed on the cluster")
+		os.Exit(1)
+	}
+	runtimeCfg, err := runtimepkg.LoadFromFile(runtimesConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to load runtimes config", "path", runtimesConfig)
+		os.Exit(1)
 	}
 
 	// --- Sandbox egress posture ---

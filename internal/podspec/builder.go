@@ -249,12 +249,6 @@ var blockWorkspaceCapabilities = []corev1.Capability{"SYS_ADMIN", "DAC_OVERRIDE"
 // Build returns a wrapped error if the Sandbox is structurally invalid in
 // ways the OpenAPI schema cannot express. Callers should propagate the error;
 // the controller records it as an Event and requeues.
-//
-// Build is preserved with its Phase 1 signature for back-compat.
-// Phase 3 callers that need node pinning go through BuildWithOptions.
-func Build(sb *setecv1alpha1.Sandbox, runtimeClassName string) (*corev1.Pod, error) {
-	return BuildWithOptions(sb, runtimeClassName, BuildOptions{})
-}
 
 // BuildWithOptions is the extended Phase 3 entry point. Build is a
 // thin wrapper that passes the zero-value options, so existing

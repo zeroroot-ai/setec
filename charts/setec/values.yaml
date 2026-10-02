@@ -56,14 +56,13 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-# -- runtimeClassName is the name of the Kata RuntimeClass the operator will
-# attach to every Sandbox Pod it creates. Must match the RuntimeClass
-# installed by kata-deploy on your cluster. Default `kata-fc` selects the
-# Firecracker VMM configuration.
-# Deprecated: use runtimes.kata-fc.runtimeClassName instead. When set, populates
-# runtimes.kata-fc.runtimeClassName for backwards compat. Scheduled for
-# removal one release after the runtimes block becomes the canonical config.
-runtimeClassName: kata-fc
+# -- runtimeClassName is REMOVED (setec#115). Use
+# `runtimes.kata-fc.runtimeClassName` below. Setting this key fails the render
+# with a message naming its replacement, because Helm does not reject an unknown
+# value and the old key was already accepted-and-ignored: the chart has always
+# passed `--runtimes-config`, and the operator read `--runtime-class-name` only
+# when that was absent. The guard comes out one release after this one.
+runtimeClassName: ""
 
 # -- runtimes declares the isolation backends the operator knows about and
 # whether each is installed on this cluster. The admission webhook and

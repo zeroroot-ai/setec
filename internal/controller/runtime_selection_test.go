@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// runtime_selection_test.go exercises the multi-backend runtime selection path
-// added by task 10. Three scenarios test selectRuntime directly using a
+// runtime_selection_test.go exercises the multi-backend runtime selection path.
+// Three scenarios test selectRuntime directly using a
 // controller-runtime fake client so they are independent of the shared
 // envtest environment wired in suite_test.go.
 //
-//  1. Legacy path: nil Runtimes/RuntimeCfg → synthesized kata-fc Selection.
-//  2. Fallback: class wants kata-qemu (no capable node), fallback to gvisor
+//  1. Fallback: class wants kata-qemu (no capable node), fallback to gvisor
 //     (node has gvisor label) → Selection.Backend=gvisor, FellBack=true.
-//  3. No capable node: class wants runc, no node advertises it → a
+//  2. No capable node: class wants runc, no node advertises it → a
 //     Provisional Selection, Sandbox Pending with Reason=AwaitingCapableNode,
 //     the Pod created anyway, and Provisional clearing on its own once a
 //     capable node joins.
-//  4. Unregistered backend: nothing in the chain has a Dispatcher → the
+//  3. Unregistered backend: nothing in the chain has a Dispatcher → the
 //     terminal ErrNoEligibleRuntime with Reason=RuntimeNotEnabled.
 package controller
 
@@ -129,50 +128,6 @@ func emptyOverheadConfig(runtimeClassName string) runtimepkg.BackendConfig {
 		RuntimeClassName: runtimeClassName,
 		DefaultOverhead:  corev1.ResourceList{},
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Scenario A: Legacy path — nil Runtimes/RuntimeCfg.
-// ---------------------------------------------------------------------------
-
-// TestSelectRuntime_Legacy verifies that when Runtimes is nil, selectRuntime
-// synthesizes a Selection for the kata-fc backend using the class
-// RuntimeClassName (or empty string when the class also has none).
-func TestSelectRuntime_Legacy(t *testing.T) {
-	g := NewWithT(t)
-
-	cls := newSandboxClassForRS("legacy-class", "", nil)
-	sb := newSandboxForRS(cls.Name)
-	r, _ := newRSReconciler(t, nil, nil, cls, sb)
-
-	sel, err := r.selectRuntime(context.Background(), sb, cls)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(sel).NotTo(BeNil())
-	// Legacy path always returns kata-fc backend.
-	g.Expect(sel.Backend).To(Equal(runtimepkg.BackendKataFC))
-	g.Expect(sel.Dispatcher).NotTo(BeNil())
-	g.Expect(sel.FellBack).To(BeFalse())
-}
-
-// TestSelectRuntime_Legacy_WithClassRCName verifies that the legacy path
-// propagates the class's RuntimeClassName into the synthesized dispatcher.
-func TestSelectRuntime_Legacy_WithClassRCName(t *testing.T) {
-	g := NewWithT(t)
-
-	cls := &setecv1alpha1.SandboxClass{
-		Name: "typed-class",
-		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM:              setecv1alpha1.VMMFirecracker,
-			RuntimeClassName: "my-kata",
-			MaxResources:     &setecv1alpha1.Resources{VCPU: 2, Memory: resource.MustParse("1Gi")},
-		},
-	}
-	sb := newSandboxForRS(cls.Name)
-	r, _ := newRSReconciler(t, nil, nil, cls, sb)
-
-	sel, err := r.selectRuntime(context.Background(), sb, cls)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(sel.Dispatcher.RuntimeClassName()).To(Equal("my-kata"))
 }
 
 // ---------------------------------------------------------------------------

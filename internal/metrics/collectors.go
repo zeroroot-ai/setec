@@ -36,11 +36,6 @@ const (
 	LabelTenant       = "tenant"
 	LabelSandboxClass = "sandbox_class"
 	LabelPhase        = "phase"
-	// Deprecated: LabelVMM is superseded by LabelRuntime. It is retained for
-	// one release to preserve backward compatibility with existing dashboards
-	// and will be removed in the next spec iteration. Use LabelRuntime for
-	// all new code.
-	LabelVMM = "vmm"
 	// LabelRuntime is the canonical replacement for LabelVMM. Bounded values:
 	// "firecracker", "kata", "gvisor", "native".
 	LabelRuntime = "runtime"
@@ -140,15 +135,13 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			},
 			[]string{LabelPhase, LabelTenant, LabelSandboxClass},
 		),
-		// Dual-write transition: both "runtime" (new canonical label) and
-		// "vmm" (deprecated) are present until the next spec removes vmm.
 		SandboxColdStart: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "setec_sandbox_cold_start_seconds",
 				Help:    "Time (s) from Sandbox creation to Pod Running.",
 				Buckets: prometheus.ExponentialBuckets(0.1, 2, 12),
 			},
-			[]string{LabelRuntime, LabelVMM, LabelSandboxClass},
+			[]string{LabelRuntime, LabelSandboxClass},
 		),
 		SandboxActive: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
@@ -233,32 +226,16 @@ func (c *Collectors) RecordDuration(tenant, class, phase string, d time.Duration
 	c.SandboxDuration.WithLabelValues(phase, normalizeTenantLabel(tenant), class).Observe(d.Seconds())
 }
 
-// RecordColdStart observes a Sandbox's time-to-Running into the cold-start
-// histogram. vmm is the SandboxClass.spec.vmm value (or the operator's
-// default) and class is the SandboxClass name (or empty string).
-//
-// Deprecated: use ObserveColdStart which carries both the new runtime label
-// and the legacy vmm label. RecordColdStart duplicates the vmm value into
-// the runtime label to maintain backward compatibility during the transition.
-func (c *Collectors) RecordColdStart(vmm, class string, d time.Duration) {
-	if c == nil {
-		return
-	}
-	// Dual-write: runtime receives the same value as vmm so existing callers
-	// continue working without change. New callers should use ObserveColdStart.
-	c.SandboxColdStart.WithLabelValues(vmm, vmm, class).Observe(d.Seconds())
-}
-
 // ObserveColdStart observes a Sandbox's time-to-Running into the cold-start
 // histogram with explicit runtime and vmm labels for the dual-write period.
 // runtime is the canonical label (bounded: "firecracker", "kata", "gvisor",
-// "native"). vmm is the legacy label value kept for dashboard compatibility.
-// Pass the same string for both if only one is known.
-func (c *Collectors) ObserveColdStart(runtime, vmm, class string, d time.Duration) {
+// "native"). The deprecated "vmm" label it dual-wrote alongside is gone
+// (setec#115).
+func (c *Collectors) ObserveColdStart(runtime, class string, d time.Duration) {
 	if c == nil {
 		return
 	}
-	c.SandboxColdStart.WithLabelValues(runtime, vmm, class).Observe(d.Seconds())
+	c.SandboxColdStart.WithLabelValues(runtime, class).Observe(d.Seconds())
 }
 
 // SetActive adjusts the active-sandbox gauge by delta (positive on

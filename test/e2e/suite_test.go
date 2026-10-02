@@ -692,7 +692,11 @@ func installChart() error {
 		"install", helmReleaseName, chartPath,
 		"--namespace", testNamespace,
 		"--set", fmt.Sprintf("namespace=%s", testNamespace),
-		"--set", fmt.Sprintf("runtimeClassName=%s", kataRuntimeClass),
+		// runtimes.kata-fc.runtimeClassName, not the removed top-level
+		// runtimeClassName: that value was accepted and ignored for every chart
+		// install, and the chart now fails the render rather than letting the
+		// setting stay silently inert (setec#115).
+		"--set", fmt.Sprintf("runtimes.kata-fc.runtimeClassName=%s", kataRuntimeClass),
 		// The E2E cluster gets its kata-fc RuntimeClass from kata-deploy
 		// (preflight requires it to pre-exist; scenario 5 deletes/restores
 		// it). The chart must therefore NOT render its own kata-fc

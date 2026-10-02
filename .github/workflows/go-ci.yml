@@ -40,8 +40,10 @@ name: go-ci
 #                                reach, and per decision 9, scanner cadence
 #                                belongs on merge_group).
 #
-# merge_group is inert until the merge queue is enabled on setec -- wiring it
-# now is intentionally a no-op until then.
+# merge_group fires: the queue is enabled on setec (ruleset
+# `setec-required-checks`), so every gate below that declares the lane runs
+# there for real. The note that once said this wiring was "intentionally a
+# no-op until then" outlived the condition it described (setec#115).
 #
 # setec keeps its own Makefile-pinned golangci-lint (`make lint`) instead of
 # delegating to the reusable's built-in golangci-lint-action step: the
