@@ -113,6 +113,6 @@ Never mutate a running node. Edit `KATA_VERSION` **and** `KATA_SHA256` in
 `kata.env` at the repo root (compute `sha256sum` of the new
 `kata-go-static-<ver>-amd64.tar.zst`). The installer image, the dev k3s
 script and this bake all read that file, and CI fails when any of them names
-a version of its own (`scripts/check-kata-pin.sh`). Then rebuild with
+a version of its own (`scripts/check-runtime-pins.sh`). Then rebuild with
 `./bake.sh` and roll nodes onto the new AMI (Karpenter drift or a node-group
 AMI update). That is the whole point.

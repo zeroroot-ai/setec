@@ -252,6 +252,21 @@ func (in *Installer) detectConfigVersion(ctx context.Context, flavor runtimeFlav
 
 // runtimeTableName returns the CRI runtime table prefix for the config
 // schema version.
+// gvisorRuntimeTableName returns the CRI runtime table prefix for the runsc
+// handler, on the same schema split as kata-fc.
+//
+// The 2.x path is not cosmetic. containerd 2.x SILENTLY IGNORES a runtime
+// registered under the 1.x `io.containerd.grpc.v1.cri` table: the stanza is
+// present, containerd starts clean, and kubelet then fails the pod with
+// `no runtime for "runsc" is configured`. Proven on kind-vanilla running
+// containerd v2.1.1.
+func gvisorRuntimeTableName(version int) string {
+	if version >= 3 {
+		return `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc`
+	}
+	return `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc`
+}
+
 func runtimeTableName(version int) string {
 	if version >= 3 {
 		return `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`
@@ -322,6 +337,16 @@ func (in *Installer) registrationTOML(version int, mode convergeMode) string {
   [%s.options]
     ConfigPath = "%s"
 `, table, table, kataFCConf)
+
+	// gvisor. No snapshotter override: runsc runs on the node's default
+	// snapshotter (overlayfs on a stock node), unlike Firecracker which needs a
+	// block device per container rootfs. No pod_annotations either, because
+	// runsc consumes none.
+	gvisorTable := gvisorRuntimeTableName(version)
+	fmt.Fprintf(&b, `
+[%s]
+  runtime_type = "io.containerd.runsc.v1"
+`, gvisorTable)
 	return b.String()
 }
 
@@ -647,4 +672,39 @@ func devmapperPluginStatus(out []byte) (string, bool) {
 func hostHas(root, name string) bool {
 	_, err := lookPathIn(root, name)
 	return err == nil
+}
+
+// ensureConfigDirTraversable makes the containerd config directory readable and
+// traversable, so a non-root reader can stat the files inside it.
+//
+// This exists because of a failure that looked like a probe bug and was a
+// permissions bug. The installer created /etc/containerd at mode 0644 — readable
+// but with no execute bit, so a non-root process could not traverse into it. The
+// runtime agent then reported `setec.zeroroot.ai/runtime.gvisor=false` with
+// reason "no containerd configuration is readable on this node", on a node whose
+// containerd was correctly configured. Nothing failed loudly; the node simply
+// advertised itself as incapable and no Sandbox scheduled (setec#89).
+//
+// 0755 and not 0775: the directory holds the node's runtime configuration, so
+// group-write is more than any reader needs.
+func (in *Installer) ensureConfigDirTraversable(flavor runtimeFlavor) (bool, error) {
+	dir := in.hostPath(flavor.configDir)
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing to fix: a flavor whose config dir does not exist has no
+			// config for the agent to read either, and the registration step
+			// creates it with the right mode.
+			return false, nil
+		}
+		return false, err
+	}
+	if info.Mode().Perm() == 0o755 {
+		return false, nil
+	}
+	in.log("making %s traversable (was %#o) so the non-root runtime agent can read the containerd config", flavor.configDir, info.Mode().Perm())
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return false, err
+	}
+	return true, nil
 }

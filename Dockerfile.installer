@@ -67,10 +67,15 @@ ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 ARG KATA_VERSION
 ARG KATA_SHA256
 
-# Pin gate: both build args must be set (kata.env is the source).
+ARG GVISOR_VERSION
+ARG GVISOR_SHA256
+
+# Pin gate: every build arg must be set (kata.env and gvisor.env are the sources).
 RUN set -eu; \
     test -n "${KATA_VERSION}" || { echo "KATA_VERSION build arg is empty: pass it from kata.env" >&2; exit 1; }; \
-    test -n "${KATA_SHA256}" || { echo "KATA_SHA256 build arg is empty: pass it from kata.env" >&2; exit 1; }
+    test -n "${KATA_SHA256}" || { echo "KATA_SHA256 build arg is empty: pass it from kata.env" >&2; exit 1; }; \
+    test -n "${GVISOR_VERSION}" || { echo "GVISOR_VERSION build arg is empty: pass it from gvisor.env" >&2; exit 1; }; \
+    test -n "${GVISOR_SHA256}" || { echo "GVISOR_SHA256 build arg is empty: pass it from gvisor.env" >&2; exit 1; }
 
 RUN set -eux; \
     apt-get update; \
@@ -115,6 +120,31 @@ RUN set -eux; \
       case " $keep " in *" $f "*) ;; *) rm -rf "$f" ;; esac; \
     done
 
+# gVisor payload. Shipped WHOLE, deliberately, unlike the kata prune above.
+#
+# Measured on release-20260928.0: with only runsc and containerd-shim-runsc-v1
+# on disk, runsc dies at sandbox creation with `sidecar "gvisor_sentry" not
+# usable ... --sidecar-usage-policy is set to STRICT`. The sentry is a separate
+# binary under gvisor-bin/ in modern releases. The only policy that works
+# without it is LEGACY_DEPRECATED_SLOW_EMBEDDED_FALLBACK, which upstream named
+# deprecated AND slow — and it would sit on the cold-start path this repo
+# exports as setec_sandbox_cold_start_seconds, for the one backend chosen
+# because it has LOWER overhead than a microVM. Owner decision 2026-10-02:
+# ship the payload, 95 MB -> ~258 MB compressed.
+#
+# /opt/gvisor mirrors /opt/kata: runsc resolves gvisor-bin/ relative to the
+# RESOLVED target of its own path, so a /usr/local/bin symlink works (verified
+# both ways, rc=0). Upstream publishes no loose runsc binary — the URL the
+# gVisor docs still name returns 404 — so this is one tarball, checksum-pinned.
+RUN set -eux; \
+    curl -fsSL --retry 3 -o /tmp/gvisor.tar.zst \
+      "https://github.com/google/gvisor/releases/download/${GVISOR_VERSION}/gvisor-x86_64.tar.zstd"; \
+    echo "${GVISOR_SHA256}  /tmp/gvisor.tar.zst" | sha256sum -c -; \
+    mkdir -p /payload/opt/gvisor; \
+    tar --zstd -xf /tmp/gvisor.tar.zst -C /payload/opt/gvisor; \
+    rm /tmp/gvisor.tar.zst; \
+    printf '%s\n' "${GVISOR_VERSION}" > /payload/opt/gvisor/VERSION
+
 # ----------------------------------------------------------------------------
 # Payload gate — its own stage so the gate can be proven to fail.
 #
@@ -138,6 +168,11 @@ RUN set -eu; \
       echo "PAYLOAD_MUTATION=${PAYLOAD_MUTATION}: planting a junk binary; this build must fail at the gate" >&2; \
       : > "/payload/opt/kata/bin/${PAYLOAD_MUTATION}"; \
     fi
+RUN set -eu; \
+    if [ -n "${PAYLOAD_MUTATION}" ]; then \
+      echo "PAYLOAD_MUTATION=${PAYLOAD_MUTATION}: also removing the gvisor sentry; this build must fail at the gate" >&2; \
+      rm -f /payload/opt/gvisor/gvisor-bin/gvisor_sentry; \
+    fi
 RUN set -eux; \
     # Positive inventory (setec#17): bin holds exactly the three binaries
     # the kata-fc handler runs, each executable. This replaces the two
@@ -157,6 +192,18 @@ RUN set -eux; \
     test -e "/payload$kernel"; \
     test -e "/payload$image"; \
     grep -qx "${KATA_VERSION}" /payload/opt/kata/VERSION
+RUN set -eux; \
+    # gVisor: positive inventory, same contract as the kata bin check above. The
+    # sentry is the one every sandbox launch needs — runsc refuses to create a
+    # sandbox without it under the default (STRICT) sidecar policy — so its
+    # absence must fail the image build, never a node.
+    test -x /payload/opt/gvisor/runsc; \
+    test -x /payload/opt/gvisor/containerd-shim-runsc-v1; \
+    test -x /payload/opt/gvisor/gvisor-bin/gvisor_sentry; \
+    have="$(ls -A /payload/opt/gvisor | LC_ALL=C sort | paste -sd' ')"; \
+    want="VERSION containerd-shim-runsc-v1 gvisor-bin runsc"; \
+    test "$have" = "$want" || { echo "gvisor payload inventory is '$have', declared '$want'" >&2; exit 1; }; \
+    grep -qx "${GVISOR_VERSION}" /payload/opt/gvisor/VERSION
 
 # ----------------------------------------------------------------------------
 # Runtime stage — distroless static; the binary chroots into the host
@@ -168,6 +215,12 @@ WORKDIR /
 
 COPY --from=builder /out/installer /entrypoint
 COPY --from=payload-gate /payload/opt/kata /opt/kata
+# The gVisor tree, from the gated stage so a payload that failed the inventory
+# above can never reach the runtime image. /opt/gvisor matches the installer's
+# --gvisor-payload-dir default, and runsc resolves gvisor-bin/ relative to the
+# resolved target of its own path, so the directory layout is load-bearing
+# (setec#89).
+COPY --from=payload-gate /payload/opt/gvisor /opt/gvisor
 
 # Apache-2.0 §4(a) requires that every recipient of a distribution gets a
 # copy of the License, and a published image is a distribution. /licenses

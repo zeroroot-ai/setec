@@ -209,10 +209,10 @@ installer-payload-guard: ## Prove the installer's payload gate: the plain gate s
 	fi; \
 	echo "payload gate: mutated build refused, the guard can fail"
 
-.PHONY: check-kata-pin
-check-kata-pin: ## Fail if any consumer names a kata version of its own (kata.env is the source).
-	bash scripts/check-kata-pin.sh --selftest
-	bash scripts/check-kata-pin.sh
+.PHONY: check-runtime-pins
+check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own (kata.env / gvisor.env are the sources).
+	bash scripts/check-runtime-pins.sh --selftest
+	bash scripts/check-runtime-pins.sh
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -289,7 +289,7 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-kata-pin ## Run the local gate (tests, credential guard, kata pin guard — run 'make lint' separately).
+check: test guard-credentials check-runtime-pins ## Run the local gate (tests, credential guard, runtime pin guard — run 'make lint' separately).
 
 ##@ Deployment
 
