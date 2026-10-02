@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.118.0](https://github.com/zeroroot-ai/setec/compare/v0.117.0...v0.118.0) (2026-10-02)
+
+
+### Features
+
+* **crd:** a served field must have a consumer, and nine did not ([#140](https://github.com/zeroroot-ai/setec/issues/140)) ([3de44cc](https://github.com/zeroroot-ai/setec/commit/3de44cc3908e30f11cb796e9cbb1ddebdc548fc1)), closes [#121](https://github.com/zeroroot-ai/setec/issues/121)
+
+
+### Bug Fixes
+
+* **images:** declare the gVisor and kata binaries setec does not compile ([#133](https://github.com/zeroroot-ai/setec/issues/133)) ([6af81c0](https://github.com/zeroroot-ai/setec/commit/6af81c0a82df8b89c72dd99364626ac436a85e9d)), closes [#89](https://github.com/zeroroot-ai/setec/issues/89)
+* **images:** re-measure reachability on .github v0.10.0 ([#135](https://github.com/zeroroot-ai/setec/issues/135)) ([1b16a46](https://github.com/zeroroot-ai/setec/commit/1b16a46f3d7cf9c55b03d5939fc267e69287af3a)), closes [#89](https://github.com/zeroroot-ai/setec/issues/89)
+* **runtime:** spec.runtime.params was documented, validated, and never delivered ([#141](https://github.com/zeroroot-ai/setec/issues/141)) ([0e72ae1](https://github.com/zeroroot-ai/setec/commit/0e72ae109e12658ba9f3152f75a1689a68afe479)), closes [#121](https://github.com/zeroroot-ai/setec/issues/121)
+* **sandboxclass:** a class naming its own kernel booted the operator default ([#139](https://github.com/zeroroot-ai/setec/issues/139)) ([799f587](https://github.com/zeroroot-ai/setec/commit/799f587c36c5e7b76afc7539e261a116214bb015)), closes [#126](https://github.com/zeroroot-ai/setec/issues/126)
+* **snapshot:** a Snapshot could only ever report Ready ([#137](https://github.com/zeroroot-ai/setec/issues/137)) ([817f0f6](https://github.com/zeroroot-ai/setec/commit/817f0f6ed681458c35ec7dd3ce3af9377a084b03))
+
 ## [0.117.0](https://github.com/zeroroot-ai/setec/compare/v0.116.0...v0.117.0) (2026-10-02)
 
 
