@@ -275,6 +275,17 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		res.Changed = res.Changed || kataChanged
 	}
 
+	// 4b. gVisor payload: runsc and its containerd shim. Laid in every mode,
+	// because unlike kata-fc there is no second owner to defer to — nothing
+	// else on the node installs runsc, which is exactly why a plain
+	// `helm install` used to yield a cluster where no gvisor Sandbox could
+	// schedule (setec#89).
+	gvisorChanged, err := in.ensureGvisorPayload()
+	if err != nil {
+		return res, fmt.Errorf("installing gvisor payload: %w", err)
+	}
+	res.Changed = res.Changed || gvisorChanged
+
 	// 5. Thin-pool provisioner assets + boot ordering, then provision the
 	// pool NOW so the containerd restart below finds it.
 	tpChanged, err := in.ensureThinpool(ctx, flavor)
@@ -290,6 +301,18 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("configuring %s: %w", flavor.name, err)
 	}
 	res.Changed = res.Changed || cdChanged
+
+	// 6b. The config directory must be traversable by the non-root
+	// runtime-agent. The installer used to leave /etc/containerd at 0644 (no
+	// execute bit), and the agent then reported `runtime.gvisor=false` with
+	// "no containerd configuration is readable on this node" — a node fully
+	// prepared and advertising itself as incapable. Proven on kind-vanilla.
+	travChanged, err := in.ensureConfigDirTraversable(flavor)
+	if err != nil {
+		return res, fmt.Errorf("making %s readable: %w", flavor.configDir, err)
+	}
+	res.Changed = res.Changed || travChanged
+
 	if cdChanged {
 		if err := in.restartRuntime(ctx, flavor); err != nil {
 			return res, err
