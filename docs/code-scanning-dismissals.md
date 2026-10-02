@@ -347,7 +347,7 @@ lockstep by hand. Since this entry there is one pin: `KATA_VERSION` and
 `KATA_SHA256` in `kata.env` at the repo root. `images.yml` reads it and passes
 both as build args (the Dockerfile ARGs have no default), the dev k3s script
 sources it, and `packer/eks-kata-fc-ami/bake.sh` passes it as `-var`.
-`scripts/check-kata-pin.sh` runs on every PR and in the merge queue and fails
+`scripts/check-runtime-pins.sh` runs on every PR and in the merge queue and fails
 when any of the three names a literal again; its `--selftest` proves each
 rule fires. `zeroroot-ai/.github` `version-links.yaml` declares the link with
 kata-containers/kata-containers as the upstream to watch, so a new kata

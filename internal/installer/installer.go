@@ -69,6 +69,13 @@ type Config struct {
 	// image (the directory that becomes /opt/kata on the host).
 	PayloadDir string
 
+	// GvisorPayloadDir is the gVisor release tree bundled in the installer
+	// image (the directory that becomes /opt/gvisor on the host). Its own
+	// field rather than a path derived from PayloadDir: deriving it would
+	// silently break the moment PayloadDir is overridden, and the two trees
+	// come from different upstreams with independent pins.
+	GvisorPayloadDir string
+
 	// PoolName is the devmapper thin-pool name registered with the
 	// containerd devmapper snapshotter.
 	PoolName string
@@ -114,6 +121,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.PayloadDir == "" {
 		c.PayloadDir = "/opt/kata"
+	}
+	if c.GvisorPayloadDir == "" {
+		c.GvisorPayloadDir = "/opt/gvisor"
 	}
 	if c.PoolName == "" {
 		c.PoolName = "setec-thinpool"
@@ -275,6 +285,17 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		res.Changed = res.Changed || kataChanged
 	}
 
+	// 4b. gVisor payload: runsc and its containerd shim. Laid in every mode,
+	// because unlike kata-fc there is no second owner to defer to — nothing
+	// else on the node installs runsc, which is exactly why a plain
+	// `helm install` used to yield a cluster where no gvisor Sandbox could
+	// schedule (setec#89).
+	gvisorChanged, err := in.ensureGvisorPayload()
+	if err != nil {
+		return res, fmt.Errorf("installing gvisor payload: %w", err)
+	}
+	res.Changed = res.Changed || gvisorChanged
+
 	// 5. Thin-pool provisioner assets + boot ordering, then provision the
 	// pool NOW so the containerd restart below finds it.
 	tpChanged, err := in.ensureThinpool(ctx, flavor)
@@ -282,6 +303,23 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("provisioning thin-pool: %w", err)
 	}
 	res.Changed = res.Changed || tpChanged
+
+	// 5b. The containerd config directory must be traversable before anything
+	// writes into it, and it must stay traversable for a non-root reader.
+	//
+	// Two failures in one. The installer left /etc/containerd at 0644 — no
+	// execute bit — so the non-root runtime agent could not traverse in and
+	// reported `runtime.gvisor=false` with "no containerd configuration is
+	// readable on this node", on a node whose containerd was correct. And this
+	// step has to run BEFORE the registration below rather than after it: the
+	// registration writes a drop-in INTO that directory, so a node already at
+	// 0644 fails there first with permission denied. My own test caught that
+	// ordering.
+	travChanged, err := in.ensureConfigDirTraversable(flavor)
+	if err != nil {
+		return res, fmt.Errorf("making %s traversable: %w", flavor.configDir, err)
+	}
+	res.Changed = res.Changed || travChanged
 
 	// 6. Containerd registration. Restart the runtime only when the
 	// registration actually changed.

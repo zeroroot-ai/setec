@@ -41,11 +41,12 @@ jobs:
 
   # The installer's payload gate, proven to fail (setec#17). The gate is a
   # stage of Dockerfile.installer that asserts the pruned kata tree holds
-  # exactly the binaries the kata-fc handler runs. This job builds that
-  # stage twice: plain, which must pass, and with PAYLOAD_MUTATION planting
-  # a junk binary, which must fail. A guard that cannot fail is the
-  # recurring defect class in this org; this is the proof that this one
-  # can. The kata pin comes from kata.env, as in images.yml.
+  # exactly the binaries the kata-fc handler runs, and that the gvisor tree
+  # holds runsc, its shim and its sentry. This job builds that stage plain,
+  # which must pass, then once per PAYLOAD_MUTATION, each of which must fail.
+  # A guard that cannot fail is the recurring defect class in this org; this
+  # is the proof that this one can. The pins come from
+  # scripts/runtime-build-args.sh, as everywhere else.
   installer-payload-guard:
     name: installer payload gate can fail
     runs-on: ubuntu-latest
@@ -55,16 +56,22 @@ jobs:
       - name: Plain gate stage builds
         run: |
           set -euo pipefail
-          args="$(grep -vE '^\s*(#|$)' kata.env | sed 's/^/--build-arg /')"
+          args="$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"
           # shellcheck disable=SC2086
           docker build -f Dockerfile.installer --target payload-gate $args -t payload-gate:plain .
-      - name: Mutated gate stage is refused
+      # One case per gate half. A single mutation that damages both at once
+      # would pass while either half was dead.
+      - name: Each mutated gate stage is refused
         run: |
           set -euo pipefail
-          args="$(grep -vE '^\s*(#|$)' kata.env | sed 's/^/--build-arg /')"
-          # shellcheck disable=SC2086
-          if docker build -f Dockerfile.installer --target payload-gate $args --build-arg PAYLOAD_MUTATION=zz-junk-binary . ; then
-            echo "::error::the payload gate cannot fail: a build with a junk binary in bin passed the inventory check"
-            exit 1
-          fi
-          echo "the mutated build was refused: the inventory guard can fail"
+          args="$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"
+          for mutation in kata-junk-binary gvisor-missing-sentry; do
+            # shellcheck disable=SC2086
+            if docker build -f Dockerfile.installer --target payload-gate $args \
+                 --build-arg "PAYLOAD_MUTATION=$mutation" . ; then
+              echo "::error::the payload gate cannot fail: the $mutation payload passed the inventory check"
+              exit 1
+            fi
+            echo "mutation $mutation was refused"
+          done
+          echo "every mutated build was refused: the inventory guard can fail"

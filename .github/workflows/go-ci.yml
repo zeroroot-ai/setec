@@ -460,10 +460,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Mutation-test the guard
-        run: bash scripts/check-kata-pin.sh --selftest
+        run: bash scripts/check-runtime-pins.sh --selftest
 
       - name: Guard the tree
-        run: bash scripts/check-kata-pin.sh
+        run: bash scripts/check-runtime-pins.sh
 
   no-silent-revert:
     name: A PR that undoes a merged commit says so

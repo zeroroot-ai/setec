@@ -51,14 +51,16 @@ func (f *fakeRunner) called(prefix string) int {
 // hostFixture builds a fake host root with KVM, host tools, and the
 // requested runtime flavor, plus a payload directory.
 type hostFixture struct {
-	root    string
-	payload string
+	root          string
+	payload       string
+	gvisorPayload string
 }
 
 func newHostFixture(t *testing.T, flavor string) hostFixture {
 	t.Helper()
 	root := t.TempDir()
 	payload := t.TempDir()
+	gvisorPayload := t.TempDir()
 
 	// KVM device + module, and the thin-pool's device node, which udev
 	// creates on a real node when setec-thinpool.service activates the pool.
@@ -95,7 +97,20 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	}
 	mustWrite(t, filepath.Join(payload, "share/defaults/kata-containers/configuration-fc.toml"), "# fc config\n")
 
-	return hostFixture{root: root, payload: payload}
+	// gVisor payload tree. gvisor_sentry is a separate binary under
+	// gvisor-bin/ in modern releases, and runsc refuses to create a sandbox
+	// without it under the default sidecar policy, so the fixture carries it
+	// like any other required artifact (setec#89).
+	mustWrite(t, filepath.Join(gvisorPayload, "VERSION"), "release-20260928.0\n")
+	for _, rel := range []string{
+		"runsc",
+		"containerd-shim-runsc-v1",
+		"gvisor-bin/gvisor_sentry",
+	} {
+		mustExecutable(t, filepath.Join(gvisorPayload, rel))
+	}
+
+	return hostFixture{root: root, payload: payload, gvisorPayload: gvisorPayload}
 }
 
 func mustWrite(t *testing.T, path, content string) {
@@ -128,9 +143,10 @@ func mustMkdir(t *testing.T, path string) {
 func newTestInstaller(t *testing.T, fx hostFixture, runner Runner) *Installer {
 	t.Helper()
 	inst, err := New(Config{
-		HostRoot:   fx.root,
-		PayloadDir: fx.payload,
-		Runner:     runner,
+		HostRoot:         fx.root,
+		PayloadDir:       fx.payload,
+		GvisorPayloadDir: fx.gvisorPayload,
+		Runner:           runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -837,10 +853,11 @@ func TestEnvChangeRestartsThinpoolUnit(t *testing.T) {
 	// Same host, bigger pool: the env changes, so the oneshot must be
 	// restarted (a plain start is a no-op with RemainAfterExit).
 	inst2, err := New(Config{
-		HostRoot:   fx.root,
-		PayloadDir: fx.payload,
-		LoopDataGB: 200,
-		Runner:     runner,
+		HostRoot:         fx.root,
+		PayloadDir:       fx.payload,
+		GvisorPayloadDir: fx.gvisorPayload,
+		LoopDataGB:       200,
+		Runner:           runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -875,10 +892,11 @@ func TestRestartFailureSurfacesUnitName(t *testing.T) {
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "activating\n"}
 	inst, err := New(Config{
-		HostRoot:       fx.root,
-		PayloadDir:     fx.payload,
-		RestartTimeout: 10 * 1e6, // 10ms — fail fast in tests
-		Runner:         runner,
+		HostRoot:         fx.root,
+		PayloadDir:       fx.payload,
+		GvisorPayloadDir: fx.gvisorPayload,
+		RestartTimeout:   10 * 1e6, // 10ms — fail fast in tests
+		Runner:           runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)

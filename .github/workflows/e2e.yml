@@ -150,15 +150,18 @@ jobs:
       # at the devmapper snapshotter and configures neither a thin-pool nor
       # the snapshotter, so without the installer every kata-fc Sandbox
       # dies in containerd with "snapshotter must be provided to unpack".
-      # Built from Dockerfile.installer with the kata pin from kata.env, as
-      # images.yml does.
-      - name: Read the kata pin
-        id: kata
+      # Built from Dockerfile.installer with every runtime pin, as images.yml
+      # does. scripts/runtime-build-args.sh is the one list, so a new runtime
+      # does not have to be remembered here.
+      - name: Read the runtime pins
+        id: pins
         run: |
           set -euo pipefail
-          . ./kata.env
-          echo "version=${KATA_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${KATA_SHA256}" >> "$GITHUB_OUTPUT"
+          {
+            echo "build_args<<EOF_ARGS"
+            scripts/runtime-build-args.sh
+            echo "EOF_ARGS"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build + push installer (Dockerfile.installer)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -166,9 +169,7 @@ jobs:
           context: .
           file: Dockerfile.installer
           platforms: linux/amd64
-          build-args: |
-            KATA_VERSION=${{ steps.kata.outputs.version }}
-            KATA_SHA256=${{ steps.kata.outputs.sha256 }}
+          build-args: ${{ steps.pins.outputs.build_args }}
           push: true
           tags: ${{ steps.tags.outputs.installer_image }}
           cache-from: type=gha
@@ -363,8 +364,8 @@ jobs:
         #   - gVisor is bring-your-own. The installer lays down kata only,
         #     and TestRuntimeBackends_* boot a gvisor Sandbox beside the
         #     kata-fc one, and fall back to gvisor when kata-fc is gone.
-        #     This installs runsc from the gVisor release bucket, checks its
-        #     SHA-512, and registers the handler with containerd.
+        #     runsc itself comes from the installer now (setec#89), pinned by
+        #     gvisor.env, so this step no longer installs it.
         run: |
           set -euo pipefail
           docker exec "${KVM_NODE}" test -c /dev/kvm || {
@@ -391,18 +392,14 @@ jobs:
           tar -xzf "${cdir}/${tarball}" -C "${cdir}" bin/containerd
           docker cp "${cdir}/bin/containerd" "${KVM_NODE}:/usr/local/bin/containerd"
 
-          # gVisor ships one tarball per release: runsc, the containerd shim,
-          # and a gvisor-bin/ directory runsc reads beside itself. The loose
-          # runsc download the gVisor docs still name returns 404.
-          url=https://storage.googleapis.com/gvisor/releases/release/latest/x86_64
-          dir="$(mktemp -d)"
-          curl -fsSL -o "${dir}/gvisor.tar.bz2" "${url}/gvisor.tar.bz2"
-          curl -fsSL -o "${dir}/gvisor.tar.bz2.sha512" "${url}/gvisor.tar.bz2.sha512"
-          (cd "${dir}" && sha512sum -c gvisor.tar.bz2.sha512)
-          mkdir "${dir}/bin"
-          tar -xjf "${dir}/gvisor.tar.bz2" -C "${dir}/bin"
-          docker cp "${dir}/bin/." "${KVM_NODE}:/usr/local/bin/"
-          docker exec "${KVM_NODE}" /usr/local/bin/runsc --version
+          # gVisor is NOT laid here any more. The setec installer lays it, from
+          # the gvisor.env pin, as part of normal node preparation (setec#89) —
+          # so this job no longer has its own copy of that logic, and the
+          # existing gvisor scenarios are what prove the installer did it.
+          #
+          # This block also fetched from the release bucket's `latest`, so CI
+          # could drift onto a new gVisor on any run. scripts/check-runtime-pins.sh
+          # now fails on exactly that pattern.
           # discard_unpacked_layers = false here, before this node ever pulls
           # any image, not only in the installer's own drop-in it writes
           # later (setec#91): setec's own images (manager, runtime-agent,
