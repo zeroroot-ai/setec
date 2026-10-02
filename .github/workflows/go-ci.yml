@@ -109,6 +109,12 @@ jobs:
       - name: Run linter
         run: make lint
 
+      # #116: the standing tracker for declarations nothing reads. The baseline
+      # only shrinks, so adding one fails here. ast-checks#13 built the scanner;
+      # before it existed the tracker could not be re-measured at all.
+      - name: lint-unwired
+        run: make lint-unwired
+
       - name: Install buf
         run: go install github.com/bufbuild/buf/cmd/buf@v1.47.2
 
