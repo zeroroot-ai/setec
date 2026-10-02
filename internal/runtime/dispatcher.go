@@ -6,6 +6,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 
@@ -71,6 +72,14 @@ type Selection struct {
 	// Dispatcher is the implementation that will produce the RuntimeClassName,
 	// NodeAffinity, Overhead, and any Pod mutations for this Sandbox.
 	Dispatcher Dispatcher
+
+	// Params carries SandboxClass.spec.runtime.params through to MutatePod.
+	//
+	// It exists because the podspec builder has no access to the SandboxClass,
+	// so applyRuntimeSelection called MutatePod(pod, nil) and the documented
+	// knob was never delivered (#121). Select has the class, so the params
+	// travel with the Selection that the class produced.
+	Params map[string]string
 
 	// FellBack is true when the chosen Backend differs from the backend that
 	// was originally requested (primary backend in class or cluster default).
@@ -153,6 +162,16 @@ func (r *Registry) EnabledBackends() []string {
 	return names
 }
 
+// classParams returns a copy of the class's runtime params, or nil. A copy,
+// because Select documents that it does not mutate class and a shared map would
+// let a dispatcher's mutation reach the caller's object.
+func classParams(class *v1alpha1.SandboxClass) map[string]string {
+	if class == nil || class.Spec.Runtime == nil || len(class.Spec.Runtime.Params) == 0 {
+		return nil
+	}
+	return maps.Clone(class.Spec.Runtime.Params)
+}
+
 // Select picks a backend from the candidate list.
 //
 // The candidate list is built as follows:
@@ -204,6 +223,7 @@ func (r *Registry) Select(
 			Dispatcher:  d,
 			FellBack:    i > 0,
 			Provisional: provisional,
+			Params:      classParams(class),
 		}
 		if i > 0 {
 			sel.FromBackend = primary

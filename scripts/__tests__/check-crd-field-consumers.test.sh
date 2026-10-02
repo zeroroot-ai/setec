@@ -138,6 +138,13 @@ red "a verdict naming a field that no longer exists" \
   "$(reads WidgetSpec.Ignored 'reads=3')" \
   "no longer exist"
 
+# 10b. An exemption for a field that now HAS a consumer is also a decision about
+#      nothing, and worse: it would hide the consumer being removed again later.
+red "a verdict for a field that now has a consumer" \
+  "v1alpha1.WidgetSpec.Ignored | #121 | kept after the consumer was built" \
+  "$(reads WidgetSpec.Ignored 'reads=4')" \
+  "now HAVE a consumer"
+
 # 11. THE FLOOR. An analyzer output that reaches nothing must not read as clean.
 #     Every guard in this repo that could not fail looked exactly like this.
 out="$(TYPES_DIR="$tmp/types" EXEMPT_FILE=/dev/null MIN_SERVED=5 FIELD_READS="$(reads WidgetSpec.Size 'reads=1')" bash "$GATE" 2>&1)"
@@ -181,7 +188,7 @@ echo
 echo "passed=$PASS failed=$FAIL"
 # A count floor. Cases appended below a summary block is how six of them once
 # silently never ran in .github's fixture suite.
-if [ "$PASS" -lt 14 ] && [ "$FAIL" -eq 0 ]; then
+if [ "$PASS" -lt 15 ] && [ "$FAIL" -eq 0 ]; then
   echo "FAIL: only $PASS case(s) ran; cases were added below the summary block" >&2
   exit 1
 fi

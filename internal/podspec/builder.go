@@ -545,10 +545,11 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 //  4. MutatePod is called last so dispatchers can see (and depend on) any
 //     of the above values.
 //
-// The params map is extracted from sandbox.Spec if SandboxClass runtime.Params
-// were set; since the builder does not have access to the SandboxClass we
-// pass nil here — callers that need param propagation should invoke
-// sel.Dispatcher.MutatePod directly after BuildWithOptions.
+// The params come from Selection.Params, which runtime.Select copies off the
+// SandboxClass. This used to pass nil, with a comment telling callers to invoke
+// sel.Dispatcher.MutatePod themselves after BuildWithOptions — and no caller
+// ever did, so spec.runtime.params was documented, validated, translated, and
+// never delivered (#121).
 func applyRuntimeSelection(pod *corev1.Pod, sel *runtimepkg.Selection) error {
 	// Merge NodeAffinity required terms.
 	dispatcherAffinity := sel.Dispatcher.NodeAffinity()
@@ -580,11 +581,8 @@ func applyRuntimeSelection(pod *corev1.Pod, sel *runtimepkg.Selection) error {
 		pod.Spec.Overhead = overhead.DeepCopy()
 	}
 
-	// MutatePod is called last. The params map is nil here because the builder
-	// does not carry SandboxClass.Spec.Runtime.Params; callers needing param
-	// propagation should set them via a post-build MutatePod call or by passing
-	// them through a future BuildOptions extension.
-	if err := sel.Dispatcher.MutatePod(pod, nil); err != nil {
+	// MutatePod is called last, with the class's params.
+	if err := sel.Dispatcher.MutatePod(pod, sel.Params); err != nil {
 		return fmt.Errorf("dispatcher %q MutatePod: %w", sel.Backend, err)
 	}
 

@@ -315,3 +315,76 @@ func TestRegistry_SelectDoesNotMutateInputs(t *testing.T) {
 		t.Error("nodeCapabilities slice was mutated")
 	}
 }
+
+// TestRegistry_Select_CarriesClassParams is the link that was missing between the
+// class and the pod (#121).
+//
+// The podspec builder has no access to a SandboxClass, so it called
+// MutatePod(pod, nil) and spec.runtime.params was never delivered. Select is
+// where the class is in scope, so the params travel on the Selection it returns.
+//
+// This test exists because mutating `Params: classParams(class)` to `Params: nil`
+// left every other suite green: the builder tests construct a Selection by hand
+// and the webhook tests never reach the builder, so nothing asserted the one hop
+// that was actually broken.
+func TestRegistry_Select_CarriesClassParams(t *testing.T) {
+	t.Parallel()
+
+	params := map[string]string{"vcpus": "4", "memory": "2048"}
+	class := &v1alpha1.SandboxClass{
+		Spec: v1alpha1.SandboxClassSpec{
+			Runtime: &v1alpha1.SandboxClassRuntime{
+				Backend: BackendKataQEMU,
+				Params:  params,
+			},
+		},
+	}
+
+	reg := newTestRegistry(BackendKataQEMU)
+	sel, err := reg.Select(class, cfgWithDefaults(BackendKataQEMU), []string{BackendKataQEMU})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if len(sel.Params) != 2 || sel.Params["vcpus"] != "4" || sel.Params["memory"] != "2048" {
+		t.Fatalf("Selection.Params = %v, want the class's params", sel.Params)
+	}
+
+	// A copy, not the class's map. Select documents that it does not mutate
+	// class, and a dispatcher writing into a shared map would break that at a
+	// distance.
+	sel.Params["vcpus"] = "99"
+	if params["vcpus"] != "4" {
+		t.Error("Selection.Params aliases the class's map; a dispatcher mutation would reach the caller's object")
+	}
+}
+
+// TestRegistry_Select_NoParamsIsNil keeps the other direction: a class with no
+// params must not hand the builder an empty-but-present map, because MutatePod
+// treats "no params" and "params I do not recognise" differently.
+func TestRegistry_Select_NoParamsIsNil(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		class *v1alpha1.SandboxClass
+	}{
+		{"nil class", nil},
+		{"no runtime block", &v1alpha1.SandboxClass{}},
+		{"runtime with no params", &v1alpha1.SandboxClass{Spec: v1alpha1.SandboxClassSpec{
+			Runtime: &v1alpha1.SandboxClassRuntime{Backend: BackendKataQEMU}}}},
+		{"an empty params map", &v1alpha1.SandboxClass{Spec: v1alpha1.SandboxClassSpec{
+			Runtime: &v1alpha1.SandboxClassRuntime{Backend: BackendKataQEMU, Params: map[string]string{}}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := newTestRegistry(BackendKataQEMU)
+			sel, err := reg.Select(tc.class, cfgWithDefaults(BackendKataQEMU), []string{BackendKataQEMU})
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if sel.Params != nil {
+				t.Errorf("Selection.Params = %v, want nil", sel.Params)
+			}
+		})
+	}
+}

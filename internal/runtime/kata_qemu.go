@@ -26,6 +26,28 @@ var kataAnnotation = map[string]string{
 	"memory": "io.katacontainers.config.hypervisor.default_memory",
 }
 
+// AcceptedParams returns the runtime.params keys a backend consumes, sorted.
+// An empty result means the backend consumes none, and a SandboxClass that
+// names params for it is declaring something that cannot take effect.
+//
+// Derived from kataAnnotation rather than restated, so the admission check and
+// MutatePod cannot disagree about which keys exist (#121).
+//
+// The webhook calls this instead of asking a Dispatcher, because SandboxClass
+// admission has no Registry and threading one in would make the webhook depend
+// on node capability state to answer a question about a class's own spec.
+func AcceptedParams(backend string) []string {
+	if backend != BackendKataQEMU {
+		return nil
+	}
+	keys := make([]string, 0, len(kataAnnotation))
+	for k := range kataAnnotation {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // KataQEMUDispatcher implements Dispatcher for the Kata Containers + QEMU
 // backend ("kata-qemu").
 //

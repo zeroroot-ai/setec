@@ -6,7 +6,7 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-02: 89 of 1203 declarations across 97 packages and 225 files
+# measured 2026-10-02: 88 of 1205 declarations across 97 packages and 225 files
 
 const metrics.LabelNode	# internal/metrics/collectors.go:47
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
@@ -28,7 +28,6 @@ field poolentry.Provenance.KernelPath	# internal/nodeagent/poolentry/poolentry.g
 field poolentry.Provenance.RootfsPath	# internal/nodeagent/poolentry/poolentry.go:86
 field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:73
 field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:529
-field v1alpha1.SandboxClassRuntime.Params	# api/v1alpha1/sandboxclass_types.go:47
 field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass_types.go:403
 field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:580
 field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:575
@@ -39,7 +38,7 @@ field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.g
 func chartname.Fullname	# internal/chartname/chartname.go:29
 func credguard.Check	# internal/credguard/credguard.go:234
 func credguard.Exemptions	# internal/credguard/exemptions.go:30
-func podspec.WithRuntimeSelection	# internal/podspec/builder.go:597
+func podspec.WithRuntimeSelection	# internal/podspec/builder.go:595
 func runtimeagent.HasSetecLabel	# internal/runtimeagent/labels.go:203
 func testutil.NewFakeEventsRecorder	# internal/controller/testutil/fake_events_recorder.go:21
 method atrest.decryptingReader.Read	# internal/snapshot/atrest/atrest.go:285
@@ -86,10 +85,10 @@ method storage.verifyingReadCloser.Read	# internal/snapshot/storage/s3.go:615
 method testutil.FakeEventsRecorder.Eventf	# internal/controller/testutil/fake_events_recorder.go:27
 method uniquify.CIDAllocator.Active	# internal/uniquify/cid.go:101
 method uniquify.CIDAllocator.Owner	# internal/uniquify/cid.go:93
-method webhook.SandboxClassWebhook.Default	# internal/webhook/sandboxclass_webhook.go:96
-method webhook.SandboxClassWebhook.ValidateCreate	# internal/webhook/sandboxclass_webhook.go:120
-method webhook.SandboxClassWebhook.ValidateDelete	# internal/webhook/sandboxclass_webhook.go:133
-method webhook.SandboxClassWebhook.ValidateUpdate	# internal/webhook/sandboxclass_webhook.go:127
+method webhook.SandboxClassWebhook.Default	# internal/webhook/sandboxclass_webhook.go:97
+method webhook.SandboxClassWebhook.ValidateCreate	# internal/webhook/sandboxclass_webhook.go:121
+method webhook.SandboxClassWebhook.ValidateDelete	# internal/webhook/sandboxclass_webhook.go:134
+method webhook.SandboxClassWebhook.ValidateUpdate	# internal/webhook/sandboxclass_webhook.go:128
 method webhook.SandboxValidator.ValidateCreate	# internal/webhook/sandbox_webhook.go:120
 method webhook.SandboxValidator.ValidateDelete	# internal/webhook/sandbox_webhook.go:142
 method webhook.SandboxValidator.ValidateUpdate	# internal/webhook/sandbox_webhook.go:130
