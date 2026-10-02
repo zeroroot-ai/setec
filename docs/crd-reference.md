@@ -308,95 +308,26 @@ Administrators author classes; tenants reference them by name in
   [`status.runtime.chosen`](#sandboxstatusruntimechosen) — because a
   fallback with no capable Node is exactly as unschedulable as the
   primary with no capable Node.
-- `spec.runtime.params` — optional backend-specific tuning (e.g.
-  `kata-fc.snapshotEnabled: true`, `gvisor.platform: ptrace|kvm`).
-  Schema validated by the `SandboxClass` webhook; empty keys default
-  to upstream defaults.
-- `spec.vmm` — **deprecated** enum: `firecracker`, `qemu`,
-  `cloud-hypervisor`. Retained for back-compat; the defaulting webhook
-  maps `firecracker→kata-fc`, `qemu→kata-qemu`. Set `spec.runtime.*`
-  instead on new classes.
-- `spec.runtimeClassName` — **deprecated**. Use `spec.runtime.backend`
-  and let Setec pick the `RuntimeClass` per backend.
-- `spec.kernelImage`, `spec.rootfsImage` — optional OCI refs the node
-  agent prefetches (kata-fc / kata-qemu only; ignored for gvisor / runc).
-- `spec.defaultResources`, `spec.maxResources` — `{vcpu, memory}`
-  blocks that set the default and ceiling for tenant Sandboxes.
-- `spec.requests` — `{cpu, memory}` quantities (optional). The
-  scheduler reservation for every Sandbox Pod in the class, separate
-  from the Sandbox's own `spec.resources`, which stays the Pod's
-  limits. A long-lived Sandbox that idles most of the time reserves a
-  small slice of a node and still bursts to its full budget: an
-  always-on agent member sets `requests: {cpu: 250m, memory: 768Mi}`
-  under a `2 vCPU / 4Gi` Sandbox. The controller bounds each request
-  by the Sandbox's limit for that resource, so a class reservation can
-  only lower what the scheduler sets aside. Unset keeps requests equal
-  to limits (Guaranteed QoS).
-- `spec.allowedNetworkModes` — subset of
-  `[external-only, egress-allow-list, none]`. Empty list means all modes
-  allowed. The check runs against the **effective** mode, so a Sandbox
-  that omits `spec.network` and inherits `defaultNetworkMode` must
-  satisfy this list too.
-- `spec.defaultNetworkMode` — the posture applied to Sandboxes in this
-  class that declare no `spec.network`. Unset resolves to `none`.
-- `spec.defaultEgressAllow` — class-level allow-list applied with
-  `defaultNetworkMode: egress-allow-list`.
-- `spec.egressExemptCIDRs` — ranges this class may reach despite the
-  operator's cluster-wide `--reserved-cidrs`. Entries are subtracted
-  from the reserved list before it is rendered into `ipBlock.except`.
-  Use it only for a specific in-cluster endpoint a class genuinely
-  needs; every entry re-opens address space for every Sandbox in the
-  class. An exemption cannot reach a Service: see
-  `spec.egressAllowSelectors`.
-- `spec.egressAllowSelectors` — in-cluster Pods this class may reach,
-  selected by labels (setec#76). Each entry is `{namespaceSelector,
-  podSelector, ports}` and renders as one egress rule whose peer carries
-  both selectors and whose ports are the listed ones, beside the
-  `ipBlock` rules of the mode. This is the only way to reach a Service:
-  the CNI evaluates egress after kube-proxy translates the ClusterIP to
-  a backend Pod, so an `ipBlock` for a ClusterIP never matches. A port
-  is a number or a container port name. At least one selector and one
-  port are required. An entry whose ports include `53` also lets the
-  class use a `--sandbox-resolvers` entry inside the reserved ranges,
-  such as the kube-dns ClusterIP. Ignored under mode `none`. The
-  webhook refuses an entry with no selector, no port, a malformed
-  selector or port, or an unknown protocol.
-- `spec.nodeSelector` — additive per-Sandbox node selector, merged with
-  the backend's own `NodeAffinity` from `setec.zeroroot.ai/runtime.<backend>=true`.
-- `spec.tolerations` — additive `[]corev1.Toleration` appended to every
-  Sandbox Pod produced under this class. Required when the target
-  NodePool carries a taint (e.g. a Karpenter pool reserved for
-  sandbox-host nodes) — without a matching toleration the Pod stays
-  `Pending` forever.
-- `spec.default` — boolean. Exactly zero or one class may carry this.
-- `spec.sessionIdleTimeout` — Go duration (optional). Idle-eviction
-  threshold for **session** Sandboxes in this class (ADR-0006). A
-  `Running` session whose last recorded activity — the
-  `setec.zeroroot.ai/last-activity` annotation the gRPC frontend stamps
-  on `Attach` and heartbeats (every minute) while a client stream is
-  open, with `status.startedAt` and then the creation timestamp as
-  floors — is older than this duration is evicted: `Failed` with
-  `reason=IdleTimeout`, VM Pod deleted. The workspace PVC survives
-  until explicit teardown. An actively-used session is never evicted
-  because its activity timestamp keeps moving. Unset, zero, or negative
-  disables idle eviction for the class. Set it comfortably above one
-  minute so the frontend heartbeat always outruns it. When the class
-  also sets `sessionCheckpoint`, the same deadline **suspends** the
-  session (checkpoint + release the microVM, resumable on reattach)
-  instead of failing it — see `spec.sessionCheckpoint`.
-- `spec.sessionCheckpoint` — object (optional; ADR-0006 L2 /
-  ADR-0007). Enables memory checkpoints for session Sandboxes of this
-  class on the S3-compatible checkpoint store (requires
-  `snapshots.s3.enabled` on the node-agents). Fields:
-  `interval` (Go duration, optional) — periodic checkpoint cadence
-  while `Running`; positive when set, omit for on-event checkpoints
-  only. `backend` (enum, only `s3`, default `s3`). With this set,
-  sessions gain suspend-on-idle, explicit suspend
-  (`spec.desiredState: Suspended`), checkpoint-on-drain with
-  resume-on-another-node, and the `RestartedFromWorkspace` degraded
-  condition. Checkpoints are always encrypted, sealed under a
-  per-session KEK Secret the operator manages, and destroyed at
-  session end (see SECURITY.md).
+- `spec.runtime.params` — optional backend-specific tuning, as bare
+  keys. **Only `kata-qemu` consumes any**, and it accepts exactly two:
+
+  | key | effect |
+  |---|---|
+  | `vcpus` | `io.katacontainers.config.hypervisor.default_vcpus` |
+  | `memory` | `io.katacontainers.config.hypervisor.default_memory` |
+
+  `kata-fc`, `gvisor` and `runc` consume none, and the `SandboxClass`
+  webhook refuses a class that names params for them rather than
+  accepting a setting that cannot take effect. An unrecognised key for
+  `kata-qemu` is refused the same way.
+
+  This entry previously gave `kata-fc.snapshotEnabled: true` and
+  `gvisor.platform: ptrace|kvm` as examples, and the worked example below
+  carried a `params: {kata-fc: {snapshotEnabled: true}}` block. Neither
+  backend reads params, the nested `backend.key` form does not even
+  validate against the schema (`params` is `map[string]string`), and
+  until setec#121 the params never reached the Pod at all — the builder
+  passed `nil`. All of it would now be refused, correctly.
 
 ### Validation rules (enforced by the SandboxClass webhook)
 
@@ -440,9 +371,12 @@ spec:
     fallback:
       - kata-qemu
       - gvisor
-    params:
-      kata-fc:
-        snapshotEnabled: true
+    # No params here: kata-fc consumes none, and the webhook refuses a class
+    # that names them for a backend that reads none. On kata-qemu the form is
+    # bare keys, not a per-backend map:
+    #   params:
+    #     vcpus: "4"
+    #     memory: "2048"
   defaultResources:
     vcpu: 2
     memory: 2Gi

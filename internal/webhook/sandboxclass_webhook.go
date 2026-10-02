@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -165,6 +166,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validateRequests(class)...)
 	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
 	allErrs = append(allErrs, validateEgressAllowSelectors(class)...)
+	allErrs = append(allErrs, validateRuntimeParams(class)...)
 	allErrs = append(allErrs, validateGuestImages(class)...)
 
 	// Runtime may be nil when a SandboxClass without a Runtime block is applied
@@ -289,6 +291,69 @@ func validateGuestImages(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	if class.Spec.RootfsImage != "" {
 		errs = append(errs, field.Invalid(
 			specPath.Child("rootfsImage"), class.Spec.RootfsImage, how))
+	}
+	return errs
+}
+
+// validateRuntimeParams refuses runtime.params a backend cannot consume.
+//
+// The params now reach MutatePod (#121). Before that they reached nothing, so a
+// bad key was harmless; now an unknown key fails pod creation, which would land
+// on every Sandbox that uses the class rather than on whoever wrote it. The
+// admission check moves the failure to the author.
+//
+// Two ways to be wrong, and they need different messages:
+//
+//   - the backend consumes NO params (kata-fc, gvisor and runc all take
+//     `_ map[string]string`), so any entry is a declaration that cannot take
+//     effect. Naming only the keys would read as a typo.
+//   - the backend consumes some, and this key is not one of them.
+//
+// The accepted set comes from runtime.AcceptedParams, which derives it from the
+// same table MutatePod translates with, so admission and execution cannot
+// disagree about which keys exist.
+//
+// Only evaluated when Runtime is populated. The defaulting webhook runs first in
+// the admission chain so it normally is; with --dry-run or webhooks bypassed the
+// params travel with a Selection built from the cluster default backend, and a
+// class with no Runtime block has declared no backend to check them against.
+func validateRuntimeParams(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	if class.Spec.Runtime == nil || len(class.Spec.Runtime.Params) == 0 {
+		return nil
+	}
+	backend := class.Spec.Runtime.Backend
+	if backend == "" {
+		return nil
+	}
+	paramsPath := field.NewPath("spec", "runtime", "params")
+
+	accepted := runtime.AcceptedParams(backend)
+	if len(accepted) == 0 {
+		keys := make([]string, 0, len(class.Spec.Runtime.Params))
+		for k := range class.Spec.Runtime.Params {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		errs = append(errs, field.Invalid(paramsPath, strings.Join(keys, ","),
+			fmt.Sprintf("the %q backend consumes no runtime params, so these would be "+
+				"declared and never applied. Remove them, or choose a backend that "+
+				"accepts them", backend)))
+		return errs
+	}
+
+	var unknown []string
+	for k := range class.Spec.Runtime.Params {
+		if !slices.Contains(accepted, k) {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		errs = append(errs, field.Invalid(paramsPath, strings.Join(unknown, ","),
+			fmt.Sprintf("the %q backend accepts only %s. An unrecognised key fails pod "+
+				"creation for every Sandbox in this class",
+				backend, strings.Join(accepted, ", "))))
 	}
 	return errs
 }

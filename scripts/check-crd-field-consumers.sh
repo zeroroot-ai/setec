@@ -212,7 +212,7 @@ if os.path.exists(exempt_file):
 # 4. Judge.
 # ---------------------------------------------------------------------------
 rc = 0
-served, unread, stale = set(), [], []
+served, unread, stale, satisfied = set(), [], [], []
 for line in open(reads_file):
     p = line.rstrip('\n').split('\t')
     if len(p) < 4 or p[0] != 'field':
@@ -234,11 +234,16 @@ for line in open(reads_file):
         continue
     unread.append((key, loc, counts, short))
 
-# An exemption for a field that no longer exists is a stale decision that reads
-# as a live one.
+# Two ways an entry rots, and both read as a live decision:
+#   * the field no longer exists, so the verdict is about nothing;
+#   * the field now HAS a consumer, so the verdict is not only unnecessary but
+#     would mask the consumer being removed again later.
+unread_keys = {u[0] for u in unread}
 for key in exempt:
     if key not in served:
         stale.append(key)
+    elif key not in unread_keys:
+        satisfied.append(key)
 
 if stale:
     rc = 1
@@ -247,6 +252,15 @@ if stale:
         print('::error::  %s' % k)
     print('::error::Delete the entry. An exemption outliving its field records a '
           'decision about nothing.')
+
+if satisfied:
+    rc = 1
+    print('::error::%s records a verdict for %d field(s) that now HAVE a consumer:'
+          % (exempt_file, len(satisfied)))
+    for k in sorted(satisfied):
+        print('::error::  %s' % k)
+    print('::error::Delete the entry. The promise is kept, and an exemption left in '
+          'place would hide the consumer being removed again.')
 
 blocking = [u for u in unread if u[0] not in exempt]
 if blocking:

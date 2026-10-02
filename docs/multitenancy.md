@@ -259,7 +259,9 @@ and tenants reference by name. A class carries:
 
 - `runtime.backend`, `runtime.fallback`, `runtime.params`: runtime backend
   selection — `kata-fc`, `kata-qemu`, `gvisor`, or `runc` (dev-only) —
-  plus an optional fallback chain and backend-specific tuning. The
+  plus an optional fallback chain. `runtime.params` is backend-specific
+  tuning that only `kata-qemu` consumes (`vcpus` and `memory`); the
+  webhook refuses params named for a backend that reads none. The
   legacy `vmm` + `runtimeClassName` fields are accepted for
   back-compat and translated by the defaulting webhook. See
   [`crd-reference.md`](./crd-reference.md#sandboxclass) for the full schema.
