@@ -15,6 +15,15 @@ updates:
         update-types:
           - minor
           - patch
+    # grpc v1.84.0 is newer than v1.83.2 and is also inside a LATER affected
+    # range of GO-2026-6443, so "bump to the latest" walks back into the
+    # advisory. The ignore names the one affected release, so it lifts itself
+    # when a fixed stable release ships. `direct-require-advisories` catches it
+    # either way (setec#97).
+    ignore:
+      - dependency-name: google.golang.org/grpc
+        versions:
+          - 1.84.0
 
   - package-ecosystem: gomod
     directory: /examples/ai-code-exec
@@ -26,6 +35,15 @@ updates:
       - dependencies
       - go
       - examples
+    # grpc v1.84.0 is newer than v1.83.2 and is also inside a LATER affected
+    # range of GO-2026-6443, so "bump to the latest" walks back into the
+    # advisory. The ignore names the one affected release, so it lifts itself
+    # when a fixed stable release ships. `direct-require-advisories` catches it
+    # either way (setec#97).
+    ignore:
+      - dependency-name: google.golang.org/grpc
+        versions:
+          - 1.84.0
 
   - package-ecosystem: gomod
     directory: /examples/ci-sandbox
@@ -37,10 +55,10 @@ updates:
       - dependencies
       - go
       - examples
-    # grpc v1.84.0 is newer than v1.83.2 and is also inside a later affected
-    # range of GO-2026-6443, so #81's "bump to the latest" walked back into the
+    # grpc v1.84.0 is newer than v1.83.2 and is also inside a LATER affected
+    # range of GO-2026-6443, so "bump to the latest" walks back into the
     # advisory. The ignore names the one affected release, so it lifts itself
-    # when v1.84.1 or v1.85.0 ships. `direct-require-advisories` catches it
+    # when a fixed stable release ships. `direct-require-advisories` catches it
     # either way (setec#97).
     ignore:
       - dependency-name: google.golang.org/grpc
@@ -57,6 +75,15 @@ updates:
       - dependencies
       - go
       - examples
+    # grpc v1.84.0 is newer than v1.83.2 and is also inside a LATER affected
+    # range of GO-2026-6443, so "bump to the latest" walks back into the
+    # advisory. The ignore names the one affected release, so it lifts itself
+    # when a fixed stable release ships. `direct-require-advisories` catches it
+    # either way (setec#97).
+    ignore:
+      - dependency-name: google.golang.org/grpc
+        versions:
+          - 1.84.0
 
   - package-ecosystem: gomod
     directory: /hack/lintconfig
