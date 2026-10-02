@@ -44,6 +44,13 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	# The chart installs the CRDs, so charts/setec/crds is the copy that
+	# actually reaches a cluster. It used to be maintained by hand and
+	# happened to match; nothing asserted it, so a schema change could ship
+	# with the chart serving the old shape. Generate it instead, and the
+	# existing "Manifests up-to-date" gate covers the drift for free.
+	rm -f charts/setec/crds/*.yaml
+	cp config/crd/bases/*.yaml charts/setec/crds/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

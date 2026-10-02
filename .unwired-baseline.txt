@@ -6,14 +6,11 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-02: 95 of 1203 declarations across 97 packages and 225 files
+# measured 2026-10-02: 91 of 1203 declarations across 97 packages and 225 files
 
 const metrics.LabelNode	# internal/metrics/collectors.go:47
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
 const snapshot.NodeAgentComponentLabel	# internal/snapshot/pod_resolver.go:27
-const v1alpha1.SnapshotPhaseCreating	# api/v1alpha1/snapshot_types.go:24
-const v1alpha1.SnapshotPhaseFailed	# api/v1alpha1/snapshot_types.go:31
-const v1alpha1.SnapshotPhaseTerminating	# api/v1alpha1/snapshot_types.go:35
 const v1alpha1.VMMCloudHypervisor	# api/v1alpha1/sandboxclass_types.go:26
 field controller.SandboxClassReconciler.Scheme	# internal/controller/sandboxclass_controller.go:49
 field controller.SnapshotReconciler.Scheme	# internal/controller/snapshot_controller.go:50
@@ -29,7 +26,7 @@ field pool.Manager.NodeName	# internal/nodeagent/pool/manager.go:100
 field pool.Manager.Storage	# internal/nodeagent/pool/manager.go:83
 field poolentry.Provenance.KernelPath	# internal/nodeagent/poolentry/poolentry.go:85
 field poolentry.Provenance.RootfsPath	# internal/nodeagent/poolentry/poolentry.go:86
-field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:72
+field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:73
 field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:529
 field v1alpha1.SandboxClassRuntime.Params	# api/v1alpha1/sandboxclass_types.go:47
 field v1alpha1.SandboxClassSpec.KernelImage	# api/v1alpha1/sandboxclass_types.go:102
@@ -38,10 +35,9 @@ field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass
 field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:580
 field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:575
 field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:585
-field v1alpha1.SnapshotSpec.KernelVersion	# api/v1alpha1/snapshot_types.go:70
-field v1alpha1.SnapshotSpec.SHA256	# api/v1alpha1/snapshot_types.go:109
-field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:134
-field v1alpha1.SnapshotStatus.Reason	# api/v1alpha1/snapshot_types.go:129
+field v1alpha1.SnapshotSpec.KernelVersion	# api/v1alpha1/snapshot_types.go:81
+field v1alpha1.SnapshotSpec.SHA256	# api/v1alpha1/snapshot_types.go:128
+field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:153
 func chartname.Fullname	# internal/chartname/chartname.go:29
 func credguard.Check	# internal/credguard/credguard.go:234
 func credguard.Exemptions	# internal/credguard/exemptions.go:30
@@ -50,7 +46,7 @@ func runtimeagent.HasSetecLabel	# internal/runtimeagent/labels.go:203
 func testutil.NewFakeEventsRecorder	# internal/controller/testutil/fake_events_recorder.go:21
 method atrest.decryptingReader.Read	# internal/snapshot/atrest/atrest.go:285
 method controller.SandboxClassReconciler.Reconcile	# internal/controller/sandboxclass_controller.go:64
-method controller.SandboxReconciler.Reconcile	# internal/controller/sandbox_controller.go:365
+method controller.SandboxReconciler.Reconcile	# internal/controller/sandbox_controller.go:371
 method controller.SnapshotReconciler.Reconcile	# internal/controller/snapshot_controller.go:72
 method credentials.spiffeSource.OnX509ContextUpdate	# internal/credentials/spiffe.go:227
 method credentials.spiffeSource.OnX509ContextWatchError	# internal/credentials/spiffe.go:250
@@ -82,7 +78,7 @@ method pool.Manager.Release	# internal/nodeagent/pool/manager.go:453
 method pool.Manager.SetClock	# internal/nodeagent/pool/manager.go:166
 method pool.Manager.Size	# internal/nodeagent/pool/manager.go:505
 method runtime.ConfigValidationError.Error	# internal/runtime/config.go:124
-method snapshot.Coordinator.RestoreSandbox	# internal/snapshot/coordinator.go:327
+method snapshot.Coordinator.RestoreSandbox	# internal/snapshot/coordinator.go:398
 method snapshot.GRPCDialer.Close	# internal/snapshot/dialer.go:199
 method snapshot.grpcShim.QueryPool	# internal/snapshot/dialer.go:187
 method storage.countingReader.Read	# internal/snapshot/storage/s3.go:600

@@ -13,6 +13,12 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
+// fieldSnapshotRef is the dotted JSON path every snapshot-compatibility
+// violation points at. One name for one field: the webhook turns it into a
+// metav1.StatusCause, so a typo in one copy would surface as a cause for a
+// field that does not exist.
+const fieldSnapshotRef = "spec.snapshotRef.name"
+
 // ConstraintViolation describes a single reason a Sandbox cannot
 // restore from a given Snapshot. Field is the dotted JSON path of the
 // offending Sandbox field so admission webhooks can surface it as a
@@ -42,7 +48,7 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 		return []ConstraintViolation{{Field: "", Message: "sandbox is nil"}}
 	}
 	if snap == nil {
-		return []ConstraintViolation{{Field: "spec.snapshotRef.name", Message: "snapshot is nil"}}
+		return []ConstraintViolation{{Field: fieldSnapshotRef, Message: "snapshot is nil"}}
 	}
 
 	var out []ConstraintViolation
@@ -54,7 +60,7 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 	// caller cannot forge a match by editing the Snapshot.
 	if sb.Namespace != snap.Namespace {
 		out = append(out, ConstraintViolation{
-			Field: "spec.snapshotRef.name",
+			Field: fieldSnapshotRef,
 			Message: fmt.Sprintf(
 				"Snapshot %q is in namespace %q but Sandbox is in namespace %q; cross-namespace restore is not permitted",
 				snap.Name, snap.Namespace, sb.Namespace,
@@ -106,6 +112,38 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 			Message: fmt.Sprintf(
 				"Snapshot %q was captured on VMM %q but the resolved class uses VMM %q",
 				snap.Name, snap.Spec.VMM, class.Spec.VMM, //nolint:staticcheck // back-compat: VMM retained until v2
+			),
+		})
+	}
+
+	// Readiness. A Snapshot only holds restorable state once the backend
+	// write has finished, and spec.storageRef is empty until it has
+	// (setec#129). Before the CR was created ahead of the write, both
+	// facts were implied by the object existing at all; now neither is,
+	// so the restore path has to ask.
+	//
+	// The phase check comes first because it is the one an operator reads;
+	// the storageRef check is the belt: a Ready snapshot with no storage
+	// reference is a bug in the Coordinator, not a user error, and it must
+	// not reach a VM either way.
+	// An empty phase is tolerated: a hand-authored Snapshot pointing at
+	// pre-staged state has no controller to set one, and the storageRef
+	// check below is what actually protects that path.
+	if snap.Status.Phase != "" && snap.Status.Phase != setecv1alpha1.SnapshotPhaseReady {
+		out = append(out, ConstraintViolation{
+			Field: fieldSnapshotRef,
+			Message: fmt.Sprintf(
+				"Snapshot %q is in phase %q; only a Ready snapshot can be restored from",
+				snap.Name, snap.Status.Phase,
+			),
+		})
+	}
+	if snap.Spec.StorageRef == "" {
+		out = append(out, ConstraintViolation{
+			Field: fieldSnapshotRef,
+			Message: fmt.Sprintf(
+				"Snapshot %q has no spec.storageRef, so the node-agent cannot locate its state files",
+				snap.Name,
 			),
 		})
 	}

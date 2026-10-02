@@ -97,6 +97,18 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Step 2: deletion handling.
 	if !snap.DeletionTimestamp.IsZero() {
+		// Report Terminating for as long as the in-use finalizer is
+		// held. Nothing wrote this phase before (setec#129), so a
+		// snapshot blocked on a reference, or on a backend erase that
+		// keeps failing, still read as Ready — indistinguishable from one
+		// nobody had asked to delete. The write happens before the
+		// reference check, because "deletion requested and blocked" is
+		// exactly the state an operator needs to see.
+		if snap.Status.Phase != setecv1alpha1.SnapshotPhaseTerminating {
+			if err := r.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseTerminating, "DeletionInProgress"); err != nil {
+				return ctrl.Result{}, fmt.Errorf("mark Snapshot Terminating: %w", err)
+			}
+		}
 		if count > 0 {
 			logger.V(1).Info("deletion blocked by referenceCount > 0",
 				"referenceCount", count)
@@ -144,6 +156,22 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{RequeueAfter: snapshotTTLRequeue}, nil
+}
+
+// markPhase writes one phase/reason pair to the Snapshot status
+// subresource and stamps the transition time. The status subresource is
+// still writable while DeletionTimestamp is set, which is what makes
+// Terminating reportable at all.
+func (r *SnapshotReconciler) markPhase(ctx context.Context, snap *setecv1alpha1.Snapshot, phase setecv1alpha1.SnapshotPhase, reason string) error {
+	original := snap.DeepCopy()
+	snap.Status.Phase = phase
+	snap.Status.Reason = reason
+	now := metav1.NewTime(time.Now())
+	snap.Status.LastTransitionTime = &now
+	if err := r.Status().Patch(ctx, snap, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("patch Snapshot status to %s: %w", phase, err)
+	}
+	return nil
 }
 
 // referenceCount returns the number of Sandboxes in the Snapshot's

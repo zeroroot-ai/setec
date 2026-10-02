@@ -161,6 +161,7 @@ const (
 	eventReasonPaused                = "Paused"
 	eventReasonResumed               = "Resumed"
 	eventReasonSnapshotCreateStarted = "SnapshotCreateStarted"
+	eventReasonSnapshotCreateFailed  = "SnapshotCreateFailed"
 	eventReasonWorkspaceCreated      = "WorkspaceCreated"
 	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
 	eventReasonSessionVMRestart      = "SessionVMRestart"
@@ -194,6 +195,11 @@ const (
 	// workspaceTeardownRequeue is how long the teardown path waits
 	// between checks that the workspace PVC deletion has been accepted.
 	workspaceTeardownRequeue = 2 * time.Second
+
+	// snapshotInFlightRequeue is how long the snapshot-create path waits
+	// when a Snapshot with the target name is already in phase Creating.
+	// A second CreateSnapshot RPC at the same name would race the first.
+	snapshotInFlightRequeue = 5 * time.Second
 
 	// defaultWorkspaceSize is the workspace PVC capacity used when a
 	// session Sandbox does not declare spec.lifecycle.workspace.size.
@@ -1922,9 +1928,36 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 		existing := &setecv1alpha1.Snapshot{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
 		if err == nil {
-			// Already created. Honour the AfterCreate intent without
-			// re-snapshotting.
-			return ctrl.Result{}, nil
+			// A Snapshot with the target name exists. Which phase it is
+			// in decides what happens next, and it has to be read.
+			//
+			// The Coordinator now creates the CR before the storage write
+			// so that Creating and Failed are reportable (setec#129).
+			// That means "the object exists" no longer implies "the state
+			// is on disk". Treating existence as success would run the
+			// AfterCreate intent on a failed snapshot, and with
+			// afterCreate=Terminated that deletes the Sandbox whose state
+			// was never saved.
+			switch existing.Status.Phase {
+			case setecv1alpha1.SnapshotPhaseCreating:
+				// Another reconcile is mid-write, or one died mid-write.
+				// Wait rather than racing a second RPC at the same name.
+				return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+			case setecv1alpha1.SnapshotPhaseFailed:
+				// Terminal by design: a Failed snapshot never becomes
+				// Ready, so re-snapshotting under the same name is not an
+				// option and the AfterCreate intent must not run. The
+				// user deletes the Snapshot and asks again.
+				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
+					"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
+					existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
+				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+			default:
+				// Ready, Terminating, or a phase this version does not
+				// know. Honour the AfterCreate intent without
+				// re-snapshotting, as before.
+				return ctrl.Result{}, nil
+			}
 		}
 		if !apierrors.IsNotFound(err) {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("check Snapshot: %w", err))
