@@ -194,20 +194,23 @@ docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: installer-image
-installer-image: ## Build the setec-installer image with the kata pin from kata.env (setec#26).
+installer-image: ## Build the setec-installer image with the runtime pins from kata.env + gvisor.env (setec#26).
 	$(CONTAINER_TOOL) build -f Dockerfile.installer \
-	  $$(grep -vE '^\s*(#|$$)' kata.env | sed 's/^/--build-arg /') \
+	  $$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /') \
 	  -t ghcr.io/zeroroot-ai/setec-installer:dev .
 
 .PHONY: installer-payload-guard
-installer-payload-guard: ## Prove the installer's payload gate: the plain gate stage builds, a mutated one fails (setec#17).
-	@args="$$(grep -vE '^\s*(#|$$)' kata.env | sed 's/^/--build-arg /')"; \
+installer-payload-guard: ## Prove the installer's payload gate: the plain gate stage builds, every mutated one fails (setec#17).
+	@args="$$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"; \
 	$(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args -t setec-installer-payload-gate:check . >/dev/null; \
 	echo "payload gate: plain build passed"; \
-	if $(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args --build-arg PAYLOAD_MUTATION=zz-junk-binary . >/dev/null 2>&1; then \
-	  echo "payload gate CANNOT FAIL: a mutated payload built; the inventory guard is broken" >&2; exit 1; \
-	fi; \
-	echo "payload gate: mutated build refused, the guard can fail"
+	for mutation in kata-junk-binary gvisor-missing-sentry; do \
+	  if $(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args --build-arg PAYLOAD_MUTATION=$$mutation . >/dev/null 2>&1; then \
+	    echo "payload gate CANNOT FAIL: the $$mutation payload built; the inventory guard is broken" >&2; exit 1; \
+	  fi; \
+	  echo "payload gate: mutation $$mutation refused"; \
+	done; \
+	echo "payload gate: every mutated build refused, the guard can fail"
 
 .PHONY: check-runtime-pins
 check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own (kata.env / gvisor.env are the sources).
