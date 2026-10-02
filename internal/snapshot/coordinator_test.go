@@ -62,6 +62,9 @@ func verifiedClaimRes() *setecgrpcv1.ClaimPoolEntryResponse {
 type fakeNodeAgentClient struct {
 	createResp *setecgrpcv1.CreateSnapshotResponse
 	createErr  error
+	// onCreate, when set, is called from inside CreateSnapshot before the
+	// response is returned.
+	onCreate   func()
 	restoreRes *setecgrpcv1.RestoreSandboxResponse
 	restoreErr error
 	pauseRes   *setecgrpcv1.PauseSandboxResponse
@@ -84,6 +87,12 @@ type fakeNodeAgentClient struct {
 
 func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
 	f.lastCreate = in
+	// onCreate runs while the storage write is nominally in flight. It is
+	// what lets a test observe a transient phase instead of only the
+	// terminal one.
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	return f.createResp, f.createErr
 }
 func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
@@ -260,7 +269,15 @@ func TestCreateSnapshot_NameConflict(t *testing.T) {
 	}
 }
 
-func TestCreateSnapshot_RPCError(t *testing.T) {
+// TestCreateSnapshot_RPCError_ReportsFailed is the Failed half of
+// setec#129. The CR is KEPT and reports Failed with a reason.
+//
+// This test used to assert the opposite — "No Snapshot CR should exist" —
+// because the CR was created after the write, so a failed write left no
+// record anywhere and SnapshotPhaseFailed had no assignment in the whole
+// repo. An operator could not tell a snapshot that failed from one that
+// was never asked for. The expectation was inverted deliberately.
+func TestCreateSnapshot_RPCError_ReportsFailed(t *testing.T) {
 	sb := newSandboxForCoord()
 	pod := newPodForSandbox(sb, "node-a")
 	c := newFakeClient(t, sb, pod)
@@ -271,10 +288,100 @@ func TestCreateSnapshot_RPCError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error on RPC failure")
 	}
-	// No Snapshot CR should exist.
+
 	got := &setecv1alpha1.Snapshot{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err == nil {
-		t.Fatalf("Snapshot should not be created on RPC failure")
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err != nil {
+		t.Fatalf("Snapshot CR should be retained for observability: %v", err)
+	}
+	if got.Status.Phase != setecv1alpha1.SnapshotPhaseFailed {
+		t.Fatalf("status.phase = %q, want Failed", got.Status.Phase)
+	}
+	if got.Status.Reason == "" {
+		t.Fatalf("status.reason is empty; a Failed phase with no reason tells an operator nothing")
+	}
+	// A Failed snapshot must not look restorable: no storage reference was
+	// ever returned, and Validate has to refuse it.
+	if got.Spec.StorageRef != "" {
+		t.Fatalf("spec.storageRef = %q, want empty on a failed write", got.Spec.StorageRef)
+	}
+	if v := Validate(sb, got, nil); len(v) == 0 {
+		t.Fatalf("Validate accepted a Failed snapshot as a restore source")
+	}
+}
+
+// TestCreateSnapshot_ReportsCreatingDuringWrite is the Creating half of
+// setec#129. The phase is observed FROM INSIDE the storage write, which
+// is the only way to tell a transient phase apart from one that is never
+// written: asserting after CreateSnapshot returns would only ever see the
+// terminal value.
+func TestCreateSnapshot_ReportsCreatingDuringWrite(t *testing.T) {
+	sb := newSandboxForCoord()
+	pod := newPodForSandbox(sb, "node-a")
+	c := newFakeClient(t, sb, pod)
+
+	var duringPhase setecv1alpha1.SnapshotPhase
+	var duringStorageRef string
+	var duringErr error
+	na := &fakeNodeAgentClient{
+		createResp: &setecgrpcv1.CreateSnapshotResponse{
+			StorageRef: "t-a-snap-1", SizeBytes: 4096, Sha256: "deadbeef",
+		},
+		onCreate: func() {
+			mid := &setecv1alpha1.Snapshot{}
+			duringErr = c.Get(context.Background(),
+				types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, mid)
+			duringPhase = mid.Status.Phase
+			duringStorageRef = mid.Spec.StorageRef
+		},
+	}
+	coord := newCoord(c, &fakeDialer{client: na})
+
+	if err := coord.CreateSnapshot(context.Background(), sb); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if duringErr != nil {
+		t.Fatalf("Snapshot CR did not exist while the write was in flight: %v", duringErr)
+	}
+	if duringPhase != setecv1alpha1.SnapshotPhaseCreating {
+		t.Fatalf("phase during write = %q, want Creating", duringPhase)
+	}
+	if duringStorageRef != "" {
+		t.Fatalf("spec.storageRef = %q during the write; the backend has not returned one yet", duringStorageRef)
+	}
+
+	got := &setecv1alpha1.Snapshot{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err != nil {
+		t.Fatalf("get Snapshot: %v", err)
+	}
+	if got.Status.Phase != setecv1alpha1.SnapshotPhaseReady {
+		t.Fatalf("final phase = %q, want Ready", got.Status.Phase)
+	}
+	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 4096 || got.Spec.SHA256 != "deadbeef" {
+		t.Fatalf("backend result not recorded on the CR: %#v", got.Spec)
+	}
+}
+
+// TestCreateSnapshot_DialErrorReportsFailed covers the other way the
+// write can never start. The node-agent is unreachable, so no RPC is
+// issued at all, and the phase must still say so.
+func TestCreateSnapshot_DialErrorReportsFailed(t *testing.T) {
+	sb := newSandboxForCoord()
+	pod := newPodForSandbox(sb, "node-a")
+	c := newFakeClient(t, sb, pod)
+	coord := newCoord(c, &fakeDialer{dialErr: errors.New("connection refused")})
+
+	if err := coord.CreateSnapshot(context.Background(), sb); err == nil {
+		t.Fatalf("expected error when the node-agent cannot be dialed")
+	}
+	got := &setecv1alpha1.Snapshot{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err != nil {
+		t.Fatalf("Snapshot CR should be retained: %v", err)
+	}
+	if got.Status.Phase != setecv1alpha1.SnapshotPhaseFailed {
+		t.Fatalf("status.phase = %q, want Failed", got.Status.Phase)
+	}
+	if got.Status.Reason != "NodeAgentUnreachable" {
+		t.Fatalf("status.reason = %q, want NodeAgentUnreachable", got.Status.Reason)
 	}
 }
 

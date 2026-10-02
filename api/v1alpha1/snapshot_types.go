@@ -15,6 +15,17 @@ import (
 const SnapshotInUseFinalizer = "setec.zeroroot.ai/snapshot-in-use"
 
 // SnapshotPhase is the high-level lifecycle state of a Snapshot.
+//
+// All four values are written by the operator. Ready was once the only
+// one that any code assigned, so a Snapshot whose storage write failed
+// kept whatever phase it had and an operator reading .status.phase
+// could not tell a finished snapshot from a broken one (setec#129).
+//
+//	Creating     the CR exists and the storage write is in flight
+//	Ready        the state is persisted and may be restored from
+//	Failed       the write could not complete; status.reason names why
+//	Terminating  deletion started and the in-use finalizer is still held
+//
 // +kubebuilder:validation:Enum=Creating;Ready;Failed;Terminating
 type SnapshotPhase string
 
@@ -92,9 +103,17 @@ type SnapshotSpec struct {
 	// locate the state files. For local-disk this is the snapshot ID
 	// under the configured snapshot root. Users SHOULD treat this as
 	// opaque.
-	// +kubebuilder:validation:MinLength=1
-	// +required
-	StorageRef string `json:"storageRef"`
+	//
+	// EMPTY WHILE Creating. The backend chooses the reference and only
+	// returns it once the state write has completed, so a Snapshot that
+	// is still being written has no storageRef to record. This field was
+	// required with a minimum length of 1, which is why the CR could not
+	// be created until after the write, and why status.phase could only
+	// ever hold a terminal value (setec#129). A Snapshot in phase Ready
+	// always carries a non-empty storageRef, and snapshot.Validate
+	// refuses a restore from one that does not.
+	// +optional
+	StorageRef string `json:"storageRef,omitempty"`
 
 	// Size is the size in bytes of the persisted snapshot state
 	// (state.bin + memory.bin). Populated by the operator at creation.

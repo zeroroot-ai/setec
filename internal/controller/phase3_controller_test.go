@@ -345,3 +345,151 @@ func TestSnapshotTTL_TriggersDelete(t *testing.T) {
 	// Housekeeping.
 	_ = fmt.Sprintf("ns=%s", ns)
 }
+
+// TestSnapshotPhase_TerminatingWhileFinalizerHeld is the Terminating
+// third of setec#129.
+//
+// SnapshotPhaseTerminating had no assignment anywhere in the repo, so a
+// Snapshot whose deletion was requested and then blocked — by a live
+// Sandbox reference, or by a backend erase that keeps failing — still
+// reported Ready. From .status.phase alone it was indistinguishable from
+// a snapshot nobody had asked to delete, which is the one case an
+// operator needs to see.
+//
+// The reference is what makes the window observable: refCount > 0 holds
+// the in-use finalizer, so the CR stays alive in the Terminating phase
+// instead of disappearing before anything can read it.
+func TestSnapshotPhase_TerminatingWhileFinalizerHeld(t *testing.T) {
+	g := gomega.NewWithT(t)
+	ns := newNamespace(t, "p3-term")
+
+	snap := &setecv1alpha1.Snapshot{
+		Namespace: ns, Name: "term-1",
+		Spec: setecv1alpha1.SnapshotSpec{
+			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			StorageBackend: "local-disk", StorageRef: "term-1", Node: "node-a",
+		},
+	}
+	g.Expect(testClient.Create(testCtx, snap)).To(gomega.Succeed())
+
+	// Reach Ready first, so the assertion below cannot pass on a phase
+	// that merely started out empty.
+	g.Eventually(func() error {
+		cur := &setecv1alpha1.Snapshot{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "term-1"}, cur); err != nil {
+			return err
+		}
+		cur.Status.Phase = setecv1alpha1.SnapshotPhaseReady
+		return testClient.Status().Update(testCtx, cur)
+	}, 10*time.Second, 250*time.Millisecond).Should(gomega.Succeed())
+
+	// A Sandbox reference keeps the finalizer, so deletion blocks and the
+	// Terminating phase stays readable.
+	sb := newPhase3Sandbox("term-ref", ns, func(sb *setecv1alpha1.Sandbox) {
+		sb.Spec.SnapshotRef = &setecv1alpha1.SandboxSnapshotRef{Name: "term-1"}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(gomega.Succeed())
+
+	g.Eventually(func() bool {
+		got := &setecv1alpha1.Snapshot{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "term-1"}, got); err != nil {
+			return false
+		}
+		return slices.Contains(got.Finalizers, setecv1alpha1.SnapshotInUseFinalizer)
+	}, 30*time.Second, 250*time.Millisecond).Should(gomega.BeTrue(), "expected the in-use finalizer")
+
+	g.Expect(testClient.Delete(testCtx, snap)).To(gomega.Succeed())
+
+	g.Eventually(func() setecv1alpha1.SnapshotPhase {
+		got := &setecv1alpha1.Snapshot{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "term-1"}, got); err != nil {
+			return ""
+		}
+		return got.Status.Phase
+	}, 30*time.Second, 250*time.Millisecond).Should(gomega.Equal(setecv1alpha1.SnapshotPhaseTerminating),
+		"a Snapshot with a deletionTimestamp and a held finalizer must report Terminating")
+
+	got := &setecv1alpha1.Snapshot{}
+	g.Expect(testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "term-1"}, got)).To(gomega.Succeed())
+	g.Expect(got.Status.Reason).NotTo(gomega.BeEmpty(), "Terminating with no reason tells an operator nothing")
+}
+
+// TestSnapshotCreate_FailedSnapshotDoesNotRunAfterCreate is the safety
+// consequence of creating the Snapshot CR before the storage write
+// (setec#129).
+//
+// The snapshot-create branch used to read "a Snapshot with this name
+// exists" as "the snapshot was taken" and go straight to the afterCreate
+// intent. That was true while the CR only appeared after a successful
+// write. It is not true any more, and with afterCreate=Terminated the old
+// reading deletes the Sandbox whose state was never saved — the exact
+// data-loss shape the phases exist to prevent.
+//
+// The Snapshot is seeded in phase Failed rather than produced by a failing
+// node-agent, so the assertion does not depend on the shared test dialer
+// and cannot pass because of an unrelated RPC outcome.
+func TestSnapshotCreate_FailedSnapshotDoesNotRunAfterCreate(t *testing.T) {
+	g := gomega.NewWithT(t)
+	ns := newNamespace(t, "p3-failskip")
+
+	failed := &setecv1alpha1.Snapshot{
+		Namespace: ns, Name: "snap-failed",
+		Spec: setecv1alpha1.SnapshotSpec{
+			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			StorageBackend: "local-disk", Node: "node-a",
+			// No storageRef: the write never completed.
+		},
+	}
+	g.Expect(testClient.Create(testCtx, failed)).To(gomega.Succeed())
+	g.Eventually(func() error {
+		cur := &setecv1alpha1.Snapshot{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "snap-failed"}, cur); err != nil {
+			return err
+		}
+		cur.Status.Phase = setecv1alpha1.SnapshotPhaseFailed
+		cur.Status.Reason = "InsufficientStorage"
+		return testClient.Status().Update(testCtx, cur)
+	}, 10*time.Second, 250*time.Millisecond).Should(gomega.Succeed())
+
+	sb := newPhase3Sandbox("sb", ns, func(sb *setecv1alpha1.Sandbox) {
+		sb.Spec.Snapshot = &setecv1alpha1.SandboxSnapshotSpec{
+			Create:      true,
+			Name:        "snap-failed",
+			AfterCreate: setecv1alpha1.SandboxSnapshotAfterCreateTerminated,
+		}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(gomega.Succeed())
+
+	// Drive the Sandbox to Running so the snapshot-create branch is
+	// reached at all; envtest has no scheduler.
+	g.Eventually(func() bool {
+		pod, err := getPod(testCtx, ns, sb.Name+"-vm")
+		return err == nil && pod != nil
+	}, 15*time.Second, 250*time.Millisecond).Should(gomega.BeTrue())
+	pod, err := getPod(testCtx, ns, sb.Name+"-vm")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	bindPodToNode(t, pod)
+	pod, err = getPod(testCtx, ns, sb.Name+"-vm")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = podReadyConditions()
+	pod.Status.StartTime = &metav1.Time{Time: time.Now()}
+	g.Expect(testClient.Status().Update(testCtx, pod)).To(gomega.Succeed())
+
+	// The Sandbox must report the failure and keep running. Consistently:
+	// a single read could catch the instant before the reconciler acts.
+	g.Eventually(func() string {
+		got := &setecv1alpha1.Sandbox{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: sb.Name}, got); err != nil {
+			return "gone: " + err.Error()
+		}
+		return got.Status.Reason
+	}, 30*time.Second, 250*time.Millisecond).Should(gomega.Equal("SnapshotCreateFailed"))
+
+	g.Consistently(func() bool {
+		got := &setecv1alpha1.Sandbox{}
+		err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: sb.Name}, got)
+		return err == nil && got.DeletionTimestamp.IsZero()
+	}, 5*time.Second, 500*time.Millisecond).Should(gomega.BeTrue(),
+		"afterCreate=Terminated must not delete the Sandbox when the snapshot failed")
+}

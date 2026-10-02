@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -214,7 +215,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: get existing Snapshot: %w", err)
 	}
 
-	// 2. Resolve the node-agent for the Sandbox's pod.
+	// 2. Resolve the node-agent for the Sandbox's pod. The node name is
+	//    part of the Snapshot spec, so it has to be known before the CR
+	//    is created.
 	pod, podErr := c.getPod(ctx, sb)
 	if podErr != nil {
 		setSpanErr(span, podErr.Error())
@@ -225,15 +228,47 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: Pod %q has no NodeName; cannot dial node-agent", pod.Name)
 	}
 
+	// 3. Materialize the Snapshot CR in phase Creating, BEFORE the
+	//    storage write.
+	//
+	// The CR used to be created after the RPC returned, which made three
+	// of the four declared phases unreachable: with no object, there was
+	// nothing to report Creating or Failed on, so a snapshot whose write
+	// failed left no record at all and an operator reading .status.phase
+	// saw only Ready (setec#129). Creating it first also makes the
+	// name-conflict check above cover an in-flight attempt, not just a
+	// finished one.
+	//
+	// spec.storageRef is empty here. The backend chooses the reference
+	// and returns it with the response, so it is filled in at step 5.
+	snap := c.newSnapshotCR(ctx, sb, pod.Spec.NodeName)
+	if err := c.Client.Create(ctx, snap); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Someone raced us. Return the sentinel so the reconciler
+			// can pick up the existing Snapshot on the next cycle.
+			return ErrSnapshotNameConflict
+		}
+		setSpanErr(span, err.Error())
+		return fmt.Errorf("coordinator: create Snapshot CR: %w", err)
+	}
+	if err := c.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseCreating, "SnapshotWriteInFlight"); err != nil {
+		// The write has not started, so refusing here costs nothing and
+		// keeps the invariant that a Snapshot never sits phase-less
+		// while its state is being written.
+		setSpanErr(span, err.Error())
+		return fmt.Errorf("coordinator: mark Snapshot Creating: %w", err)
+	}
+
+	// 4. Dial the node-agent and issue the CreateSnapshot RPC.
 	na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName)
 	if dialErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable,
 			fmt.Sprintf("dial node-agent on %q: %v", pod.Spec.NodeName, dialErr))
+		c.failSnapshot(ctx, snap, "NodeAgentUnreachable", dialErr)
 		setSpanErr(span, dialErr.Error())
 		return fmt.Errorf("coordinator: dial node-agent: %w", dialErr)
 	}
 
-	// 3. Issue the CreateSnapshot RPC.
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
 		SandboxId:      sb.Namespace + "/" + sb.Name,
 		SnapshotId:     sb.Namespace + "-" + sb.Spec.Snapshot.Name,
@@ -246,15 +281,49 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 			reason = EventReasonInsufficientStorage
 		}
 		c.emit(sb, corev1.EventTypeWarning, reason, rpcErr.Error())
+		c.failSnapshot(ctx, snap, reason, rpcErr)
 		setSpanErr(span, rpcErr.Error())
 		c.recordDuration("create", sb, time.Since(start))
 		return fmt.Errorf("coordinator: CreateSnapshot RPC: %w", rpcErr)
 	}
 
-	// 4. Materialize the Snapshot CR. VMM is populated from the
-	// resolved class when possible so the CRD enum validation is
-	// satisfied. Callers using the bare sandbox (no class) fall back
-	// to Firecracker, matching Phase 3's supported-VMM default.
+	// 5. Record what the backend wrote, then mark Ready.
+	original := snap.DeepCopy()
+	snap.Spec.StorageRef = resp.GetStorageRef()
+	snap.Spec.Size = resp.GetSizeBytes()
+	snap.Spec.SHA256 = resp.GetSha256()
+	if err := c.Client.Patch(ctx, snap, client.MergeFrom(original)); err != nil {
+		// The state is on disk but the CR does not say where. Leaving it
+		// Creating would be a lie in the safe direction; Ready without a
+		// storageRef would be a lie in the dangerous one, because the
+		// restore path keys off the phase.
+		c.failSnapshot(ctx, snap, "StorageRefNotRecorded", err)
+		setSpanErr(span, err.Error())
+		c.recordDuration("create", sb, time.Since(start))
+		return fmt.Errorf("coordinator: record Snapshot storage reference: %w", err)
+	}
+
+	if err := c.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseReady, ""); err != nil {
+		// Non-fatal; the SnapshotReconciler will re-derive.
+		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotCreated,
+			fmt.Sprintf("snapshot %q persisted but status update failed: %v", snap.Name, err))
+	} else {
+		c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotCreated,
+			fmt.Sprintf("snapshot %q ready on node %q (%d bytes)", snap.Name, snap.Spec.Node, snap.Spec.Size))
+	}
+
+	c.recordDuration("create", sb, time.Since(start))
+	return nil
+}
+
+// newSnapshotCR builds the Snapshot CR for a sandbox snapshot request.
+// Everything it fills is knowable before the storage write: the node is
+// the Pod's node, and the VMM comes from the resolved class.
+//
+// VMM is populated from the resolved class when possible so the CRD enum
+// validation is satisfied. Callers using the bare sandbox (no class)
+// fall back to Firecracker, matching Phase 3's supported-VMM default.
+func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandbox, nodeName string) *setecv1alpha1.Snapshot {
 	vmm := setecv1alpha1.VMMFirecracker
 	if sb.Spec.SandboxClassName != "" {
 		cls := &setecv1alpha1.SandboxClass{}
@@ -269,7 +338,7 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		// invariant even when the user didn't set a class explicitly.
 		className = sb.Name
 	}
-	snap := &setecv1alpha1.Snapshot{
+	return &setecv1alpha1.Snapshot{
 		Namespace: sb.Namespace,
 		Name:      sb.Spec.Snapshot.Name,
 		Spec: setecv1alpha1.SnapshotSpec{
@@ -279,37 +348,39 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 			VMM:            vmm,
 			TTL:            ttlFrom(sb.Spec.Snapshot.TTL),
 			StorageBackend: c.backendName(),
-			StorageRef:     resp.GetStorageRef(),
-			Size:           resp.GetSizeBytes(),
-			SHA256:         resp.GetSha256(),
-			Node:           pod.Spec.NodeName,
+			Node:           nodeName,
 		},
 	}
-	if err := c.Client.Create(ctx, snap); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			// Someone raced us. Return the sentinel so the reconciler
-			// can pick up the existing Snapshot on the next cycle.
-			return ErrSnapshotNameConflict
-		}
-		setSpanErr(span, err.Error())
-		return fmt.Errorf("coordinator: create Snapshot CR: %w", err)
-	}
+}
 
-	// 5. Mark Ready on the status subresource.
-	snap.Status.Phase = setecv1alpha1.SnapshotPhaseReady
+// markPhase writes one phase/reason pair to the Snapshot status
+// subresource and stamps the transition time.
+func (c *Coordinator) markPhase(ctx context.Context, snap *setecv1alpha1.Snapshot, phase setecv1alpha1.SnapshotPhase, reason string) error {
+	original := snap.DeepCopy()
+	snap.Status.Phase = phase
+	snap.Status.Reason = reason
 	now := metav1.NewTime(time.Now())
 	snap.Status.LastTransitionTime = &now
-	if err := c.Client.Status().Update(ctx, snap); err != nil {
-		// Non-fatal; the SnapshotReconciler will re-derive.
-		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotCreated,
-			fmt.Sprintf("snapshot %q persisted but status update failed: %v", snap.Name, err))
-	} else {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotCreated,
-			fmt.Sprintf("snapshot %q ready on node %q (%d bytes)", snap.Name, snap.Spec.Node, snap.Spec.Size))
+	if err := c.Client.Status().Patch(ctx, snap, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("patch Snapshot status to %s: %w", phase, err)
 	}
-
-	c.recordDuration("create", sb, time.Since(start))
 	return nil
+}
+
+// failSnapshot records phase Failed and the reason on a Snapshot whose
+// creation could not complete. The CR is deliberately kept: it is the
+// only place an operator can read why a snapshot is missing, and the
+// phase doc states a Failed snapshot never returns to Ready.
+//
+// The caller is already returning an error, so a failure to write the
+// status is logged on the span rather than replacing that error. It is
+// not discarded silently: a swallowed status write is how the phase
+// stopped being reported in the first place.
+func (c *Coordinator) failSnapshot(ctx context.Context, snap *setecv1alpha1.Snapshot, reason string, cause error) {
+	if err := c.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseFailed, reason); err != nil {
+		log.FromContext(ctx).Error(err, "could not record Snapshot phase Failed",
+			"snapshot", snap.Namespace+"/"+snap.Name, "reason", reason, "cause", cause)
+	}
 }
 
 // RestoreSandbox issues the RestoreSandbox RPC to the node holding

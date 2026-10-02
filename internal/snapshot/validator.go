@@ -110,5 +110,37 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 		})
 	}
 
+	// Readiness. A Snapshot only holds restorable state once the backend
+	// write has finished, and spec.storageRef is empty until it has
+	// (setec#129). Before the CR was created ahead of the write, both
+	// facts were implied by the object existing at all; now neither is,
+	// so the restore path has to ask.
+	//
+	// The phase check comes first because it is the one an operator reads;
+	// the storageRef check is the belt: a Ready snapshot with no storage
+	// reference is a bug in the Coordinator, not a user error, and it must
+	// not reach a VM either way.
+	// An empty phase is tolerated: a hand-authored Snapshot pointing at
+	// pre-staged state has no controller to set one, and the storageRef
+	// check below is what actually protects that path.
+	if snap.Status.Phase != "" && snap.Status.Phase != setecv1alpha1.SnapshotPhaseReady {
+		out = append(out, ConstraintViolation{
+			Field: "spec.snapshotRef.name",
+			Message: fmt.Sprintf(
+				"Snapshot %q is in phase %q; only a Ready snapshot can be restored from",
+				snap.Name, snap.Status.Phase,
+			),
+		})
+	}
+	if snap.Spec.StorageRef == "" {
+		out = append(out, ConstraintViolation{
+			Field: "spec.snapshotRef.name",
+			Message: fmt.Sprintf(
+				"Snapshot %q has no spec.storageRef, so the node-agent cannot locate its state files",
+				snap.Name,
+			),
+		})
+	}
+
 	return out
 }

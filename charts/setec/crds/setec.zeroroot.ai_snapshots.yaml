@@ -125,7 +125,15 @@ spec:
                   locate the state files. For local-disk this is the snapshot ID
                   under the configured snapshot root. Users SHOULD treat this as
                   opaque.
-                minLength: 1
+
+                  EMPTY WHILE Creating. The backend chooses the reference and only
+                  returns it once the state write has completed, so a Snapshot that
+                  is still being written has no storageRef to record. This field was
+                  required with a minimum length of 1, which is why the CR could not
+                  be created until after the write, and why status.phase could only
+                  ever hold a terminal value (setec#129). A Snapshot in phase Ready
+                  always carries a non-empty storageRef, and snapshot.Validate
+                  refuses a restore from one that does not.
                 type: string
               ttl:
                 description: |-
@@ -148,7 +156,6 @@ spec:
             - node
             - sandboxClass
             - storageBackend
-            - storageRef
             - vmm
             type: object
           status:
