@@ -556,6 +556,17 @@ jobs:
       - name: Guard every module's direct requires
         run: bash scripts/check-direct-requires-have-no-advisory.sh
 
+      # Same job, because it is the other half of the same failure. The advisory
+      # guard refuses a bad version; this one checks that the Dependabot ignore
+      # keeping it out covers every module that could be offered it. setec#125
+      # sat blocked because the grpc ignore existed for one of four gomod
+      # entries.
+      - name: Mutation-test the ignore-coverage guard
+        run: bash scripts/check-dependabot-ignores-cover-every-module.sh --selftest
+
+      - name: Every advisory ignore covers every module that requires it
+        run: bash scripts/check-dependabot-ignores-cover-every-module.sh
+
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
     if: github.event_name == 'pull_request'
