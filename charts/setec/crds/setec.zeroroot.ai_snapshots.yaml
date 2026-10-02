@@ -32,6 +32,10 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.lastTransitionTime
+      name: Transitioned
+      priority: 1
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:

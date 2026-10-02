@@ -1,0 +1,24 @@
+# Verdicts for served CRD fields that no controller reads.
+#
+# Format, three pipe-separated columns:
+#
+#   <pkg>.<Type>.<Field> | <#issue or ADR> | <why this is the right state today>
+#
+# Keyed by qualified name, never by line, so an unrelated edit never needs a
+# re-pin. The reference column must name an issue or an ADR: a verdict with
+# nowhere to read it is an opinion. The gate FAILS when an entry names a field
+# that no longer exists, because an exemption outliving its field records a
+# decision about nothing.
+#
+# ADR-0094 rule 5: every entry is "build the consumer" or "delete the producer",
+# never defaulted to deletion. An entry here says which, and that the work is
+# tracked — it does not say the promise is kept.
+#
+# First run, 2026-10-02: nine fields. Five were display-only status fields and
+# got the print column that is their actual consumer, in this same change. These
+# four need code.
+
+v1alpha1.SandboxClassRuntime.Params | #121 | BUILD THE CONSUMER. The knob is documented in docs/crd-reference.md and docs/multitenancy.md, the translation table exists (internal/runtime/kata_qemu.go kataAnnotation), and ErrUnknownKataParam validates it — but podspec.applyRuntimeSelection calls MutatePod(pod, nil) and nothing else calls MutatePod at all, so a class setting runtime.params.vcpus gets the default vCPU count silently. Same class as #126 on a resource knob, and this one is promised in user-facing docs.
+v1alpha1.SandboxClassStatus.ObservedGeneration | #121 | BUILD THE CONSUMER. Neither written nor read. The Kubernetes convention is that the controller stamps it after a successful reconcile so an external waiter can compare it with metadata.generation; absent, every SandboxClass reads as never reconciled. The consumer is outside this repo (kubectl wait, Argo health), so it needs the write plus a print column, which is the same shape the five status fields in this change got.
+v1alpha1.SnapshotSpec.KernelVersion | #121 | BUILD THE CONSUMER OR DELETE. Neither written nor read. snapshot.Validate's doc says a kernel mismatch between snapshot and restore target rejects the restore; it does not check, because nothing records the source kernel. Either the Coordinator records it and Validate compares, or the field and the claim both go. Decided with #126, which asks the neighbouring question about SandboxClass kernel selection.
+v1alpha1.SnapshotSpec.SHA256 | #121 | BUILD THE CONSUMER. Written on every snapshot (internal/snapshot/coordinator.go) and read nowhere, so a snapshot's declared digest is never verified and restored guest memory is never checked against it. The verifier has to be the node-agent, which holds the state file, so the expected digest needs to reach it on the RestoreSandbox RPC. Proto plus node-agent work, which is why it is not in this change.

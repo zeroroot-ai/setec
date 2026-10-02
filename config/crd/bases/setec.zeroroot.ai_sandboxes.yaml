@@ -40,6 +40,22 @@ spec:
       name: Lifecycle
       priority: 1
       type: string
+    - jsonPath: .status.warmStart.outcome
+      name: Warm-Start
+      priority: 1
+      type: string
+    - jsonPath: .status.warmStart.reason
+      name: Warm-Start-Reason
+      priority: 1
+      type: string
+    - jsonPath: .status.warmStart.entryID
+      name: Pool-Entry
+      priority: 1
+      type: string
+    - jsonPath: .status.checkpoint.sizeBytes
+      name: Checkpoint-Bytes
+      priority: 1
+      type: integer
     name: v1alpha1
     schema:
       openAPIV3Schema:

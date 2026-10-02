@@ -471,6 +471,38 @@ jobs:
       - name: Guard the tree
         run: bash scripts/check-runtime-pins.sh
 
+  crd-field-consumers:
+    name: Every served CRD field has a consumer
+    # Runs on both lanes, like the other tree guards. ADR-0094 layer 6, the
+    # setec half (#121). A spec or status field in a served schema that no
+    # controller reads is a promise `kubectl explain` prints and the cluster
+    # does not keep: setec#126 is the measured instance that prompted it.
+    #
+    # The reads come from ast-checks/cmd/unwired at the version go.mod pins,
+    # which is the same analyzer `make lint-unwired` uses. A second
+    # type-checker implementation would give this repo two answers to "is this
+    # field read".
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The fixture runs first and offline: it feeds the decision half a crafted
+      # analyzer output, so a rule that stopped working is a failure here rather
+      # than a quiet pass below.
+      - name: Mutation-test the guard
+        run: bash scripts/__tests__/check-crd-field-consumers.test.sh
+
+      - name: Every served field has a consumer or a recorded verdict
+        run: bash scripts/check-crd-field-consumers.sh
+
   no-silent-revert:
     name: A PR that undoes a merged commit says so
     # Runs on both lanes. On pull_request HEAD is the PR merge ref; on
@@ -793,6 +825,7 @@ jobs:
       - proto-breaking
       - test
       - manifests-up-to-date
+      - crd-field-consumers
       - proto-up-to-date
       - helm-lint
       - docker-build
