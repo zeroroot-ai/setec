@@ -595,6 +595,15 @@ type SandboxWarmStartStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:printcolumn:name="Exit-Code",type=integer,JSONPath=`.status.exitCode`,priority=1
 // +kubebuilder:printcolumn:name="Lifecycle",type=string,JSONPath=`.spec.lifecycle.mode`,priority=1
+// Warm-start and checkpoint status exist to be read by an operator, and these
+// four fields were written on every reconcile and read by nothing (#121). A
+// print column is their consumer: no Go code will ever read them, and without
+// one the only way to see a warm start's outcome was to dump the whole object.
+// priority=1, so `kubectl get sandboxes` is unchanged and -o wide carries them.
+// +kubebuilder:printcolumn:name="Warm-Start",type=string,JSONPath=`.status.warmStart.outcome`,priority=1
+// +kubebuilder:printcolumn:name="Warm-Start-Reason",type=string,JSONPath=`.status.warmStart.reason`,priority=1
+// +kubebuilder:printcolumn:name="Pool-Entry",type=string,JSONPath=`.status.warmStart.entryID`,priority=1
+// +kubebuilder:printcolumn:name="Checkpoint-Bytes",type=integer,JSONPath=`.status.checkpoint.sizeBytes`,priority=1
 
 // Sandbox is the Schema for the sandboxes API. Each Sandbox represents a
 // single isolated microVM execution unit following one of two lifecycles

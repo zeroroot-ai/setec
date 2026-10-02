@@ -168,6 +168,11 @@ type SnapshotStatus struct {
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.spec.size`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.spec.node`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// status.lastTransitionTime is stamped on every phase change and read by
+// nothing (#121). With the phases now reachable (#137), when a snapshot entered
+// its phase is the operator's question, so a print column is its consumer.
+// priority=1, so the default `kubectl get snapshots` is unchanged.
+// +kubebuilder:printcolumn:name="Transitioned",type=date,JSONPath=`.status.lastTransitionTime`,priority=1
 
 // Snapshot is the Schema for the snapshots API. A Snapshot is a
 // namespaced representation of a saved microVM state (CPU state,
