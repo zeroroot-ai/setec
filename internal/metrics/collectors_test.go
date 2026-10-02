@@ -55,25 +55,12 @@ func TestRecordDuration(t *testing.T) {
 	}
 }
 
-func TestRecordColdStart(t *testing.T) {
-	t.Parallel()
-	c, _ := newTestCollectors(t)
-
-	// RecordColdStart (deprecated) duplicates vmm into both runtime and vmm labels.
-	c.RecordColdStart("firecracker", "standard", 3*time.Second)
-
-	if got, want := testutil.CollectAndCount(c.SandboxColdStart), 1; got != want {
-		t.Errorf("CollectAndCount = %d, want %d", got, want)
-	}
-}
-
 func TestObserveColdStart(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCollectors(t)
 
-	// ObserveColdStart carries distinct runtime and vmm labels.
-	c.ObserveColdStart("firecracker", "firecracker", "standard", 3*time.Second)
-	c.ObserveColdStart("kata", "kata", "gpu", 5*time.Second)
+	c.ObserveColdStart("firecracker", "standard", 3*time.Second)
+	c.ObserveColdStart("kata", "gpu", 5*time.Second)
 
 	if got, want := testutil.CollectAndCount(c.SandboxColdStart), 2; got != want {
 		t.Errorf("CollectAndCount = %d, want %d", got, want)
@@ -162,8 +149,7 @@ func TestNilReceiverNoPanic(t *testing.T) {
 	// None of the following must panic.
 	c.RecordPhaseTransition("", "", setecv1alpha1.SandboxPhasePending)
 	c.RecordDuration("", "", "", time.Second)
-	c.RecordColdStart("", "", time.Second)
-	c.ObserveColdStart("", "", "", time.Second)
+	c.ObserveColdStart("", "", time.Second)
 	c.SetActive("", "", 1)
 	c.IncFallback("", "")
 	c.SetNodeRuntimeAvailable("", false)
@@ -178,7 +164,7 @@ func TestCollectAndLint(t *testing.T) {
 
 	c.RecordPhaseTransition("tenant", "cls", setecv1alpha1.SandboxPhasePending)
 	c.RecordDuration("tenant", "cls", string(setecv1alpha1.SandboxPhasePending), time.Millisecond)
-	c.RecordColdStart("firecracker", "cls", time.Second)
+	c.ObserveColdStart("firecracker", "cls", time.Second)
 	c.SetActive("tenant", "cls", 1)
 	c.IncFallback("kata", "firecracker")
 	c.SetNodeRuntimeAvailable("firecracker", true)

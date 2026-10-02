@@ -220,8 +220,8 @@ type SandboxReconciler struct {
 	Runtimes *runtimepkg.Registry
 
 	// RuntimeCfg is the operator-wide runtime configuration loaded from
-	// --runtimes-config (or synthesized from the legacy --runtime-class-name flag).
-	// selectRuntime reads cluster defaults and fallback chains from this value.
+	// --runtimes-config, which main.go requires. selectRuntime reads cluster
+	// defaults and fallback chains from this value.
 	RuntimeCfg *runtimepkg.RuntimeConfig
 
 	// NodeSelectorLabel is the label key Nodes must carry to be considered
@@ -1048,12 +1048,16 @@ func nextLifecycleDeadline(
 	return after, true
 }
 
-// checkPrereqs verifies that the required RuntimeClass(es) exist in the cluster.
-// When Runtimes/RuntimeCfg are set (multi-backend path) it checks all enabled
-// backends; otherwise it falls back to the legacy single-class check.
-// Returns a non-zero RequeueAfter result when prerequisites are not yet met.
+// checkPrereqs verifies that the required RuntimeClass(es) exist in the cluster
+// for every enabled backend. Returns a non-zero RequeueAfter result when
+// prerequisites are not yet met.
+//
+// Runtimes and RuntimeCfg are always set: main.go requires --runtimes-config and
+// wires both. The old single-class fallback behind a nil check was unreachable in
+// production and survived only because the test suite constructed a reconciler
+// without them (setec#115).
 func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
-	if r.Runtimes != nil && r.RuntimeCfg != nil {
+	{
 		classNames := make(map[string]string, len(r.RuntimeCfg.Runtimes))
 		for name, bc := range r.RuntimeCfg.Runtimes {
 			if bc.Enabled {
@@ -1077,24 +1081,6 @@ func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.
 		}
 		return ctrl.Result{}, nil
 	}
-	// Legacy path: single-class check with the operator-wide default.
-	legacyClassName := ""
-	if r.RuntimeCfg != nil {
-		legacyClassName = r.RuntimeCfg.Defaults.Runtime.Backend
-	}
-	prereqResult, err := prereq.Check(ctx, r.Client, legacyClassName, r.NodeSelectorLabel)
-	if err != nil {
-		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("prereq check: %w", err))
-	}
-	if !prereqResult.RuntimeClassPresent {
-		msg := fmt.Sprintf(runtimeUnavailableMessage, legacyClassName)
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, actionResolveRuntime, "%s", msg)
-		if err := r.patchPendingStatus(ctx, sb, eventReasonRuntimeUnavailable); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch RuntimeUnavailable status: %w", err)
-		}
-		return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
-	}
-	return ctrl.Result{}, nil
 }
 
 // maybeWarmStart performs the one-shot pool warm-start attempt for a
@@ -1226,30 +1212,14 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 // administrator enabling the backend is a live fix the next reconcile picks
 // up, but it is not waiting on a node and does not claim to be.
 //
-// When Runtimes or RuntimeCfg are nil (legacy path) it synthesizes a minimal
-// Selection from the class RuntimeClassName / defaults so existing code paths
-// keep working unchanged.
+// Runtimes and RuntimeCfg are always set, because main.go requires
+// --runtimes-config and wires both.
 func (r *SandboxReconciler) selectRuntime(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
 	cls *setecv1alpha1.SandboxClass,
 ) (*runtimepkg.Selection, error) {
 	logger := log.FromContext(ctx)
-
-	// Legacy path: no registry wired. Synthesize a Selection using the
-	// class RuntimeClassName or the legacy operator default so the reconciler
-	// stays backward-compatible without a registry.
-	if r.Runtimes == nil || r.RuntimeCfg == nil {
-		rcName := ""
-		if cls != nil && cls.Spec.RuntimeClassName != "" { //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
-			rcName = cls.Spec.RuntimeClassName //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
-		}
-		// Build a minimal inline dispatcher that only supplies the RuntimeClass name.
-		return &runtimepkg.Selection{
-			Backend:    runtimepkg.BackendKataFC,
-			Dispatcher: runtimepkg.NewKataFCDispatcher(runtimepkg.BackendConfig{RuntimeClassName: rcName}),
-		}, nil
-	}
 
 	// Apply local defaulting: when the SandboxClass has no Runtime struct
 	// (legacy class applied before the webhook defaulter runs), treat the
@@ -1610,7 +1580,7 @@ func (r *SandboxReconciler) recordTransition(
 				startTime = t
 			}
 			if d := startTime.Sub(sb.CreationTimestamp.Time); d >= 0 {
-				r.MetricsCollector.ObserveColdStart(runtimeLabel, vmm, className, d)
+				r.MetricsCollector.ObserveColdStart(runtimeLabel, className, d)
 			}
 		}
 
@@ -1633,9 +1603,9 @@ func setSpanError(span trace.Span, msg string) {
 	span.SetStatus(codes.Error, msg)
 }
 
-// createPod builds the Pod spec via the pure podspec.Build helper, reconciles
+// createPod builds the Pod spec via the pure podspec.BuildWithOptions helper, reconciles
 // the OwnerReference to the live Sandbox UID/APIVersion via controllerutil
-// (podspec.Build sets the basic OwnerReference fields but has no access to
+// (podspec.BuildWithOptions sets the basic OwnerReference fields but has no access to
 // the Scheme needed to stamp the correct APIVersion; we re-apply it here so
 // the authoritative source of truth is controller-runtime), and creates the
 // Pod. The next reconcile will observe the new Pod via the Owns watch.
@@ -1715,7 +1685,7 @@ func (r *SandboxReconciler) createPod(
 		pod.Spec.Tolerations = append(pod.Spec.Tolerations, cls.Spec.Tolerations...)
 	}
 
-	// podspec.Build already populates a basic OwnerReference, but UID and
+	// podspec.BuildWithOptions already populates a basic OwnerReference, but UID and
 	// APIVersion are authoritative only once the Scheme is consulted.
 	// SetControllerReference overwrites the reference in place, which keeps
 	// responsibility for the canonical form in the controller.

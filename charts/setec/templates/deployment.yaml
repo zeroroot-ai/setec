@@ -36,11 +36,14 @@ spec:
             - --health-probe-bind-address=:{{ .Values.healthPort }}
             - --leader-elect={{ .Values.leaderElect }}
             - --runtimes-config=/etc/setec/runtimes.yaml
-            {{- /* Legacy alias preserved for one release so existing
-                    `--set runtimeClassName=...` overrides keep working. Remove
-                    alongside the deprecated value. */ -}}
+            {{- /* runtimeClassName was removed (setec#115). It never worked:
+                    the chart has always passed --runtimes-config above, and the
+                    operator read --runtime-class-name only when that was absent,
+                    so a `--set runtimeClassName=...` was accepted and ignored.
+                    Helm does not reject an unknown value, so this fails loudly
+                    rather than letting the setting stay silently inert. */ -}}
             {{- if .Values.runtimeClassName }}
-            - --runtime-class-name={{ .Values.runtimeClassName }}
+            {{- fail "runtimeClassName was removed and never took effect; set runtimes.kata-fc.runtimeClassName instead (setec#115)." }}
             {{- end }}
             - --node-selector-label={{ .Values.nodeSelectorLabel }}
             {{- if .Values.multiTenancy.enabled }}

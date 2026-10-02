@@ -53,12 +53,12 @@ func newSandbox(mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox
 
 func buildOrFatal(t *testing.T, sb *setecv1alpha1.Sandbox, rc string) *corev1.Pod {
 	t.Helper()
-	pod, err := Build(sb, rc)
+	pod, err := BuildWithOptions(sb, rc, BuildOptions{})
 	if err != nil {
-		t.Fatalf("Build() returned unexpected error: %v", err)
+		t.Fatalf("BuildWithOptions() returned unexpected error: %v", err)
 	}
 	if pod == nil {
-		t.Fatalf("Build() returned nil Pod")
+		t.Fatalf("BuildWithOptions() returned nil Pod")
 	}
 	return pod
 }
@@ -301,15 +301,15 @@ func TestBuild_ValidationErrors(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			pod, err := Build(c.sandbox, c.runtimeClassName)
+			pod, err := BuildWithOptions(c.sandbox, c.runtimeClassName, BuildOptions{})
 			if pod != nil {
-				t.Errorf("Build() returned non-nil Pod on error: %+v", pod)
+				t.Errorf("BuildWithOptions() returned non-nil Pod on error: %+v", pod)
 			}
 			if err == nil {
-				t.Fatalf("Build() returned nil error, want %v", c.wantErr)
+				t.Fatalf("BuildWithOptions() returned nil error, want %v", c.wantErr)
 			}
 			if !errors.Is(err, c.wantErr) {
-				t.Fatalf("Build() error = %v, want errors.Is(err, %v)", err, c.wantErr)
+				t.Fatalf("BuildWithOptions() error = %v, want errors.Is(err, %v)", err, c.wantErr)
 			}
 		})
 	}
@@ -327,9 +327,9 @@ func TestBuild_DeepCopyIsolation(t *testing.T) {
 		sb.Spec.Env = []corev1.EnvVar{{Name: "A", Value: "1"}}
 	})
 
-	pod, err := Build(sb, defaultRuntimeClass)
+	pod, err := BuildWithOptions(sb, defaultRuntimeClass, BuildOptions{})
 	if err != nil {
-		t.Fatalf("Build() unexpected error: %v", err)
+		t.Fatalf("BuildWithOptions() unexpected error: %v", err)
 	}
 
 	// Mutate the Sandbox slices after Build and assert the Pod is
@@ -353,7 +353,7 @@ func TestBuildWithOptions_NodeNamePinning(t *testing.T) {
 	sb := newSandbox()
 
 	// Phase 1 back-compat: empty NodeName.
-	pod, err := Build(sb, defaultRuntimeClass)
+	pod, err := BuildWithOptions(sb, defaultRuntimeClass, BuildOptions{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

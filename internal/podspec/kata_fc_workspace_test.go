@@ -317,13 +317,13 @@ func TestBuild_GVisorSessionKeepsFilesystemWorkspace(t *testing.T) {
 }
 
 // TestBuild_SessionWithNoRuntimeSelectionKeepsFilesystemWorkspace
-// asserts that Build() (no RuntimeSelection at all — e.g. a caller that
+// asserts that BuildWithOptions() with no RuntimeSelection at all (e.g. a caller that
 // has not resolved a backend yet) preserves the pre-setec#91 Pod shape,
 // exactly like TestBuild_SessionMountsWorkspacePVC.
 func TestBuild_SessionWithNoRuntimeSelectionKeepsFilesystemWorkspace(t *testing.T) {
 	t.Parallel()
 	sb := newSandbox(withLifecycleMode(setecv1alpha1.LifecycleModeSession))
-	pod, err := Build(sb, defaultRuntimeClass)
+	pod, err := BuildWithOptions(sb, defaultRuntimeClass, BuildOptions{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
