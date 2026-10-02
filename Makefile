@@ -212,6 +212,18 @@ installer-payload-guard: ## Prove the installer's payload gate: the plain gate s
 	done; \
 	echo "payload gate: every mutated build refused, the guard can fail"
 
+# ast-checks ships the per-declaration read counter behind #116. Pinned, because
+# a floating version would change the count without a commit.
+UNWIRED_VERSION ?= v0.4.0
+
+.PHONY: lint-unwired
+lint-unwired: ## Fail if a declaration nothing reads is added (#116). Baseline only shrinks.
+	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -baseline .unwired-baseline.txt
+
+.PHONY: lint-unwired-write
+lint-unwired-write: ## Re-measure #116 and rewrite the baseline.
+	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -baseline .unwired-baseline.txt -write
+
 .PHONY: check-runtime-pins
 check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own (kata.env / gvisor.env are the sources).
 	bash scripts/check-runtime-pins.sh --selftest
