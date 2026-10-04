@@ -252,6 +252,14 @@ lint-unwired: unwired-version ## Fail if a declaration nothing reads is added (#
 lint-unwired-write: unwired-version ## Re-measure #116 and rewrite the baseline.
 	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -baseline .unwired-baseline.txt -write
 
+# The gate is ast-checks/cmd/crdfields, at the version go.mod pins. It was a
+# shell script here and a copy in gibson, and the copies drifted (ast-checks#20).
+# Its fixture is the crdfields package's own tests.
+.PHONY: check-crd-field-consumers
+check-crd-field-consumers: unwired-version ## Fail if a served CRD field has no consumer and no recorded verdict (#121).
+	go run github.com/zeroroot-ai/ast-checks/cmd/crdfields@$(UNWIRED_VERSION) -dir . \
+	  -types api/v1alpha1 -exempt scripts/crd-field-consumers-exempt.txt -min-served 50
+
 .PHONY: check-runtime-pins
 check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own (kata.env / gvisor.env are the sources).
 	bash scripts/check-runtime-pins.sh --selftest
