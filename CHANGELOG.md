@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.118.1](https://github.com/zeroroot-ai/setec/compare/v0.118.0...v0.118.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** the grpc advisory ignore covered one module of four ([#142](https://github.com/zeroroot-ai/setec/issues/142)) ([80ba36e](https://github.com/zeroroot-ai/setec/commit/80ba36e3d30efbcb2ebf17f7f7818e35349d95f6)), closes [#125](https://github.com/zeroroot-ai/setec/issues/125)
+* **images:** pin the installer to v0.10.5, which is the first release that can match ([#146](https://github.com/zeroroot-ai/setec/issues/146)) ([a045f3d](https://github.com/zeroroot-ai/setec/commit/a045f3da7c12a2f44c9ff2668906985cae919a5b)), closes [#89](https://github.com/zeroroot-ai/setec/issues/89)
+* **images:** the installer pin missed the reachability fix, so the gate read 350 ids ([#143](https://github.com/zeroroot-ai/setec/issues/143)) ([70048bc](https://github.com/zeroroot-ai/setec/commit/70048bcce9040d0570533ce68db22c4f86005f55)), closes [#89](https://github.com/zeroroot-ai/setec/issues/89)
+* **rework:** the crd field gate is the shared one in ast-checks ([#149](https://github.com/zeroroot-ai/setec/issues/149)) ([96548af](https://github.com/zeroroot-ai/setec/commit/96548afac52742fc17faa49ba9c3a2761a8e0768)), closes [#148](https://github.com/zeroroot-ai/setec/issues/148)
+
 ## [0.118.0](https://github.com/zeroroot-ai/setec/compare/v0.117.0...v0.118.0) (2026-10-02)
 
 
