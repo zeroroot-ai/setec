@@ -478,10 +478,10 @@ jobs:
     # controller reads is a promise `kubectl explain` prints and the cluster
     # does not keep: setec#126 is the measured instance that prompted it.
     #
-    # The reads come from ast-checks/cmd/unwired at the version go.mod pins,
-    # which is the same analyzer `make lint-unwired` uses. A second
-    # type-checker implementation would give this repo two answers to "is this
-    # field read".
+    # The gate is ast-checks/cmd/crdfields at the version go.mod pins. It
+    # counts reads with the same analyzer `make lint-unwired` uses, so this
+    # repo has one answer to "is this field read". The rules and their
+    # mutation tests live in the crdfields package (ast-checks#20).
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -494,14 +494,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The fixture runs first and offline: it feeds the decision half a crafted
-      # analyzer output, so a rule that stopped working is a failure here rather
-      # than a quiet pass below.
-      - name: Mutation-test the guard
-        run: bash scripts/__tests__/check-crd-field-consumers.test.sh
-
       - name: Every served field has a consumer or a recorded verdict
-        run: bash scripts/check-crd-field-consumers.sh
+        run: make check-crd-field-consumers
 
   no-silent-revert:
     name: A PR that undoes a merged commit says so
