@@ -107,6 +107,13 @@ func TestNewPair(t *testing.T) {
 	if got := p.Labels(); got[ClientLabelKey] != "cluster-a" || got[TenantLabelKey] != "acme" {
 		t.Errorf("Labels = %v", got)
 	}
+	if !p.IsOwnerOf(p.Labels()) {
+		t.Error("a pair is not the owner of its own labels")
+	}
+	other, _ := NewPair("cluster-a", "globex")
+	if other.IsOwnerOf(p.Labels()) || p.IsOwnerOf(map[string]string{ClientLabelKey: "cluster-a"}) {
+		t.Error("a pair owns the labels of another pair, or labels with no tenant")
+	}
 	for _, tc := range []struct{ name, client, tenant string }{
 		{"empty client", "", "acme"},
 		{"empty tenant", "cluster-a", ""},

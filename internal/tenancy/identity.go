@@ -102,6 +102,11 @@ func NewPair(client, tenant string) (Pair, error) {
 // String renders the pair as client/tenant, for messages.
 func (p Pair) String() string { return p.Client + "/" + string(p.Tenant) }
 
+// IsOwnerOf reports whether labels record this pair as the owner.
+func (p Pair) IsOwnerOf(labels map[string]string) bool {
+	return labels[ClientLabelKey] == p.Client && labels[TenantLabelKey] == string(p.Tenant)
+}
+
 // Labels returns the two labels that record the pair on an object.
 func (p Pair) Labels() map[string]string {
 	return map[string]string{ClientLabelKey: p.Client, TenantLabelKey: string(p.Tenant)}

@@ -88,11 +88,9 @@ func (n *NamespaceProvisioner) NamespaceFor(ctx context.Context, p tenancy.Pair)
 	if err != nil {
 		return "", fmt.Errorf("namespace %s of pair %s: %w", name, p, err)
 	}
-	for k, v := range want {
-		if ns.Labels[k] != v {
-			return "", fmt.Errorf("namespace %s exists with label %s=%q, not %q; it is not the namespace of pair %s",
-				name, k, ns.Labels[k], v, p)
-		}
+	if !p.IsOwnerOf(ns.Labels) || ns.Labels[SandboxNamespaceLabel] != "true" {
+		return "", fmt.Errorf("namespace %s exists with labels %v; it is not the namespace of pair %s",
+			name, ns.Labels, p.String())
 	}
 	if ns.DeletionTimestamp != nil {
 		return "", fmt.Errorf("namespace %s of pair %s is being deleted", name, p)
