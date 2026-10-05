@@ -118,7 +118,12 @@ func main() {
 	log.Printf("setec-guest-agent: listening on vsock ports %d (entropy) and %d (uniquify), random device %s",
 		opts.Port, opts.UniquifyPort, opts.RandomDevice)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+	// In a launcher machine the agent is PID 1: it is also the supervisor
+	// of the workload. Its exit ends the machine, so an error is fatal.
+	if os.Getpid() == 1 {
+		go func() { errCh <- runSupervisor(ctx, log.Printf) }()
+	}
 	go func() {
 		errCh <- runUniquify(ctx, uln,
 			uniquify.NewLinuxIdentity(), uniquify.NewLinuxNetwork(), uniquify.VsockCID{}, log.Printf)

@@ -39,12 +39,14 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 	if err != nil {
 		return report(termLog, &launcher.Error{Reason: launcher.ReasonBadSpec, Err: err})
 	}
+	guest := launcher.NewGuest(spec)
 	l := &launcher.Launcher{
-		Spec:    spec,
-		Net:     launcher.TCNetwork{},
-		VMM:     &launcher.FirecrackerVMM{Binary: fcBinary},
-		Console: os.Stdout,
-		Grace:   grace,
+		Spec:       spec,
+		Net:        launcher.TCNetwork{},
+		VMM:        &launcher.FirecrackerVMM{Binary: fcBinary},
+		Console:    os.Stdout,
+		Grace:      grace,
+		AfterStart: guest.AfterStart(spec.Workload),
 	}
 	code, err := l.Run(ctx)
 	if err != nil {

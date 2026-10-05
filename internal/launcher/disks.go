@@ -7,12 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
-// prepareDisks makes the writable layer when it does not exist, and links
-// each disk into WorkDir under its fixed name.
-func (s *Spec) prepareDisks() error {
+// Formatter makes an empty ext4 file system on a new writable layer.
+type Formatter func(path string) error
+
+// MkfsExt4 formats with mkfs.ext4 from the launcher image. Lazy init keeps
+// the format fast on a large sparse file.
+func MkfsExt4(path string) error {
+	out, err := exec.Command("mkfs.ext4", "-q", "-F", //nolint:gosec // a path the launcher made
+		"-E", "lazy_itable_init=1,lazy_journal_init=1", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.ext4: %w: %s", err, out)
+	}
+	return nil
+}
+
+// prepareDisks makes and formats the writable layer when it does not exist,
+// and links each disk into WorkDir under its fixed name.
+func (s *Spec) prepareDisks(format Formatter) error {
 	if _, err := os.Stat(s.ImageDisk); err != nil {
 		return fmt.Errorf("the image disk: %w", err)
 	}
@@ -27,6 +42,10 @@ func (s *Spec) prepareDisks() error {
 		}
 		if err := f.Close(); err != nil {
 			return err
+		}
+		if err := format(s.WritableDisk); err != nil {
+			_ = os.Remove(s.WritableDisk)
+			return fmt.Errorf("format the writable layer: %w", err)
 		}
 	} else if err != nil {
 		return fmt.Errorf("the writable layer: %w", err)

@@ -66,6 +66,9 @@ type Launcher struct {
 	Console io.Writer
 	// Grace bounds a clean stop of the guest before a kill.
 	Grace time.Duration
+	// Format makes the file system of a new writable layer. Nil uses
+	// MkfsExt4.
+	Format Formatter
 	// AfterStart runs once the machine runs, with the identity of the Pod.
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
@@ -91,7 +94,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	if err != nil {
 		return LaunchFailedExit, fail(ReasonNetwork, err)
 	}
-	if err := l.Spec.prepareDisks(); err != nil {
+	format := l.Format
+	if format == nil {
+		format = MkfsExt4
+	}
+	if err := l.Spec.prepareDisks(format); err != nil {
 		return LaunchFailedExit, fail(ReasonDisks, err)
 	}
 	exitL, err := listenExit(l.Spec.WorkDir)

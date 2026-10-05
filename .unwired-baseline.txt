@@ -137,3 +137,9 @@ method launcher.Error.Error	# internal/launcher/run.go
 method launcher.Error.Unwrap	# internal/launcher/run.go
 # The guest agent step (setec#189) reads the address of the Pod in AfterStart.
 field launcher.PodNet.Address	# internal/launcher/network.go
+# The exec client reads these: exec and logs through the setec API and the
+# guest agent (setec#192). The guest agent of setec#189 writes them.
+const guestagent.FrameStderr	# internal/guestagent/protocol.go
+const guestagent.FrameStdout	# internal/guestagent/protocol.go
+field guestagent.Response.Size	# internal/guestagent/protocol.go
+func guestagent.ExitCode	# internal/guestagent/protocol.go

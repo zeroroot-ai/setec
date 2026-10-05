@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/zeroroot-ai/setec/internal/guestagent"
 )
 
 // Spec is what the operator writes into the launcher Pod.
@@ -41,6 +43,11 @@ type Spec struct {
 
 	// WorkDir holds the API socket, the vsock socket and the config.
 	WorkDir string `json:"workDir"`
+
+	// Workload is the process that the guest agent starts after a boot:
+	// the entry point, user, directory and environment of the image, with
+	// the command and environment of the Sandbox applied by the operator.
+	Workload *guestagent.Process `json:"workload,omitempty"`
 }
 
 // Source is exactly one of a boot and a snapshot.
@@ -94,6 +101,8 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: the boot kernel must be an absolute path")
 	case s.Source.Snapshot != nil && (!filepath.IsAbs(s.Source.Snapshot.State) || !filepath.IsAbs(s.Source.Snapshot.Memory)):
 		return errors.New("launcher: the snapshot state and memory must be absolute paths")
+	case s.Source.Boot != nil && (s.Workload == nil || len(s.Workload.Argv) == 0):
+		return errors.New("launcher: a boot needs a workload with an argv")
 	}
 	return nil
 }

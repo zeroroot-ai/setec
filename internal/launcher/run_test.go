@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/guestagent"
 )
 
 type fakeNet struct {
@@ -102,8 +104,9 @@ func testSpec(t *testing.T) *Spec {
 	return &Spec{
 		VCPU: 2, MemoryMiB: 512,
 		ImageDisk: img, WritableDisk: filepath.Join(dir, "rw.ext4"), WritableBytes: 1 << 20,
-		WorkDir: filepath.Join(dir, "work"),
-		Source:  Source{Boot: &BootSource{Kernel: "/opt/setec/vmlinux"}},
+		WorkDir:  filepath.Join(dir, "work"),
+		Source:   Source{Boot: &BootSource{Kernel: "/opt/setec/vmlinux"}},
+		Workload: &guestagent.Process{Argv: []string{"/bin/true"}},
 	}
 }
 
@@ -113,7 +116,7 @@ func TestRun_ReturnsTheExitCodeOfTheWorkload(t *testing.T) {
 		t.Run(strconv.Itoa(want), func(t *testing.T) {
 			t.Parallel()
 			nw, vmm, console := &fakeNet{}, &fakeVMM{report: want}, &syncBuf{}
-			l := &Launcher{Spec: testSpec(t), Net: nw, VMM: vmm, Console: console, Grace: time.Second}
+			l := &Launcher{Spec: testSpec(t), Net: nw, VMM: vmm, Console: console, Grace: time.Second, Format: noFormat}
 			code, err := l.Run(t.Context())
 			if err != nil || code != want {
 				t.Fatalf("Run = %d, %v; want %d", code, err, want)
@@ -131,7 +134,7 @@ func TestRun_ReturnsTheExitCodeOfTheWorkload(t *testing.T) {
 func TestRun_BootConfigTakesTheSandboxLimitsAndThePodMAC(t *testing.T) {
 	t.Parallel()
 	vmm := &fakeVMM{}
-	l := &Launcher{Spec: testSpec(t), Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second}
+	l := &Launcher{Spec: testSpec(t), Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat}
 	if _, err := l.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +166,7 @@ func TestRun_SnapshotIsTheSameCall(t *testing.T) {
 	s.Source = Source{Snapshot: &SnapshotSource{State: "/snap/state", Memory: "/snap/mem"}}
 	vmm := &fakeVMM{report: 0}
 	var after []bool
-	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second,
+	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
 		AfterStart: func(_ context.Context, _ PodNet, fromSnapshot bool) error {
 			after = append(after, fromSnapshot)
 			return nil
@@ -195,7 +198,7 @@ func TestRun_FailuresHaveATypedReasonAndLeaveNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			nw := &fakeNet{}
-			l := &Launcher{Spec: testSpec(t), Net: nw, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second}
+			l := &Launcher{Spec: testSpec(t), Net: nw, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second, Format: noFormat}
 			tc.mutate(l)
 			if fn, ok := l.Net.(*fakeNet); ok {
 				nw = fn
@@ -224,3 +227,5 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return string(s.b) }
+
+func noFormat(string) error { return nil }
