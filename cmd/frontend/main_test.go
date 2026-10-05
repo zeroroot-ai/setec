@@ -7,14 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
 	"github.com/zeroroot-ai/setec/internal/credentials"
-	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
 const daemonID = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
@@ -118,36 +111,18 @@ func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 	}
 }
 
-// TestLabelPairResolver_ExactlyOneNamespacePerPair pins the namespace rule of
-// ADR-0142: one namespace for each pair, found by both labels. A namespace
-// with the tenant label only, or with the labels of a different client, is
-// never the namespace of the pair.
-func TestLabelPairResolver_ExactlyOneNamespacePerPair(t *testing.T) {
+// TestParseGrants pins the grant flag: the Pod-write grant of the operator
+// is required, and a malformed entry is refused.
+func TestParseGrants(t *testing.T) {
 	t.Parallel()
-	ns := func(name string, labels map[string]string) *corev1.Namespace {
-		return &corev1.Namespace{Name: name, Labels: labels}
+	got, err := parseGrants([]string{"setec-sandbox-namespace=setec-system/setec"})
+	if err != nil || len(got) != 1 || got[0].ClusterRole != "setec-sandbox-namespace" ||
+		got[0].ServiceAccount.Namespace != "setec-system" || got[0].ServiceAccount.Name != "setec" {
+		t.Fatalf("parseGrants = %+v, %v", got, err)
 	}
-	pairA, _ := tenancy.NewPair("cluster-a", "acme")
-	pairB, _ := tenancy.NewPair("cluster-b", "acme")
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		ns("sbx-a-acme", pairA.Labels()),
-		ns("tenant-only", map[string]string{tenancy.TenantLabelKey: "acme"}),
-		ns("sbx-b-acme-1", pairB.Labels()),
-		ns("sbx-b-acme-2", pairB.Labels()),
-	).Build()
-	r := &labelPairResolver{client: c}
-
-	got, err := r.NamespaceFor(t.Context(), pairA)
-	if err != nil || got != "sbx-a-acme" {
-		t.Fatalf("pair A: namespace = %q, %v; want sbx-a-acme", got, err)
-	}
-	if _, err := r.NamespaceFor(t.Context(), pairB); err == nil || !strings.Contains(err.Error(), "exactly one") {
-		t.Fatalf("pair B has two namespaces: error = %v, want a refusal", err)
-	}
-	pairC, _ := tenancy.NewPair("cluster-c", "acme")
-	if _, err := r.NamespaceFor(t.Context(), pairC); err == nil || !strings.Contains(err.Error(), "no namespace") {
-		t.Fatalf("pair C has no namespace: error = %v, want a refusal", err)
+	for _, bad := range [][]string{nil, {"role"}, {"role=sa"}, {"=ns/sa"}, {"role=/sa"}} {
+		if _, err := parseGrants(bad); err == nil {
+			t.Fatalf("parseGrants(%q) accepted the entries", bad)
+		}
 	}
 }

@@ -353,6 +353,20 @@ assert_absent "$workdir/fe-default.stripped.yaml" "no fixed shared namespace" \
 assert_absent "$workdir/fe-default.stripped.yaml" "no tenant label override" \
 	"--tenant-namespace-label"
 
+render "$workdir/fe-scope.yaml" "${FE_TLS[@]}"
+strip_comments "$workdir/fe-scope.yaml" "$workdir/fe-scope.stripped.yaml"
+assert_contains "$workdir/fe-scope.stripped.yaml" "the frontend gets the pair grants and the scope policy (setec#207)" \
+	"--pair-namespace-grant=setec-sandbox-namespace=" \
+	"--pair-namespace-grant=setec-frontend-exec=" \
+	"name: setec-frontend-scope" \
+	"name: setec-sandbox-host-guard-pairs" \
+	"setec.zeroroot.ai/sandbox-namespace: \"true\""
+if "$HELM" template setec "$CHART_DIR" --set webhook.certManager.enabled=true "${FE_TLS[@]}" >/dev/null 2>&1; then
+	pass "a frontend install renders with no static sandboxNamespaces"
+else
+	fail "a frontend install must render with no static sandboxNamespaces: the frontend makes the pair namespaces"
+fi
+
 if "$HELM" template setec "$CHART_DIR" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \

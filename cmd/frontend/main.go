@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -20,8 +21,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -32,7 +33,6 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/frontend"
-	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc"
 )
@@ -42,6 +42,7 @@ func main() {
 		listenAddr        string
 		creds             credentialFlags
 		clients           repeatedString
+		grants            repeatedString
 		metricsAddr       string
 		shutdownGraceTime time.Duration
 	)
@@ -60,6 +61,9 @@ func main() {
 			"saas=spiffe://example.org/ns/gibson/sa/gibson-daemon. Repeat for each Gibson cluster. "+
 			"Required: the frontend refuses every caller that is not enrolled. In SPIFFE mode "+
 			"these IDs are also the credential allow-list.")
+	flag.Var(&grants, "pair-namespace-grant",
+		"A RoleBinding that each new pair namespace gets, as <cluster-role>=<sa-namespace>/<sa-name>. "+
+			"Repeat for each: the operator needs its Pod-write role and the frontend its exec role there.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
 	flag.DurationVar(&shutdownGraceTime, "shutdown-grace", 30*time.Second,
 		"Maximum time to wait for in-flight RPCs during graceful shutdown.")
@@ -85,15 +89,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Each Gibson cluster is a named client (ADR-0142). The pair of the
-	// client and the tenant of the request selects one namespace, by the
-	// two labels of tenancy.Pair.
+	// Each Gibson cluster is a named client. The pair of the client and the
+	// tenant of the request has one namespace, which the frontend makes on
+	// the first call of the pair (docs/design/isolation.md).
 	enrollment, err := frontend.ParseEnrollment(clients)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: %v\n", err)
 		os.Exit(1)
 	}
-	resolver := &labelPairResolver{client: k8sClient}
+	roleGrants, err := parseGrants(grants)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "frontend: %v\n", err)
+		os.Exit(1)
+	}
+	resolver := &frontend.NamespaceProvisioner{Client: k8sClient, Grants: roleGrants}
 	fmt.Fprintf(os.Stderr, "frontend: %d enrolled clients\n", len(enrollment.SPIFFEIDs()))
 	srv := &frontend.Service{
 		Client:    k8sClient,
@@ -242,30 +251,27 @@ func (r *repeatedString) Set(v string) error {
 	return nil
 }
 
-// labelPairResolver finds the one namespace of a pair by its two labels,
-// tenancy.ClientLabelKey and tenancy.TenantLabelKey. Zero matches and two
-// matches are both refused: a pair has exactly one namespace, and two pairs
-// never share one, because a namespace holds one value for each label.
-type labelPairResolver struct {
-	client client.Client
-}
-
-// NamespaceFor returns the namespace whose labels name the pair.
-func (r *labelPairResolver) NamespaceFor(ctx context.Context, p tenancy.Pair) (string, error) {
-	list := &corev1.NamespaceList{}
-	if err := r.client.List(ctx, list, client.MatchingLabels(p.Labels())); err != nil {
-		return "", fmt.Errorf("list namespaces: %w", err)
+// parseGrants reads the --pair-namespace-grant entries. At least one is
+// required: without the Pod-write grant of the operator, no Sandbox of a
+// new pair could run.
+func parseGrants(entries []string) ([]frontend.RoleGrant, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("no --pair-namespace-grant is set; " +
+			"a new pair namespace would hold no Pod-write grant for the operator")
 	}
-	switch len(list.Items) {
-	case 1:
-		return list.Items[0].Name, nil
-	case 0:
-		return "", fmt.Errorf("no namespace has the labels %s=%s and %s=%s",
-			tenancy.ClientLabelKey, p.Client, tenancy.TenantLabelKey, p.Tenant)
-	default:
-		return "", fmt.Errorf("%d namespaces have the labels of pair %s; a pair must have exactly one",
-			len(list.Items), p)
+	out := make([]frontend.RoleGrant, 0, len(entries))
+	for _, e := range entries {
+		role, sa, ok := strings.Cut(e, "=")
+		ns, name, ok2 := strings.Cut(sa, "/")
+		if !ok || !ok2 || role == "" || ns == "" || name == "" {
+			return nil, fmt.Errorf("--pair-namespace-grant %q is not <cluster-role>=<sa-namespace>/<sa-name>", e)
+		}
+		out = append(out, frontend.RoleGrant{
+			ClusterRole:    role,
+			ServiceAccount: types.NamespacedName{Namespace: ns, Name: name},
+		})
 	}
+	return out, nil
 }
 
 // serveMetrics runs the Prometheus scrape endpoint. Uses the default

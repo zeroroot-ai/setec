@@ -314,8 +314,8 @@ admission still produce clear `ConstraintViolated` Events.
 The frontend serves many Gibson clusters of one owner (ADR-0142). Each
 cluster is an enrolled client: `frontend.clients` joins a client name to
 the SPIFFE ID of the daemon of that cluster. Each request carries the
-tenant. The pair of client and tenant selects the one namespace with the
-labels `setec.zeroroot.ai/client` and `setec.zeroroot.ai/tenant`. A call
+tenant. Each pair of client and tenant has its own namespace, which the
+frontend makes on the first call of the pair. A call
 from a different pair on a Sandbox gets `PERMISSION_DENIED`. See
 `docs/frontend-api.md` "Enrolled clients and tenant resolution".
 

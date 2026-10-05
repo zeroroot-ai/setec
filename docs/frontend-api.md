@@ -282,10 +282,16 @@ a tenant.
 
 Each request carries the `tenant` field. An empty tenant, or a tenant that
 is not a DNS label, gets `INVALID_ARGUMENT`. The pair of the client name
-and the tenant selects one namespace: the namespace with the labels
-`setec.zeroroot.ai/client=<name>` and `setec.zeroroot.ai/tenant=<tenant>`.
-No namespace, or two namespaces, gets `PERMISSION_DENIED`. A namespace
-holds one value for each label, so two pairs never share a namespace.
+and the tenant has one namespace. Its name is `sbx-` and 20 hex digits
+of a hash of the pair, so a pair never gets two. The frontend makes it on
+the first call of the pair, with the labels
+`setec.zeroroot.ai/client=<name>`, `setec.zeroroot.ai/tenant=<tenant>` and
+`setec.zeroroot.ai/sandbox-namespace=true`, and with two RoleBindings: Pod
+writes for the operator and exec for the frontend. The operator writes
+the default-deny policy of the namespace before its first Pod, and the
+host guard binds to the label. A namespace with that name and different
+labels gets `PERMISSION_DENIED`. The admission policy `-frontend-scope`
+refuses any other namespace or binding that the frontend tries to write.
 
 Every call on an existing Sandbox checks that the namespace in the
 sandbox id is the namespace of the pair of the caller. A different

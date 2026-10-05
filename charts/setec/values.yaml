@@ -586,7 +586,8 @@ netpol:
 #      no label-based exemption is offered, because any label an exempt
 #      Pod wears an adversary can wear too.
 #
-# Empty fails the render unless rbac.allowClusterWideSandboxWrite is set.
+# Empty fails the render unless rbac.allowClusterWideSandboxWrite is set or
+# frontend.enabled is true: the frontend makes the namespace of each pair.
 # Namespaces listed here must already exist.
 sandboxNamespaces: []
 
@@ -781,11 +782,12 @@ frontend:
   # REQUIRED when frontend.enabled=true: the frontend refuses a caller
   # whose certificate does not carry one of these SPIFFE IDs.
   #
-  # Each request carries a tenant. The pair of the client name and the
-  # tenant selects the one namespace of the Sandbox: the namespace with
-  # the labels setec.zeroroot.ai/client=<name> and
-  # setec.zeroroot.ai/tenant=<tenant>. Two pairs never share a namespace.
-  # The namespace must exist and be listed in sandboxNamespaces.
+  # Each request carries a tenant. The frontend makes one namespace for
+  # each pair of client and tenant on the first call of the pair
+  # (setec#207), so two pairs never share one. It is labeled
+  # setec.zeroroot.ai/sandbox-namespace=true and gets the host guard, the
+  # default-deny policy and two RoleBindings. The policy -frontend-scope
+  # limits the frontend to these writes.
   #
   #   clients:
   #     - name: saas

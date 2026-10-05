@@ -292,10 +292,13 @@ verify the expected new manifests appear via `helm template`.
   still flows through the webhook. `frontend.clients` enrolls each Gibson
   cluster as a named client, with the SPIFFE ID of its daemon, and is
   required. The frontend refuses a caller that is not enrolled. Each
-  request carries a tenant. The pair of client and tenant selects the one
-  namespace with the labels `setec.zeroroot.ai/client` and
-  `setec.zeroroot.ai/tenant`. That namespace must exist and be listed in
-  `sandboxNamespaces`.
+  request carries a tenant. The frontend makes one namespace for each pair
+  of client and tenant on the first call of the pair, with its two
+  RoleBindings. The ValidatingAdmissionPolicy `-frontend-scope` limits the
+  frontend to those writes, and the host guard binds to each such
+  namespace by its `setec.zeroroot.ai/sandbox-namespace=true` label.
+  `sandboxNamespaces` lists only the namespaces that hold Sandboxes made
+  by other means, and it can be empty when the frontend is on.
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and

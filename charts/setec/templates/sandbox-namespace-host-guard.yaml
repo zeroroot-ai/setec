@@ -1,4 +1,4 @@
-{{- if and .Values.sandboxNamespaces .Values.sandboxHostGuard.enabled }}
+{{- if and (or .Values.sandboxNamespaces .Values.frontend.enabled) .Values.sandboxHostGuard.enabled }}
 # Host-access guard for Sandbox namespaces (setec#159).
 #
 # WHY THIS EXISTS
@@ -131,6 +131,7 @@ spec:
 # validationActions: [Deny] — the policy rejects the request. Audit is
 # deliberately not added: an annotation on an admitted host-network Pod is
 # not containment.
+{{- if .Values.sandboxNamespaces }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
@@ -151,4 +152,27 @@ spec:
             {{- range $ns := .Values.sandboxNamespaces }}
             - {{ $ns | quote }}
             {{- end }}
+{{- end }}
+{{- if and .Values.frontend.enabled .Values.sandboxHostGuard.enabled }}
+---
+# The namespaces that the frontend makes for each pair of client and
+# tenant (setec#207). Selected by label: the frontend sets the label at
+# create, the frontend-scope policy refuses a namespace without it, and
+# the frontend has no verb that changes the labels of a namespace later.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-sandbox-host-guard-pairs
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    setec.zeroroot.ai/managed-by: setec-operator
+spec:
+  policyName: {{ include "setec.fullname" . }}-sandbox-host-guard
+  validationActions:
+    - Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        setec.zeroroot.ai/sandbox-namespace: "true"
+{{- end }}
 {{- end }}

@@ -31,7 +31,7 @@ rbac.allowClusterWideSandboxWrite: true and gets it, explicitly and on the
 record.
 */ -}}
 {{- $clusterWide := .Values.rbac.allowClusterWideSandboxWrite -}}
-{{- if and (not $clusterWide) (empty .Values.sandboxNamespaces) }}
+{{- if and (not $clusterWide) (empty .Values.sandboxNamespaces) (not .Values.frontend.enabled) }}
 {{- fail "sandboxNamespaces is empty. It names the namespaces Sandboxes run in: the operator's Pod-write RBAC is bound there, and each one gets the namespace-wide default-deny NetworkPolicy. Leaving it empty would either leave the operator unable to create any Pod, or require cluster-wide pods:create — which is a cluster-admin path. Either list your Sandbox namespaces, or set rbac.allowClusterWideSandboxWrite: true to take the cluster-wide grant deliberately." }}
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
