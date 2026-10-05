@@ -177,3 +177,15 @@ func (c *httpClient) LoadSnapshot(ctx context.Context, statePath, memPath string
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/load", body)
 }
+
+// SendCtrlAltDel asks the guest behind socketPath to stop. With the boot
+// argument reboot=k the guest kernel ends, and Firecracker exits. The
+// interface Client stays the four snapshot calls; the launcher alone stops
+// a machine, so this is a function and not a method of Client.
+func SendCtrlAltDel(ctx context.Context, socketPath string) error {
+	c, ok := NewClientFromSocket(socketPath).(*httpClient)
+	if !ok {
+		return fmt.Errorf("firecracker: unexpected client type")
+	}
+	return c.do(ctx, http.MethodPut, "/actions", map[string]string{"action_type": "SendCtrlAltDel"})
+}

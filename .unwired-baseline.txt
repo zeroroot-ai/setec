@@ -109,3 +109,31 @@ method deviceplugin.Plugin.PreStartContainer	# internal/deviceplugin/plugin.go
 const podspec.KVMResource	# internal/podspec/launcher.go
 const podspec.TunResource	# internal/podspec/launcher.go
 func podspec.BuildLauncher	# internal/podspec/launcher.go
+
+# The Firecracker config of the launcher (setec#188). Firecracker reads these
+# JSON fields; the measurer counts only reads in Go.
+field launcher.bootSource.BootArgs	# internal/launcher/vmconfig.go
+field launcher.bootSource.InitrdPath	# internal/launcher/vmconfig.go
+field launcher.bootSource.KernelImagePath	# internal/launcher/vmconfig.go
+field launcher.drive.DriveID	# internal/launcher/vmconfig.go
+field launcher.drive.IsReadOnly	# internal/launcher/vmconfig.go
+field launcher.drive.IsRootDevice	# internal/launcher/vmconfig.go
+field launcher.drive.PathOnHost	# internal/launcher/vmconfig.go
+field launcher.machine.MemSizeMiB	# internal/launcher/vmconfig.go
+field launcher.machine.SMT	# internal/launcher/vmconfig.go
+field launcher.machine.VCPUCount	# internal/launcher/vmconfig.go
+field launcher.netIface.GuestMAC	# internal/launcher/vmconfig.go
+field launcher.netIface.HostDevName	# internal/launcher/vmconfig.go
+field launcher.netIface.IfaceID	# internal/launcher/vmconfig.go
+field launcher.vmConfig.BootSource	# internal/launcher/vmconfig.go
+field launcher.vmConfig.Drives	# internal/launcher/vmconfig.go
+field launcher.vmConfig.MachineConfig	# internal/launcher/vmconfig.go
+field launcher.vmConfig.NetworkInterfaces	# internal/launcher/vmconfig.go
+field launcher.vmConfig.Vsock	# internal/launcher/vmconfig.go
+field launcher.vsockDevice.GuestCID	# internal/launcher/vmconfig.go
+field launcher.vsockDevice.UDSPath	# internal/launcher/vmconfig.go
+# Called through the error interface by errors.As and errors.Unwrap.
+method launcher.Error.Error	# internal/launcher/run.go
+method launcher.Error.Unwrap	# internal/launcher/run.go
+# The guest agent step (setec#189) reads the address of the Pod in AfterStart.
+field launcher.PodNet.Address	# internal/launcher/network.go
