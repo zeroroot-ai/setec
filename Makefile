@@ -303,7 +303,7 @@ helm-verify-credentials: ## Render both credential modes and assert the install-
 	HELM="$(HELM)" ./hack/verify-chart-credentials.sh $(HELM_CHART_DIR)
 
 .PHONY: verify-x86-substrate
-verify-x86-substrate: ## Assert the x86-only substrate (ADR-0001): amd64-only images + arch selectors.
+verify-x86-substrate: ## Assert the x86-only substrate (ADR-0141): amd64-only images + arch selectors.
 	@command -v $(HELM) >/dev/null 2>&1 || { \
 		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
 		exit 1; \

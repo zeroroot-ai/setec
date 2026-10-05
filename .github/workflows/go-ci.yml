@@ -309,7 +309,7 @@ jobs:
         # makes the check unable to fail is caught here.
         run: ./hack/measure-idle-footprint.sh --self-test
 
-      - name: x86-substrate assertions (ADR-0001)
+      - name: x86-substrate assertions (ADR-0141)
         # The sandbox substrate is x86 only (setec#186): image publishing
         # must stay single-arch linux/amd64 and the node-facing DaemonSets
         # and Karpenter NodePool must keep their kubernetes.io/arch=amd64

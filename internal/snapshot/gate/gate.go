@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Package gate is the single decision point for the ADR-0005
+// Package gate is the single decision point for the ADR-0145
 // snapshot-isolation invariant gate: a snapshot restore or checkpoint
 // resume is served OUTSIDE dev-mode only when every one of the five
 // isolation invariants carries a positive per-restore verification.
@@ -40,13 +40,13 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
-// Invariant names one of the five ADR-0005 isolation invariants. The
+// Invariant names one of the five ADR-0145 isolation invariants. The
 // values are bounded, human-meaningful strings used verbatim in
 // Events, conditions, and metric labels.
 type Invariant string
 
 const (
-	// InvariantCleanBase (ADR-0005 #1): the restored state is the
+	// InvariantCleanBase (ADR-0145 #1): the restored state is the
 	// class image booted to guest-agent-ready — no tenant data, no
 	// secrets, no prior input. Per-restore evidence: for a pool
 	// warm-start, the entry's recorded secret-scan verdict (produced
@@ -56,7 +56,7 @@ const (
 	// the artifact's binding to the very sandbox that produced it.
 	InvariantCleanBase Invariant = "clean-base"
 
-	// InvariantUniquified (ADR-0005 #2): the restored guest verifiably
+	// InvariantUniquified (ADR-0145 #2): the restored guest verifiably
 	// received a fresh CSPRNG reseed AND adopted a fresh identity
 	// (machine-id, boot-id, hostname, CNI-assigned Pod IP, unique
 	// vsock CID). Per-restore evidence: the node-agent's
@@ -64,21 +64,21 @@ const (
 	// setec#189).
 	InvariantUniquified Invariant = "per-restore-uniquification"
 
-	// InvariantSingleSession (ADR-0005 #3): the restored state serves
+	// InvariantSingleSession (ADR-0145 #3): the restored state serves
 	// exactly one session — never reused across sessions or tenants.
 	// Per-restore evidence: pool entries are consumed on claim (one
 	// claim, then destroyed); a snapshot/checkpoint resume must target
 	// the sandbox that produced the artifact.
 	InvariantSingleSession Invariant = "one-session-then-destroy"
 
-	// InvariantProvenance (ADR-0005 #4): the restored template was
+	// InvariantProvenance (ADR-0145 #4): the restored template was
 	// built only from a trusted class image, never from a used
 	// sandbox. Per-restore evidence: the node-agent's
 	// provenance_verified confirmation (record read, class-image-boot
 	// source, cryptographically bound into the sealed DEK, setec#190).
 	InvariantProvenance Invariant = "template-provenance"
 
-	// InvariantEncryptedAtRest (ADR-0005 #5): the restored state was
+	// InvariantEncryptedAtRest (ADR-0145 #5): the restored state was
 	// only ever persisted through the sealed-DEK encrypted path.
 	// Per-restore evidence: the node-agent's encrypted_at_rest
 	// confirmation (setec#190).
@@ -167,13 +167,13 @@ type Decision struct {
 // String renders the violation list for Events and errors.
 func (d Decision) String() string {
 	if len(d.Violations) == 0 {
-		return "all ADR-0005 invariants verified"
+		return "all ADR-0145 invariants verified"
 	}
 	parts := make([]string, len(d.Violations))
 	for i, v := range d.Violations {
 		parts[i] = string(v)
 	}
-	return "unverified ADR-0005 invariants: " + strings.Join(parts, ", ")
+	return "unverified ADR-0145 invariants: " + strings.Join(parts, ", ")
 }
 
 // Gate resolves the dev-mode opt-out for the invariant gate. A nil

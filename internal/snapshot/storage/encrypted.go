@@ -17,7 +17,7 @@ import (
 
 // KEKSource resolves the key-encryption key an EncryptedBackend seals
 // per-snapshot DEKs with. Two implementations exist and they define
-// the two sealing domains of ADR-0005 invariant 5:
+// the two sealing domains of ADR-0145 invariant 5:
 //
 //   - FileKEKSource — the NODE-LOCAL keyfile. Pool entries and
 //     local-disk snapshots never leave the node, so a node-scoped KEK
@@ -152,7 +152,7 @@ func (d *DirDEKStore) Destroy(_ context.Context, snapshotID string) error {
 	return atrest.Shred(d.path(snapshotID))
 }
 
-// EncryptedBackend enforces encryption at rest (ADR-0005 invariant 5)
+// EncryptedBackend enforces encryption at rest (ADR-0145 invariant 5)
 // in front of any inner StorageBackend. Every snapshot is encrypted
 // with its own DEK; the DEK is sealed with the KEK the configured
 // KEKSource serves and persisted through the SealedDEKStore.
@@ -187,7 +187,7 @@ type EncryptedBackend struct {
 // artifact this wrapper serves was written through the per-snapshot
 // sealed-DEK path — there is no plaintext write path behind it. The
 // node-agent reports it per restore so the operator-side invariant
-// gate (ADR-0005) never has to infer encryption.
+// gate (ADR-0145) never has to infer encryption.
 func (b *EncryptedBackend) EncryptedAtRest() bool { return true }
 
 // dekAAD binds a sealed DEK to the snapshot it protects, so a sealed

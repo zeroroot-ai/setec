@@ -541,7 +541,7 @@ func TestParseFlags_HappyPath(t *testing.T) {
 	}
 }
 
-// TestParseFlags_GuestCID pins the ADR-0005 invariant-2 flag surface:
+// TestParseFlags_GuestCID pins the ADR-0145 invariant-2 flag surface:
 // the node-agent passes a node-unique CID per pool boot, and reserved
 // values are rejected.
 func TestParseFlags_GuestCID(t *testing.T) {

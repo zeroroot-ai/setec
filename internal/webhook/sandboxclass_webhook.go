@@ -157,7 +157,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		))
 	}
 
-	// Pre-warm pool knobs (ADR-0004, setec#188). The three fields are one
+	// Pre-warm pool knobs (ADR-0144, setec#188). The three fields are one
 	// declarative surface: a pool needs an image to bake, and a TTL of zero
 	// or less would recycle entries in a hot loop.
 	allErrs = append(allErrs, validatePreWarm(class)...)
@@ -360,7 +360,7 @@ func validateRuntimeParams(class *setecv1alpha1.SandboxClass) field.ErrorList {
 
 // validatePreWarm enforces the coherence rules of the declarative
 // pre-warm pool surface (PreWarmPoolSize / PreWarmImage / PreWarmTTL,
-// ADR-0004):
+// ADR-0144):
 //
 //   - a non-zero pool size requires a PreWarmImage — the node-agent
 //     bakes pool entries from the class image and has nothing to boot

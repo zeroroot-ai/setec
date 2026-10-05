@@ -4,7 +4,7 @@ Short playbook for choosing Setec runtime backends on Amazon EKS. One page, copy
 
 ## What's available per node type
 
-- **`.metal` instance types (bare metal)** — the Nitro bare-metal sizes (for example `m7i.metal-24xl`, `m7i.metal-48xl`, `m6i.metal`, `c7i.metal-*`, `r7i.metal-*`) expose Intel VT-x directly to the OS. These are the nodes where `kata-fc` works without fuss — `/dev/kvm` is present and KVM modules load normally. Graviton-based `.metal` sizes (for example `m7g.metal`, `c7g.metal`) are **not supported**: the sandbox substrate is x86 only ([ADR-0001](../adr/0001-x86-substrate.md)) — setec images are `linux/amd64` single-arch and every sandbox component pins `kubernetes.io/arch=amd64`.
+- **`.metal` instance types (bare metal)** — the Nitro bare-metal sizes (for example `m7i.metal-24xl`, `m7i.metal-48xl`, `m6i.metal`, `c7i.metal-*`, `r7i.metal-*`) expose Intel VT-x directly to the OS. These are the nodes where `kata-fc` works without fuss — `/dev/kvm` is present and KVM modules load normally. Graviton-based `.metal` sizes (for example `m7g.metal`, `c7g.metal`) are **not supported**: the sandbox substrate is x86 only (ADR-0141) — setec images are `linux/amd64` single-arch and every sandbox component pins `kubernetes.io/arch=amd64`.
 - **Virtualized EC2 instances with nested-virt (C8i, M8i, R8i)** — AWS announced support for nested KVM/Hyper-V on C8i, M8i, and R8i virtual (non-metal) instances in February 2026 ([AWS announcement](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-ec2-nested-virtualization-on-virtual/)). On these instance types a non-metal EKS node can run `kata-fc` or `kata-qemu`. Confirm the region and launch template before depending on this — check current vendor docs.
 - **All other default EKS node types (m7i/m6i/m5/c7i/c6i/t3/t3a/c7g/m7g etc., non-metal, non-C8i/M8i/R8i)** — do **not** expose `/dev/kvm`. Kata-fc and kata-qemu will fail to start Sandboxes on these nodes. Practical backends: **gvisor** and **runc**.
 
@@ -49,7 +49,7 @@ If you need `kata-fc` for a subset of workloads (for example, untrusted model-ag
 ## Baked x86-metal AMI for kata-fc (optional profile)
 
 On any x86 KVM-capable node pool the chart's portable installer DaemonSet
-(`installer.enabled=true`, the default — ADR-0003) converges nodes with no
+(`installer.enabled=true`, the default — ADR-0143) converges nodes with no
 AWS-specific setup, so a `.metal` x86 pool needs nothing beyond the chart
 install. The **Packer-baked immutable AMI** in
 [`packer/eks-kata-fc-ami/`](../../packer/eks-kata-fc-ami/README.md) is the
@@ -60,7 +60,7 @@ loudly at boot:
 
 - **Base**: current EKS-optimized AL2023 **x86_64** AMI (pinned Kubernetes
   version via the public SSM parameter). arm64 is unsupported per
-  [ADR-0001](../adr/0001-x86-substrate.md).
+  ADR-0141.
 - **Targets**: cheapest x86 bare metal with local NVMe —
   **`c6id.metal` / `m6id.metal`**. `.metal` supplies `/dev/kvm` (VT-x); the
   `d` suffix supplies the instance-store NVMe the devmapper thin-pool is
@@ -114,7 +114,7 @@ How the pieces line up:
 - The `EC2NodeClass` selects the baked AMI (`setec-kata-fc-*` by name, or
   pin an AMI id) with `amiFamily: AL2023` so Karpenter emits standard
   nodeadm user data.
-- The `NodePool` requires `kubernetes.io/arch=amd64` (ADR-0001) and
+- The `NodePool` requires `kubernetes.io/arch=amd64` (ADR-0141) and
   restricts to `c6id.metal` / `m6id.metal` (on-demand only by default),
   stamps the `setec.zeroroot.ai/runtime.kata-fc=true` label the
   kata-fc RuntimeClass schedules on, and taints the node

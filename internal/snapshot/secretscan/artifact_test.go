@@ -14,7 +14,7 @@ import (
 
 // TestScanArtifactSHA256_CleanReturnsDigest: a clean artifact yields
 // no findings and the exact SHA-256 of its bytes, computed in the same
-// pass — the digest a scan verdict records (ADR-0005 invariant 1).
+// pass — the digest a scan verdict records (ADR-0145 invariant 1).
 func TestScanArtifactSHA256_CleanReturnsDigest(t *testing.T) {
 	body := []byte("plain guest state with nothing secret-shaped in it")
 	path := filepath.Join(t.TempDir(), "state.bin")

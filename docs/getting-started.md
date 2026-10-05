@@ -43,7 +43,7 @@ You should see a character device owned by `root:kvm` (or similar). If you see "
 
 Setec talks to runtime backends through the standard Kubernetes `RuntimeClass` abstraction. Pick the install path for your chosen backend:
 
-**kata-fc** (the default backend): **no manual step**. The Setec chart ships a portable installer DaemonSet (ADR-0003, `installer.enabled=true` by default) that converges every x86 KVM-capable node: it lays down the stock Kata + Firecracker release bundled in its image, provisions the containerd devmapper thin-pool with boot ordering, and registers the `kata-fc` handler with containerd (stock containerd and k3s). The chart renders the `kata-fc` `RuntimeClass` itself (`runtimes.kata-fc.install=true`). After the chart install in Step 3, verify with:
+**kata-fc** (the default backend): **no manual step**. The Setec chart ships a portable installer DaemonSet (ADR-0143, `installer.enabled=true` by default) that converges every x86 KVM-capable node: it lays down the stock Kata + Firecracker release bundled in its image, provisions the containerd devmapper thin-pool with boot ordering, and registers the `kata-fc` handler with containerd (stock containerd and k3s). The chart renders the `kata-fc` `RuntimeClass` itself (`runtimes.kata-fc.install=true`). After the chart install in Step 3, verify with:
 
 ```bash
 kubectl -n setec-system rollout status ds/setec-installer --timeout=5m

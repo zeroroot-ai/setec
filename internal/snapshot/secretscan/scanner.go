@@ -150,7 +150,7 @@ func New() *Scanner {
 // the rule names and patterns rather than hand-bumped, so any change to
 // the detectors changes the version automatically — a recorded verdict
 // therefore names precisely which rules cleared the artifact. Recorded
-// in pool-entry scan verdicts (ADR-0005 invariant 1).
+// in pool-entry scan verdicts (ADR-0145 invariant 1).
 func Version() string {
 	h := sha256.New()
 	for _, rl := range builtinRules {

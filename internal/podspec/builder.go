@@ -176,7 +176,7 @@ const (
 	scratchMountPath = "/tmp"
 
 	// WorkspaceVolumeName is the Pod volume name for the durable
-	// per-session workspace PVC (session lifecycle only, ADR-0006/0007).
+	// per-session workspace PVC (session lifecycle only, ADR-0146/0147).
 	WorkspaceVolumeName = "workspace"
 
 	// WorkspaceMountPath is where the session workspace is mounted

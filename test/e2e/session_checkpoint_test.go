@@ -21,7 +21,7 @@ limitations under the License.
 
 package e2e
 
-// Session-checkpoint e2e (setec#194, ADR-0006 L2 / ADR-0007): the
+// Session-checkpoint e2e (setec#194, ADR-0146 L2 / ADR-0147): the
 // suspend-idle → resume loop and drain → resume-on-another-node, with
 // process state carried across by memory checkpoints on the
 // S3-compatible store (MinIO in the dev env).

@@ -25,7 +25,7 @@ import (
 
 // newEphemeralReapReconciler wires a SandboxReconciler over a fake client
 // holding only the given Sandbox, with the ephemeral finished-TTL injected so
-// the auto-destroy ramp (ADR-0006) can be driven through real reconciles
+// the auto-destroy ramp (ADR-0146) can be driven through real reconciles
 // instead of wall-clock waits.
 func newEphemeralReapReconciler(
 	g *WithT,
@@ -68,7 +68,7 @@ func terminalEphemeral(name string, phase setecv1alpha1.SandboxPhase, finishedAt
 	return sb
 }
 
-// TestEphemeralSandboxAutoDestroyedAfterRetention proves ADR-0006's
+// TestEphemeralSandboxAutoDestroyedAfterRetention proves ADR-0146's
 // "auto-destroy on exit": a terminal ephemeral Sandbox whose finished-TTL has
 // elapsed is deleted by the reconciler, so a creator that never called Kill
 // leaks nothing. Owner-reference GC (a real-cluster guarantee, not exercised

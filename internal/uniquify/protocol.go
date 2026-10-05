@@ -3,7 +3,7 @@
 
 // Package uniquify implements the per-restore identity uniquification
 // channel between the setec host (node-agent) and a restored microVM
-// guest (setec-guest-agent), closing the remaining ADR-0005
+// guest (setec-guest-agent), closing the remaining ADR-0145
 // invariant-2 residuals after the entropy reseed (setec#72):
 //
 //   - fresh machine-id, boot-id, and hostname per restore, so any two

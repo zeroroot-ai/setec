@@ -15,7 +15,7 @@ import (
 	setecruntime "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
-// TestSandboxClassWebhook_ValidatePreWarm covers the ADR-0004
+// TestSandboxClassWebhook_ValidatePreWarm covers the ADR-0144
 // declarative pre-warm pool surface: pool size, image, and TTL are one
 // coherent knob, and an active pool requires the kata-fc backend
 // (pool restore drives the Kata VM's Firecracker socket).

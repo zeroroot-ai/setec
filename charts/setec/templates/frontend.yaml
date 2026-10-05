@@ -144,7 +144,7 @@ rules:
   # Sandboxes (Attach + stream heartbeats) so the operator's idle
   # eviction can tell an active session from an abandoned one, and
   # flips spec.desiredState to Running when an Exec arrives for a
-  # paused or suspended session (ADR-0008 auto-resume). Both are
+  # paused or suspended session (ADR-0148 auto-resume). Both are
   # narrow merge patches; the frontend never writes status.
   - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxes]

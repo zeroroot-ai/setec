@@ -30,7 +30,7 @@ type TickReconciler struct {
 	// FillObserver, when non-nil, receives the per-class entry counts
 	// after every reconcile pass. The node-agent wires this to the
 	// setec_prewarm_pool_entries gauge so pool state is observable
-	// without a gRPC round-trip (ADR-0004 acceptance).
+	// without a gRPC round-trip (ADR-0144 acceptance).
 	FillObserver func(fills map[string]int)
 }
 

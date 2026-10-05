@@ -3,7 +3,7 @@
 
 package controller
 
-// Session-lifecycle scenarios (ADR-0006/0007): the durable workspace
+// Session-lifecycle scenarios (ADR-0146/0147): the durable workspace
 // PVC is created before the Pod, an exited session VM is restarted
 // rather than finished, and explicit teardown wipes the workspace.
 //

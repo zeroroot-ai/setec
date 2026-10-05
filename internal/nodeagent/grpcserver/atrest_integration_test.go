@@ -18,7 +18,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
-// This file is the integration test ADR-0005 invariant 5 gates on:
+// This file is the integration test ADR-0145 invariant 5 gates on:
 // driving the real node-agent RPC surface over the PRODUCTION storage
 // composition (EncryptedBackend over LocalDiskBackend), it asserts a
 // snapshot artifact is unreadable without its key and provably gone —

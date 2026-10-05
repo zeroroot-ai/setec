@@ -17,7 +17,7 @@ import (
 // recorded caller activity for a session Sandbox, as an RFC 3339 UTC
 // timestamp. The frontend stamps it on Attach and heartbeats it while
 // a client stream is open; the operator reads it to decide whether a
-// session is idle (SandboxClass.spec.sessionIdleTimeout, ADR-0006).
+// session is idle (SandboxClass.spec.sessionIdleTimeout, ADR-0146).
 // It lives on the Sandbox object — not in the frontend — so idle
 // detection survives frontend restarts with no datastore.
 const AnnotationLastActivity = "setec.zeroroot.ai/last-activity"
@@ -84,7 +84,7 @@ const (
 	SandboxPhaseRestoring SandboxPhase = "Restoring"
 	// SandboxPhaseSuspended indicates a session Sandbox whose microVM
 	// has been checkpointed to portable storage and released
-	// (setec#194, ADR-0006 L2). The durable workspace PVC and the
+	// (setec#194, ADR-0146 L2). The durable workspace PVC and the
 	// checkpoint survive; no Pod exists while Suspended. A reattach,
 	// fresh activity, or desiredState=Running resumes the session —
 	// on whichever node the scheduler picks.
@@ -121,7 +121,7 @@ type SessionRecoveryKind string
 const (
 	// SessionRecoveryResumedFromCheckpoint: the VM's process state was
 	// restored from the latest memory checkpoint — the session
-	// continued where it left off (the L2 good case, ADR-0006).
+	// continued where it left off (the L2 good case, ADR-0146).
 	SessionRecoveryResumedFromCheckpoint SessionRecoveryKind = "ResumedFromCheckpoint"
 	// SessionRecoveryRestartedFromWorkspace: no usable checkpoint
 	// existed (node died between checkpoints, or the restore failed),
@@ -258,7 +258,7 @@ type Network struct {
 	Allow []NetworkAllow `json:"allow,omitempty"`
 }
 
-// LifecycleMode selects which of the two Sandbox lifecycles (ADR-0006)
+// LifecycleMode selects which of the two Sandbox lifecycles (ADR-0146)
 // applies.
 // +kubebuilder:validation:Enum=ephemeral;session
 type LifecycleMode string
@@ -274,14 +274,14 @@ const (
 	// lives across many calls, owns a durable workspace PVC mounted at
 	// /workspace, survives VM restart and node loss (the PVC re-attaches),
 	// and ends only on explicit teardown (deleting the Sandbox), which
-	// wipes and deletes the workspace. Per ADR-0005 invariant 3 a
+	// wipes and deletes the workspace. Per ADR-0145 invariant 3 a
 	// session VM and its workspace serve exactly one session and are
 	// never reused.
 	LifecycleModeSession LifecycleMode = "session"
 )
 
 // WorkspaceSpec configures the durable per-session workspace volume
-// (ADR-0007). The workspace is a dedicated ReadWriteOnce CSI
+// (ADR-0147). The workspace is a dedicated ReadWriteOnce CSI
 // PersistentVolumeClaim the operator creates with the Sandbox and
 // deletes at session teardown. Only meaningful when
 // spec.lifecycle.mode=session; the webhook rejects it otherwise.
@@ -304,7 +304,7 @@ type WorkspaceSpec struct {
 // Lifecycle declares which lifecycle the Sandbox follows and carries
 // optional runtime constraints.
 type Lifecycle struct {
-	// Mode selects the Sandbox lifecycle (ADR-0006): "ephemeral"
+	// Mode selects the Sandbox lifecycle (ADR-0146): "ephemeral"
 	// (default; run-to-completion, auto-destroy, stateless) or "session"
 	// (long-lived, durable /workspace PVC, explicit teardown). Mode is
 	// immutable: the admission webhook rejects any update that changes
@@ -348,7 +348,7 @@ type SandboxSpec struct {
 	// are passed verbatim; no shell interpretation occurs.
 	//
 	// Required for the ephemeral lifecycle: that one command is the whole
-	// life of the Sandbox (ADR-0006). A session may leave it empty. The
+	// life of the Sandbox (ADR-0146). A session may leave it empty. The
 	// operator then boots the setec keepalive, a process that reaps
 	// orphans and never exits on its own, so the session outlives every
 	// command sent through Exec. The keepalive never depends on a shell
@@ -417,7 +417,7 @@ func (s *SandboxSpec) IsSession() bool {
 
 // IsEphemeral reports whether the Sandbox follows the ephemeral,
 // run-to-completion lifecycle: it starts, runs its command to a terminal
-// phase, and is auto-destroyed after (ADR-0006). It is the exact
+// phase, and is auto-destroyed after (ADR-0146). It is the exact
 // complement of IsSession.
 func (s *SandboxSpec) IsEphemeral() bool {
 	return s.EffectiveLifecycleMode() == LifecycleModeEphemeral
@@ -480,7 +480,7 @@ type SandboxStatus struct {
 	Runtime *SandboxRuntimeStatus `json:"runtime,omitempty"`
 
 	// Checkpoint records the session's latest memory checkpoint and
-	// its recovery bookkeeping (setec#194, ADR-0006 L2). Nil for
+	// its recovery bookkeeping (setec#194, ADR-0146 L2). Nil for
 	// ephemeral Sandboxes and for sessions whose class does not
 	// enable sessionCheckpoint.
 	// +optional
@@ -488,7 +488,7 @@ type SandboxStatus struct {
 
 	// WarmStart records the outcome of the one-shot pool warm-start
 	// attempt for Sandboxes whose class maintains a pre-warm pool
-	// (ADR-0004). Nil when no attempt was made (class has no pool,
+	// (ADR-0144). Nil when no attempt was made (class has no pool,
 	// image mismatch, or explicit snapshotRef). Its presence is the
 	// idempotency marker: the controller attempts a warm start at
 	// most once per Sandbox.
@@ -500,7 +500,7 @@ type SandboxStatus struct {
 // of a session Sandbox plus how the last VM (re)start recovered. A
 // session keeps AT MOST one live checkpoint: taking a new one destroys
 // the previous, and a restore consumes the checkpoint it used
-// (ADR-0005 forbids restoring the same state twice).
+// (ADR-0145 forbids restoring the same state twice).
 type SandboxCheckpointStatus struct {
 	// Ref is the storage reference of the latest checkpoint. Empty
 	// when no live checkpoint exists (none taken yet, or the last one
@@ -559,7 +559,7 @@ const (
 	// fallback, never a failure.
 	SandboxWarmStartColdBoot SandboxWarmStartOutcome = "ColdBoot"
 	// SandboxWarmStartRejected means the restore succeeded node-side
-	// but the ADR-0005 invariant gate refused to serve it: one or more
+	// but the ADR-0145 invariant gate refused to serve it: one or more
 	// per-restore invariant verifications did not pass and no dev-mode
 	// opt-out was active. The Sandbox is destroyed (Failed with reason
 	// InvariantGateViolation) because its VM already received the
@@ -607,7 +607,7 @@ type SandboxWarmStartStatus struct {
 
 // Sandbox is the Schema for the sandboxes API. Each Sandbox represents a
 // single isolated microVM execution unit following one of two lifecycles
-// (ADR-0006): ephemeral (the default — one run, auto-destroy, stateless)
+// (ADR-0146): ephemeral (the default — one run, auto-destroy, stateless)
 // or session (long-lived, durable /workspace volume, explicit teardown).
 type Sandbox struct {
 	metav1.TypeMeta `json:",inline"`

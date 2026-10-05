@@ -34,7 +34,7 @@ import (
 )
 
 // TestInstaller_Converges asserts the portable node installer DaemonSet
-// (ADR-0003, setec#187) reached a deliberate outcome on every node it
+// (ADR-0143, setec#187) reached a deliberate outcome on every node it
 // targets. installChart renders it under SETEC_E2E_INSTALLER=1 and
 // waitForInstallReady already waited for every pod to be Ready, which the
 // readiness probe grants only on a deliberate outcome; this reads the

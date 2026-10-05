@@ -79,7 +79,7 @@ type StorageBackend interface {
 
 // AtRestReporter is the optional capability a StorageBackend
 // implements to attest that every artifact it serves is encrypted at
-// rest (ADR-0005 invariant 5). The node-agent consults it per restore
+// rest (ADR-0145 invariant 5). The node-agent consults it per restore
 // to populate the encrypted_at_rest response signal the operator-side
 // invariant gate verifies. A backend that does not implement the
 // interface is treated as unencrypted — the signal is never inferred.

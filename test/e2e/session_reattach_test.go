@@ -83,7 +83,7 @@ func newInProcessFrontend() *frontend.Service {
 	}
 }
 
-// TestSession_ReattachByHandle exercises the ADR-0006 reattach contract
+// TestSession_ReattachByHandle exercises the ADR-0146 reattach contract
 // end to end against a real microVM (setec#193):
 //
 //  1. attach to a Running session by handle;

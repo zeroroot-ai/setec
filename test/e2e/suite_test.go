@@ -183,7 +183,7 @@ var (
 	k8sClient client.Client
 
 	// sessionS3 carries the session-checkpoint object-store settings
-	// (setec#194, ADR-0007). The checkpoint scenarios are the only ones
+	// (setec#194, ADR-0147). The checkpoint scenarios are the only ones
 	// that need a node-agent at all, so the whole DaemonSet stays out of
 	// the base install until SETEC_E2E_S3 turns it on.
 	sessionS3 sessionS3Config
@@ -297,7 +297,7 @@ func TestMain(m *testing.M) {
 }
 
 // sessionS3Config is the resolved session-checkpoint object-store
-// configuration (setec#194, ADR-0007). Zero value = disabled, which is
+// configuration (setec#194, ADR-0147). Zero value = disabled, which is
 // what every environment without a checkpoint bucket gets.
 type sessionS3Config struct {
 	// enabled mirrors SETEC_E2E_S3. When false the base install keeps
@@ -717,7 +717,7 @@ func installChart() error {
 		"--set", fmt.Sprintf("image.pullPolicy=%s", imagePullPolicy),
 		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
 		"--set", fmt.Sprintf("runtimeAgent.image.pullPolicy=%s", imagePullPolicy),
-		// The portable installer DaemonSet (ADR-0003) joins the base install
+		// The portable installer DaemonSet (ADR-0143) joins the base install
 		// under SETEC_E2E_INSTALLER=1. kata-deploy owns the kata-fc handler
 		// on the metal node and the installer leaves it alone, but the
 		// handler asks for the devmapper snapshotter and kata-deploy
@@ -771,7 +771,7 @@ func installChart() error {
 	// half. phase3Enabled() greps the operator Deployment for
 	// `--snapshots-enabled`, which the chart only renders under
 	// snapshots.enabled; left off, every Phase 3 scenario calls t.Skip —
-	// including BOTH ADR-0005 invariants (TestPhase3_RestoredClonesDivergeInRNG,
+	// including BOTH ADR-0145 invariants (TestPhase3_RestoredClonesDivergeInRNG,
 	// TestPhase3_RestoredClonesHaveUniqueIdentity) and
 	// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS having
 	// verified none of them. That is the failure mode TestEnv_KVMPresent exists

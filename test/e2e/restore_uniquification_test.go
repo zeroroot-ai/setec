@@ -38,7 +38,7 @@ import (
 )
 
 // TestPhase3_RestoredClonesHaveUniqueIdentity is the setec#189 /
-// ADR-0005 invariant-2 acceptance: two sandboxes restored from the
+// ADR-0145 invariant-2 acceptance: two sandboxes restored from the
 // SAME snapshot template must each observe a distinct machine
 // identity (machine-id, boot-id, hostname) and their own CNI-assigned
 // Pod IP — no stale network state from snapshot time. Each restored

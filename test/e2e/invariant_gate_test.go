@@ -107,7 +107,7 @@ func setNodeAgentFlag(t *testing.T, flag, from, to string) func() {
 }
 
 // TestGate_UnverifiedWarmStartFailsClosed is the setec#191 acceptance
-// e2e: artificially suppress one ADR-0005 per-restore verification
+// e2e: artificially suppress one ADR-0145 per-restore verification
 // (the entropy reseed, via the node-agent's --entropy-reseed=off
 // opt-out) and assert the invariant gate fails the restore CLOSED in a
 // non-dev namespace — the Sandbox is destroyed with the typed

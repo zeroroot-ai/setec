@@ -27,7 +27,7 @@ import (
 
 // S3Config carries the connection parameters for an S3-compatible
 // object store (real S3 on EKS, MinIO or any S3-compatible endpoint
-// when self-hosted — ADR-0007).
+// when self-hosted — ADR-0147).
 type S3Config struct {
 	// Endpoint is the base URL of the S3-compatible service (e.g.
 	// "http://minio.minio.svc:9000"). Empty selects the AWS default
@@ -72,7 +72,7 @@ type S3Config struct {
 // cannot honour the interface's overwrite-before-unlink guidance, so
 // callers MUST front this backend with EncryptedBackend — destroying
 // the sealed DEK is what actually erases an S3 checkpoint
-// (crypto-erase, ADR-0005 invariant 5). That destroy removes every
+// (crypto-erase, ADR-0145 invariant 5). That destroy removes every
 // version of the sealed DEK, not only the current one; on a versioned
 // bucket a plain delete would leave the key material alive as a
 // noncurrent version and the erasure would be nominal (#297).
@@ -322,7 +322,7 @@ func errHeadForbidden(err error) error {
 // stack creates is versioned, and that is a sane default generally.
 //
 // For the sealed DEK that is the difference between crypto-erase and the
-// appearance of one — S3DEKStore.Destroy is what ADR-0005 invariant 5 leans
+// appearance of one — S3DEKStore.Destroy is what ADR-0145 invariant 5 leans
 // on. As deployed it is not a confidentiality hole, because the sealed DEK is
 // useless without the per-session KEK in a Kubernetes Secret that never
 // enters the bucket, so deleting that Secret is still a true crypto-erase.
@@ -531,7 +531,7 @@ func (s *S3DEKStore) Destroy(ctx context.Context, snapshotID string) error {
 	}
 	// Every version, not just the current one. On a versioned bucket a plain
 	// DeleteObject writes a delete marker and leaves the sealed DEK alive as
-	// a noncurrent version — and this call is what ADR-0005 invariant 5
+	// a noncurrent version — and this call is what ADR-0145 invariant 5
 	// treats as the erasure.
 	if err := s.Backend.deleteObjectAllVersions(ctx, s.Backend.dekKey(snapshotID)); err != nil {
 		return fmt.Errorf("storage: s3 destroy sealed DEK %q: %w", snapshotID, err)

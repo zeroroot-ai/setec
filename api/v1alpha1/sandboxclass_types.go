@@ -258,7 +258,7 @@ type SandboxClassSpec struct {
 	// reason=PauseTimeoutExceeded and deletes its VM Pod.
 	//
 	// Sessions in a class with spec.sessionCheckpoint enabled are the
-	// exception (setec#202, ADR-0006): past the cap they suspend
+	// exception (setec#202, ADR-0146): past the cap they suspend
 	// instead — checkpoint retained, microVM released, phase=Suspended
 	// with reason=SuspendedPauseTimeout — and resume when
 	// spec.desiredState returns to Running. The Suspended phase itself
@@ -271,7 +271,7 @@ type SandboxClassSpec struct {
 	MaxPauseDuration *metav1.Duration `json:"maxPauseDuration,omitempty"`
 
 	// SessionIdleTimeout is the idle-eviction threshold for session
-	// Sandboxes in this class (ADR-0006). A Running session whose last
+	// Sandboxes in this class (ADR-0146). A Running session whose last
 	// recorded activity — the setec.zeroroot.ai/last-activity
 	// annotation the frontend stamps on Attach and heartbeats while a
 	// client stream is open, falling back to status.startedAt and then
@@ -290,7 +290,7 @@ type SandboxClassSpec struct {
 	SessionIdleTimeout *metav1.Duration `json:"sessionIdleTimeout,omitempty"`
 
 	// SessionCheckpoint enables L2 memory checkpoints for session
-	// Sandboxes of this class (setec#194, ADR-0006/0007): periodic
+	// Sandboxes of this class (setec#194, ADR-0146/0147): periodic
 	// checkpoints while Running, checkpoint-on-drain when the node is
 	// cordoned or the VM Pod is evicted, and suspend-instead-of-evict
 	// when the sessionIdleTimeout deadline passes — the idle session
@@ -351,7 +351,7 @@ type EgressAllowPort struct {
 type SessionCheckpointSpec struct {
 	// Interval is the cadence of periodic memory checkpoints while
 	// the session is Running. Because the durable workspace already
-	// provides continuous data safety (ADR-0007), checkpoints serve
+	// provides continuous data safety (ADR-0147), checkpoints serve
 	// process continuity only and SHOULD be infrequent — the trade is
 	// bandwidth/cost against how much process replay a resume loses.
 	// Unset or zero disables periodic checkpoints; checkpoints are
@@ -407,7 +407,7 @@ type SandboxClassStatus struct {
 	// UnverifiedRestoresAllowed: True when the class carries the
 	// setec.zeroroot.ai/allow-unverified-restores="true" dev-mode
 	// annotation AND the cluster-level dev gate label is present, so
-	// the ADR-0005 invariant gate may serve unverified restores for
+	// the ADR-0145 invariant gate may serve unverified restores for
 	// this class. Anyone auditing the cluster sees the opt-out on the
 	// class itself, not buried in per-sandbox events.
 	// +optional

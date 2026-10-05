@@ -52,7 +52,7 @@ func PauseDeadline(
 //
 // When the class enables sessionCheckpoint, a Paused session past the
 // deadline is owned by the suspend machinery instead (setec#194,
-// ADR-0006): the session suspends — checkpoint, release the microVM,
+// ADR-0146): the session suspends — checkpoint, release the microVM,
 // resume when desiredState returns to Running — rather than
 // hard-failing, so this policy passes the status through untouched.
 // An ephemeral Sandbox in such a class still hard-fails here: the

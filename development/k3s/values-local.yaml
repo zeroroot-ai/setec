@@ -84,7 +84,7 @@ runtimeAgent:
   # (setec#243).
   mountK3sContainerdConfig: true
 
-# The portable installer DaemonSet (ADR-0003) is the chart's DEFAULT
+# The portable installer DaemonSet (ADR-0143) is the chart's DEFAULT
 # node-prep path, but this dev cluster's node prep is kata-deploy-owned
 # (20-install-kata.sh) — the installer would detect that and stand down
 # anyway, but running it here would also require building + importing its

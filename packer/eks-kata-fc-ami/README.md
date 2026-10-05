@@ -1,6 +1,6 @@
 # Setec kata-fc x86-metal EKS AMI (Packer)
 
-> **Optional deployment profile** (ADR-0003). The DEFAULT node-prep path
+> **Optional deployment profile** (ADR-0143). The DEFAULT node-prep path
 > is the chart's portable installer DaemonSet (`installer.enabled=true`),
 > which converges any x86 KVM-capable node with no AWS dependency. This
 > AMI pre-bakes the same components for faster node-ready on EKS +
@@ -13,7 +13,7 @@ node either boots capable or fails loudly in `setec-thinpool.service`.
 
 Built from the current **EKS-optimized AL2023 x86_64** base (resolved via the
 public SSM parameter for the pinned Kubernetes version). The sandbox
-substrate is x86 only ([ADR-0001](../../docs/adr/0001-x86-substrate.md)).
+substrate is x86 only (ADR-0141).
 Target instance types are the cheapest x86 bare metal with local NVMe:
 **`c6id.metal` / `m6id.metal`** — the chart's Karpenter NodePool defaults
 (KVM requires `.metal`; the devmapper thin-pool requires the `d` suffix's
@@ -29,7 +29,7 @@ NVMe instance store).
 | boot-time thin-pool provisioner | `setec-thinpool.service` → `/usr/local/sbin/setec-thinpool.sh` | builds an LVM thin-pool (`setec-thinpool`) from unused NVMe **instance-store** devices, idempotent across reboots; rebuilds + clears stale devmapper snapshotter state after a stop/start wiped the ephemeral disks. Ordered `Before=containerd.service`, and containerd `Requires=` it |
 | static RuntimeClass manifest | `/etc/setec/manifests/runtimeclass-kata-fc.yaml` (also in `files/`) | `kata-fc` handler, kata-deploy-parity `overhead.podFixed` (130Mi / 250m), scheduling nodeSelector `setec.zeroroot.ai/runtime.kata-fc=true` |
 
-The end state matches what the portable installer DaemonSet (ADR-0003,
+The end state matches what the portable installer DaemonSet (ADR-0143,
 `Dockerfile.installer`) produces on a stock node: same kata payload (same
 version, same sha256 pin), same containerd drop-in content, same shim
 symlinks, same RuntimeClass. The AMI is just the pre-baked fast path — a

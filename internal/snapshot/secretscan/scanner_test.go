@@ -139,7 +139,7 @@ func TestScan_DeduplicatesIdenticalFindings(t *testing.T) {
 }
 
 // TestVersion_IsDerivedFromTheRules pins the verdict-versioning
-// contract (ADR-0005 invariant 1, setec#206): the version is stable
+// contract (ADR-0145 invariant 1, setec#206): the version is stable
 // across calls, non-empty, and derived from the detector set so any
 // rule change re-versions recorded verdicts automatically.
 func TestVersion_IsDerivedFromTheRules(t *testing.T) {

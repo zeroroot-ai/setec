@@ -21,7 +21,7 @@ import (
 // defaulted to /usr/local/bin/firecracker ("the standard path kata-deploy lays
 // down") while this installer only ever links the shim and leaves Firecracker
 // at /opt/kata/bin/firecracker. On any node prepared by setec's own installer
-// DaemonSet (the default node-prep path, ADR-0003) the launcher's default
+// DaemonSet (the default node-prep path, ADR-0143) the launcher's default
 // therefore named a file that does not exist, and nothing failed until a pool
 // VM tried to spawn on a real node.
 //

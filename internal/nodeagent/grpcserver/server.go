@@ -46,7 +46,7 @@ type Server struct {
 	Storage storage.StorageBackend
 
 	// SessionStorage builds the portable session-checkpoint backend
-	// ("s3", ADR-0007) for one call. The caller-provided kek is the
+	// ("s3", ADR-0147) for one call. The caller-provided kek is the
 	// per-session key-encryption key the operator read from the
 	// session's Kubernetes Secret and forwarded over the mTLS control
 	// channel; it lives only for the duration of the RPC. kek may be
@@ -89,7 +89,7 @@ type Server struct {
 	ReseedObserver func(outcome string)
 
 	// Uniquifier drives the per-restore identity uniquification over
-	// the same vsock UDS after the entropy reseed (ADR-0005 invariant
+	// the same vsock UDS after the entropy reseed (ADR-0145 invariant
 	// 2, setec#189): fresh machine-id/boot-id/hostname, the
 	// CNI-assigned Pod IP reconciled in-guest, and the guest's vsock
 	// CID reported for the node-local uniqueness check. When non-nil
@@ -120,7 +120,7 @@ type Server struct {
 	// entries' per-entry DEKs are sealed with (the same keyfile the
 	// EncryptedBackend uses). ClaimPoolEntry needs it to decrypt an
 	// entry's state/memory pair before LoadSnapshot — pool state is
-	// always encrypted at rest (ADR-0005 invariant 5).
+	// always encrypted at rest (ADR-0145 invariant 5).
 	PoolKEKPath string
 
 	// Tracer is optional.
@@ -135,7 +135,7 @@ func (s *Server) tracer() trace.Tracer {
 }
 
 // sessionBackendName is the storage_backend identifier of the
-// portable S3-compatible session-checkpoint backend (ADR-0007).
+// portable S3-compatible session-checkpoint backend (ADR-0147).
 const sessionBackendName = "s3"
 
 // backendFor routes a request's storage_backend (plus optional
@@ -341,7 +341,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		reseeded = true
 	}
 
-	// Per-restore uniquification (ADR-0005 invariant 2, setec#189):
+	// Per-restore uniquification (ADR-0145 invariant 2, setec#189):
 	// direct the restored guest to adopt a fresh machine-id, boot-id,
 	// and hostname, reconcile its interface to the CNI-assigned Pod
 	// IP, and report its vsock CID for the node-local uniqueness
@@ -370,7 +370,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		Uniquified:      uniquified,
 		// Reported from the attested capability of the backend that
 		// actually served THIS restore (node-local or per-session S3),
-		// never assumed: the operator-side invariant gate (ADR-0005)
+		// never assumed: the operator-side invariant gate (ADR-0145)
 		// fails closed on false outside dev.
 		EncryptedAtRest: storage.IsEncryptedAtRest(backend),
 	}, nil
@@ -580,13 +580,13 @@ func (s *Server) QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest
 
 // ClaimPoolEntry atomically claims a pre-warmed pool entry for the
 // requested class/image and restores its paused-VM state into the
-// caller-provided Kata Firecracker socket (ADR-0004). Pool entries
+// caller-provided Kata Firecracker socket (ADR-0144). Pool entries
 // persist raw state.bin/memory.bin files under their entry directory
 // (written by setec-pool-vm) — not the framed stream the Storage
 // backend uses — so the restore reads them directly.
 //
 // The claimed entry is consumed no matter how the restore ends:
-// ADR-0005 forbids restoring the same snapshot state twice, so a
+// ADR-0145 forbids restoring the same snapshot state twice, so a
 // failed restore releases the entry rather than returning it to the
 // pool. Both "no entry" and "restore failed" are reported as
 // non-error responses; the operator's fallback to cold boot is the
@@ -621,12 +621,12 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 	}
 
 	// The entry is consumed from here on: erase its on-disk state when
-	// we return, success or not (ADR-0005 single-restore invariant).
+	// we return, success or not (ADR-0145 single-restore invariant).
 	// Claim already detached it from pool state, so ReleaseClaimed —
 	// not Release — is the teardown.
 	defer func() { _ = s.Pool.ReleaseClaimed(ctx, entry) }()
 
-	// Pool entry state is encrypted at rest (ADR-0005 invariant 5):
+	// Pool entry state is encrypted at rest (ADR-0145 invariant 5):
 	// unseal the per-entry DEK and decrypt into a private temp dir for
 	// LoadSnapshot. Plain RemoveAll on the temp pair — Firecracker may
 	// keep the restored memory file mapped, so it must be unlinked,
@@ -686,7 +686,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 		reseeded = true
 	}
 
-	// Per-restore uniquification (ADR-0005 invariant 2, setec#189),
+	// Per-restore uniquification (ADR-0145 invariant 2, setec#189),
 	// identical fail-closed contract: the warm-started clone must
 	// verifiably adopt its fresh identity (machine-id / boot-id /
 	// hostname / Pod IP) and its vsock CID — pinned to the one the
@@ -726,7 +726,7 @@ func (s *Server) ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEn
 		// decrypted the always-encrypted state pair, and matched the
 		// plaintext digests against the verdict — so the clean-base
 		// signal (invariant 1) is independent evidence, not an
-		// inference from provenance (invariant 4). ADR-0005
+		// inference from provenance (invariant 4). ADR-0145
 		// invariants 1, 4 and 5.
 		ProvenanceVerified: true,
 		EncryptedAtRest:    true,
@@ -758,7 +758,7 @@ func (s *Server) decryptPoolEntry(entryDir, entryID, workDir string) (statePath,
 	if err != nil {
 		return "", "", nil, fmt.Errorf("read provenance: %w", err)
 	}
-	// The clean-base scan verdict (ADR-0005 invariant 1, setec#206) is
+	// The clean-base scan verdict (ADR-0145 invariant 1, setec#206) is
 	// as load-bearing as the provenance record: it must exist and be
 	// clean (fail closed on absence), it is AAD-bound into the sealed
 	// DEK so a swapped or tampered record makes the DEK unopenable,
