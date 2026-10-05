@@ -163,6 +163,18 @@ runtimes:
     # -- diskRepo is the repository of the signed image disks that
     # setec-disk-builder makes. Required when enabled.
     diskRepo: ""
+    # -- diskBuilder runs as a Job in the operator namespace before the
+    # first launcher Pod of an image digest.
+    diskBuilder:
+      image:
+        repository: ghcr.io/zeroroot-ai/setec-disk-builder
+        tag: ""
+      # -- signingSecret holds the base64 ed25519 seed (key "seed") that
+      # signs each disk. Required when enabled. The install makes it.
+      signingSecret: ""
+      # -- registrySecret is an optional kubernetes.io/dockerconfigjson
+      # Secret with the push credentials of diskRepo.
+      registrySecret: ""
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
     # CI where you want to exercise the Setec control plane without a

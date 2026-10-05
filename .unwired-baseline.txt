@@ -163,3 +163,5 @@ field podspec.launcherSpec.WritableDisk	# internal/podspec/launcher.go
 # Map keys of the launcher Pod limits; the measurer counts a map key as a write.
 const podspec.KVMResource	# internal/podspec/launcher.go
 const podspec.TunResource	# internal/podspec/launcher.go
+# Called through the error interface when the controller logs the failure.
+method controller.diskBuildError.Error	# internal/controller/launcher_disk.go

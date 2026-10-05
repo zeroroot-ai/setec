@@ -132,6 +132,10 @@ func main() {
 		sessionKeepaliveImage string
 		launcherImage         string
 		diskRepo              string
+		diskBuilderImage      string
+		diskSigningSecret     string
+		diskRegistrySecret    string
+		operatorNamespace     string
 		otlpEndpoint          string
 		otlpInsecure          bool
 		otlpCAFile            string
@@ -178,6 +182,14 @@ func main() {
 	pflag.StringVar(&diskRepo, "disk-repo", "",
 		"Repository of the signed image disks that setec-disk-builder makes. "+
 			"Required when the launcher backend is enabled.")
+	pflag.StringVar(&diskBuilderImage, "disk-builder-image", "",
+		"Image of setec-disk-builder. The operator runs it as a Job before the first launcher Pod of an image digest.")
+	pflag.StringVar(&diskSigningSecret, "disk-signing-secret", "",
+		"Secret in the operator namespace with the ed25519 seed (key \"seed\") that signs each disk.")
+	pflag.StringVar(&diskRegistrySecret, "disk-registry-secret", "",
+		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
+	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
+		"Namespace of the operator, where the disk builder Jobs run.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
@@ -363,8 +375,9 @@ func main() {
 		case runtimepkg.BackendRunc:
 			runtimeRegistry.Register(runtimepkg.NewRuncDispatcher(bc))
 		case runtimepkg.BackendLauncher:
-			if launcherImage == "" || diskRepo == "" {
-				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image and --disk-repo are required")
+			if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") {
+				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image, --disk-repo, "+
+					"--disk-builder-image, --disk-signing-secret and --operator-namespace are required")
 				os.Exit(1)
 			}
 			runtimeRegistry.Register(runtimepkg.NewLauncherDispatcher())
@@ -486,6 +499,11 @@ func main() {
 		KeepaliveImage:        sessionKeepaliveImage,
 		LauncherImage:         launcherImage,
 		DiskRepo:              diskRepo,
+		DiskBuilder: controller.DiskBuilderConfig{
+			Image: diskBuilderImage, Namespace: operatorNamespace,
+			SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
+			Reader: mgr.GetAPIReader(),
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)

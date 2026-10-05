@@ -90,8 +90,17 @@ spec:
             {{- if not .diskRepo }}
             {{- fail "runtimes.launcher.diskRepo is required when runtimes.launcher.enabled is true: each launcher machine boots the signed disk of its image from there" }}
             {{- end }}
+            {{- if not .diskBuilder.signingSecret }}
+            {{- fail "runtimes.launcher.diskBuilder.signingSecret is required when runtimes.launcher.enabled is true: it signs each image disk" }}
+            {{- end }}
             - --launcher-image={{ .image.repository }}:{{ .image.tag | default $.Chart.AppVersion }}
             - --disk-repo={{ .diskRepo }}
+            - --disk-builder-image={{ .diskBuilder.image.repository }}:{{ .diskBuilder.image.tag | default $.Chart.AppVersion }}
+            - --disk-signing-secret={{ .diskBuilder.signingSecret }}
+            {{- with .diskBuilder.registrySecret }}
+            - --disk-registry-secret={{ . }}
+            {{- end }}
+            - --operator-namespace={{ $.Values.namespace }}
             {{- end }}
             {{- end }}
             {{- if .Values.snapshots.enabled }}

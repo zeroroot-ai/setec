@@ -249,6 +249,9 @@ type SandboxReconciler struct {
 	// disk of its image digest from DiskRepo.
 	LauncherImage string
 	DiskRepo      string
+	// DiskBuilder runs setec-disk-builder before the first launcher Pod of
+	// an image digest.
+	DiskBuilder DiskBuilderConfig
 
 	// --- Phase 2 optional dependencies ---
 	//
@@ -1675,6 +1678,9 @@ func (r *SandboxReconciler) createPod(
 	opts.KeepaliveImage = r.KeepaliveImage
 	var pod *corev1.Pod
 	if sel != nil && sel.Backend == runtimepkg.BackendLauncher {
+		if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
+			return res, derr
+		}
 		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
 			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
 			// Scratch here once both are on main; until then the default holds.
