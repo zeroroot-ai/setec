@@ -88,6 +88,13 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	if err := os.MkdirAll(l.Spec.WorkDir, 0o700); err != nil {
 		return LaunchFailedExit, fail(ReasonDisks, err)
 	}
+	// The disk comes first. Once the network is joined, every frame of the
+	// Pod goes to the machine, and the launcher itself can reach nothing.
+	if _, statErr := os.Stat(l.Spec.ImageDisk); os.IsNotExist(statErr) && l.Spec.ImageRef != "" && l.FetchDisk != nil {
+		if err := l.FetchDisk(ctx, l.Spec); err != nil {
+			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("fetch the image disk: %w", err))
+		}
+	}
 	defer func() {
 		if lerr := l.Net.Leave(); lerr != nil && err == nil {
 			err = fmt.Errorf("remove the network join: %w", lerr)
@@ -96,11 +103,6 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	pn, err := l.Net.Join()
 	if err != nil {
 		return LaunchFailedExit, fail(ReasonNetwork, err)
-	}
-	if _, statErr := os.Stat(l.Spec.ImageDisk); os.IsNotExist(statErr) && l.Spec.ImageRef != "" && l.FetchDisk != nil {
-		if err := l.FetchDisk(ctx, l.Spec); err != nil {
-			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("fetch the image disk: %w", err))
-		}
 	}
 	format := l.Format
 	if format == nil {

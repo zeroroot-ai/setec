@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -229,3 +230,26 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return string(s.b) }
 
 func noFormat(string) error { return nil }
+
+// TestRun_FetchesTheDiskBeforeTheNetworkJoin pins the order that the first
+// real boot found: after the join, each frame of the Pod goes to the
+// machine, so a download after it can reach nothing.
+func TestRun_FetchesTheDiskBeforeTheNetworkJoin(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	s.ImageDisk = filepath.Join(t.TempDir(), "fetched.sqfs")
+	s.ImageRef = "registry.example/tool@sha256:" + strings.Repeat("a", 64)
+	nw := &fakeNet{}
+	var joinedAtFetch int
+	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		FetchDisk: func(_ context.Context, s *Spec) error {
+			joinedAtFetch = nw.joined
+			return os.WriteFile(s.ImageDisk, []byte("disk"), 0o600)
+		}}
+	if _, err := l.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if joinedAtFetch != 0 {
+		t.Fatal("the disk was fetched after the network join")
+	}
+}
