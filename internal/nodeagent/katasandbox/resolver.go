@@ -14,7 +14,7 @@
 // (kata-containers src/runtime/virtcontainers/fc.go, setPaths and
 // truncateID). The CRI sandbox id is not the Pod UID, and the Pod
 // object does not carry it, so only the node can resolve it: the
-// containerd CRI plugin records the sandbox as a container labelled
+// containerd CRI plugin records the sandbox as a container labeled
 // with the Pod UID.
 package katasandbox
 

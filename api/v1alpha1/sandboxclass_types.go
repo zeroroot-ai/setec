@@ -105,7 +105,7 @@ type SandboxClassSpec struct {
 	// nothing. The microVM is the isolation boundary, so that substitution
 	// silently changed the boundary.
 	//
-	// Honouring it needs a Kata hypervisor path annotation, which Kata gates
+	// Honoring it needs a Kata hypervisor path annotation, which Kata gates
 	// behind an operator-configured allowlist that is empty by default for the
 	// same reason. Pin the guest kernel on the node instead. The field stays
 	// served so an existing object still validates.

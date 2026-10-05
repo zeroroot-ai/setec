@@ -9,7 +9,7 @@ import "context"
 // runtime is available on the host node.
 //
 // Requirements, all mandatory:
-//   - /dev/kvm must exist (hardware virtualisation device node).
+//   - /dev/kvm must exist (hardware virtualization device node).
 //   - A KVM kernel module must be loaded: /sys/module/kvm_intel or
 //     /sys/module/kvm_amd on x86, or the built-in /sys/module/kvm entry on
 //     arm64 hosts (e.g. AWS Graviton bare metal), where KVM is compiled

@@ -28,7 +28,7 @@ type runtimeFlavor struct {
 	configDir string
 }
 
-// Runtime flavour names. Defined here rather than in the tests that first
+// Runtime flavor names. Defined here rather than in the tests that first
 // needed them: the production switches below are what repeat the literals.
 const (
 	flavorContainerd = "containerd"
@@ -621,7 +621,7 @@ const (
 // binary was built without the plugin: the kind node image ships such a
 // build, so the installer reported "converged" while every kata-fc Pod died
 // with "inspection service could not find snapshotter devmapper plugin"
-// (setec#22). A plugin that is present but failed to initialise is the same
+// (setec#22). A plugin that is present but failed to initialize is the same
 // failure, one step later.
 //
 // When the host has no ctr to ask (k3s without its multicall binary, a

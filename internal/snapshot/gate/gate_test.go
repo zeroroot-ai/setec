@@ -108,9 +108,9 @@ func annotatedClass() *setecv1alpha1.SandboxClass {
 	}
 }
 
-func devNamespace(labelled bool) *corev1.Namespace {
+func devNamespace(labeled bool) *corev1.Namespace {
 	ns := &corev1.Namespace{Name: DefaultGateNamespace}
-	if labelled {
+	if labeled {
 		ns.Labels = map[string]string{DefaultAllowDevLabel: "true"}
 	}
 	return ns

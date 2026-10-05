@@ -574,7 +574,7 @@ func TestExec_ResumesPausedSession(t *testing.T) {
 	sb.Spec.DesiredState = setecv1alpha1.SandboxDesiredStatePaused
 	svc := execService(t, &stubExecutor{}, sb)
 
-	// Simulate the controller honouring the resume request.
+	// Simulate the controller honoring the resume request.
 	go func() {
 		for range 200 {
 			time.Sleep(5 * time.Millisecond)

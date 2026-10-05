@@ -36,7 +36,7 @@ func KVMAvailable(root string) (bool, string) {
 	path := filepath.Join(root, "dev", "kvm")
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return false, "KVM device /dev/kvm not found; node may not support hardware virtualisation"
+			return false, "KVM device /dev/kvm not found; node may not support hardware virtualization"
 		}
 		return false, "KVM device /dev/kvm not accessible: " + err.Error()
 	}
@@ -63,7 +63,7 @@ func ModuleLoaded(root, name string) bool {
 //     is compiled into the kernel with no vendor module; the built-in kvm
 //     module still surfaces a /sys/module/kvm directory because it exposes
 //     parameters. Checking it last keeps x86 results byte-identical to the
-//     historical behaviour while unblocking ARM hosts.
+//     historical behavior while unblocking ARM hosts.
 var kvmModuleCandidates = []string{"kvm_intel", "kvm_amd", "kvm"}
 
 // LoadedKVMModule returns the name of the first loaded KVM kernel module

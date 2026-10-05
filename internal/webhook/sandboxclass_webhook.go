@@ -57,7 +57,7 @@ const devGateNamespace = "default"
 //
 // The dev-only gate for runc (REQ-4.3) is enforced by fetching a well-known
 // namespace (devGateNamespace, "default") and checking for the AllowDevLabel.
-// Cluster operators signal cluster-wide dev-runtime consent by labelling that
+// Cluster operators signal cluster-wide dev-runtime consent by labeling that
 // namespace; a SandboxClass requesting runc without the label present is
 // rejected.
 type SandboxClassWebhook struct {
@@ -107,7 +107,7 @@ func (w *SandboxClassWebhook) Default(_ context.Context, class *setecv1alpha1.Sa
 	case setecv1alpha1.VMMQEMU:
 		backend = runtime.BackendKataQEMU
 	default:
-		// VMM is also unset or an unrecognised value — fall back to the
+		// VMM is also unset or an unrecognized value — fall back to the
 		// cluster-default backend from Helm values.
 		backend = w.RuntimeCfg.Defaults.Runtime.Backend
 	}
@@ -351,7 +351,7 @@ func validateRuntimeParams(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
 		errs = append(errs, field.Invalid(paramsPath, strings.Join(unknown, ","),
-			fmt.Sprintf("the %q backend accepts only %s. An unrecognised key fails pod "+
+			fmt.Sprintf("the %q backend accepts only %s. An unrecognized key fails pod "+
 				"creation for every Sandbox in this class",
 				backend, strings.Join(accepted, ", "))))
 	}
@@ -422,7 +422,7 @@ func (w *SandboxClassWebhook) validateBackendKnownAndEnabled(backend string, fld
 	known := slices.Contains(runtime.AllKnownBackends, backend)
 	if !known {
 		return field.Invalid(fldPath, backend,
-			fmt.Sprintf("%q is not a recognised backend; must be one of %v", backend, runtime.AllKnownBackends))
+			fmt.Sprintf("%q is not a recognized backend; must be one of %v", backend, runtime.AllKnownBackends))
 	}
 	bc, ok := w.RuntimeCfg.Runtimes[backend]
 	if !ok || !bc.Enabled {

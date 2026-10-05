@@ -275,19 +275,19 @@ func anchors() *x509.CertPool { return x509.NewCertPool() }
 	}
 }
 
-// TestScanHonoursAnExemptionWithoutWideningIt proves an exemption
+// TestScanHonorsAnExemptionWithoutWideningIt proves an exemption
 // covers what it names and nothing adjacent.
-func TestScanHonoursAnExemptionWithoutWideningIt(t *testing.T) {
+func TestScanHonorsAnExemptionWithoutWideningIt(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "allowed", bypassFile), bypassSource)
-	writeFile(t, filepath.Join(root, "allowed-neighbour", bypassFile), bypassSource)
+	writeFile(t, filepath.Join(root, "allowed-neighbor", bypassFile), bypassSource)
 
 	report := scanOK(t, root, []Exemption{{Path: "allowed", Reason: "test fixture"}})
 	if len(report.Violations) == 0 {
-		t.Fatal("the neighbour of an exempt directory went unflagged")
+		t.Fatal("the neighbor of an exempt directory went unflagged")
 	}
 	for _, v := range report.Violations {
-		if !strings.HasPrefix(v.File, "allowed-neighbour/") {
+		if !strings.HasPrefix(v.File, "allowed-neighbor/") {
 			t.Errorf("flagged %q; the exemption names \"allowed\" and covers nothing else", v.File)
 		}
 	}

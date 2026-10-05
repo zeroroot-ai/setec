@@ -44,7 +44,7 @@ const kataFCNodeLabel = "setec.zeroroot.ai/runtime.kata-fc"
 // TestEnv_KVMPresent is the loud-fail environment guard for the Phase 3
 // suite. Every Phase 3 scenario implicitly assumes a Firecracker microVM can
 // actually boot, because Kata Containers with Firecracker requires hardware
-// virtualisation. Without this guard, an incapable environment makes the
+// virtualization. Without this guard, an incapable environment makes the
 // Phase 3 scenarios all hit t.Skip() and the suite reports PASS with zero
 // meaningful coverage — a silent regression hiding underneath green CI.
 //
@@ -122,7 +122,7 @@ func requireKataFCCapableNode(t *testing.T) {
 	for {
 		var nodes corev1.NodeList
 		if err := k8sClient.List(ctx, &nodes, client.MatchingLabels{kataFCNodeLabel: "true"}); err != nil {
-			t.Fatalf("list nodes labelled %s=true: %v", kataFCNodeLabel, err)
+			t.Fatalf("list nodes labeled %s=true: %v", kataFCNodeLabel, err)
 		}
 		if len(nodes.Items) > 0 {
 			return

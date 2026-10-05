@@ -155,7 +155,7 @@ func NewCachingResolver(opts ResolverOptions) *CachingResolver {
 //
 // The result is sorted and de-duplicated so that an unchanged DNS answer
 // produces a byte-identical policy on every reconcile. Multi-address
-// records commonly come back in rotated order, and without normalisation
+// records commonly come back in rotated order, and without normalization
 // that rotation alone would make the reconciler patch the NetworkPolicy on
 // every pass.
 func (r *CachingResolver) Resolve(ctx context.Context, host string) ([]string, error) {
@@ -178,7 +178,7 @@ func (r *CachingResolver) Resolve(ctx context.Context, host string) ([]string, e
 		return nil, fmt.Errorf("%w: %q: %w", ErrResolveFailed, host, err)
 	}
 
-	prefixes := normalisePrefixes(addrs)
+	prefixes := normalizePrefixes(addrs)
 	r.store(host, prefixes, now)
 	return prefixes, nil
 }
@@ -213,9 +213,9 @@ func (r *CachingResolver) store(host string, prefixes []string, now time.Time) {
 	r.entries[host] = resolvedEntry{prefixes: prefixes, at: now}
 }
 
-// normalisePrefixes renders resolved addresses as single-host prefixes,
+// normalizePrefixes renders resolved addresses as single-host prefixes,
 // de-duplicated and sorted. See Resolve for why the ordering matters.
-func normalisePrefixes(addrs []netip.Addr) []string {
+func normalizePrefixes(addrs []netip.Addr) []string {
 	seen := make(map[string]struct{}, len(addrs))
 	out := make([]string, 0, len(addrs))
 	for _, a := range addrs {

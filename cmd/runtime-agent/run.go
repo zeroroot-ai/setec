@@ -51,7 +51,7 @@ type Dependencies struct {
 	Collectors *metrics.Collectors
 }
 
-// Run executes the probe loop, blocking until ctx is cancelled. On the first
+// Run executes the probe loop, blocking until ctx is canceled. On the first
 // iteration the probes are run immediately; subsequent iterations are
 // scheduled by a ticker.
 //
@@ -87,7 +87,7 @@ func Run(ctx context.Context, deps Dependencies) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Fprintln(os.Stderr, "runtime-agent: context cancelled, stopping probe loop")
+			fmt.Fprintln(os.Stderr, "runtime-agent: context canceled, stopping probe loop")
 			return
 		case <-ticker.C:
 			runOnce()
@@ -96,7 +96,7 @@ func Run(ctx context.Context, deps Dependencies) {
 }
 
 // runProbes executes each probe within perProbeBudget and collects results.
-// The parent ctx is used as the base; if it is already cancelled the loop
+// The parent ctx is used as the base; if it is already canceled the loop
 // exits early.
 func runProbes(ctx context.Context, probes []probe.Probe, col *metrics.Collectors) []probe.CapabilityResult {
 	results := make([]probe.CapabilityResult, 0, len(probes))
@@ -121,7 +121,7 @@ func runProbes(ctx context.Context, probes []probe.Probe, col *metrics.Collector
 
 // probeFailReason maps a free-form probe Reason string to one of the bounded
 // label values documented on IncNodeProbeError. Probes in the probe package
-// use specific English phrases; anything unrecognised falls through to
+// use specific English phrases; anything unrecognized falls through to
 // "unknown".
 func probeFailReason(reason string) string {
 	switch reason {

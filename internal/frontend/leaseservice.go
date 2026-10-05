@@ -71,7 +71,7 @@ type LeaseService struct {
 }
 
 // Start binds the background replenish loops to ctx. Call once before
-// serving; the loops stop when ctx is cancelled.
+// serving; the loops stop when ctx is canceled.
 func (s *LeaseService) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.runCtx = ctx

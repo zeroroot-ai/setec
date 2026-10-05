@@ -34,7 +34,7 @@ type TickReconciler struct {
 	FillObserver func(fills map[string]int)
 }
 
-// Run blocks until ctx is cancelled, ticking every Interval. The
+// Run blocks until ctx is canceled, ticking every Interval. The
 // first reconcile fires immediately so a freshly-started node-agent
 // pays a warm-up cost up front rather than after the first tick.
 func (r *TickReconciler) Run(ctx context.Context) {
@@ -55,7 +55,7 @@ func (r *TickReconciler) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			r.logf("pool reconciler: context cancelled, exiting")
+			r.logf("pool reconciler: context canceled, exiting")
 			return
 		case <-ticker.C:
 			r.runOnce(ctx)

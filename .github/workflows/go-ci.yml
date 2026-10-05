@@ -451,11 +451,10 @@ jobs:
           fi
 
       - name: Grep markdown docs for markers
-        # docs/launch/ is allowed (release-tracking files track future work)
-        # but every other .md must be marker-free.
+        # Every .md must be marker-free.
         run: |
-          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.md" --exclude-dir=docs/launch . ; then
-            echo "::error::markdown docs outside docs/launch/ contain TODO/FIXME/XXX/HACK markers"
+          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.md" . ; then
+            echo "::error::markdown docs contain TODO/FIXME/XXX/HACK markers"
             exit 1
           fi
 
@@ -482,6 +481,13 @@ jobs:
 
       - name: No scaffold note and no TLS skip in the tree
         run: bash scripts/check-no-scaffold-notes.sh
+
+      # setec#174: American spelling in each Go comment.
+      - name: Mutation-test the Go comment spelling guard
+        run: bash scripts/check-go-comment-spelling.sh --selftest
+
+      - name: No British spelling in a Go comment
+        run: bash scripts/check-go-comment-spelling.sh
 
   crd-field-consumers:
     name: Every served CRD field has a consumer

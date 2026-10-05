@@ -243,7 +243,7 @@ func statUnderRoot(root, path string) (os.FileInfo, error) {
 }
 
 // serveHTTP runs the Prometheus /metrics and /healthz HTTP endpoint until ctx
-// is cancelled. It performs a graceful shutdown with a short deadline so the
+// is canceled. It performs a graceful shutdown with a short deadline so the
 // overall shutdown stays within the 5s SIGTERM budget.
 func serveHTTP(ctx context.Context, addr string, reg *prometheus.Registry) {
 	mux := http.NewServeMux()

@@ -188,7 +188,7 @@ func TestPodResolver_FindsTheNewPodAfterARestart(t *testing.T) {
 }
 
 // TestPodResolver_IgnoresPodsInOtherNamespaces guards the namespace
-// scope: a node-agent-labelled Pod in an unrelated namespace (a
+// scope: a node-agent-labeled Pod in an unrelated namespace (a
 // different setec install sharing the cluster, or a coincidental
 // label collision) must never be dialed.
 func TestPodResolver_IgnoresPodsInOtherNamespaces(t *testing.T) {

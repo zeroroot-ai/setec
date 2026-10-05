@@ -34,7 +34,7 @@ const BaselineManagedByValue = "setec-operator"
 // workloads that cooperate by wearing the label.
 //
 // This policy selects podSelector: {} — every Pod in the namespace,
-// present and future, whatever it is labelled. It lists both policy types
+// present and future, whatever it is labeled. It lists both policy types
 // with no rules, which is the NetworkPolicy spelling of deny-all. Because
 // NetworkPolicies union, it subtracts nothing from a Sandbox that has its
 // own policy: a Sandbox under external-only still reaches the internet.

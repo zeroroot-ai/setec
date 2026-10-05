@@ -326,7 +326,7 @@ func TestCheckFillThresholdZeroBlocks(t *testing.T) {
 	}
 }
 
-// TestOpenContextCanceled confirms Open honours context cancellation.
+// TestOpenContextCanceled confirms Open honors context cancellation.
 func TestOpenContextCanceled(t *testing.T) {
 	b := newBackend(t)
 	if _, _, err := b.Save(context.Background(), "s", bytes.NewReader([]byte("x"))); err != nil {
@@ -340,7 +340,7 @@ func TestOpenContextCanceled(t *testing.T) {
 	}
 }
 
-// TestDeleteContextCanceled confirms Delete honours cancellation.
+// TestDeleteContextCanceled confirms Delete honors cancellation.
 func TestDeleteContextCanceled(t *testing.T) {
 	b := newBackend(t)
 	if _, _, err := b.Save(context.Background(), "s", bytes.NewReader([]byte("x"))); err != nil {
@@ -354,7 +354,7 @@ func TestDeleteContextCanceled(t *testing.T) {
 	}
 }
 
-// TestStatContextCanceled confirms Stat honours cancellation.
+// TestStatContextCanceled confirms Stat honors cancellation.
 func TestStatContextCanceled(t *testing.T) {
 	b := newBackend(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -116,7 +116,7 @@ func TestGenerateForClass_ExplicitSandboxNetworkWins(t *testing.T) {
 // TestGenerateForClass_UnstatedPostureIsDenyAll replaces the old
 // back-compat case. A nil class, or a class that declares no default,
 // used to mean "emit no policy". It now means deny-all: the absence of a
-// stated posture is not a licence to skip the policy.
+// stated posture is not a license to skip the policy.
 func TestGenerateForClass_UnstatedPostureIsDenyAll(t *testing.T) {
 	t.Parallel()
 	s := sb("")

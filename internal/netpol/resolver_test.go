@@ -93,7 +93,7 @@ func newTestResolver(t *testing.T, grace time.Duration) (*CachingResolver, *scri
 	return r, lk, clk
 }
 
-// TestResolve_ReturnsSortedHostPrefixes covers the normalisation that
+// TestResolve_ReturnsSortedHostPrefixes covers the normalization that
 // makes a policy stable. A rotated DNS answer must not produce a different
 // policy, or the reconciler would patch the NetworkPolicy on every pass
 // forever.

@@ -322,7 +322,7 @@ Administrators author classes; tenants reference them by name in
 
   `kata-fc`, `gvisor` and `runc` consume none, and the `SandboxClass`
   webhook refuses a class that names params for them rather than
-  accepting a setting that cannot take effect. An unrecognised key for
+  accepting a setting that cannot take effect. An unrecognized key for
   `kata-qemu` is refused the same way.
 
   This entry previously gave `kata-fc.snapshotEnabled: true` and

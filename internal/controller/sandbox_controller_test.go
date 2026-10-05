@@ -86,7 +86,7 @@ func waitForPod(g Gomega, ns, sbName string) *corev1.Pod {
 }
 
 // patchPodStatus overwrites the Pod's status subresource to simulate kubelet
-// behaviour. Envtest has no kubelet, so we are the only driver of Pod state.
+// behavior. Envtest has no kubelet, so we are the only driver of Pod state.
 // The helper refetches the Pod inside a retry loop to absorb resourceVersion
 // conflicts caused by the manager's own reconcile touching the object.
 func patchPodStatus(g Gomega, ns, podName string, mutate func(*corev1.Pod)) {

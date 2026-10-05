@@ -54,7 +54,7 @@ type LinuxIdentity struct {
 	HostnamePath string
 	// BootIDProcPath defaults to /proc/sys/kernel/random/boot_id.
 	BootIDProcPath string
-	// RunPath is where the fresh boot-id file is materialised before
+	// RunPath is where the fresh boot-id file is materialized before
 	// the bind mount. Defaults to /run/setec/boot-id.
 	RunPath string
 	// Sethostname defaults to unix.Sethostname; injectable for tests.
@@ -99,7 +99,7 @@ func (l *LinuxIdentity) ApplyMachineID(id string) error {
 	return os.WriteFile(l.MachineIDPath, []byte(id+"\n"), 0o444)
 }
 
-// ApplyBootID materialises the directed boot-id and bind-mounts it
+// ApplyBootID materializes the directed boot-id and bind-mounts it
 // over the kernel's boot_id proc file.
 func (l *LinuxIdentity) ApplyBootID(id string) error {
 	if id == "" {

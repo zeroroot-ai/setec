@@ -14,7 +14,7 @@ import (
 )
 
 // ErrUnknownKataParam is returned by KataQEMUDispatcher.MutatePod when the
-// params map contains keys that are not recognised kata-qemu hypervisor
+// params map contains keys that are not recognized kata-qemu hypervisor
 // parameters.  The error message lists all unknown keys.
 var ErrUnknownKataParam = errors.New("unknown kata-qemu parameter")
 
@@ -67,7 +67,7 @@ func AcceptedParams(backend string) []string {
 //	vcpus  → io.katacontainers.config.hypervisor.default_vcpus
 //	memory → io.katacontainers.config.hypervisor.default_memory
 //
-// Any unrecognised key causes MutatePod to return ErrUnknownKataParam listing
+// Any unrecognized key causes MutatePod to return ErrUnknownKataParam listing
 // all bad keys; the pod is not mutated in that case.  The operation is
 // idempotent: calling MutatePod twice with the same params produces the same
 // annotation set.

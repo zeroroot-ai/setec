@@ -30,7 +30,7 @@ const (
 // read. It is a seed list, not the whole search space: whatever those files
 // name in their `imports` array is followed from there (see followImports).
 //
-// Both containerd flavours the installer supports are covered (see
+// Both containerd flavors the installer supports are covered (see
 // internal/installer/containerd.go, which writes into exactly these places):
 //
 //   - stock containerd: /etc/containerd/config.toml plus the sibling drop-in

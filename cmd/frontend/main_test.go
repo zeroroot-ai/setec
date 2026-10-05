@@ -120,7 +120,7 @@ func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 // label lookup are mutually exclusive; asking for both is refused with
 // a message naming the cause rather than silently preferring one, and
 // the label strategy stays the default so an install that configures
-// nothing keeps today's behaviour.
+// nothing keeps today's behavior.
 func TestSelectResolver_ExactlyOneStrategy(t *testing.T) {
 	t.Parallel()
 

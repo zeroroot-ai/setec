@@ -617,7 +617,7 @@ func TestPhase2_SandboxClassControllerRuns(t *testing.T) {
 // setec.zeroroot.ai/sandbox label, so it confines Pods the operator built.
 // A Pod created in the namespace by any other route wears no such label,
 // is selected by no policy, and is therefore unrestricted. These tests
-// assert the one policy that does not depend on that labelling.
+// assert the one policy that does not depend on that labeling.
 // ---------------------------------------------------------------------------
 
 func TestPhase2_NamespaceBaselineSelectsEveryPod(t *testing.T) {
@@ -637,9 +637,9 @@ func TestPhase2_NamespaceBaselineSelectsEveryPod(t *testing.T) {
 	}, convergeTimeout, convergeInterval).Should(Succeed())
 
 	g.Expect(baseline.Spec.PodSelector.MatchLabels).To(BeEmpty(),
-		"the baseline must select every Pod, not only labelled Sandbox Pods")
+		"the baseline must select every Pod, not only labeled Sandbox Pods")
 	g.Expect(baseline.Spec.PodSelector.MatchExpressions).To(BeEmpty(),
-		"the baseline must select every Pod, not only labelled Sandbox Pods")
+		"the baseline must select every Pod, not only labeled Sandbox Pods")
 	g.Expect(baseline.Spec.Egress).To(BeEmpty())
 	g.Expect(baseline.Spec.Ingress).To(BeEmpty())
 	g.Expect(baseline.Spec.PolicyTypes).To(ConsistOf(
@@ -687,7 +687,7 @@ func TestPhase2_NamespaceBaselineRestoredWhenWidened(t *testing.T) {
 		return testClient.Get(testCtx, key, baseline)
 	}, convergeTimeout, convergeInterval).Should(Succeed())
 
-	// Narrow the selector so it stops covering unlabelled Pods — the
+	// Narrow the selector so it stops covering unlabeled Pods — the
 	// exact mutation that would silently reopen the hole.
 	baseline.Spec.PodSelector = metav1.LabelSelector{
 		MatchLabels: map[string]string{podspec.SandboxLabelKey: sb.Name},

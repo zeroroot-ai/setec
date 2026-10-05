@@ -157,6 +157,10 @@ artifact.
 **Reverses if** a future kata build links `os.Root`. Re-check with:
 `go tool nm /opt/kata/bin/containerd-shim-kata-v2 | grep -F 'os.(*Root)'`
 
+**On kata 4.2.0 (2026-10-05):** the alert is closed as fixed, because the shim
+is built with Go 1.26.7. The symbols are still absent: `os.(*Root)` resolves 0
+and `os.OpenInRoot` resolves 0.
+
 ### Entry 4 — CVE-2026-56864, `x/mod/sumdb` unauthenticated hash acceptance
 
 **Class B. Dismissed: vulnerable code not linked.**
@@ -173,6 +177,10 @@ resolves no modules at runtime.
 
 **Reverses if** `golang.org/x/mod/sumdb` appears in the shim's symbol table.
 
+**On kata 4.2.0 (2026-10-05):** the alert is closed as fixed (`x/mod` v0.40.0).
+The `golang.org/x/mod/sumdb` prefix still resolves 0 symbols. This is also true
+for Entry 5.
+
 ### Entry 5 — CVE-2026-56865, `x/mod/sumdb/tlog` tile verification bypass
 
 **Class B. Dismissed: vulnerable code not linked.**
@@ -183,42 +191,37 @@ symbol table. Same evidence and same reversal condition as Entry 4.
 
 ## Residual open findings — NOT dismissed
 
-**2 findings remain open on `trivy-setec-installer`, both in
-`/opt/kata/bin/containerd-shim-kata-v2`, and both are Class B.**
+**1 finding stays open on `trivy-setec-installer`. It is in
+`/opt/kata/bin/containerd-shim-kata-v2`, and it is Class B.**
 
-This is the residual set as measured on 2026-09-08, against the payload
-`kata.env` pins today: kata 4.1.0, `KATA_SHA256`
-`8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55`. Entry 9
-cleared 18 of the 20 findings the earlier 3.32.0 payload carried. These two are
-what it did not clear.
+This is the set for the payload that `kata.env` pins: kata 4.2.0, `KATA_SHA256`
+`7dda31ca54b397cbf8165f620d6041872d3c45b7a77383ce0e86f76a06e103d0`. It was
+measured on 2026-10-05. Entry 12 has the symbol record.
 
 | Alert | CVE | Sev | Package | Installed | Fixed in | Linked? |
 |---|---|---|---|---|---|---|
-| 34 | CVE-2026-84304 | HIGH | `google.golang.org/grpc` | v1.82.1 | 1.83.1 | yes (server transport, Entry 11) |
-| 25 | CVE-2026-10722 | LOW | `github.com/cilium/ebpf` | v0.17.3 | 0.22.0 | yes (1,156 syms, Entry 11) |
+| 54 | CVE-2026-53493 | MEDIUM | `github.com/containerd/containerd` | v1.7.35 | 1.7.36 | yes (Entry 12) |
 
-They are **deliberately left open**. For each one `go tool nm` confirms the
-vulnerable package *is* linked into the shipped binary. Linked is not the same
-as reachable from untrusted input. Under the Class-B bar above, "I could not
-prove it reachable" is not a dismissal reason. Entry 11 carries the symbol
-counts and the control symbol.
+The alert is **deliberately left open**. `go tool nm` confirms that the package
+is linked into the shipped binary. Linked is not the same as reachable from
+untrusted input. Under the Class-B bar above, "I could not prove it reachable"
+is not a dismissal reason.
 
-**setec cannot fix either one directly.** Both live in upstream kata's vendored
-dependency graph. kata 4.1.0 (2026-08-21) is the newest kata release, and its
-`src/runtime/go.mod` at that tag still pins `google.golang.org/grpc v1.82.1`
-and `github.com/cilium/ebpf v0.17.3`. No kata release fixes either finding
-today. The only levers are:
+**setec cannot fix it directly.** The package is in the vendored dependency
+graph of upstream kata. kata 4.2.0 (2026-09-15) is the newest kata release, and
+its `src/runtime/go.mod` at that tag pins `github.com/containerd/containerd
+v1.7.35`. The only levers are:
 
-1. Bump `KATA_VERSION` and `KATA_SHA256` in `kata.env` the moment upstream
-   publishes a release with refreshed vendored deps. This is the expected path.
+1. Bump `KATA_VERSION` and `KATA_SHA256` in `kata.env` when upstream publishes
+   a release that pins containerd 1.7.36 or later. This is the expected path.
    `zeroroot-ai/.github` `version-links.yaml` watches kata releases, so a new
-   one surfaces in the org version-drift tracker (Entry 10).
+   one shows in the org version-drift tracker (Entry 10).
 2. Build the shim from source against patched deps, which would abandon the
    stock-static-release property ADR-0143 exists to preserve. That is an
    architecture decision, not a triage decision.
 
-Tracked as upstream dependency debt on the repo's standing code-scanning digest
-issue. Re-audit on every kata pin bump, with the procedure below.
+Re-audit on every kata pin bump, with the procedure below. The kata payload
+leaves the repo at the launcher cutover, and this section leaves with it.
 
 ### Entry 6 — kata 4.1.0 evaluated on 2026-09-07, not taken (setec#21)
 
@@ -356,6 +359,8 @@ digest months later.
 
 ### Entry 11 — the two residual shim findings re-audited on kata 4.1.0 (setec#35)
 
+**History. Entry 12 replaces this entry.** kata 4.2.0 fixed both alerts.
+
 Not a dismissal. This is the symbol record behind the two findings the
 "Residual open findings" section lists. It exists because that section was
 written for the kata 3.32.0 payload, and Entry 9 cleared 18 of those 20
@@ -406,3 +411,50 @@ there is nothing to bump to.
 **Reverses if** upstream kata publishes a release that pins
 `google.golang.org/grpc` 1.83.1 or later, or `github.com/cilium/ebpf` 0.22.0 or
 later. Move the pin in `kata.env` and re-run the procedure above.
+
+### Entry 12 — kata payload moved to 4.2.0, and the shim re-audited (setec#50, setec#174)
+
+Not a dismissal. `kata.env` moved to kata 4.2.0 on 2026-09-15. Its
+`src/runtime/go.mod` pins `google.golang.org/grpc v1.83.2` and
+`github.com/cilium/ebpf v0.22.0`. GitHub closed four alerts as fixed on that
+day: 34 (CVE-2026-84304), 48 (CVE-2026-84445), 49 (CVE-2026-84303) and 25
+(CVE-2026-10722). The two findings of Entry 11 are gone.
+
+Re-audit run on 2026-10-05 with the procedure above, against the pinned tarball
+`kata-go-static-4.2.0-amd64.tar.zst` (sha256
+`7dda31ca54b397cbf8165f620d6041872d3c45b7a77383ce0e86f76a06e103d0`, the
+`KATA_SHA256` in `kata.env`). `go version -m` on the extracted
+`/opt/kata/bin/containerd-shim-kata-v2` reports Go 1.26.7, grpc v1.83.2,
+cilium/ebpf v0.22.0, x/mod v0.40.0 and containerd v1.7.35. `go tool nm`
+resolves **51,862 symbols**. Control symbol
+`github.com/containerd/ttrpc.(*Server).Serve` resolves **3**.
+
+**Alert 54, CVE-2026-53493, MEDIUM. `github.com/containerd/containerd`
+v1.7.35, fixed in 1.7.36.** A crafted OCI index can make an image pull use
+very high CPU and memory. The package is linked: the
+`github.com/containerd/containerd/` prefix resolves **3,376 symbols**. The shim
+does not pull an image, and this record has no symbol list from the advisory
+that proves the pull path absent. The Class-B bar is linkage, so the alert
+stays open.
+
+**Reverses if** upstream kata publishes a release that pins containerd 1.7.36
+or later. Move the pin in `kata.env` and re-run the procedure above.
+
+### Entry 13 — CVE-2026-81870, OpenTelemetry SDK diagnostic log (alert 51)
+
+**Class B. Dismissed on 2026-09-21 as won't fix. The symbol evidence was added
+on 2026-10-05.**
+
+`go.opentelemetry.io/otel/sdk` v1.44.0, fixed in 1.45.0, LOW.
+`sdk/trace.NewTracerProvider` writes a diagnostic event that can hold collector
+addresses. The advisory states the condition: the application must call
+`otel.SetLogger` to enable the internal Info log. The default logger does not
+write the event.
+
+On the kata 4.2.0 shim, `go.opentelemetry.io/otel.SetLogger` resolves **0**
+symbols, and `go.opentelemetry.io/otel/internal/global.SetLogger` resolves
+**0**. `go.opentelemetry.io/otel/sdk/trace.NewTracerProvider` resolves **1**,
+so the dump reads the package and the zeros are real. The call that enables
+the log is not linked into the binary.
+
+**Reverses if** `otel.SetLogger` appears in the symbol table of the shim.

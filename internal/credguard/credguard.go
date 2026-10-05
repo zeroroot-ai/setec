@@ -387,7 +387,7 @@ func exemptionIndex(exemptions []Exemption, rel string) int {
 // inspectFile parses one file and returns the references it makes that
 // the guard rejects.
 //
-// Imports are resolved first so that judgement is on the package a
+// Imports are resolved first so that judgment is on the package a
 // symbol came from. That is what makes an aliased import no different
 // from a plain one, and it is why the guard cannot be walked around by
 // spelling crypto/tls something else.

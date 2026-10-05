@@ -475,7 +475,7 @@ func (p *stdinPump) run() {
 				_ = p.w.Close()
 			}
 		default:
-			p.fail(fmt.Errorf("unrecognised Exec request message %T", r))
+			p.fail(fmt.Errorf("unrecognized Exec request message %T", r))
 			return
 		}
 	}
@@ -497,7 +497,7 @@ func (p *stdinPump) err() error {
 	return p.protoErr
 }
 
-// execSender serialises writes to the response stream. remotecommand
+// execSender serializes writes to the response stream. remotecommand
 // writes stdout and stderr from separate goroutines, and a gRPC stream
 // tolerates exactly one Send at a time.
 type execSender struct {
@@ -540,7 +540,7 @@ func (w *execStreamWriter) Write(b []byte) (int, error) {
 		return 0, nil
 	}
 	// Copy: the caller owns b and reuses its buffer between writes,
-	// while the gRPC codec may still be marshalling ours.
+	// while the gRPC codec may still be marshaling ours.
 	chunk := make([]byte, len(b))
 	copy(chunk, b)
 	if err := w.sender.send(&setecv1grpc.SandboxServiceExecResponse{

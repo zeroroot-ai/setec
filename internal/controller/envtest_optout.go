@@ -11,7 +11,7 @@ import "os"
 // The invariant being protected: a lane that is SUPPOSED to run the envtest
 // suites must fail if they cannot run. Reporting `ok` with zero tests executed
 // is indistinguishable from a pass, which is how this package's entire
-// behavioural coverage — Phase 2/3, session lifecycle, pause timeouts, the
+// behavioral coverage — Phase 2/3, session lifecycle, pause timeouts, the
 // invariant gate, runtime selection — could silently evaporate while CI stayed
 // green.
 //

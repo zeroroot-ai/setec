@@ -402,7 +402,7 @@ func TestPhase3_StorageFillProtection(t *testing.T) {
 	// dedicated filesystem that can be filled via a hostPath side-job.
 	// Keep the environment-guarded skip; the deferred-tooling skip has
 	// been removed now that the E2E runner is expected to own disk
-	// fill behaviour.
+	// fill behavior.
 }
 
 // TestPhase3_UpgradeFromPhase2 drives the Phase 2 to Phase 3 upgrade on the

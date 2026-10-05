@@ -732,7 +732,7 @@ func newSandboxClassLister() (func() []setecv1alpha1.SandboxClass, error) {
 }
 
 // serveGRPC binds a TCP listener, registers the NodeAgentService
-// implementation, and blocks until the supplied context is cancelled.
+// implementation, and blocks until the supplied context is canceled.
 // Errors during Serve cause the process to exit so the DaemonSet
 // restarts the pod and re-reads any rotated secrets.
 func serveGRPC(ctx context.Context, addr string, srv *grpcserver.Server, opts ...grpc.ServerOption) {

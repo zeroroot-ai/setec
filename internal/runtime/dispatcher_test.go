@@ -360,7 +360,7 @@ func TestRegistry_Select_CarriesClassParams(t *testing.T) {
 
 // TestRegistry_Select_NoParamsIsNil keeps the other direction: a class with no
 // params must not hand the builder an empty-but-present map, because MutatePod
-// treats "no params" and "params I do not recognise" differently.
+// treats "no params" and "params I do not recognize" differently.
 func TestRegistry_Select_NoParamsIsNil(t *testing.T) {
 	t.Parallel()
 

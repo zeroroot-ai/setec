@@ -69,7 +69,7 @@ const (
 
 	// stateFileName and memFileName are the local filenames inside
 	// <storage-root>/<pool-entry-id>/ where Firecracker writes the
-	// serialised VM state and guest memory respectively. They are
+	// serialized VM state and guest memory respectively. They are
 	// encrypted in place before the launcher commits the entry.
 	stateFileName = poolentry.StateFile
 	memFileName   = poolentry.MemFile

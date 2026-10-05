@@ -30,7 +30,7 @@ const (
 	// ReasonDevModeOptOut: both opt-out halves are present; the gate
 	// may serve unverified restores for this class. DEV ONLY.
 	ReasonDevModeOptOut = "DevModeOptOut"
-	// ReasonDevGateNamespaceUnlabelled: the class asks for the opt-out
+	// ReasonDevGateNamespaceUnlabeled: the class asks for the opt-out
 	// but the cluster-level dev label is absent, so the gate still
 	// enforces. The annotation is inert — surfaced so the mismatch is
 	// visible instead of silently ignored.
@@ -81,7 +81,7 @@ func (r *SandboxClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		switch {
 		case err != nil:
 			// Unreadable gate namespace fails closed — the gate will
-			// not honour the opt-out either. Surface why.
+			// not honor the opt-out either. Surface why.
 			cond.Reason = ReasonDevGateNamespaceUnlabelled
 			cond.Message = "opt-out annotation present but the dev gate namespace could not be read (failing closed): " + err.Error()
 		case !dev:

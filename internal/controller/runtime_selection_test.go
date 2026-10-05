@@ -366,7 +366,7 @@ func TestSelectRuntime_NilRuntimeDefaultsToConfig(t *testing.T) {
 // Scenario E: scale-from-zero — the Pod is created with NO capable node.
 // ---------------------------------------------------------------------------
 
-// TestHandleMissingPod_CreatesPodWithNoCapableNode is the behavioural centre
+// TestHandleMissingPod_CreatesPodWithNoCapableNode is the behavioral centre
 // of setec#300. With an empty node pool the reconciler must still create the
 // Pod, because an unschedulable Pod is the only thing a cluster autoscaler
 // acts on. Before this fix handleMissingPod returned on ErrNoEligibleRuntime

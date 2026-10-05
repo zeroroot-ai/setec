@@ -186,7 +186,7 @@ func TestReap_RemoveErrorContinuesAndCountsReaped(t *testing.T) {
 	}
 }
 
-func TestReap_ReapedMetricLabelledByHandler(t *testing.T) {
+func TestReap_ReapedMetricLabeledByHandler(t *testing.T) {
 	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	handlers := map[string]int{}
 	fc := &fakeClient{list: []Sandbox{
@@ -211,7 +211,7 @@ func TestRun_DisabledWithoutClient(t *testing.T) {
 	var logged []string
 	r := &OrphanReaper{Logger: func(f string, _ ...any) { logged = append(logged, f) }}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled; Run must return promptly
+	cancel() // already canceled; Run must return promptly
 	r.Run(ctx)
 	if len(logged) != 1 {
 		t.Fatalf("expected a single 'disabled' log line, got %v", logged)

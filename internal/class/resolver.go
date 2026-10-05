@@ -68,7 +68,7 @@ func (r *Resolver) Resolve(ctx context.Context, sb *setecv1alpha1.Sandbox) (*set
 		// A nil-resolver path indicates a plumbing error higher up;
 		// returning a descriptive error rather than panicking keeps
 		// the controller alive and surfaces the problem via Events.
-		return nil, errors.New("class: Resolver is not initialised")
+		return nil, errors.New("class: Resolver is not initialized")
 	}
 	if sb == nil {
 		return nil, errors.New("class: Resolve called with nil Sandbox")

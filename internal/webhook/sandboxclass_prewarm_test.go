@@ -93,7 +93,7 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
 				if err == nil {
@@ -120,7 +120,7 @@ func TestSandboxClassWebhook_ValidatePreWarm_NilRuntime(t *testing.T) {
 	cls := mkSandboxClass("pw-nil", "", nil)
 	cls.Spec.PreWarmPoolSize = 2 // no image
 
-	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 	_, err := w.ValidateCreate(context.Background(), cls)
 	if err == nil || !strings.Contains(err.Error(), "requires preWarmImage") {
 		t.Fatalf("expected preWarmImage pairing error with nil Runtime, got: %v", err)

@@ -73,7 +73,7 @@ func TestProbeServerServesBeforeLeadershipIsAcquired(t *testing.T) {
 			t.Fatalf("probe server returned %v on shutdown", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("probe server did not shut down when its context was cancelled")
+		t.Fatal("probe server did not shut down when its context was canceled")
 	}
 }
 

@@ -92,7 +92,7 @@ var (
 
 // BuildOptions carries optional build-time knobs that are additive to
 // the Phase 1 Build signature. Nil / zero-valued fields preserve
-// Phase 1/2 behaviour.
+// Phase 1/2 behavior.
 type BuildOptions struct {
 	// NodeName, when non-empty, is written into Pod.Spec.NodeName so
 	// the scheduler pins the Pod to a specific node. Used by the
@@ -204,7 +204,7 @@ const (
 )
 
 // WorkspacePVCName derives the deterministic name of the workspace PVC
-// owned by the named session Sandbox. Centralised so the controller
+// owned by the named session Sandbox. Centralized so the controller
 // (which creates and deletes the claim) and the builder (which mounts
 // it) can never disagree.
 func WorkspacePVCName(sandboxName string) string {

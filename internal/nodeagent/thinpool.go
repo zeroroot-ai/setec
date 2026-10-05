@@ -41,7 +41,7 @@ type Config struct {
 	// (e.g. /dev/vdc). Required.
 	MetadataDevice string
 
-	// FillThreshold is the fraction (0..100) of data-pool utilisation
+	// FillThreshold is the fraction (0..100) of data-pool utilization
 	// that triggers a degraded NodeCondition + Event. 80 is a
 	// sensible default.
 	FillThreshold int

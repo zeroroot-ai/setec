@@ -24,7 +24,7 @@ import (
 // snapshot artifact is unreadable without its key and provably gone —
 // artifact AND key — after teardown.
 
-// guestSecret is the recognisable "sensitive guest memory" pattern the
+// guestSecret is the recognizable "sensitive guest memory" pattern the
 // fake Firecracker writes into the snapshot.
 var guestSecret = bytes.Repeat([]byte("INTEGRATION-GUEST-SECRET-"), 128)
 
