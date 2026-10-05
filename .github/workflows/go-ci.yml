@@ -828,6 +828,7 @@ jobs:
     name: ci-required
     if: always()
     needs:
+      - exit-tests-off-pr
       - permissive-floor
       - fast
       - heavy
@@ -867,3 +868,9 @@ jobs:
   # setec or ast-checks (zeroroot-ai/.github#202).
   permissive-floor:
     uses: zeroroot-ai/.github/.github/workflows/permissive-floor.yml@6815b30d4c26537972433711f0d86ddf73bb6c41 # v0.13.0
+
+  # ADR-0080: an exit test never runs on a pull request, and it runs on a
+  # schedule. The org guard reads every exit-test-*.yml here
+  # (zeroroot-ai/.github#200).
+  exit-tests-off-pr:
+    uses: zeroroot-ai/.github/.github/workflows/exit-tests-off-pr.yml@53a2406de391869c35d5cf5b851a21b80185ff48 # v0.14.0
