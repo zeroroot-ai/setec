@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Epic: cicd-efficiency (board #44), slice S11b, .github#203. Per
-# docs/architecture/CICD-CONTEXT.md decision #9 (scanner cadence ->
+# the scanner cadence decision (scanner cadence ->
 # merge_group gate + weekly deep cron, drop per-PR/push), the trigger moved
 # from `push: [main]` (post-merge-only scan) to `merge_group` (pre-merge
 # authoritative gate) plus the existing weekly cron. merge_group is inert
@@ -57,7 +57,7 @@ jobs:
           # soon as the queue entry resolves -- often before this step's
           # SARIF upload call reaches the API, which then 404s with "ref ...
           # not found" and fails the whole gate on a non-actionable timing
-          # error. Per decision #9 (docs/architecture/CICD-CONTEXT.md),
+          # error. Per the scanner cadence decision,
           # merge_group is the pre-merge build/extraction gate; the weekly
           # schedule run is the authoritative alert-publishing run. Only
           # upload SARIF (and therefore only publish/refresh Security-tab

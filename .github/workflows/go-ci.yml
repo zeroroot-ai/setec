@@ -1,9 +1,7 @@
 name: go-ci
 
 # Thin caller for the canonical three-tier Go CI (Epic: cicd-efficiency,
-# board #44, slice S11b, .github#203). See docs/architecture/CICD-CONTEXT.md
-# (workspace docs repo) and docs/adr/0060-ci-runner-split-hosted-default-
-# ephemeral-metal.md for the org-wide tiering rationale.
+# board #44, slice S11b, .github#203).
 #
 # Replaces the former all-in-one ci.yml (365 lines), which ran every job on
 # both `pull_request` and `push:main`, double-firing full suites. setec is a
