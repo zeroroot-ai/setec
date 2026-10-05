@@ -50,7 +50,7 @@ type CreateSnapshotRequest struct {
 	// sandbox id, which the Pod object does not carry.
 	SourcePodUid string `protobuf:"bytes,6,opt,name=source_pod_uid,json=sourcePodUid,proto3" json:"source_pod_uid,omitempty"`
 	// session_kek is the per-session key-encryption key session
-	// checkpoints seal their DEKs with (setec#194, ADR-0007). The
+	// checkpoints seal their DEKs with (setec#194, ADR-0147). The
 	// operator reads it from the session's Kubernetes Secret and
 	// forwards it over this mutually-authenticated mTLS channel; the
 	// node-agent holds it in memory for the duration of the RPC only.
@@ -208,7 +208,7 @@ type RestoreSandboxRequest struct {
 	Resources *Resources `protobuf:"bytes,5,opt,name=resources,proto3" json:"resources,omitempty"`
 	// sandbox_id is the composite <namespace>/<name> of the Sandbox the
 	// restore targets. Used as the ownership key for the node-local
-	// vsock-CID uniqueness registry (ADR-0005 invariant 2): two
+	// vsock-CID uniqueness registry (ADR-0145 invariant 2): two
 	// Sandboxes restored from the same snapshot state would otherwise
 	// share the snapshotted guest CID undetected.
 	SandboxId string `protobuf:"bytes,6,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
@@ -216,7 +216,7 @@ type RestoreSandboxRequest struct {
 	// guest carries the snapshot-time network state in memory; the
 	// node-agent directs the in-guest agent to reconcile its primary
 	// interface to this address and fails the restore closed when the
-	// guest cannot confirm it (ADR-0005 invariant 2).
+	// guest cannot confirm it (ADR-0145 invariant 2).
 	PodIp string `protobuf:"bytes,7,opt,name=pod_ip,json=podIp,proto3" json:"pod_ip,omitempty"`
 	// hostname is the fresh hostname the restored guest must adopt
 	// (derived from the Sandbox name). Part of the per-restore
@@ -342,14 +342,14 @@ type RestoreSandboxResponse struct {
 	// uniquified reports whether the restored guest verifiably applied
 	// its per-restore identity (fresh machine-id, boot-id, hostname,
 	// CNI-assigned Pod IP) and its vsock CID was confirmed unique on
-	// the node (ADR-0005 invariant 2, setec#189). When the node-agent
+	// the node (ADR-0145 invariant 2, setec#189). When the node-agent
 	// runs with restore uniquification enforcement (the default),
 	// success=true implies uniquified=true; false alongside
 	// success=true can only happen when the operator explicitly opted
 	// out (--restore-uniquify=off).
 	Uniquified bool `protobuf:"varint,4,opt,name=uniquified,proto3" json:"uniquified,omitempty"`
 	// encrypted_at_rest reports whether the restored state was read
-	// through the sealed-DEK encrypted storage path (ADR-0005
+	// through the sealed-DEK encrypted storage path (ADR-0145
 	// invariant 5). Production wires the EncryptedBackend as the ONLY
 	// persistence path, so this is true on every production restore;
 	// false means the node served the state from an unencrypted
@@ -831,7 +831,7 @@ type ClaimPoolEntryRequest struct {
 	TargetPodUid string `protobuf:"bytes,7,opt,name=target_pod_uid,json=targetPodUid,proto3" json:"target_pod_uid,omitempty"`
 	// sandbox_id is the composite <namespace>/<name> of the requesting
 	// Sandbox. Also the ownership key for the node-local vsock-CID
-	// uniqueness registry (ADR-0005 invariant 2).
+	// uniqueness registry (ADR-0145 invariant 2).
 	SandboxId string `protobuf:"bytes,4,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	// pod_ip is the CNI-assigned IP of the Sandbox's Pod; the restored
 	// guest must observe it (see RestoreSandboxRequest.pod_ip).
@@ -934,20 +934,20 @@ type ClaimPoolEntryResponse struct {
 	EntropyReseeded bool `protobuf:"varint,5,opt,name=entropy_reseeded,json=entropyReseeded,proto3" json:"entropy_reseeded,omitempty"`
 	// uniquified mirrors RestoreSandboxResponse.uniquified: the
 	// restored guest verifiably applied its per-restore identity and
-	// its vsock CID was confirmed unique on the node (ADR-0005
+	// its vsock CID was confirmed unique on the node (ADR-0145
 	// invariant 2, setec#189).
 	Uniquified bool `protobuf:"varint,6,opt,name=uniquified,proto3" json:"uniquified,omitempty"`
 	// provenance_verified reports that the claimed entry's template
 	// provenance record was read, claims the class-image boot path
 	// (never a used sandbox), and was cryptographically bound into the
 	// entry's sealed DEK (the seal's AAD covers the provenance, so a
-	// tampered or foreign record makes the DEK unopenable) — ADR-0005
+	// tampered or foreign record makes the DEK unopenable) — ADR-0145
 	// invariants 1 and 4, setec#190. Always true on a successful claim
 	// because the decrypt path IS the verification; reported explicitly
 	// so the operator-side invariant gate never has to infer it.
 	ProvenanceVerified bool `protobuf:"varint,7,opt,name=provenance_verified,json=provenanceVerified,proto3" json:"provenance_verified,omitempty"`
 	// encrypted_at_rest mirrors RestoreSandboxResponse.encrypted_at_rest
-	// (ADR-0005 invariant 5): pool entry state is only ever persisted
+	// (ADR-0145 invariant 5): pool entry state is only ever persisted
 	// through the per-entry sealed-DEK path, so a successful claim
 	// implies true.
 	EncryptedAtRest bool `protobuf:"varint,8,opt,name=encrypted_at_rest,json=encryptedAtRest,proto3" json:"encrypted_at_rest,omitempty"`
@@ -957,7 +957,7 @@ type ClaimPoolEntryResponse struct {
 	// the entry's sealed DEK alongside the provenance record — that is
 	// clean, and that the digests it names match the artifacts this
 	// restore decrypted. It is the independent per-restore evidence for
-	// ADR-0005 invariant 1 (setec#206), decoupled from the provenance
+	// ADR-0145 invariant 1 (setec#206), decoupled from the provenance
 	// record that carries invariant 4: the operator-side invariant gate
 	// consumes this signal directly and fails closed when it is absent,
 	// so entries baked without a verdict are refused and rebuilt.

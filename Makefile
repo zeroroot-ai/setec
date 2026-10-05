@@ -194,7 +194,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: image
-image: docker-build ## Uniform-contract alias for docker-build (RESTRUCTURE-QUALITY-BARS §1).
+image: docker-build ## Uniform-contract alias for docker-build.
 
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
@@ -370,7 +370,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 ##@ Dependencies
 
 .PHONY: bootstrap
-bootstrap: kustomize controller-gen setup-envtest golangci-lint buf ## Install all local build/test/lint tooling (uniform-contract entrypoint, RESTRUCTURE-QUALITY-BARS §1).
+bootstrap: kustomize controller-gen setup-envtest golangci-lint buf ## Install all local build/test/lint tooling (uniform-contract entrypoint).
 	go mod download
 
 ## Location to install dependencies to

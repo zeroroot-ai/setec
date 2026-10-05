@@ -11,8 +11,8 @@
 # ----------------------------------------------------------------------------
 # Build stage
 # ----------------------------------------------------------------------------
-# Base images are mirror-sourced and digest-pinned for reproducibility
-# (RESTRUCTURE-QUALITY-BARS §1). The toolchain is whatever the FROM line below
+# Base images are mirror-sourced and digest-pinned for reproducibility.
+# The toolchain is whatever the FROM line below
 # names, which must match go.mod and .tool-versions (gibson#777). The version
 # is deliberately not repeated here: this comment said 1.26.4 while the FROM
 # line said 1.26.8, and before that 1.26.6, so the prose copy only ever drifted.

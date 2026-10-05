@@ -53,7 +53,7 @@ service SandboxService {
   // reattach works across frontend restarts by construction.
   //
   // Attach also registers caller activity for the session, which
-  // exempts it from per-SandboxClass idle eviction (ADR-0006: a
+  // exempts it from per-SandboxClass idle eviction (ADR-0146: a
   // session in active use is never idle-reaped).
   //
   // Failure shapes (each carries an AttachFailure detail so callers
@@ -64,13 +64,13 @@ service SandboxService {
   //   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
   //     the session is over (terminal phase, or teardown in progress).
   //   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
-  //     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+  //     the ephemeral lifecycle has no reattach semantics (ADR-0146).
   rpc Attach(AttachRequest) returns (AttachResponse);
 
   // Exec runs a command INSIDE an existing session Sandbox's running
   // microVM and streams its stdio, so a session can be worked on
   // across many turns instead of being limited to the single
-  // immutable spec.command it booted with (ADR-0008).
+  // immutable spec.command it booted with (ADR-0148).
   //
   // This is not LeaseService.Exec: that verb launches a fresh
   // one-shot Sandbox per call and shares nothing between calls. This
@@ -101,10 +101,10 @@ service SandboxService {
   //
   // An in-flight Exec registers as session activity for the whole of
   // its run, so a long build can never be idle-evicted underneath the
-  // caller (ADR-0006).
+  // caller (ADR-0146).
   //
   // A session whose VM is paused or suspended is resumed first and
-  // the command runs once it is back (ADR-0006 suspend/resume); the
+  // the command runs once it is back (ADR-0146 suspend/resume); the
   // caller sees only the added latency.
   //
   // Failure shapes (each carries an AttachFailure detail, the same
@@ -114,7 +114,7 @@ service SandboxService {
   //     Sandbox.
   //   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
   //   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
-  //     ephemeral; its one command is its whole life (ADR-0006).
+  //     ephemeral; its one command is its whole life (ADR-0146).
   //   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
   //     not be brought to a running microVM in time.
   // These are RPC-level errors raised before the command starts, so
@@ -192,7 +192,7 @@ message NetworkAllow {
 message Lifecycle {
   string timeout = 1; // Go-style duration: "30m", "8h"
 
-  // mode selects the Sandbox lifecycle (ADR-0006): "ephemeral"
+  // mode selects the Sandbox lifecycle (ADR-0146): "ephemeral"
   // (default when empty; run-to-completion, auto-destroy, stateless)
   // or "session" (long-lived, durable /workspace volume, explicit
   // teardown via Kill). Mode is immutable for the life of a Sandbox.
@@ -448,7 +448,7 @@ message AttachFailure {
     REASON_SESSION_ENDED = 2;
     // REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
     // REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
-    // lifecycle, which rejects reattach (ADR-0006).
+    // lifecycle, which rejects reattach (ADR-0146).
     REASON_NOT_A_SESSION = 3;
     // REASON_SESSION_NOT_RUNNING: Exec-only. The session is live but
     // its microVM could not be brought to Running in time — it is
