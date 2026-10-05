@@ -19,6 +19,7 @@ import (
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/leasepool"
+	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -48,9 +49,10 @@ type LeaseService struct {
 	// Clientset streams Pod logs for Exec. Required for Exec output.
 	Clientset kubernetes.Interface
 
-	// TenantResolver maps a tenant identity to its namespace. Required
-	// unless AuthDisabled.
-	TenantResolver TenantResolver
+	// Enrollment and Resolver mean the same as on Service. Required unless
+	// AuthDisabled.
+	Enrollment *Enrollment
+	Resolver   PairResolver
 
 	// AuthDisabled / DefaultNamespace are unit-test-only, identical in
 	// meaning to the SandboxService Service fields.
@@ -79,27 +81,15 @@ func (s *LeaseService) Start(ctx context.Context) {
 }
 
 // resolveNamespace mirrors Service.resolveNamespace.
-func (s *LeaseService) resolveNamespace(ctx context.Context) (string, error) {
+func (s *LeaseService) resolveNamespace(ctx context.Context, tenant string) (string, tenancy.Pair, error) {
 	if s.AuthDisabled {
 		if s.DefaultNamespace == "" {
-			return "", status.Error(codes.FailedPrecondition,
+			return "", tenancy.Pair{}, status.Error(codes.FailedPrecondition,
 				"AuthDisabled set but DefaultNamespace empty")
 		}
-		return s.DefaultNamespace, nil
+		return s.DefaultNamespace, tenancy.Pair{}, nil
 	}
-	tid, err := TenantFromContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if s.TenantResolver == nil {
-		return "", status.Error(codes.FailedPrecondition, "TenantResolver not configured")
-	}
-	ns, err := s.TenantResolver.NamespaceFor(ctx, tid)
-	if err != nil {
-		return "", status.Errorf(codes.PermissionDenied,
-			"tenant %q has no accessible namespace: %v", tid, err)
-	}
-	return ns, nil
+	return resolveCallerNamespace(ctx, s.Enrollment, s.Resolver, tenant)
 }
 
 // managerFor returns the pool Manager for a namespace, lazily creating it
@@ -166,7 +156,7 @@ func (s *LeaseService) templateForClass(ctx context.Context, ns, className strin
 
 // Lease claims a pre-warmed Sandbox for the requested class.
 func (s *LeaseService) Lease(ctx context.Context, req *setecv1grpc.LeaseRequest) (*setecv1grpc.LeaseResponse, error) {
-	ns, err := s.resolveNamespace(ctx)
+	ns, pair, err := s.resolveNamespace(ctx, req.GetTenant())
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +164,7 @@ func (s *LeaseService) Lease(ctx context.Context, req *setecv1grpc.LeaseRequest)
 	if err != nil {
 		return nil, err
 	}
+	tmpl.Labels = pairLabels(pair)
 
 	m := s.managerFor(ns)
 	m.Register(tmpl)
@@ -196,7 +187,7 @@ func (s *LeaseService) Lease(ctx context.Context, req *setecv1grpc.LeaseRequest)
 
 // Release destroys the leased Sandbox and replenishes the pool.
 func (s *LeaseService) Release(ctx context.Context, req *setecv1grpc.ReleaseRequest) (*setecv1grpc.ReleaseResponse, error) {
-	ns, err := s.resolveNamespace(ctx)
+	ns, _, err := s.resolveNamespace(ctx, req.GetTenant())
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +207,7 @@ func (s *LeaseService) Release(ctx context.Context, req *setecv1grpc.ReleaseRequ
 
 // PoolStatus reports the warm fill level for a class.
 func (s *LeaseService) PoolStatus(ctx context.Context, req *setecv1grpc.PoolStatusRequest) (*setecv1grpc.PoolStatusResponse, error) {
-	ns, err := s.resolveNamespace(ctx)
+	ns, _, err := s.resolveNamespace(ctx, req.GetTenant())
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +239,7 @@ func (s *LeaseService) PoolStatus(ctx context.Context, req *setecv1grpc.PoolStat
 // workspace that silently vanishes between calls.
 func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.LeaseService_ExecServer) error {
 	ctx := stream.Context()
-	ns, err := s.resolveNamespaceStream(ctx)
+	ns, pair, err := s.resolveNamespace(ctx, req.GetTenant())
 	if err != nil {
 		return err
 	}
@@ -285,7 +276,7 @@ func (s *LeaseService) Exec(req *setecv1grpc.ExecRequest, stream setecv1grpc.Lea
 	workload := &setecv1alpha1.Sandbox{
 		GenerateName: "exec-",
 		Namespace:    ns,
-		Labels:       map[string]string{leaseClassLabel: className},
+		Labels:       withPairLabels(map[string]string{leaseClassLabel: className}, pair),
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: className,
 			Image:            sc.Spec.PreWarmImage,
@@ -385,7 +376,10 @@ func (s *LeaseService) waitLoggable(ctx context.Context, ns, podName string) err
 	}
 }
 
-// resolveNamespaceStream is resolveNamespace for streaming RPCs.
-func (s *LeaseService) resolveNamespaceStream(ctx context.Context) (string, error) {
-	return s.resolveNamespace(ctx)
+// withPairLabels adds the labels of the owner pair to labels and returns it.
+func withPairLabels(labels map[string]string, p tenancy.Pair) map[string]string {
+	for k, v := range pairLabels(p) {
+		labels[k] = v
+	}
+	return labels
 }

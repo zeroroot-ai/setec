@@ -57,6 +57,10 @@ type PoolTemplate struct {
 	// so the operator applies the class default at admission.
 	VCPU   int32
 	Memory string
+
+	// Labels are copied onto each warm Sandbox. The frontend puts the owner
+	// pair (client and tenant) here, so each pool Sandbox records its owner.
+	Labels map[string]string
 }
 
 // SandboxRef identifies a launched Sandbox.

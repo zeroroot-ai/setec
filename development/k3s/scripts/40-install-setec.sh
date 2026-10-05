@@ -4,7 +4,8 @@
 #
 # After this script:
 #   - setec-system namespace running the operator + frontend
-#   - gibson-dev namespace labelled setec.zeroroot.ai/tenant=gibson-dev
+#   - gibson-dev namespace labelled setec.zeroroot.ai/client=dev and
+#     setec.zeroroot.ai/tenant=gibson-dev (the namespace of the pair dev/gibson-dev)
 #   - frontend reachable via:
 #       in-cluster:   setec-frontend.setec-system.svc:50051
 #       external:     <host-lan-ip>:30051 (NodePort wrapper)
@@ -40,6 +41,7 @@ kind: Namespace
 metadata:
   name: gibson-dev
   labels:
+    setec.zeroroot.ai/client: dev
     setec.zeroroot.ai/tenant: gibson-dev
 EOF
 

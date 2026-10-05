@@ -96,7 +96,7 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+	if err := s.checkTenantNamespace(ctx, start.GetTenant(), ns); err != nil {
 		return err
 	}
 	if _, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId()); err != nil {

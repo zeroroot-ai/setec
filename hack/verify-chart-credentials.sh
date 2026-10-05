@@ -20,7 +20,7 @@
 #     certificate posture the chart rendered before the switch existed —
 #     no SPIFFE flag, socket mount, or value leaks in;
 #   - spiffe mode renders the Workload API socket mount and the
-#     --spiffe-socket / --spiffe-authorized-id flags on the frontend, the
+#     --spiffe-socket and --client flags on the frontend, the
 #     node-agent, and the operator's node-agent dialer — all three, so a
 #     mixed posture is not reachable;
 #   - an empty authorized-ID list in spiffe mode fails the render rather
@@ -102,6 +102,8 @@ BASE=(
 	--set webhook.certManager.enabled=true
 	--set 'sandboxNamespaces={sandbox-workloads}'
 	--set frontend.enabled=true
+	--set 'frontend.clients[0].name=saas'
+	--set 'frontend.clients[0].spiffeID=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon'
 	--set nodeAgent.enabled=true
 	--set snapshots.enabled=true
 )
@@ -116,7 +118,6 @@ FILE_CREDS=(
 )
 SPIFFE=(
 	--set credentials.mode=spiffe
-	--set 'credentials.spiffe.authorizedIDs.frontendClients={spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon}'
 	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://zeroroot.ai/ns/setec/sa/setec}'
 	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent}'
 )
@@ -166,9 +167,11 @@ strip_comments "$workdir/spiffe-nodeagent.yaml" "$workdir/spiffe-nodeagent.strip
 	--show-only templates/deployment.yaml >"$workdir/spiffe-operator.yaml"
 strip_comments "$workdir/spiffe-operator.yaml" "$workdir/spiffe-operator.stripped.yaml"
 
-assert_contains "$workdir/spiffe-frontend.stripped.yaml" "frontend gets socket + allow-list" \
+assert_contains "$workdir/spiffe-frontend.stripped.yaml" "frontend gets the socket and the enrolled clients" \
 	"--spiffe-socket=/run/spire/agent-sockets/api.sock" \
-	"--spiffe-authorized-id=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
+	"--client=saas=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
+assert_absent "$workdir/spiffe-frontend.stripped.yaml" "frontend has no second allow-list" \
+	"--spiffe-authorized-id"
 assert_contains "$workdir/spiffe-frontend.stripped.yaml" "frontend mounts the Workload API socket dir read-only" \
 	"name: spiffe-workload-api" \
 	"path: /run/spire/agent-sockets" \
@@ -196,20 +199,17 @@ assert_absent "$workdir/spiffe-operator.stripped.yaml" "operator drops the clien
 # would otherwise render unused Certificates.
 # ---------------------------------------------------------------------------
 note "render-time failures"
-assert_render_fails "empty frontend allow-list fails the render" \
-	"credentials.spiffe.authorizedIDs.frontendClients must not be empty" \
-	"${BASE[@]}" --set credentials.mode=spiffe \
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://zeroroot.ai/ns/setec/sa/setec}' \
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent}'
+assert_render_fails "a frontend with no enrolled client fails the render" \
+	"frontend.clients must not be empty" \
+	--set webhook.certManager.enabled=true --set 'sandboxNamespaces={sandbox-workloads}' \
+	--set frontend.enabled=true --set credentials.mode=spiffe
 assert_render_fails "empty node-agent allow-list fails the render" \
 	"credentials.spiffe.authorizedIDs.nodeAgentClients must not be empty" \
 	"${BASE[@]}" --set credentials.mode=spiffe \
-	--set 'credentials.spiffe.authorizedIDs.frontendClients={spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon}' \
 	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent}'
 assert_render_fails "empty dialer allow-list fails the render" \
 	"credentials.spiffe.authorizedIDs.nodeAgentServers must not be empty" \
 	"${BASE[@]}" --set credentials.mode=spiffe \
-	--set 'credentials.spiffe.authorizedIDs.frontendClients={spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon}' \
 	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://zeroroot.ai/ns/setec/sa/setec}'
 assert_render_fails "unknown mode fails the render" \
 	'credentials.mode must be "file" or "spiffe"' \

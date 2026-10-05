@@ -665,8 +665,10 @@ credentials:
   #            frontend.tlsCertSecretName / frontend.tlsClientCASecretName
   #            and snapshots.mTLS.*.
   #   spiffe — the SPIFFE Workload API (a SPIRE agent socket on each
-  #            node). Renders --spiffe-socket / --spiffe-authorized-id on
-  #            the frontend and node-agent and the --nodeagent-spiffe-*
+  #            node). Renders --spiffe-socket on the frontend (whose
+  #            allow-list is frontend.clients), --spiffe-socket /
+  #            --spiffe-authorized-id on the node-agent, and the
+  #            --nodeagent-spiffe-*
   #            dialer flags on the operator, plus a read-only hostPath
   #            mount of the socket directory. There is NO fallback between
   #            modes: a SPIFFE component that cannot reach its Workload
@@ -685,11 +687,10 @@ credentials:
     # REQUIRED in spiffe mode: an empty one fails the render, so "accept
     # everyone" cannot be reached by omitting configuration (mirrors the
     # binaries' own refusal to start with an empty allow-list).
+    #
+    # The callers of the frontend are not here. They are frontend.clients,
+    # because each one is an enrolled client with a name (ADR-0142).
     authorizedIDs:
-      # frontendClients — IDs allowed to call the frontend SandboxService,
-      # e.g. spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon.
-      # Required when frontend.enabled=true.
-      frontendClients: []
       # nodeAgentClients — IDs allowed to call the node-agent snapshot
       # gRPC service (normally the operator's own ID). Required when
       # nodeAgent.enabled=true and snapshots.enabled=true.
@@ -775,26 +776,21 @@ frontend:
   # verification. REQUIRED when frontend.enabled=true — mTLS is the
   # only supported authentication mechanism.
   tlsClientCASecretName: ""
-  # sandboxNamespace places every tenant's Sandboxes in one fixed, shared
-  # namespace (renders --sandbox-namespace) instead of resolving a
-  # per-tenant namespace by label. Use it where the frontend's authorized
-  # caller set is a single trusted platform: every caller resolves to the
-  # same namespace, so the per-namespace ownership check no longer
-  # separates callers from each other. It must be listed in
-  # sandboxNamespaces (or rbac.allowClusterWideSandboxWrite must be true)
-  # so the operator can actually run Pods there. Mutually exclusive with
-  # tenantNamespaceLabel — setting both fails the render (setec#158).
-  sandboxNamespace: ""
-  # tenantNamespaceLabel overrides the label key the frontend matches
-  # namespaces on (renders --tenant-namespace-label; the binary defaults
-  # to setec.zeroroot.ai/tenant when unset). Set it where another system
-  # owns the tenant-namespace labels, e.g. gibson.zeroroot.ai/tenant.
-  # This is the frontend's tenant → namespace RESOLUTION key; the
-  # operator's multiTenancy.tenantLabelKey is the namespace-label
-  # ENFORCEMENT check, a different flag on a different binary — override
-  # both when the label scheme changes. Mutually exclusive with
-  # sandboxNamespace.
-  tenantNamespaceLabel: ""
+  # clients enrolls each Gibson cluster that may call the frontend
+  # (ADR-0142). Renders one --client=<name>=<spiffeID> for each entry.
+  # REQUIRED when frontend.enabled=true: the frontend refuses a caller
+  # whose certificate does not carry one of these SPIFFE IDs.
+  #
+  # Each request carries a tenant. The pair of the client name and the
+  # tenant selects the one namespace of the Sandbox: the namespace with
+  # the labels setec.zeroroot.ai/client=<name> and
+  # setec.zeroroot.ai/tenant=<tenant>. Two pairs never share a namespace.
+  # The namespace must exist and be listed in sandboxNamespaces.
+  #
+  #   clients:
+  #     - name: saas
+  #       spiffeID: spiffe://example.org/ns/gibson/sa/gibson-daemon
+  clients: []
   replicas: 1
   resources:
     requests:

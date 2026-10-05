@@ -54,13 +54,6 @@ const workloadContainerName = "workload"
 // a single line from growing the frontend's buffer without bound.
 const maxLogLineBytes = 1024 * 1024
 
-// TenantResolver maps a TenantID to the Kubernetes namespace the
-// frontend should operate against. Implementations typically list
-// namespaces with the tenant label and return the first match.
-type TenantResolver interface {
-	NamespaceFor(ctx context.Context, t tenancy.TenantID) (string, error)
-}
-
 // Service is the SandboxService implementation backed by a
 // controller-runtime client. It enforces tenant scoping on every RPC:
 // no matter what sandbox_id a caller passes, the service confirms the
@@ -78,9 +71,13 @@ type Service struct {
 	// RPCs degrade gracefully when nil.
 	Clientset kubernetes.Interface
 
-	// TenantResolver maps a tenant identity to its namespace. Required
-	// unless AuthDisabled is true.
-	TenantResolver TenantResolver
+	// Enrollment names the client cluster of each caller (ADR-0142).
+	// Required unless AuthDisabled is true.
+	Enrollment *Enrollment
+
+	// Resolver maps the owner pair of a call (client and tenant) to its
+	// one namespace. Required unless AuthDisabled is true.
+	Resolver PairResolver
 
 	// AuthDisabled, when true, skips TLS peer cert extraction and uses
 	// DefaultNamespace for every call. Exists SOLELY for unit-test
@@ -119,30 +116,18 @@ type Service struct {
 	logOpener podLogOpener
 }
 
-// resolveNamespace returns the namespace for the caller. mTLS-authenticated
-// path extracts tenant from peer cert and delegates to TenantResolver;
-// insecure path returns DefaultNamespace.
-func (s *Service) resolveNamespace(ctx context.Context) (string, error) {
+// resolveNamespace returns the namespace of the owner pair of the call: the
+// enrolled client of the caller and the tenant of the request. The pair is
+// empty on the test-only AuthDisabled path, which uses DefaultNamespace.
+func (s *Service) resolveNamespace(ctx context.Context, tenant string) (string, tenancy.Pair, error) {
 	if s.AuthDisabled {
 		if s.DefaultNamespace == "" {
-			return "", status.Error(codes.FailedPrecondition,
+			return "", tenancy.Pair{}, status.Error(codes.FailedPrecondition,
 				"AuthDisabled set but DefaultNamespace empty")
 		}
-		return s.DefaultNamespace, nil
+		return s.DefaultNamespace, tenancy.Pair{}, nil
 	}
-	tid, err := TenantFromContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	if s.TenantResolver == nil {
-		return "", status.Error(codes.FailedPrecondition, "TenantResolver not configured")
-	}
-	ns, err := s.TenantResolver.NamespaceFor(ctx, tid)
-	if err != nil {
-		return "", status.Errorf(codes.PermissionDenied,
-			"tenant %q has no accessible namespace: %v", tid, err)
-	}
-	return ns, nil
+	return resolveCallerNamespace(ctx, s.Enrollment, s.Resolver, tenant)
 }
 
 // parseSandboxID splits a sandbox_id of the form <namespace>/<name>/<uid>
@@ -158,7 +143,7 @@ func parseSandboxID(id string) (ns, name string, err error) {
 
 // Launch translates LaunchRequest into a Sandbox CR create.
 func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*setecv1grpc.LaunchResponse, error) {
-	ns, err := s.resolveNamespace(ctx)
+	ns, pair, err := s.resolveNamespace(ctx, req.GetTenant())
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +172,9 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 	sb := &setecv1alpha1.Sandbox{
 		GenerateName: "sbx-",
 		Namespace:    ns,
+		// The owner pair, recorded on the Sandbox itself. The namespace is
+		// already one pair only, so this is the readable record of it.
+		Labels: pairLabels(pair),
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: req.GetSandboxClass(),
 			Image:            req.GetImage(),
@@ -300,7 +288,7 @@ func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*sete
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+	if err := s.checkTenantNamespace(ctx, req.GetTenant(), ns); err != nil {
 		return nil, err
 	}
 
@@ -349,7 +337,7 @@ func (s *Service) Kill(ctx context.Context, req *setecv1grpc.KillRequest) (*sete
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+	if err := s.checkTenantNamespace(ctx, req.GetTenant(), ns); err != nil {
 		return nil, err
 	}
 	grace := req.GetGraceSeconds()
@@ -401,7 +389,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	if err != nil {
 		return err
 	}
-	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+	if err := s.checkTenantNamespace(ctx, req.GetTenant(), ns); err != nil {
 		return err
 	}
 	tail := req.GetTailLines()
@@ -806,18 +794,29 @@ func relayLogStream(
 	return out, nil
 }
 
-// checkTenantNamespace is the tenant-scope guard. It verifies the
-// requested namespace is the caller's resolved namespace.
-func (s *Service) checkTenantNamespace(ctx context.Context, ns string) error {
-	mine, err := s.resolveNamespace(ctx)
+// checkTenantNamespace is the scope guard of each call on an existing
+// Sandbox. The namespace in the sandbox id must be the namespace of the owner
+// pair of the call, so a different client with the same tenant, or the same
+// client with a different tenant, is refused.
+func (s *Service) checkTenantNamespace(ctx context.Context, tenant, ns string) error {
+	mine, _, err := s.resolveNamespace(ctx, tenant)
 	if err != nil {
 		return err
 	}
 	if mine != ns {
 		return status.Errorf(codes.PermissionDenied,
-			"tenant does not own namespace %q", ns)
+			"the caller does not own namespace %q", ns)
 	}
 	return nil
+}
+
+// pairLabels returns the labels of a pair, or nil for the empty pair of the
+// test-only AuthDisabled path.
+func pairLabels(p tenancy.Pair) map[string]string {
+	if p.Client == "" {
+		return nil
+	}
+	return p.Labels()
 }
 
 // isTerminal mirrors the controller's isTerminalPhase; duplicated here

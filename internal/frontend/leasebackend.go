@@ -52,6 +52,9 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 			Command:          appendStrings(tmpl.Command, b.idleCommand),
 		},
 	}
+	for k, v := range tmpl.Labels {
+		sb.Labels[k] = v
+	}
 	if tmpl.VCPU > 0 {
 		sb.Spec.Resources = setecv1alpha1.Resources{VCPU: tmpl.VCPU}
 		if tmpl.Memory != "" {

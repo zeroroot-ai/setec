@@ -49,7 +49,7 @@ func (s *Service) Attach(ctx context.Context, req *setecv1grpc.AttachRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkTenantNamespace(ctx, ns); err != nil {
+	if err := s.checkTenantNamespace(ctx, req.GetTenant(), ns); err != nil {
 		return nil, err
 	}
 

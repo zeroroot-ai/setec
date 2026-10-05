@@ -33,6 +33,11 @@ frontend:
   # from the dev PKI under ../pki/. Production delivers via SPIRE.
   tlsCertSecretName: setec-frontend-tls
   tlsClientCASecretName: setec-frontend-ca
+  # The one enrolled client of dev. 30-generate-pki.sh writes this SPIFFE
+  # ID into the URI SAN of the dev client certificate.
+  clients:
+    - name: dev
+      spiffeID: spiffe://dev.local/ns/gibson/sa/gibson-daemon
 
   # Single-node dev sizing — keep memory low so the node has headroom for
   # operator + sandbox workloads on the same host.
