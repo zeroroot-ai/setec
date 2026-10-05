@@ -20,14 +20,17 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
   end-to-end: gibson dispatch → Sandbox → metal node → kata-fc → guest-agent →
   result. **Includes snapshot/restore** (warm per-run start), because per-run
   cold-boot latency caps throughput for a fresh-sandbox-per-tool model.
-- **Substrate** — the node microVMs run on: **x86 bare-metal** EC2 only (nested
-  virt ⇒ metal; x86 for tool-ecosystem compatibility and kata maturity). A
-  pre-baked Packer AMI (kata-fc + devmapper thinpool) on a Karpenter
-  on-demand, scale-to-zero NodePool. arm64 is unsupported (see ADR-0141).
-- **Dispatch** — the gibson-daemon → setec-frontend hop. gibson authenticates
-  over **SPIFFE** (SPIRE Workload API SVID); setec stays **generic mTLS**
-  (trust bundle + allowed SPIFFE IDs, no SPIRE dependency). One caller identity
-  (`platform/daemon`), so setec derives no tenancy from the cert (ADR-0142).
+- **Substrate** — the node microVMs run on: **x86** nodes with KVM (nested
+  virt ⇒ metal on EC2; x86 for tool-ecosystem compatibility and kata maturity).
+  The installer DaemonSet prepares each node: the Kata static release, the
+  devmapper thin-pool, the gVisor release, and the containerd handlers
+  (ADR-0143). A pre-baked AMI on a Karpenter NodePool is an optional profile
+  (`karpenter.enabled`, default false). arm64 is unsupported (see ADR-0141).
+- **Dispatch** — the gibson-daemon → setec-frontend hop. Every hop is mTLS,
+  and a component uses exactly one credential source: PEM files (the default)
+  or the SPIFFE Workload API socket (ADR-0142). In SPIFFE mode the server
+  accepts only the SPIFFE IDs in its allow list. One caller identity
+  (`platform/daemon`), so setec derives no tenancy from the cert (ADR-0052).
 
 ## Architecture decisions (the ADR files live in the `docs` repo)
 
