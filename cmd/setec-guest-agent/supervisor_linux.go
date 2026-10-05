@@ -22,10 +22,18 @@ import (
 // PID 1 the agent prepares the root of the image, reaps orphans, and serves
 // the launcher on the control port. A machine of today's backends never
 // runs the agent as PID 1, so it never enters this mode.
-func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
+//
+// prepareMachine runs first, before any listener: as PID 1 the agent must
+// mount devtmpfs before /dev/vsock exists. The first real boot found that
+// order.
+func prepareMachine() error {
 	if err := guestagent.PrepareRoot(guestagent.KernelArg("setec.lowerfs")); err != nil {
 		return fmt.Errorf("prepare the root: %w", err)
 	}
+	return nil
+}
+
+func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
 	sup := guestagent.NewSupervisor(guestagent.NewRoot)
 	ln, err := vsock.Listen(guestagent.ControlPort, nil)
 	if err != nil {

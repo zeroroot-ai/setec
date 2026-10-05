@@ -105,6 +105,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	pid1 := os.Getpid() == 1
+	if pid1 {
+		if err := prepareMachine(); err != nil {
+			log.Printf("setec-guest-agent: %v", err)
+			os.Exit(1)
+		}
+	}
+
 	ln, err := listenVsock(opts.Port)
 	if err != nil {
 		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.Port, err)
@@ -121,7 +129,7 @@ func main() {
 	errCh := make(chan error, 3)
 	// In a launcher machine the agent is PID 1: it is also the supervisor
 	// of the workload. Its exit ends the machine, so an error is fatal.
-	if os.Getpid() == 1 {
+	if pid1 {
 		go func() { errCh <- runSupervisor(ctx, log.Printf) }()
 	}
 	go func() {
