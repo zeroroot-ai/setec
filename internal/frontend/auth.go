@@ -10,14 +10,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spiffe/go-spiffe/v2/spiffeid"
-	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	setcreds "github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
@@ -55,19 +54,19 @@ func ParseEnrollment(entries []string) (*Enrollment, error) {
 		if errs := validation.IsDNS1123Label(name); len(errs) != 0 {
 			return nil, fmt.Errorf("enrollment: client name %q is not a DNS label", name)
 		}
-		id, err := spiffeid.FromString(rawID)
+		id, err := setcreds.ParseSPIFFEID(rawID)
 		if err != nil {
 			return nil, fmt.Errorf("enrollment: client %q: %w", name, err)
 		}
 		if _, dup := names[name]; dup {
 			return nil, fmt.Errorf("enrollment: client name %q is enrolled twice", name)
 		}
-		if other, dup := e.byID[id.String()]; dup {
+		if other, dup := e.byID[id]; dup {
 			return nil, fmt.Errorf("enrollment: SPIFFE ID %s is enrolled as %q and as %q", id, other, name)
 		}
 		names[name] = struct{}{}
-		e.byID[id.String()] = name
-		e.ids = append(e.ids, id.String())
+		e.byID[id] = name
+		e.ids = append(e.ids, id)
 	}
 	sort.Strings(e.ids)
 	return e, nil
@@ -93,11 +92,11 @@ func (e *Enrollment) clientFromContext(ctx context.Context) (string, error) {
 	if len(tlsInfo.State.PeerCertificates) == 0 {
 		return "", status.Error(codes.Unauthenticated, "no client certificate presented")
 	}
-	id, err := x509svid.IDFromCert(tlsInfo.State.PeerCertificates[0])
+	id, err := setcreds.PeerSPIFFEID(tlsInfo.State.PeerCertificates[0])
 	if err != nil {
 		return "", status.Error(codes.PermissionDenied, "the client certificate carries no SPIFFE ID")
 	}
-	name, ok := e.byID[id.String()]
+	name, ok := e.byID[id]
 	if !ok {
 		return "", status.Errorf(codes.PermissionDenied, "caller %s is not an enrolled client", id)
 	}

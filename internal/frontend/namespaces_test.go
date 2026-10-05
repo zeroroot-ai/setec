@@ -44,13 +44,15 @@ func mustPair(t *testing.T, clientName, tenant string) tenancy.Pair {
 
 // TestNamespaceProvisioner_MakesOneNamespacePerPair is the done-when test of
 // setec#207: the first call of a pair makes its namespace and grants, a
-// second call reuses them, and two pairs never share a namespace.
+// second call reuses them, and two pairs never share a namespace. Pair C has
+// the client of pair A and another tenant.
 func TestNamespaceProvisioner_MakesOneNamespacePerPair(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	n := provisioner(t)
 	a := mustPair(t, "cluster-a", "acme")
 	b := mustPair(t, "cluster-b", "acme")
+	c := mustPair(t, "cluster-a", "globex")
 
 	nsA, err := n.NamespaceFor(ctx, a)
 	if err != nil {
@@ -63,6 +65,10 @@ func TestNamespaceProvisioner_MakesOneNamespacePerPair(t *testing.T) {
 	nsB, err := n.NamespaceFor(ctx, b)
 	if err != nil || nsB == nsA {
 		t.Fatalf("pair B = %q, %v; want a namespace of its own", nsB, err)
+	}
+	nsC, err := n.NamespaceFor(ctx, c)
+	if err != nil || nsC == nsA || nsC == nsB {
+		t.Fatalf("pair C = %q, %v; want a namespace of its own", nsC, err)
 	}
 	if !strings.HasPrefix(nsA, PairNamespacePrefix) || len(nsA) > 63 {
 		t.Fatalf("namespace name %q", nsA)
@@ -84,8 +90,8 @@ func TestNamespaceProvisioner_MakesOneNamespacePerPair(t *testing.T) {
 		t.Fatalf("role bindings in %s = %d, want 2", nsA, len(rbs.Items))
 	}
 	nss := &corev1.NamespaceList{}
-	if err := n.Client.List(ctx, nss); err != nil || len(nss.Items) != 2 {
-		t.Fatalf("namespaces = %d, %v; want 2", len(nss.Items), err)
+	if err := n.Client.List(ctx, nss); err != nil || len(nss.Items) != 3 {
+		t.Fatalf("namespaces = %d, %v; want 3", len(nss.Items), err)
 	}
 }
 
