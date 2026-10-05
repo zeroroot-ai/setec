@@ -40,8 +40,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // SandboxService is the gRPC frontend for launching and observing Setec
-// Sandboxes. Every operation is tenant-scoped via mTLS client certificate
-// (or, optionally, JWT). The frontend translates these RPCs to Sandbox
+// Sandboxes. Every hop uses mTLS (ADR-0142). The client certificate names
+// the caller and carries no tenancy: tenant data isolation is the job of
+// the caller, and the job of Setec is the isolation of untrusted code
+// (ADR-0052). The frontend translates these RPCs to Sandbox
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
@@ -230,8 +232,10 @@ type SandboxService_ExecClient = grpc.BidiStreamingClient[SandboxServiceExecRequ
 // for forward compatibility.
 //
 // SandboxService is the gRPC frontend for launching and observing Setec
-// Sandboxes. Every operation is tenant-scoped via mTLS client certificate
-// (or, optionally, JWT). The frontend translates these RPCs to Sandbox
+// Sandboxes. Every hop uses mTLS (ADR-0142). The client certificate names
+// the caller and carries no tenancy: tenant data isolation is the job of
+// the caller, and the job of Setec is the isolation of untrusted code
+// (ADR-0052). The frontend translates these RPCs to Sandbox
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
