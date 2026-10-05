@@ -316,6 +316,12 @@ jobs:
         # gating. This fails the build if either is reintroduced.
         run: ./hack/verify-x86-substrate.sh charts/setec
 
+      - name: x86-substrate build-file rule fixture
+        # setec#160: the guard also reads the Makefile and the Dockerfiles.
+        # The fixture feeds it a multi-arch PLATFORMS default, an arm64
+        # --platform flag and an arm64 comment, and each must fail.
+        run: ./hack/verify-x86-substrate.test.sh
+
       - name: Helm template (Phase 3 enabled)
         # Catches regressions in Phase 3 chart extensions without
         # requiring a live cluster. mTLS is mandatory so the tls

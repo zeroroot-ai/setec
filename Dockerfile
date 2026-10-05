@@ -21,10 +21,9 @@
 # then re-resolve the digest with:
 #   docker buildx imagetools inspect ghcr.io/zeroroot-ai/mirror/golang:<tag> --format '{{.Manifest.Digest}}'
 # --platform=$BUILDPLATFORM: the build stage always runs natively on the
-# build host and cross-compiles via TARGETOS/TARGETARCH (CGO is disabled),
-# so multi-arch builds (linux/amd64,linux/arm64 — setec#132) never emulate
-# the Go toolchain. The distroless runtime stage below is a multi-arch
-# index, and it has no RUN steps, so no QEMU is needed anywhere.
+# build host and compiles for TARGETOS/TARGETARCH (CGO is disabled). setec
+# publishes each image for linux/amd64 only (ADR-0141), so the two are the
+# same on a CI runner. The runtime stage has no RUN steps.
 FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
 # The builder image carries exactly the Go that go.mod names, and the org
 # guard (check-go-toolchain.sh, .github#22) fails a PR where they differ.
