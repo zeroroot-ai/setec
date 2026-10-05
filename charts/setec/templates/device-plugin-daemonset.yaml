@@ -14,8 +14,8 @@ purpose, and each one is named here with its reason:
 
   1. This DaemonSet. It runs as root and mounts two host paths: the kubelet
      device plugin directory, because the kubelet finds a plugin by its
-     socket there, and /dev, so the plugin can see whether each device
-     exists. It is not privileged, it drops every capability, it has no
+     socket there, and /dev (at /host/dev), so the plugin can see whether
+     each device exists. It is not privileged, it drops every capability, it has no
      ServiceAccount token and no host network.
   2. The launcher Pod (internal/podspec/launcher.go). It has the one
      capability NET_ADMIN, to join the machine to the Pod network
@@ -74,8 +74,10 @@ spec:
           volumeMounts:
             - name: device-plugins
               mountPath: /var/lib/kubelet/device-plugins
+            # Not at /dev: the container runtime mounts the termination log
+            # into /dev of the container, which fails on a read-only /dev.
             - name: dev
-              mountPath: /dev
+              mountPath: /host/dev
               readOnly: true
       volumes:
         - name: device-plugins

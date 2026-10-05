@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -30,7 +31,9 @@ func main() {
 			"the kubelet device plugin directory, mounted from the node")
 		count = flag.Int("count", 110,
 			"how many launcher Pods a node may run at one time; each takes one share of each device")
-		health = flag.Duration("health-interval", 10*time.Second, "how often to check that each device exists")
+		health  = flag.Duration("health-interval", 10*time.Second, "how often to check that each device exists")
+		hostDev = flag.String("host-dev", "/host/dev",
+			"where /dev of the node is mounted; not /dev, which the container runtime owns")
 	)
 	flag.Parse()
 
@@ -43,7 +46,8 @@ func main() {
 
 	var wg sync.WaitGroup
 	for _, d := range devices {
-		p, err := deviceplugin.New(d, d.HostPath, *health)
+		statPath := filepath.Join(*hostDev, strings.TrimPrefix(d.HostPath, "/dev/"))
+		p, err := deviceplugin.New(d, statPath, *health)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "setec-device-plugin: %v\n", err)
 			os.Exit(1)
