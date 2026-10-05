@@ -446,7 +446,7 @@ func main() {
 			Recorder: snapshotCoordRecorder,
 			Metrics:  collectors,
 			Tracer:   tracer,
-			// ADR-0005 invariant gate: enforcement is unconditional
+			// ADR-0145 invariant gate: enforcement is unconditional
 			// inside the Coordinator; this only wires the dev-mode
 			// opt-out lookup (class annotation + gate-namespace label).
 			Gate: &gate.Gate{Reader: mgr.GetClient()},
@@ -489,7 +489,7 @@ func main() {
 		}
 	}
 
-	// SandboxClass controller: keeps the ADR-0005 dev-mode opt-out
+	// SandboxClass controller: keeps the ADR-0145 dev-mode opt-out
 	// condition (UnverifiedRestoresAllowed) truthful on every class.
 	if err := (&controller.SandboxClassReconciler{
 		Client: mgr.GetClient(),

@@ -32,7 +32,7 @@ func secretSnapshotWriter(state, mem string) error {
 	return os.WriteFile(mem, secretMarker, 0o644)
 }
 
-// TestRunLauncher_EncryptsEntryAtRest is the pool half of ADR-0005
+// TestRunLauncher_EncryptsEntryAtRest is the pool half of ADR-0145
 // invariant 5: after a successful launch, the entry's state/memory
 // files on disk are ciphertext (no plaintext marker, correct framing),
 // the sealed per-entry DEK exists, the provenance record claims the
@@ -120,7 +120,7 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 		t.Fatal("sealed DEK must be bound to its provenance record")
 	}
 
-	// A forged scan verdict must not unseal the DEK either (ADR-0005
+	// A forged scan verdict must not unseal the DEK either (ADR-0145
 	// invariant 1, setec#206): the verdict is AAD-bound exactly like
 	// the provenance record.
 	forgedScan := verdict
@@ -130,7 +130,7 @@ func TestRunLauncher_EncryptsEntryAtRest(t *testing.T) {
 	}
 }
 
-// TestRunLauncher_RefusesSecretInSnapshot is the bake half of ADR-0005
+// TestRunLauncher_RefusesSecretInSnapshot is the bake half of ADR-0145
 // invariant 1 (setec#206): a guest image that contains secret-shaped
 // material must never be persisted as a pool entry — the launch fails
 // and every artifact (including any scan record) is removed.
@@ -162,7 +162,7 @@ func TestRunLauncher_RefusesSecretInSnapshot(t *testing.T) {
 	}
 }
 
-// TestRunLauncher_RefusesLiveSocket is ADR-0005 invariant 4 at the
+// TestRunLauncher_RefusesLiveSocket is ADR-0145 invariant 4 at the
 // builder: a live listener on the requested Firecracker socket means a
 // pre-existing (possibly used) VM — the launcher must refuse to adopt
 // and snapshot it.

@@ -46,7 +46,7 @@ with a port value.
 {{- end -}}
 
 {{/*
-Session-checkpoint S3 validation (setec#194, ADR-0007). Every
+Session-checkpoint S3 validation (setec#194, ADR-0147). Every
 snapshots.s3.* value is consumed by exactly one place — the node-agent
 DaemonSet's argv, inside the snapshots.enabled guard. Turning s3 on
 without those two switches therefore renders NOTHING and the operator
@@ -109,7 +109,7 @@ error, so the mistake is caught before it reaches a cluster.
 {{- end -}}
 
 {{/*
-Installer values validation (ADR-0003). Fails the render when the
+Installer values validation (ADR-0143). Fails the render when the
 thin-pool configuration is inconsistent, so a misconfigured install
 fails at helm time instead of leaving every node's installer NotReady.
 */}}

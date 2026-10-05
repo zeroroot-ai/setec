@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-# Dockerfile.installer — the portable node installer image (ADR-0003,
+# Dockerfile.installer — the portable node installer image (ADR-0143,
 # issue #187). Unlike the shared ./Dockerfile (pure Go binaries), this
 # image also carries the stock kata-containers static release as an
 # immutable payload, kata-deploy-style: the only network fetch a node
@@ -8,7 +8,7 @@
 # air-gap-friendly and makes the payload version an image property that
 # release engineering pins, not a runtime download a node performs.
 #
-# amd64 only: kata-fc is x86-only in setec (ADR-0001), and the chart's
+# amd64 only: kata-fc is x86-only in setec (ADR-0141), and the chart's
 # installer DaemonSet pins kubernetes.io/arch: amd64.
 
 # ----------------------------------------------------------------------------

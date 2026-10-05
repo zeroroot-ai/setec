@@ -54,7 +54,7 @@ func ScanArtifact(path string) ([]PathFinding, error) {
 // ScanArtifactSHA256 scans a single artifact like ScanArtifact and
 // additionally returns the lowercase-hex SHA-256 of the bytes EXACTLY
 // as scanned, computed in the same pass. Callers that record a scan
-// verdict (the pool bake path, ADR-0005 invariant 1) use the digest to
+// verdict (the pool bake path, ADR-0145 invariant 1) use the digest to
 // bind the verdict to the artifact: a later consumer re-deriving the
 // digest proves the scanned bytes are the restored bytes.
 func ScanArtifactSHA256(path string) ([]PathFinding, string, error) {

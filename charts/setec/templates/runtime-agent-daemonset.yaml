@@ -44,7 +44,7 @@ spec:
       # Sandbox.
       tolerations:
         {{- toYaml .Values.runtimeAgent.tolerations | nindent 8 }}
-      {{- /* The sandbox substrate is x86 only (ADR-0001): every published
+      {{- /* The sandbox substrate is x86 only (ADR-0141): every published
       setec image is single-arch linux/amd64, so the arch selector is
       hardcoded — an unconstrained DaemonSet ImagePullBackOffs forever on
       arm64 (Graviton system) nodes and the release never converges

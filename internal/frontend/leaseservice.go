@@ -240,7 +240,7 @@ func (s *LeaseService) PoolStatus(ctx context.Context, req *setecv1grpc.PoolStat
 // it inherits the warm base, then streams its logs to terminal.
 // Exactly one Exec is permitted per lease.
 //
-// This is deliberately NOT SandboxService.Exec (ADR-0008). That verb
+// This is deliberately NOT SandboxService.Exec (ADR-0148). That verb
 // enters an already-running session microVM so successive commands
 // share a durable /workspace; this one buys a warm cold-start for a
 // single throwaway command. Leases are a fast-start mechanism, not a

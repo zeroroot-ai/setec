@@ -3,7 +3,7 @@
 
 package controller
 
-// Session idle-eviction scenarios (ADR-0006, setec#193): a Running
+// Session idle-eviction scenarios (ADR-0146, setec#193): a Running
 // session past its per-SandboxClass sessionIdleTimeout is evicted
 // (Failed reason=IdleTimeout, Pod deleted), while a session whose
 // activity annotation keeps moving — what the frontend does while a

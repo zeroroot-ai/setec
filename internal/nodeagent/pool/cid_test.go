@@ -11,7 +11,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
-// TestBootEntries_AllocateDistinctGuestCIDs is the ADR-0005
+// TestBootEntries_AllocateDistinctGuestCIDs is the ADR-0145
 // invariant-2 construction guarantee: every pool entry boots with its
 // own node-unique vsock CID, so two sandboxes warm-started from the
 // same class pool can never collide.

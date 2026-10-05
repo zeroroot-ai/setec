@@ -19,7 +19,7 @@ import (
 )
 
 // ConditionUnverifiedRestoresAllowed is the SandboxClass condition
-// type that makes the ADR-0005 dev-mode opt-out loud: it is True only
+// type that makes the ADR-0145 dev-mode opt-out loud: it is True only
 // while the class annotation AND the cluster-level dev gate label are
 // both present, i.e. while the invariant gate may serve unverified
 // restores for this class.
@@ -35,13 +35,13 @@ const (
 	// enforces. The annotation is inert — surfaced so the mismatch is
 	// visible instead of silently ignored.
 	ReasonDevGateNamespaceUnlabelled = "DevGateNamespaceUnlabelled"
-	// ReasonEnforced: no opt-out requested; the ADR-0005 invariant
+	// ReasonEnforced: no opt-out requested; the ADR-0145 invariant
 	// gate enforces all five invariant verifications per restore.
 	ReasonEnforced = "Enforced"
 )
 
 // SandboxClassReconciler watches SandboxClass resources and keeps the
-// ADR-0005 dev-mode opt-out condition (UnverifiedRestoresAllowed)
+// ADR-0145 dev-mode opt-out condition (UnverifiedRestoresAllowed)
 // truthful on every class. Class resolution itself stays read-fresh in
 // the resolver; this controller only owns the loud status surface.
 type SandboxClassReconciler struct {
@@ -73,7 +73,7 @@ func (r *SandboxClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		Type:               ConditionUnverifiedRestoresAllowed,
 		Status:             metav1.ConditionFalse,
 		Reason:             ReasonEnforced,
-		Message:            "ADR-0005 invariant gate enforced: every restore/resume requires all five invariant verifications",
+		Message:            "ADR-0145 invariant gate enforced: every restore/resume requires all five invariant verifications",
 		ObservedGeneration: cls.Generation,
 	}
 	if gate.ClassOptsOut(cls) {
@@ -91,9 +91,9 @@ func (r *SandboxClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		default:
 			cond.Status = metav1.ConditionTrue
 			cond.Reason = ReasonDevModeOptOut
-			cond.Message = "DEV-MODE: the ADR-0005 invariant gate may serve UNVERIFIED restores for this class (" +
+			cond.Message = "DEV-MODE: the ADR-0145 invariant gate may serve UNVERIFIED restores for this class (" +
 				gate.AllowUnverifiedRestoresAnnotation + "=\"true\" + cluster dev label). Never use in production."
-			logger.Info("SECURITY: ADR-0005 invariant-gate dev-mode opt-out ACTIVE — unverified snapshot restores may be served",
+			logger.Info("SECURITY: ADR-0145 invariant-gate dev-mode opt-out ACTIVE — unverified snapshot restores may be served",
 				"class", cls.Name,
 				"annotation", gate.AllowUnverifiedRestoresAnnotation,
 				"devLabel", gate.DefaultAllowDevLabel)

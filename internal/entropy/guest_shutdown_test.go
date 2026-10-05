@@ -33,7 +33,7 @@ func (p *blockingPool) AddEntropy(_ []byte) error {
 // failed after cancellation, so its return meant only "the accept loop
 // stopped" — a handler could still be running. Every caller treats the return
 // as "all work is done"; in the guest agent that means SIGTERM could cut a
-// reseed injection off mid-flight, which for entropy is an ADR-0005 concern
+// reseed injection off mid-flight, which for entropy is an ADR-0145 concern
 // (the reseed is what stands between a restored clone and a duplicated RNG
 // stream).
 //

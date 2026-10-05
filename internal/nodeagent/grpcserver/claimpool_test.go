@@ -141,7 +141,7 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 	if resp.GetEntryId() == "" {
 		t.Fatal("entry_id must identify the consumed entry")
 	}
-	// ADR-0005 attestations for the operator-side invariant gate: the
+	// ADR-0145 attestations for the operator-side invariant gate: the
 	// claim path verified the template provenance (AAD-bound into the
 	// sealed DEK) and decrypted always-encrypted state, so both signals
 	// must be reported affirmatively.
@@ -164,7 +164,7 @@ func TestClaimPoolEntry_RestoresAndConsumes(t *testing.T) {
 		t.Fatalf("loadCalls = %v, want one call with the entry's state.bin", fc.loadCalls)
 	}
 
-	// The entry is consumed (ADR-0005: one restore per snapshot state)
+	// The entry is consumed (ADR-0145: one restore per snapshot state)
 	// and its on-disk state is gone.
 	if n := pm.CountClass("std"); n != 0 {
 		t.Fatalf("pool still holds %d entries after claim, want 0", n)
@@ -243,7 +243,7 @@ func TestClaimPoolEntry_LoadFailureConsumesEntry(t *testing.T) {
 	if resp.GetError() == "" {
 		t.Fatal("error message must explain the failed restore")
 	}
-	// The failed entry must NOT return to the pool (ADR-0005).
+	// The failed entry must NOT return to the pool (ADR-0145).
 	if n := pm.CountClass("std"); n != 0 {
 		t.Fatalf("pool entries = %d after failed restore, want 0", n)
 	}

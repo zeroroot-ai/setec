@@ -124,7 +124,7 @@ func (v *SandboxValidator) ValidateCreate(ctx context.Context, obj *setecv1alpha
 // ValidateUpdate reuses the create logic (any Sandbox mutation that leaves
 // the spec violating class constraints is just as bad as creation) and
 // additionally enforces lifecycle-mode immutability: a Sandbox declared
-// ephemeral can never become a session and vice versa (ADR-0006). The
+// ephemeral can never become a session and vice versa (ADR-0146). The
 // comparison is on the EFFECTIVE mode, so stamping an explicit
 // "ephemeral" onto a pre-lifecycle Sandbox is not a mutation.
 func (v *SandboxValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *setecv1alpha1.Sandbox) (admission.Warnings, error) {
@@ -165,7 +165,7 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 	}
 
 	// (0b) An ephemeral Sandbox's one command is its whole life
-	// (ADR-0006), so it must have one. A session may leave it empty:
+	// (ADR-0146), so it must have one. A session may leave it empty:
 	// the operator boots the setec keepalive and work arrives through
 	// Exec (setec#7). The CRD no longer requires the field, so this is
 	// where the ephemeral rule is enforced at admission.

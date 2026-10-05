@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package atrest implements encryption at rest for snapshot artifacts
-// (ADR-0005 invariant 5). The design is deliberately boring:
+// (ADR-0145 invariant 5). The design is deliberately boring:
 //
 //   - Every artifact (a Snapshot's framed state stream, a pool entry's
 //     state/memory pair) is encrypted with its own fresh 256-bit data
@@ -19,7 +19,7 @@
 //     ciphertext overwrite, the artifact is cryptographically erased
 //     because its only key is gone.
 //
-// There is deliberately no external KMS dependency (ADR-0003/0007
+// There is deliberately no external KMS dependency (ADR-0143/0147
 // portability): the KEK is a node-local file. The accepted residual is
 // that an attacker with simultaneous access to a node's keyfile AND its
 // artifact tree can decrypt that node's artifacts; the encryption
@@ -393,7 +393,7 @@ func EncryptFile(path string, dek []byte) error {
 // computed in the same pass. Used by restore paths that must hand
 // Firecracker a plaintext state file; the digest lets them check the
 // recovered bytes against a recorded verdict (e.g. the pool entry's
-// secret-scan record, ADR-0005 invariant 1) without a second read.
+// secret-scan record, ADR-0145 invariant 1) without a second read.
 func DecryptFile(src, dst string, dek []byte) (string, error) {
 	in, err := os.Open(src) //nolint:gosec // node-agent controlled path
 	if err != nil {

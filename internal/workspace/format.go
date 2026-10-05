@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package workspace formats and mounts the durable per-session
-// workspace volume for the kata-fc backend (setec#91, ADR-0007
+// workspace volume for the kata-fc backend (setec#91, ADR-0147
 // addendum).
 //
 // Kata Containers + Firecracker carries no virtio-fs, so kata cannot
@@ -22,7 +22,7 @@
 // restart (a node dying, an eviction, an explicit Pod delete), and each
 // of those incarnations runs this package's logic again. Reformatting
 // an already-formatted device would silently destroy the very corpus
-// ADR-0006/0007 promise a session never loses, so FormatOnce checks for
+// ADR-0146/0147 promise a session never loses, so FormatOnce checks for
 // an existing filesystem before ever calling mkfs.
 package workspace
 

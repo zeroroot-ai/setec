@@ -422,7 +422,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 
 	// An open client stream is caller activity: while it lives the
 	// session's last-activity annotation is heartbeaten so the operator
-	// never idle-evicts a session someone is watching (ADR-0006), and
+	// never idle-evicts a session someone is watching (ADR-0146), and
 	// the final stamp on disconnect starts the idle clock there.
 	if sb.Spec.IsSession() {
 		stopHeartbeat := s.keepSessionActive(ctx, ns, name)

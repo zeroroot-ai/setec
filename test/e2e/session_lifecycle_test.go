@@ -137,14 +137,14 @@ func waitForLogMarker(t *testing.T, podName, marker string, timeout time.Duratio
 }
 
 // TestSession_WorkspaceSurvivesPodKill exercises the session-lifecycle
-// durability contract end to end (ADR-0006/0007, setec#192):
+// durability contract end to end (ADR-0146/0147, setec#192):
 //
 //  1. a session Sandbox writes a marker into its /workspace PVC;
 //  2. the backing Pod is killed (VM destroyed);
 //  3. the controller recreates the Pod, the fresh microVM re-mounts the
 //     workspace, and the workload finds the marker — data survived;
 //  4. deleting the Sandbox (explicit teardown) deletes the workspace
-//     PVC, so nothing is reusable across sessions (ADR-0005 inv. 3).
+//     PVC, so nothing is reusable across sessions (ADR-0145 inv. 3).
 func TestSession_WorkspaceSurvivesPodKill(t *testing.T) {
 	installSessionClass(t)
 	sb := newSandbox("e2e-session", sessionSpec())

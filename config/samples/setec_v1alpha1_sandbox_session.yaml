@@ -1,5 +1,5 @@
-# A session-lifecycle Sandbox (ADR-0006): long-lived, ends only on
-# explicit teardown, and owns a durable /workspace PVC (ADR-0007) that
+# A session-lifecycle Sandbox (ADR-0146): long-lived, ends only on
+# explicit teardown, and owns a durable /workspace PVC (ADR-0147) that
 # survives VM restart and node loss. Deleting the Sandbox wipes and
 # deletes the workspace. Point storageClassName at a StorageClass whose
 # CSI driver encrypts volumes for at-rest encryption.

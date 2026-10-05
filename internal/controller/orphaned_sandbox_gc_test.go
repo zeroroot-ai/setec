@@ -195,7 +195,7 @@ func TestTerminalSandboxSurvivesDeletedClass(t *testing.T) {
 			res, err := reconcileSandbox(r, sb)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(res.RequeueAfter).To(BeNumerically(">", time.Duration(0)),
-				"a terminal ephemeral Sandbox is requeued for its own finished-TTL auto-destroy (ADR-0006), not dragged onto the ClassNotFound path")
+				"a terminal ephemeral Sandbox is requeued for its own finished-TTL auto-destroy (ADR-0146), not dragged onto the ClassNotFound path")
 
 			got := &setecv1alpha1.Sandbox{}
 			g.Expect(c.Get(context.Background(),

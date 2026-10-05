@@ -22,7 +22,7 @@ re-audit when the threat model changes.
 | `trivy-setec-node-agent` | `Dockerfile` | Per-node pool/snapshot agent. |
 | `trivy-setec-runtime-agent` | `Dockerfile` | Per-node runtime prober. |
 | `trivy-setec-guest-agent` | `Dockerfile` | Static in-guest binary; not a runnable service image. |
-| `trivy-setec-installer` | `Dockerfile.installer` | The node installer. **Additionally carries the stock kata-containers static release as an immutable payload** (ADR-0003). |
+| `trivy-setec-installer` | `Dockerfile.installer` | The node installer. **Additionally carries the stock kata-containers static release as an immutable payload** (ADR-0143). |
 
 Five of the six scan clean. **Every finding this repo has ever carried belongs
 to `trivy-setec-installer`, and every one of them is inside the kata payload —
@@ -214,7 +214,7 @@ today. The only levers are:
    `zeroroot-ai/.github` `version-links.yaml` watches kata releases, so a new
    one surfaces in the org version-drift tracker (Entry 10).
 2. Build the shim from source against patched deps, which would abandon the
-   stock-static-release property ADR-0003 exists to preserve. That is an
+   stock-static-release property ADR-0143 exists to preserve. That is an
    architecture decision, not a triage decision.
 
 Tracked as upstream dependency debt on the repo's standing code-scanning digest
@@ -291,7 +291,7 @@ Not a dismissal. Owner decision 2026-09-07, option 2 of three: take the
 shim (`containerd-shim-kata-v2`), Firecracker and the jailer, so the
 `kata-fc` path is unchanged. Alternatives declined: stay on 3.32.0 with the
 20 findings open, or build the 3.32.0 shim from source (a kata fork to
-maintain, and the ADR-0003 stock-release property lost).
+maintain, and the ADR-0143 stock-release property lost).
 
 What moved, in lockstep as before: `Dockerfile.installer` (tarball name and
 pin), `packer/eks-kata-fc-ami/*` (same), `development/k3s/scripts/20-install-kata.sh`

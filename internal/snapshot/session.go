@@ -96,7 +96,7 @@ func (c *Coordinator) CheckpointSession(
 // are both cluster-scoped, so no node pinning applies (unlike the
 // local-disk Snapshot restore path). The node-agent's restore
 // invariants (entropy reseed, restore uniquification) apply
-// unchanged, and the ADR-0005 invariant gate guards the hand-over
+// unchanged, and the ADR-0145 invariant gate guards the hand-over
 // exactly as on the warm-start path: an error wrapping
 // ErrInvariantGateViolation is terminal for the restored VM — the
 // caller must destroy it, never serve it.
@@ -112,7 +112,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	span.SetAttributes(attribute.String("setec.sandbox", sb.Namespace+"/"+sb.Name))
 	start := time.Now()
 
-	// ADR-0005 gate, operator-verifiable half. A checkpoint resume is
+	// ADR-0145 gate, operator-verifiable half. A checkpoint resume is
 	// an intra-session restore only when the ref was minted by THIS
 	// sandbox's own checkpoint machinery (SessionCheckpointID
 	// namespace) — the per-session KEK then enforces the binding
@@ -154,7 +154,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	}
 
 	// SandboxId/PodIp/Hostname feed the node-agent's per-restore
-	// uniquification (ADR-0005 invariant 2, setec#189): a session
+	// uniquification (ADR-0145 invariant 2, setec#189): a session
 	// resume is a restore like any other, so the resumed guest gets a
 	// fresh machine identity, reconciles to its new Pod IP, and takes
 	// a node-unique vsock CID — fail-closed like the E10 path.
@@ -176,7 +176,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 		return fmt.Errorf("coordinator: RestoreSandbox (checkpoint) RPC: %s", msg)
 	}
 
-	// ADR-0005 gate, full evidence. The node reported success — the
+	// ADR-0145 gate, full evidence. The node reported success — the
 	// checkpoint state is loaded into the VM — so a refusal here is
 	// terminal for this VM: pause it best-effort and surface the typed
 	// violation so the controller destroys it (the session then

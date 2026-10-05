@@ -98,7 +98,7 @@ The node-agent now says so in the error rather than surfacing a bare
 On a versioned bucket — which every platform bucket in `deploy`'s `eks/gibson`
 is — a plain `DeleteObject` writes a delete marker and removes nothing.
 `S3DEKStore.Destroy` now deletes **every version** of the sealed DEK, so the
-erasure ADR-0005 invariant 5 relies on is real rather than nominal.
+erasure ADR-0145 invariant 5 relies on is real rather than nominal.
 
 That is defense in depth, not the primary control: the sealed DEK is useless
 without the per-session KEK, which lives in a Kubernetes Secret and never

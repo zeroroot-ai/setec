@@ -21,7 +21,7 @@ spec:
       serviceAccountName: {{ include "setec.fullname" . }}-node-agent
       hostNetwork: false
       {{- /* kubernetes.io/arch is hardcoded, not values-driven: the sandbox
-      substrate is x86 only (ADR-0001) and node-agent images are published
+      substrate is x86 only (ADR-0141) and node-agent images are published
       single-arch linux/amd64 (setec#186). Extra keys merge from values;
       the arch key is omitted there so it cannot be overridden. */}}
       nodeSelector:

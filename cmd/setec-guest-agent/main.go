@@ -42,7 +42,7 @@ type Options struct {
 	// requests.
 	Port uint32
 	// UniquifyPort is the AF_VSOCK port to listen on for per-restore
-	// identity uniquification directives (ADR-0005 invariant 2,
+	// identity uniquification directives (ADR-0145 invariant 2,
 	// setec#189).
 	UniquifyPort uint32
 	// RandomDevice is the device node the RNDADDENTROPY ioctl is

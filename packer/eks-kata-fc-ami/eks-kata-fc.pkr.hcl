@@ -1,5 +1,5 @@
 # eks-kata-fc.pkr.hcl — Packer build for the Setec kata-fc x86-metal EKS
-# node AMI (ADR-0001: the sandbox substrate is x86 only).
+# node AMI (ADR-0141: the sandbox substrate is x86 only).
 #
 # Produces an x86_64 AMI from the current EKS-optimized AL2023 base that boots
 # READY to run kata-fc Firecracker microVMs with zero runtime config

@@ -5,7 +5,7 @@ package firecracker
 
 // HostBinaryPath is the host-absolute path of the Firecracker binary on a node
 // prepared by setec's own installer DaemonSet — the default node-prep path
-// (ADR-0003).
+// (ADR-0143).
 //
 // It is the SINGLE definition shared by the two sides that must agree: the
 // installer, which places the kata payload (internal/installer.kataFCBin), and

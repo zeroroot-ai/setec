@@ -100,7 +100,7 @@ func TestRestoreSandbox_UniquifySuccessIsReported(t *testing.T) {
 	}
 }
 
-// TestRestoreSandbox_UniquifyFailureFailsClosed is the core ADR-0005
+// TestRestoreSandbox_UniquifyFailureFailsClosed is the core ADR-0145
 // invariant-2 contract of setec#189: when the guest cannot confirm
 // its fresh identity, the restore RPC must fail (so the sandbox is
 // never reported Ready) and the VM must be paused, not handed over.
@@ -203,7 +203,7 @@ func TestClaimPoolEntry_UniquifyFailureConsumesEntryAndFallsBack(t *testing.T) {
 	if resp.GetError() == "" {
 		t.Fatal("the fallback must carry the uniquification failure detail")
 	}
-	// The entry is consumed regardless (ADR-0005 single-restore).
+	// The entry is consumed regardless (ADR-0145 single-restore).
 	if n := pm.CountClass("std"); n != 0 {
 		t.Fatalf("pool still holds %d entries, want 0", n)
 	}
