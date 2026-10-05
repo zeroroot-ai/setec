@@ -187,6 +187,13 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 // host's standard binary directories as mounted under root (e.g. /host). The
 // container's own $PATH cannot see host binaries like runsc, so the gvisor and
 // runc probes must look under the host mounts instead of using exec.LookPath.
+//
+// A candidate is resolved with statUnderRoot, not os.Stat. The setec installer
+// lays /usr/local/bin/runsc as a symlink to /opt/gvisor/runsc, a host-absolute
+// target. os.Stat follows that target against the CONTAINER's filesystem,
+// where it does not exist, so the probe reported "runsc binary not found" on
+// every node the installer had just prepared and no gVisor sandbox could be
+// scheduled.
 func hostLookPath(root string) func(string) (string, error) {
 	dirs := []string{
 		"/usr/local/sbin", "/usr/local/bin",
@@ -196,12 +203,43 @@ func hostLookPath(root string) func(string) (string, error) {
 	return func(file string) (string, error) {
 		for _, d := range dirs {
 			p := filepath.Join(root, d, file)
-			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			if fi, err := statUnderRoot(root, p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 				return p, nil
 			}
 		}
 		return "", fmt.Errorf("%s not found under %s in %v", file, root, dirs)
 	}
+}
+
+// maxHostSymlinkHops bounds statUnderRoot, so a symlink loop on the host is an
+// error and not a hang.
+const maxHostSymlinkHops = 16
+
+// statUnderRoot is os.Stat for a path inside the host tree mounted at root. It
+// follows symlinks itself, and resolves an absolute link target against root,
+// because an absolute target on the host names a host path. A target the
+// DaemonSet does not mount is not found, which is the honest answer: the probe
+// cannot vouch for a binary it cannot see.
+func statUnderRoot(root, path string) (os.FileInfo, error) {
+	for range maxHostSymlinkHops {
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fi, nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.IsAbs(target) {
+			path = filepath.Join(root, target)
+		} else {
+			path = filepath.Join(filepath.Dir(path), target)
+		}
+	}
+	return nil, fmt.Errorf("%s: more than %d symlink hops under %s", path, maxHostSymlinkHops, root)
 }
 
 // serveHTTP runs the Prometheus /metrics and /healthz HTTP endpoint until ctx
