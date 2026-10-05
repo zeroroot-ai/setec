@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.118.3](https://github.com/zeroroot-ai/setec/compare/v0.118.2...v0.118.3) (2026-10-05)
+
+
+### Bug Fixes
+
+* **ci:** the session affinity exit test runs off the pull request lane ([#171](https://github.com/zeroroot-ai/setec/issues/171)) ([b83b5a5](https://github.com/zeroroot-ai/setec/commit/b83b5a53059031cff570a32d9a57b27fdd7ee2c1)), closes [#170](https://github.com/zeroroot-ai/setec/issues/170)
+
 ## [0.118.2](https://github.com/zeroroot-ai/setec/compare/v0.118.1...v0.118.2) (2026-10-05)
 
 
