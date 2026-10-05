@@ -34,6 +34,9 @@ set -euo pipefail
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
 WORKFLOW_DIR=".github/workflows"
+# The files a person builds an image from by hand. Only the fixture in
+# hack/verify-x86-substrate.test.sh sets X86_BUILD_FILES.
+BUILD_FILES="${X86_BUILD_FILES:-Makefile Dockerfile Dockerfile.installer}"
 
 fail_count=0
 
@@ -93,6 +96,31 @@ else
 		pass "every platforms input is exactly linux/amd64"
 	fi
 fi
+
+# ---------------------------------------------------------------------------
+# 1b. No build file names another platform.
+#
+# The workflows are not the only way to build an image. The Makefile carried a
+# kubebuilder `docker-buildx` target whose default was
+# linux/arm64,linux/amd64,linux/s390x,linux/ppc64le, and this guard could not
+# see it because it read the workflow directory only (setec#160). Every
+# linux/<arch> token in a build file must be linux/amd64, comments included: a
+# comment that describes an arm64 build is how the next one gets written.
+# ---------------------------------------------------------------------------
+note "no build file names a platform other than linux/amd64 (ADR-0141)"
+
+for build_file in $BUILD_FILES; do
+	if [ ! -s "$build_file" ]; then
+		fail "$build_file is missing or empty, so its platforms were not checked"
+		continue
+	fi
+	other="$(grep -noE 'linux/[a-z0-9_]+' "$build_file" | grep -vE ':linux/amd64$' || true)"
+	if [ -n "$other" ]; then
+		fail "$build_file names a platform other than linux/amd64: $(printf '%s' "$other" | tr '\n' ' ')"
+	else
+		pass "$build_file names no platform other than linux/amd64"
+	fi
+done
 
 # ---------------------------------------------------------------------------
 # 2. Chart DaemonSets hardcode the amd64 nodeSelector.
