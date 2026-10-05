@@ -395,7 +395,7 @@ func TestRunLauncher_BringUpHTTPError(t *testing.T) {
 // pre-boot configuration). This is the snapshot RNG-safety mechanism: a VM
 // restored from a Snapshot must reseed its CRNG from fresh host entropy rather
 // than resume with the predictable, shared RNG state captured at snapshot time
-// (ADR-0052, setec#66).
+// (docs/design/threat-model.md, setec#66).
 func TestConfigureAndBoot_AttachesEntropyBeforeStart(t *testing.T) {
 	opts := tempOpts(t)
 
@@ -541,7 +541,7 @@ func TestParseFlags_HappyPath(t *testing.T) {
 	}
 }
 
-// TestParseFlags_GuestCID pins the ADR-0145 invariant-2 flag surface:
+// TestParseFlags_GuestCID pins the docs/design/isolation.md invariant-2 flag surface:
 // the node-agent passes a node-unique CID per pool boot, and reserved
 // values are rejected.
 func TestParseFlags_GuestCID(t *testing.T) {

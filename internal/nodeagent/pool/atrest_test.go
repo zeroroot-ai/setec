@@ -15,7 +15,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
 )
 
-// TestLaunchOptions_CarriesNoSnapshotSource codifies ADR-0145
+// TestLaunchOptions_CarriesNoSnapshotSource codifies docs/design/isolation.md
 // invariant 4 at its source, in the style of
 // TestLaunchOptions_CarriesNoSecretMaterial: the pool launch surface
 // must never grow a field that could point the builder at an existing
@@ -29,13 +29,13 @@ func TestLaunchOptions_CarriesNoSnapshotSource(t *testing.T) {
 		for _, bad := range forbidden {
 			if strings.Contains(name, bad) {
 				t.Fatalf("LaunchOptions.%s looks like a snapshot/template source; the pool builder "+
-					"only ever cold-boots from the class image (ADR-0145 invariant 4)", field.Name)
+					"only ever cold-boots from the class image (docs/design/isolation.md invariant 4)", field.Name)
 			}
 		}
 	}
 }
 
-// TestClaim_RefusesEntryWithoutProvenance codifies ADR-0145 invariant 4
+// TestClaim_RefusesEntryWithoutProvenance codifies docs/design/isolation.md invariant 4
 // at the hand-over boundary: a pool entry whose on-disk provenance
 // record is missing is never handed out — it is torn down and the
 // claim falls through to "no entry".
@@ -114,7 +114,7 @@ func TestClaim_RefusesForeignSourceProvenance(t *testing.T) {
 	}
 }
 
-// TestClaim_RefusesEntryWithoutScanVerdict codifies ADR-0145
+// TestClaim_RefusesEntryWithoutScanVerdict codifies docs/design/isolation.md
 // invariant 1 (setec#206) at the hand-over boundary: a pool entry
 // without a recorded secret-scan verdict — e.g. one baked before the
 // verdict existed — is never handed out. It is torn down and the pool

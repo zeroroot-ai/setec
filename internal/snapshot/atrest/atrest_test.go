@@ -237,7 +237,7 @@ func TestEncryptFile_ReplacesPlaintextInPlace(t *testing.T) {
 		t.Fatalf("expected exactly 1 file in dir, got %d", len(entries))
 	}
 	// Roundtrip through DecryptFile, which also reports the plaintext
-	// digest for verdict checks (ADR-0145 invariant 1).
+	// digest for verdict checks (docs/design/isolation.md invariant 1).
 	out := filepath.Join(dir, "plain.bin")
 	digest, err := DecryptFile(path, out, dek)
 	if err != nil {

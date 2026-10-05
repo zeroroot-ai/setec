@@ -26,7 +26,7 @@ func withSessionMode() func(*setecv1alpha1.Sandbox) {
 // TestDerive_SessionPodExitIsNotTerminal asserts that a session
 // Sandbox's Pod reaching Succeeded or Failed maps to
 // Pending/SessionVMRestarting rather than a terminal phase: sessions
-// end only on explicit teardown (ADR-0146), so the controller restarts
+// end only on explicit teardown (docs/design/lifecycles.md), so the controller restarts
 // the VM against the durable workspace instead of finishing the
 // Sandbox.
 func TestDerive_SessionPodExitIsNotTerminal(t *testing.T) {

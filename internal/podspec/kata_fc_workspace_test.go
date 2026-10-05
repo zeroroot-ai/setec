@@ -98,7 +98,7 @@ func TestBuild_KataFCSessionUsesBlockWorkspace(t *testing.T) {
 			*mount.MountPropagation)
 	}
 
-	// The pod-level workspace Volume is still the PVC (ADR-0147 is
+	// The pod-level workspace Volume is still the PVC (docs/design/storage.md is
 	// unchanged: the durable claim is what a CSI driver reattaches).
 	var pvcVol *corev1.Volume
 	for i := range pod.Spec.Volumes {

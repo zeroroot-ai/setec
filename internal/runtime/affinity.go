@@ -14,7 +14,7 @@ import (
 //     "setec.zeroroot.ai/runtime.kata-fc" = "true").
 //  2. "kubernetes.io/os" In ["linux"] — all Setec backends require Linux nodes.
 //  3. "kubernetes.io/arch" In ["amd64"] — the sandbox substrate is x86 only
-//     (ADR-0141): every published image is linux/amd64 single-arch, so a
+//     (docs/design/runtime.md): every published image is linux/amd64 single-arch, so a
 //     Sandbox Pod must never land on an arm64 node.
 //
 // The returned value is always non-nil and is freshly allocated so callers may

@@ -150,7 +150,7 @@ Past the cap the operator transitions the Sandbox to Failed with
 class with `sessionCheckpoint` enabled suspend instead of failing:
 checkpoint retained, microVM released, `phase=Suspended` with
 `reason=SuspendedPauseTimeout`, resumed when `spec.desiredState`
-returns to `Running` (ADR-0146). Unset means pauses are unbounded;
+returns to `Running` (docs/design/lifecycles.md). Unset means pauses are unbounded;
 the webhook rejects zero or negative values.
 
 ## Pre-warmed pool
@@ -221,7 +221,7 @@ The outcome is recorded once in `status.warmStart`:
 
 Events `WarmStartRestored` / `WarmStartColdBoot` narrate the attempt
 on the Sandbox. A claimed entry is consumed even when its restore
-fails — pool state is never restored twice (ADR-0145) — and the pool
+fails — pool state is never restored twice (docs/design/isolation.md) — and the pool
 reconciler reprovisions the missing entry on its next tick. Deleting
 the SandboxClass (or setting `preWarmPoolSize: 0`) drains the pool;
 no operator-managed template objects exist anywhere in the flow.
@@ -233,7 +233,7 @@ Phase 3 ships one backend: local-disk. State files live under
 mode 0600 and a hex SHA256 sidecar at `state.bin.sha256`.
 
 Every artifact is **encrypted at rest** — always, with no opt-out
-(ADR-0145 invariant 5). Each snapshot gets its own AES-256-GCM data
+(docs/design/isolation.md invariant 5). Each snapshot gets its own AES-256-GCM data
 key. The data key is sealed with a node-local key file
 (`snapshots.keysDir`, default `/var/lib/setec/keys`) and stored
 OUTSIDE the artifact tree, so a copy or backup of the snapshot
@@ -260,10 +260,10 @@ node.
 
 ## Session memory checkpoints (S3-compatible backend)
 
-Session Sandboxes (ADR-0146 L2) add a second, PORTABLE storage
+Session Sandboxes (docs/design/lifecycles.md L2) add a second, PORTABLE storage
 composition: memory checkpoints on an **S3-compatible object store**
 (real S3 on EKS, MinIO or any S3-compatible endpoint when
-self-hosted — ADR-0147). Enable it on the node-agent via the chart:
+self-hosted — docs/design/storage.md). Enable it on the node-agent via the chart:
 
 ```yaml
 snapshots:
@@ -312,7 +312,7 @@ With `sessionCheckpoint` set, a session Sandbox gets:
 
 A session keeps AT MOST one live checkpoint: a new one replaces (and
 destroys) its predecessor, and a restore CONSUMES the checkpoint it
-used — the same single-restore rule every snapshot obeys (ADR-0145).
+used — the same single-restore rule every snapshot obeys (docs/design/isolation.md).
 `status.checkpoint` records the ref, sequence, timestamps, and the
 last recovery outcome.
 
@@ -371,7 +371,7 @@ The selected mode is logged at startup
 ## Snapshot security
 
 Snapshots are shared across warm-pool claims, so Setec enforces three
-hardening invariants (ADR-0052; full detail in `SECURITY.md`):
+hardening invariants (docs/design/threat-model.md; full detail in `SECURITY.md`):
 
 - **No secrets in a Snapshot.** Pool entries are booted with no secret
   material, and a CI scan-gate (`no-secrets-in-snapshot`, backed by the

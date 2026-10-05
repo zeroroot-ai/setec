@@ -2,7 +2,7 @@
 
 microVM isolation as a Kubernetes primitive: setec runs untrusted code
 (gibson's tools/agents) inside hardware-virtualized sandboxes, tenancy-unaware,
-as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
+as gibson's sole untrusted-execution boundary (docs/design/threat-model.md open-core split).
 
 ## Ubiquitous language
 
@@ -24,37 +24,37 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
   virt ⇒ metal on EC2; x86 for tool-ecosystem compatibility and kata maturity).
   The installer DaemonSet prepares each node: the Kata static release, the
   devmapper thin-pool, the gVisor release, and the containerd handlers
-  (ADR-0143). A pre-baked AMI on a Karpenter NodePool is an optional profile
-  (`karpenter.enabled`, default false). arm64 is unsupported (see ADR-0141).
+  (docs/design/runtime.md). A pre-baked AMI on a Karpenter NodePool is an optional profile
+  (`karpenter.enabled`, default false). arm64 is unsupported (see docs/design/runtime.md).
 - **Dispatch** — the gibson-daemon → setec-frontend hop. Every hop is mTLS,
   and a component uses exactly one credential source: PEM files (the default)
-  or the SPIFFE Workload API socket (ADR-0142). In SPIFFE mode the server
+  or the SPIFFE Workload API socket (docs/design/threat-model.md). In SPIFFE mode the server
   accepts only the SPIFFE IDs in its allow list. One caller identity
-  (`platform/daemon`), so setec derives no tenancy from the cert (ADR-0052).
+  (`platform/daemon`), so setec derives no tenancy from the cert (docs/design/threat-model.md).
 
 ## Architecture decisions (the ADR files live in the `docs` repo)
 
 - **Runtime** — stock **Kata + Firecracker** (`kata-fc`); setec does not own a
-  shim or require a Kata fork (ADR-0143).
+  shim or require a Kata fork (docs/design/runtime.md).
 - **Node-prep** — setec owns a portable **installer DaemonSet** (kata-deploy
   style) that lays Kata+FC+devmapper on any x86 KVM node. Works on any cluster;
   the EKS baked-AMI + Karpenter path is an *optional* profile, never required
-  (ADR-0143).
+  (docs/design/runtime.md).
 - **Warm-start** — a declarative SandboxClass knob (`PreWarmPoolSize`); setec
   automates the whole snapshot pool. **Operator manages zero templates.**
   Restore lands in a real `kata-fc` Pod via the node-agent's FC-socket path
-  (ADR-0144), gated on the isolation invariants (ADR-0145). **Status
+  (docs/design/lifecycles.md), gated on the isolation invariants (docs/design/isolation.md). **Status
   (2026-09-28): not working, post-launch.** Firecracker loads a snapshot only
   before its VM boots, so the FC-socket path cannot restore into a kata-booted
   VM (setec#105); the pool is rebuilt on a working restore (setec#103).
 
 - **Lifecycle** — a Sandbox is **ephemeral** (run-to-completion, auto-destroy,
   stateless; snapshot fast-start) or **session** (long-lived, reattach by
-  handle, durable workspace, explicit teardown). See ADR-0146.
+  handle, durable workspace, explicit teardown). See docs/design/lifecycles.md.
 - **Session survival (L2)** — a session always has a **durable workspace**
   (never lose corpus/findings) plus **memory checkpoints** for suspend-idle and
   resume-on-node-loss (process continues). Isolation: **one session per VM,
-  wiped at session end**; intra-session suspend/resume ok (ADR-0145/0146).
+  wiped at session end**; intra-session suspend/resume ok (docs/design/isolation.md/0146).
   **Status (2026-09-28):** the durable workspace works (a session's files
   survive a VM restart); memory-checkpoint resume does not and is
   post-launch, since it restores through the same path (setec#105).
@@ -62,8 +62,8 @@ as gibson's sole untrusted-execution boundary (ADR-0052 open-core split).
   decision 2026-09-29: the whole question waits until after launch,
   including whether to remove `snapshotRef` and `sessionCheckpoint`. Restoring
   a *running* sandbox needs kata to adopt a container it did not start, which
-  stock kata cannot do (ADR-0143); a *clean-base* snapshot (a VM just booted)
+  stock kata cannot do (docs/design/runtime.md); a *clean-base* snapshot (a VM just booted)
   can serve fast starts. See setec#105 and setec#103.
 - **Storage** — durable workspace on a **portable CSI volume** (continuous data
   safety), memory checkpoints on **S3-compatible object storage** (S3 or MinIO;
-  process continuity). Both node-independent and portable; no AWS lock (ADR-0147).
+  process continuity). Both node-independent and portable; no AWS lock (docs/design/storage.md).

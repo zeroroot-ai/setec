@@ -62,7 +62,7 @@ spec:
         description: |-
           Sandbox is the Schema for the sandboxes API. Each Sandbox represents a
           single isolated microVM execution unit following one of two lifecycles
-          (ADR-0146): ephemeral (the default — one run, auto-destroy, stateless)
+          (docs/design/lifecycles.md): ephemeral (the default — one run, auto-destroy, stateless)
           or session (long-lived, durable /workspace volume, explicit teardown).
         properties:
           apiVersion:
@@ -91,7 +91,7 @@ spec:
                   are passed verbatim; no shell interpretation occurs.
 
                   Required for the ephemeral lifecycle: that one command is the whole
-                  life of the Sandbox (ADR-0146). A session may leave it empty. The
+                  life of the Sandbox (docs/design/lifecycles.md). A session may leave it empty. The
                   operator then boots the setec keepalive, a process that reaps
                   orphans and never exits on its own, so the session outlives every
                   command sent through Exec. The keepalive never depends on a shell
@@ -284,7 +284,7 @@ spec:
                   mode:
                     default: ephemeral
                     description: |-
-                      Mode selects the Sandbox lifecycle (ADR-0146): "ephemeral"
+                      Mode selects the Sandbox lifecycle (docs/design/lifecycles.md): "ephemeral"
                       (default; run-to-completion, auto-destroy, stateless) or "session"
                       (long-lived, durable /workspace PVC, explicit teardown). Mode is
                       immutable: the admission webhook rejects any update that changes
@@ -536,7 +536,7 @@ spec:
               checkpoint:
                 description: |-
                   Checkpoint records the session's latest memory checkpoint and
-                  its recovery bookkeeping (setec#194, ADR-0146 L2). Nil for
+                  its recovery bookkeeping (setec#194, docs/design/lifecycles.md L2). Nil for
                   ephemeral Sandboxes and for sessions whose class does not
                   enable sessionCheckpoint.
                 properties:
@@ -654,7 +654,7 @@ spec:
                 description: |-
                   WarmStart records the outcome of the one-shot pool warm-start
                   attempt for Sandboxes whose class maintains a pre-warm pool
-                  (ADR-0144). Nil when no attempt was made (class has no pool,
+                  (docs/design/lifecycles.md). Nil when no attempt was made (class has no pool,
                   image mismatch, or explicit snapshotRef). Its presence is the
                   idempotency marker: the controller attempts a warm start at
                   most once per Sandbox.

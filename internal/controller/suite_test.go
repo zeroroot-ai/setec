@@ -142,7 +142,7 @@ func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.
 func (f *fakeNodeAgentClient) RestoreSandbox(_ context.Context, _ *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	if f.RestoreRes == nil && f.RestoreErr == nil {
 		// The default fake models a healthy production node: every
-		// ADR-0145 per-restore verification is confirmed, so the
+		// docs/design/isolation.md per-restore verification is confirmed, so the
 		// invariant gate admits the restore. Scenarios that exercise
 		// the gate override RestoreRes with a degraded response.
 		return &setecgrpcv1.RestoreSandboxResponse{

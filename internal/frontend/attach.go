@@ -33,7 +33,7 @@ const activityHeartbeatInterval = time.Minute
 const finalActivityStampTimeout = 5 * time.Second
 
 // Attach resolves a session handle to its live session Sandbox
-// (ADR-0146 reattach-by-handle). Resolution is stateless: the handle is
+// (docs/design/lifecycles.md reattach-by-handle). Resolution is stateless: the handle is
 // parsed and checked against cluster state alone — the frontend keeps
 // no session table — so a caller reattaches identically whether it lost
 // its connection, moved to another frontend replica, or the frontend

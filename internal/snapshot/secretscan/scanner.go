@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package secretscan implements the "no secrets in a Snapshot" invariant
-// (ADR-0052). A Snapshot is shared across every warm-pool claim of a
+// (docs/design/threat-model.md). A Snapshot is shared across every warm-pool claim of a
 // SandboxClass, so any secret baked into snapshot state would leak to every
 // future tenant that restores it. The architectural rule is therefore:
 // secrets are injected per-lease POST-restore over the control plane, NEVER
@@ -150,7 +150,7 @@ func New() *Scanner {
 // the rule names and patterns rather than hand-bumped, so any change to
 // the detectors changes the version automatically — a recorded verdict
 // therefore names precisely which rules cleared the artifact. Recorded
-// in pool-entry scan verdicts (ADR-0145 invariant 1).
+// in pool-entry scan verdicts (docs/design/isolation.md invariant 1).
 func Version() string {
 	h := sha256.New()
 	for _, rl := range builtinRules {

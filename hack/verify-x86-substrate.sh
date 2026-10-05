@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Guards the x86-only substrate (ADR-0141, setec#186).
+# Guards the x86-only substrate (docs/design/runtime.md, setec#186).
 #
 # The sandbox substrate is x86 exclusively: every published image is
 # single-arch linux/amd64 and every node-facing component pins
@@ -80,7 +80,7 @@ printf 'verify-x86-substrate: checking %s and %s\n' "$WORKFLOW_DIR" "$CHART_DIR"
 # must be exactly linux/amd64. A count check backs the content check so a
 # renamed key or restructured workflow cannot skip the gate silently.
 # ---------------------------------------------------------------------------
-note "single-arch image publishing (ADR-0141)"
+note "single-arch image publishing (docs/design/runtime.md)"
 
 platform_lines="$(grep -rhE '^\s*platforms:' "$WORKFLOW_DIR" || true)"
 platform_count="$(printf '%s' "$platform_lines" | grep -c 'platforms:' || true)"
@@ -107,7 +107,7 @@ fi
 # linux/<arch> token in a build file must be linux/amd64, comments included: a
 # comment that describes an arm64 build is how the next one gets written.
 # ---------------------------------------------------------------------------
-note "no build file names a platform other than linux/amd64 (ADR-0141)"
+note "no build file names a platform other than linux/amd64 (docs/design/runtime.md)"
 
 for build_file in $BUILD_FILES; do
 	if [ ! -s "$build_file" ]; then

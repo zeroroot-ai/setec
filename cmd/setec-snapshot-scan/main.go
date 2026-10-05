@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Command setec-snapshot-scan is the "no secrets in a Snapshot" CI gate
-// (ADR-0052). It scans a snapshot artifact (a file) or a directory of
+// (docs/design/threat-model.md). It scans a snapshot artifact (a file) or a directory of
 // snapshot artifacts for secret-shaped material and exits non-zero if any is
 // found. A Snapshot is shared across every warm-pool claim, so a secret baked
 // into snapshot state would leak to every future tenant — this gate fails the

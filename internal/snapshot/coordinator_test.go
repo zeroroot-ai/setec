@@ -27,7 +27,7 @@ import (
 // --- test doubles --------------------------------------------------
 
 // verifiedRestoreRes returns a RestoreSandboxResponse carrying every
-// ADR-0145 per-restore verification signal, so the invariant gate
+// docs/design/isolation.md per-restore verification signal, so the invariant gate
 // admits the restore. Tests that exercise a specific missing signal
 // build their own response.
 func verifiedRestoreRes() *setecgrpcv1.RestoreSandboxResponse {
@@ -656,7 +656,7 @@ func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
 
 // TestRestoreSandbox_NoReseedEventWithoutConfirmation pins that a
 // restore whose reseed the node-agent did NOT confirm (e.g.
-// --entropy-reseed=off) is refused by the ADR-0145 invariant gate:
+// --entropy-reseed=off) is refused by the docs/design/isolation.md invariant gate:
 // no EntropyReseeded event, a typed InvariantGateViolation instead,
 // and the restore surfaces the terminal gate error.
 func TestRestoreSandbox_NoReseedEventWithoutConfirmation(t *testing.T) {

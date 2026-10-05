@@ -51,7 +51,7 @@ kvm-ok   # from the cpu-checker package on Debian/Ubuntu-like distros
 ```
 
 For `kata-fc`, KVM is the only prerequisite: **the Setec chart prepares
-the node for you**. The portable installer DaemonSet (ADR-0143,
+the node for you**. The portable installer DaemonSet (docs/design/runtime.md,
 `installer.enabled=true` by default) targets each x86 KVM-capable node
 and lays down the stock Kata + Firecracker release bundled in its image,
 provisions the containerd devmapper thin-pool with correct boot ordering,

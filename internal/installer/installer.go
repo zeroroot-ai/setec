@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package installer implements the portable node installer consumed by
-// cmd/installer (ADR-0143). Given any x86 KVM-capable node, it converges
+// cmd/installer (docs/design/runtime.md). Given any x86 KVM-capable node, it converges
 // the node to run kata-fc Firecracker microVMs:
 //
 //   - lays down the stock Kata Containers static release (bundled in the

@@ -163,6 +163,12 @@ and `setec-launch` specs in the private spec workflow.
 Any user-facing change updates the relevant doc in `docs/`. The PR
 template has a checklist — tick the boxes.
 
+A design change updates its page under `docs/design/` (or
+`docs/architecture.md`) in the same pull request. A page describes the
+code on `main` and names the path that proves each statement. A code
+comment that needs a design reason points to one of these pages, never to
+a private record.
+
 ## Getting help
 
 - **Questions and discussions:** GitHub Discussions (enabled once the

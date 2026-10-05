@@ -64,7 +64,7 @@ type Entry struct {
 	PausedAt time.Time
 	// GuestCID is the vsock context id the entry's guest was booted
 	// with, allocated node-locally so any two entries differ
-	// (ADR-0145 invariant 2). Zero when the Manager runs without a
+	// (docs/design/isolation.md invariant 2). Zero when the Manager runs without a
 	// CIDAllocator (tests, legacy wiring).
 	GuestCID uint32
 }
@@ -127,7 +127,7 @@ type Manager struct {
 	// CIDs is the node-local vsock CID authority shared with the gRPC
 	// server. When set, every pool entry boots with a freshly
 	// allocated guest CID so no two entries (and no two sandboxes
-	// warm-started from them) can collide (ADR-0145 invariant 2). A
+	// warm-started from them) can collide (docs/design/isolation.md invariant 2). A
 	// claimed entry's CID registration is released at Claim time; the
 	// restore path re-registers it to the owning sandbox after the
 	// guest confirms it. nil disables allocation (launcher default
@@ -336,7 +336,7 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 		mem = 512
 	}
 
-	// Allocate a node-unique guest vsock CID for the entry (ADR-0145
+	// Allocate a node-unique guest vsock CID for the entry (docs/design/isolation.md
 	// invariant 2): any two pool entries — and any two sandboxes
 	// restored from them — differ by construction.
 	var guestCID uint32
@@ -379,7 +379,7 @@ func (m *Manager) bootOne(ctx context.Context, cls *setecv1alpha1.SandboxClass) 
 // returns it. Returns ok=false when no compatible entry exists; the
 // caller must fall back to cold boot.
 //
-// Template provenance (ADR-0145 invariant 4) and the clean-base scan
+// Template provenance (docs/design/isolation.md invariant 4) and the clean-base scan
 // verdict (invariant 1) are enforced here, at the hand-over boundary:
 // an entry whose on-disk provenance record is missing, unreadable, or
 // claims any source other than the class-image boot path — or whose
@@ -438,7 +438,7 @@ func (m *Manager) popMatching(className, imageRef string) (*Entry, bool) {
 // the pool by Claim. Claim detaches the entry from internal state, so
 // Release (which looks the entry up by ID) cannot find it; callers
 // that consumed an entry — successfully restored or not — use this to
-// erase its on-disk state (ADR-0145: pool state is never restored
+// erase its on-disk state (docs/design/isolation.md: pool state is never restored
 // twice). The entry's CID registration was already handed over at
 // Claim time and is NOT touched here: on a successful restore the
 // restored sandbox now owns it.
@@ -467,7 +467,7 @@ func (m *Manager) Release(ctx context.Context, entryID string) error {
 // The function is idempotent: a missing directory or socket is
 // treated as success so reconcile retries do not thrash.
 //
-// Destruction order matters (ADR-0145 invariant 5): the entry's sealed
+// Destruction order matters (docs/design/isolation.md invariant 5): the entry's sealed
 // DEK is zero-overwritten and unlinked FIRST, cryptographically
 // erasing the encrypted state/memory files even if the subsequent
 // directory removal is interrupted or the filesystem's overwrite

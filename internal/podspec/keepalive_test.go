@@ -112,7 +112,7 @@ func TestBuild_SessionWithoutCommandNeedsKeepaliveImage(t *testing.T) {
 }
 
 // TestBuild_EphemeralWithoutCommandRejected: an ephemeral Sandbox's one
-// command is its whole life, so it is still required (ADR-0146).
+// command is its whole life, so it is still required (docs/design/lifecycles.md).
 func TestBuild_EphemeralWithoutCommandRejected(t *testing.T) {
 	t.Parallel()
 	for name, sb := range map[string]*setecv1alpha1.Sandbox{

@@ -230,7 +230,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Portable node installer (ADR-0143, setec#187).
+# Portable node installer (docs/design/runtime.md, setec#187).
 #
 # The installer is privileged by design (it writes host files and
 # restarts containerd — that is the product). What bounds its blast
@@ -240,7 +240,7 @@ fi
 # ---------------------------------------------------------------------------
 render "$workdir/installer.yaml" --show-only templates/installer-daemonset.yaml
 
-note "portable node installer (ADR-0143, setec#187)"
+note "portable node installer (docs/design/runtime.md, setec#187)"
 assert_contains "$workdir/installer.yaml" "installer DaemonSet is rendered by default" \
 	"kind: DaemonSet" \
 	"app.kubernetes.io/component: installer"

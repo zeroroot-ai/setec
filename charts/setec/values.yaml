@@ -228,7 +228,7 @@ runtimeAgent:
     pullPolicy: IfNotPresent
   # -- nodeSelector adds EXTRA scheduling constraints to the runtime-agent
   # DaemonSet. The template always hardcodes {kubernetes.io/arch: amd64}: the
-  # sandbox substrate is x86 only (ADR-0141) and every published image is
+  # sandbox substrate is x86 only (docs/design/runtime.md) and every published image is
   # single-arch linux/amd64, so an arch key set here is ignored. Empty keeps
   # the run-on-every-amd64-node default.
   nodeSelector: {}
@@ -324,7 +324,7 @@ runtimeAgent:
   extraContainerdConfigDirs:
     - /opt/kata/containerd
 
-# -- installer configures the portable node installer DaemonSet (ADR-0143,
+# -- installer configures the portable node installer DaemonSet (docs/design/runtime.md,
 # issue #187): given any x86 KVM-capable node it lays down the stock
 # Kata+Firecracker release bundled in its image, provisions the containerd
 # devmapper thin-pool with boot ordering (containerd never starts before
@@ -368,7 +368,7 @@ installer:
     # -- pullPolicy one of Always, Never, IfNotPresent.
     pullPolicy: IfNotPresent
   # -- nodeSelector pins the DaemonSet to x86 Linux nodes: the bundled
-  # kata payload is amd64-only (ADR-0141 x86 substrate). KVM capability
+  # kata payload is amd64-only (docs/design/runtime.md x86 substrate). KVM capability
   # cannot be expressed as a selector, so the installer probes /dev/kvm
   # at runtime and idles (untouched node, Ready pod) when it is absent.
   nodeSelector:
@@ -925,10 +925,17 @@ snapshots:
   # keysDir is the per-node directory holding the node key-encryption
   # key (node.key, created on first use) and the per-snapshot sealed
   # data-encryption keys (dek/). Snapshot artifacts are ALWAYS encrypted
-  # at rest with per-snapshot keys sealed under the node key (ADR-0145
+  # at rest with per-snapshot keys sealed under the node key (docs/design/isolation.md
   # invariant 5); there is no opt-out. The directory is deliberately
   # separate from localDisk.root so copies/backups of the artifact tree
   # carry no key material.
+  #
+  # The session workspace volume has a different rule. setec adds no
+  # encryption to it, and it does not check the StorageClass. The chart
+  # has no workspace StorageClass value: each Sandbox names one in
+  # spec.lifecycle.workspace.storageClassName, else the cluster default
+  # applies. Select a StorageClass whose CSI driver encrypts its volumes
+  # (docs/design/storage.md).
   keysDir: /var/lib/setec/keys
   # entropyReseed controls the ACTIVE entropy reseed on snapshot restore
   # (setec#72). "require" (default, fail-closed): a restore only succeeds
@@ -939,7 +946,7 @@ snapshots:
   # (see SECURITY.md "Entropy reseed on restore" for the residual risk).
   entropyReseed: require
   # restoreUniquify controls the per-restore identity uniquification
-  # (ADR-0145 invariant 2, setec#189). "require" (default, fail-closed):
+  # (docs/design/isolation.md invariant 2, setec#189). "require" (default, fail-closed):
   # a restore only succeeds once the in-guest setec-guest-agent has
   # confirmed a fresh machine-id/boot-id/hostname, the CNI-assigned Pod
   # IP, and a node-unique vsock CID — guest images MUST bundle
@@ -947,7 +954,7 @@ snapshots:
   # clones then keep the machine identity captured at snapshot time.
   restoreUniquify: require
   # s3 configures the S3-compatible object store session memory
-  # checkpoints are written to (setec#194, ADR-0147): real S3 on EKS,
+  # checkpoints are written to (setec#194, docs/design/storage.md): real S3 on EKS,
   # MinIO (or any S3-compatible endpoint) when self-hosted. Disabled by
   # default; session suspend/resume-on-drain requires it. Checkpoints
   # are encrypted with per-checkpoint keys sealed under a per-session
@@ -1034,7 +1041,7 @@ preWarmPool:
   enabled: false
 
 # -- karpenter optionally renders a Karpenter EC2NodeClass + NodePool that
-# provision x86 bare-metal nodes (ADR-0141) from the baked kata-fc AMI
+# provision x86 bare-metal nodes (docs/design/runtime.md) from the baked kata-fc AMI
 # (packer/eks-kata-fc-ami) ON DEMAND and scale to zero when no kata Sandbox
 # is running — the bare-metal floor is paid only during actual microVM
 # execution. Requires Karpenter >= 1.0 (karpenter.sh/v1 +
@@ -1075,7 +1082,7 @@ karpenter:
   # -- instanceTypes restricts provisioning to x86 bare metal with local
   # NVMe (VT-x KVM for Firecracker + instance-store for the devmapper
   # thin-pool). arm64/Graviton types are not eligible: the sandbox substrate
-  # is x86 only (ADR-0141) and the NodePool hardcodes
+  # is x86 only (docs/design/runtime.md) and the NodePool hardcodes
   # kubernetes.io/arch=amd64. Karpenter automatically picks the cheapest
   # eligible type — verify current pricing before pinning.
   instanceTypes:

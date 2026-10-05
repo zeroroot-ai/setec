@@ -52,7 +52,7 @@ func TestRestoreSandbox_PassesIdentityFieldsToNodeAgent(t *testing.T) {
 // TestRestoreSandbox_EmitsSandboxUniquifiedEvent asserts the
 // Coordinator surfaces the node-agent's uniquified confirmation as a
 // Normal event on a served restore — and that an UNCONFIRMED
-// uniquification is refused outright by the ADR-0145 invariant gate
+// uniquification is refused outright by the docs/design/isolation.md invariant gate
 // (no event, terminal error) instead of being served quietly.
 func TestRestoreSandbox_EmitsSandboxUniquifiedEvent(t *testing.T) {
 	for _, confirmed := range []bool{true, false} {

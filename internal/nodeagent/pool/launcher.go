@@ -39,7 +39,7 @@ type LaunchOptions struct {
 	// GuestCID is the vsock context id assigned to the entry's guest.
 	// The Manager allocates it from the node-local CIDAllocator so
 	// every pool entry — and therefore every sandbox warm-started
-	// from the pool — carries a distinct CID (ADR-0145 invariant 2).
+	// from the pool — carries a distinct CID (docs/design/isolation.md invariant 2).
 	// Zero lets setec-pool-vm fall back to its default.
 	GuestCID uint32
 }

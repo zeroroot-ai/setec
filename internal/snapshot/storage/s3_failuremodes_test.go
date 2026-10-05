@@ -331,7 +331,7 @@ func TestDestroySealedDEKRemovesEveryVersion(t *testing.T) {
 		t.Fatalf("Destroy: %v", err)
 	}
 
-	// This is the assertion that matters: ADR-0145 invariant 5 treats this
+	// This is the assertion that matters: docs/design/isolation.md invariant 5 treats this
 	// destroy as the erasure, so key material surviving as a noncurrent
 	// version makes the guarantee nominal.
 	if got := fake.liveVersionCount(dekKey); got != 0 {

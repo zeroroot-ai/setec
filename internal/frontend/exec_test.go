@@ -474,7 +474,7 @@ func TestExec_EmptyCommandRejected(t *testing.T) {
 }
 
 // TestExec_RejectsEphemeralSandbox — the ephemeral lifecycle has one
-// command and no second turn (ADR-0146).
+// command and no second turn (docs/design/lifecycles.md).
 func TestExec_RejectsEphemeralSandbox(t *testing.T) {
 	sb := runningSession(execTestNS)
 	sb.Spec.Lifecycle = nil

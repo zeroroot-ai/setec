@@ -63,7 +63,7 @@ rules:
       - delete
       - patch
       - update
-  # Session lifecycle (ADR-0146/0147): the durable workspace PVC is
+  # Session lifecycle (docs/design/lifecycles.md and docs/design/storage.md): the durable workspace PVC is
   # created before the session Pod and deleted (wiped) at teardown.
   - apiGroups:
       - ""

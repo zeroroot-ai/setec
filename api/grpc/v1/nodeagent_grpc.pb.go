@@ -70,9 +70,9 @@ type NodeAgentServiceClient interface {
 	QueryPool(ctx context.Context, in *QueryPoolRequest, opts ...grpc.CallOption) (*QueryPoolResponse, error)
 	// ClaimPoolEntry atomically removes a matching pre-warmed pool
 	// entry and restores its paused-VM state into the caller-provided
-	// Kata Firecracker socket (ADR-0144 declarative warm-start). The
+	// Kata Firecracker socket (docs/design/lifecycles.md declarative warm-start). The
 	// claimed entry is consumed regardless of restore outcome —
-	// ADR-0145 forbids restoring the same snapshot state twice. A
+	// docs/design/isolation.md forbids restoring the same snapshot state twice. A
 	// response with claimed=false (pool empty or no image match) or
 	// claimed=true/success=false (restore failed) tells the operator to
 	// fall back to cold boot; neither is an RPC error.
@@ -196,9 +196,9 @@ type NodeAgentServiceServer interface {
 	QueryPool(context.Context, *QueryPoolRequest) (*QueryPoolResponse, error)
 	// ClaimPoolEntry atomically removes a matching pre-warmed pool
 	// entry and restores its paused-VM state into the caller-provided
-	// Kata Firecracker socket (ADR-0144 declarative warm-start). The
+	// Kata Firecracker socket (docs/design/lifecycles.md declarative warm-start). The
 	// claimed entry is consumed regardless of restore outcome —
-	// ADR-0145 forbids restoring the same snapshot state twice. A
+	// docs/design/isolation.md forbids restoring the same snapshot state twice. A
 	// response with claimed=false (pool empty or no image match) or
 	// claimed=true/success=false (restore failed) tells the operator to
 	// fall back to cold boot; neither is an RPC error.

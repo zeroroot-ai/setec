@@ -53,9 +53,9 @@ helm install setec ./charts/setec \
   --create-namespace
 ```
 
-Prerequisites: a Kubernetes 1.30+ cluster with **x86-64 (amd64) worker nodes** for the execution plane — arm64 is unsupported for the untrusted-execution plane (ADR-0141): all setec images are published `linux/amd64` single-arch and sandbox components pin `kubernetes.io/arch=amd64` — plus at least one runtime backend's node-level requirements:
+Prerequisites: a Kubernetes 1.30+ cluster with **x86-64 (amd64) worker nodes** for the execution plane — arm64 is unsupported for the untrusted-execution plane (docs/design/runtime.md): all setec images are published `linux/amd64` single-arch and sandbox components pin `kubernetes.io/arch=amd64` — plus at least one runtime backend's node-level requirements:
 
-- `kata-fc` — worker node with `/dev/kvm`. That is all: the chart's portable installer DaemonSet (ADR-0143, on by default) lays down stock Kata + Firecracker, provisions the containerd devmapper thin-pool, and registers the `kata-fc` `RuntimeClass` on every x86 KVM-capable node. Beside [kata-deploy](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy) it supplies only the devmapper thin-pool and snapshotter the `fc` handler asks for, and it stands down where a baked node image already did all the work. Strongest isolation; requires bare metal or nested-virt-capable nodes.
+- `kata-fc` — worker node with `/dev/kvm`. That is all: the chart's portable installer DaemonSet (docs/design/runtime.md, on by default) lays down stock Kata + Firecracker, provisions the containerd devmapper thin-pool, and registers the `kata-fc` `RuntimeClass` on every x86 KVM-capable node. Beside [kata-deploy](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy) it supplies only the devmapper thin-pool and snapshotter the `fc` handler asks for, and it stands down where a baked node image already did all the work. Strongest isolation; requires bare metal or nested-virt-capable nodes.
 - `kata-qemu` — same KVM requirement; uses QEMU instead of Firecracker. Falls back to TCG where hardware virt is unavailable.
 - `gvisor` — `runsc` binary + `gvisor` `RuntimeClass`. No KVM required. Ships on most managed-K8s platforms.
 - `runc` — any container runtime. Dev clusters only; gated by a Helm flag.

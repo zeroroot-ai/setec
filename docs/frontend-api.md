@@ -64,7 +64,7 @@ reported X" and decide for itself how to treat an unresolved value.
 
 ## Session reattach (`Attach`)
 
-A **session** Sandbox (`lifecycle.mode: session`, ADR-0146) outlives any
+A **session** Sandbox (`lifecycle.mode: session`, docs/design/lifecycles.md) outlives any
 one connection. The `sandbox_id` returned by `Launch`
 (`<namespace>/<name>/<uid>`) is the **session handle**: a caller that
 disconnected calls `Attach` with the handle and continues with
@@ -95,7 +95,7 @@ starts when the last client disconnects.
 ## Session exec (`Exec`)
 
 `SandboxService.Exec` runs a command **inside** an already-running
-session Sandbox and streams its stdio (ADR-0148). It is what makes a
+session Sandbox and streams its stdio (docs/design/lifecycles.md). It is what makes a
 session more than an observable one-shot: successive commands enter the
 same live microVM and see each other's effects on the durable
 `/workspace` volume.
@@ -519,7 +519,7 @@ and `setec_lease_pool_leased{namespace,sandbox_class}` gauges.
 >
 > To run successive commands *inside one live microVM* — sharing a durable
 > `/workspace` across turns — use `SandboxService.Exec` against a session
-> Sandbox instead (see [Session exec](#session-exec-exec) above and ADR-0148). Leases are a
+> Sandbox instead (see [Session exec](#session-exec-exec) above and docs/design/lifecycles.md). Leases are a
 > fast-start mechanism; sessions are a state mechanism. The two verbs
 > share a name and nothing else.
 

@@ -40,7 +40,7 @@
 # Refs: gibson#1183, gibson#1450, setec#239
 name: exit-test-session-affinity
 
-# ADR-0080: an exit test runs on a push to main, on a daily schedule and on
+# An exit test runs on a push to main, on a daily schedule and on
 # dispatch. It never runs on a pull request. This one ran on pull requests that
 # touched the paths below; it now runs when such a change reaches main.
 on:

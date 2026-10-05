@@ -198,7 +198,7 @@ the security posture.
 {{- end -}}
 
 {{/*
-Validate snapshots.restoreUniquify (ADR-0145 invariant 2, setec#189):
+Validate snapshots.restoreUniquify (docs/design/isolation.md invariant 2, setec#189):
 only "require" (fail-closed per-restore identity uniquification) and
 "off" (explicit opt-out) are meaningful; anything else would silently
 change the security posture.

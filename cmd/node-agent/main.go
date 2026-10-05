@@ -149,7 +149,7 @@ func main() {
 		"Phase 3: root directory for persisted snapshot state files.")
 	flag.StringVar(&snapshotKeyFile, "snapshot-key-file", "/var/lib/setec/keys/node.key",
 		"Node-local key-encryption-key file snapshot DEKs are sealed with (created on "+
-			"first use). Snapshots are ALWAYS encrypted at rest (ADR-0145); there is no opt-out.")
+			"first use). Snapshots are ALWAYS encrypted at rest (docs/design/isolation.md); there is no opt-out.")
 	flag.StringVar(&snapshotDEKDir, "snapshot-dek-dir", "/var/lib/setec/keys/dek",
 		"Directory holding per-snapshot sealed data-encryption keys. Kept OUTSIDE the "+
 			"snapshot root so artifact-tree copies carry no key material.")
@@ -167,7 +167,7 @@ func main() {
 			"endpoint resolution for --s3-region (real S3 on EKS).")
 	flag.StringVar(&s3Bucket, "s3-bucket", "",
 		"Bucket for session memory checkpoints. Empty disables the S3 checkpoint backend; "+
-			"session suspend/resume-on-drain is then unavailable on this node (ADR-0147).")
+			"session suspend/resume-on-drain is then unavailable on this node (docs/design/storage.md).")
 	flag.StringVar(&s3Region, "s3-region", "us-east-1",
 		"Signing region for the S3-compatible store. MinIO accepts any non-empty value.")
 	flag.StringVar(&s3Prefix, "s3-prefix", "",
@@ -186,7 +186,7 @@ func main() {
 			"over vsock; 'off' is an explicit opt-out that leaves only the passive virtio-rng "+
 			"mechanism (guest images without setec-guest-agent need this).")
 	flag.StringVar(&restoreUniquifyMode, "restore-uniquify", requireMode,
-		"Per-restore identity uniquification (ADR-0145 invariant 2, setec#189). 'require' (default) "+
+		"Per-restore identity uniquification (docs/design/isolation.md invariant 2, setec#189). 'require' (default) "+
 			"fails a restore closed unless the in-guest setec-guest-agent confirms a fresh "+
 			"machine-id/boot-id/hostname, the CNI-assigned Pod IP, and a node-unique vsock CID. "+
 			"'off' is an explicit opt-out.")
@@ -354,7 +354,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", snapshotDEKDir, err)
 			os.Exit(1)
 		}
-		// Encryption at rest is unconditional (ADR-0145 invariant 5):
+		// Encryption at rest is unconditional (docs/design/isolation.md invariant 5):
 		// the encrypted wrapper is the only backend ever wired, so an
 		// unencrypted snapshot write path does not exist.
 		backend := &storage.EncryptedBackend{
@@ -371,7 +371,7 @@ func main() {
 		// The node-local vsock CID authority is shared between the pool
 		// Manager (allocates a unique CID per pool boot) and the gRPC
 		// restore path (verifies the CID a restored guest reports) —
-		// ADR-0145 invariant 2.
+		// docs/design/isolation.md invariant 2.
 		cids := uniquify.NewCIDAllocator()
 
 		poolMgr := pool.New(backend, nodeagent.NewImageCache(puller), ffactory, nodeName)
@@ -383,7 +383,7 @@ func main() {
 		poolMgr.CIDs = cids
 
 		// S3-compatible session-checkpoint backend (setec#194,
-		// ADR-0147). Checkpoints are node-independent so a session can
+		// docs/design/storage.md). Checkpoints are node-independent so a session can
 		// resume on a different node; their DEKs are sealed with the
 		// per-session KEK the operator forwards per call, never the
 		// node-local keyfile. Credentials come from the AWS default
@@ -468,7 +468,7 @@ func main() {
 				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 					"restored snapshot clones rely on passive virtio-rng only")
 		}
-		// Per-restore identity uniquification (ADR-0145 invariant 2,
+		// Per-restore identity uniquification (docs/design/isolation.md invariant 2,
 		// setec#189). Default fail-closed: a restored sandbox is only
 		// reported successful once the in-guest setec-guest-agent has
 		// confirmed a fresh machine-id/boot-id/hostname, its

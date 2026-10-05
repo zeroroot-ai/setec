@@ -11,6 +11,15 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 - [Getting Started](./getting-started.md) &mdash; the same territory as the quickstart but narrative, with prose explaining what is happening at each step and what you should observe.
 - [Prerequisites](./prerequisites.md) &mdash; KVM, kernel, Kata Containers, Firecracker, and Kubernetes requirements on the host.
 
+## Design
+
+- [Architecture](./architecture.md) &mdash; the parts of `setec`, its objects, and the path of one Sandbox.
+- [Isolation](./design/isolation.md) &mdash; the Pod, the network, the namespace, and the checks on a restored Sandbox.
+- [Lifecycles](./design/lifecycles.md) &mdash; ephemeral and session Sandboxes, idle eviction, suspend, limits, and the warm pool.
+- [Storage](./design/storage.md) &mdash; the scratch volume, the session workspace, the snapshot store, and the encryption rule of each.
+- [Runtime](./design/runtime.md) &mdash; the four backends, their selection, and the node preparation.
+- [Threat model](./design/threat-model.md) &mdash; what each backend protects, and who may call `setec`.
+
 ## User Guides
 
 - [Multi-tenancy](./multitenancy.md) &mdash; tenant labels, per-tenant policies, namespace scoping.

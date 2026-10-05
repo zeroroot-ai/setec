@@ -113,7 +113,7 @@ const (
 
 	// ephemeralFinishedRetention bounds how long an ephemeral Sandbox that
 	// reached a terminal phase (Completed or Failed) is kept before the
-	// reconciler deletes it, honoring ADR-0146's "auto-destroy on exit" for
+	// reconciler deletes it, honoring docs/design/lifecycles.md's "auto-destroy on exit" for
 	// the run-to-completion lifecycle.
 	//
 	// An ephemeral Sandbox is one agent/tool action. Its creator lives in
@@ -182,13 +182,13 @@ const (
 
 	// eventReasonInvariantGateViolation mirrors the coordinator's
 	// typed reason (snapshot.EventReasonInvariantGateViolation): the
-	// ADR-0145 invariant gate refused a restore and the Pod holding
+	// docs/design/isolation.md invariant gate refused a restore and the Pod holding
 	// the unverified state is destroyed.
 	eventReasonInvariantGateViolation = "InvariantGateViolation"
 
 	// workspaceFinalizer guards session-Sandbox deletion so the durable
 	// workspace PVC is wiped and deleted before the Sandbox object goes
-	// away (ADR-0145 invariant 3: one session, wiped at session end).
+	// away (docs/design/isolation.md invariant 3: one session, wiped at session end).
 	// Ephemeral Sandboxes never carry it.
 	workspaceFinalizer = "setec.zeroroot.ai/workspace-teardown"
 
@@ -284,7 +284,7 @@ type SandboxReconciler struct {
 	OrphanRetention time.Duration
 
 	// EphemeralRetention bounds how long an ephemeral Sandbox that reached a
-	// terminal phase is kept before it is auto-destroyed (ADR-0146). Zero
+	// terminal phase is kept before it is auto-destroyed (docs/design/lifecycles.md). Zero
 	// means ephemeralFinishedRetention. Overridden in tests so the reap can
 	// be driven through a real reconcile without waiting.
 	EphemeralRetention time.Duration
@@ -384,7 +384,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// (1a) Session teardown. A Sandbox being deleted that still carries
 	// the workspace finalizer must have its workspace PVC deleted before
-	// the object is released (ADR-0145 invariant 3). Ephemeral Sandboxes
+	// the object is released (docs/design/isolation.md invariant 3). Ephemeral Sandboxes
 	// never carry the finalizer and fall straight through to owner-ref GC.
 	if !sb.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
@@ -404,7 +404,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// (1c) ADR-0146 "auto-destroy on exit": a terminal ephemeral Sandbox is
+	// (1c) docs/design/lifecycles.md "auto-destroy on exit": a terminal ephemeral Sandbox is
 	// kept for a bounded window so its creator can read the outcome, then the
 	// reconciler deletes it and owner-ref GC collects the Pod. This owns the
 	// reconcile for a terminal ephemeral Sandbox — nothing below (class
@@ -662,7 +662,7 @@ func (r *SandboxReconciler) handleMissingPod(
 }
 
 // newWorkspacePVC builds the session Sandbox's durable workspace claim
-// object (ADR-0147: a portable RWO CSI volume; any CSI driver works).
+// object (docs/design/storage.md: a portable RWO CSI volume; any CSI driver works).
 // It is a pure function — no API calls — so the PVC shape can be
 // asserted per backend without a fake or live apiserver.
 //
@@ -715,7 +715,7 @@ func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.Persiste
 // end.
 //
 // A workspace PVC found mid-deletion is an error, not a wait: per
-// ADR-0145 invariant 3 a workspace serves exactly one session, so a
+// docs/design/isolation.md invariant 3 a workspace serves exactly one session, so a
 // name collision with a dying claim must fail loudly instead of
 // adopting or racing it.
 func (r *SandboxReconciler) ensureWorkspacePVC(
@@ -758,7 +758,7 @@ func (r *SandboxReconciler) ensureWorkspacePVC(
 // Terminating claim can never bind again, so no cross-session reuse is
 // possible from that point; the CSI driver destroys the volume — and
 // with it every byte of session data — as soon as the Pod releases it
-// (ADR-0145 invariant 3).
+// (docs/design/isolation.md invariant 3).
 func (r *SandboxReconciler) teardownWorkspace(
 	ctx context.Context,
 	logger logr.Logger,
@@ -850,14 +850,14 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	now := time.Now()
 	desired := status.Derive(sb, pod, now)
 
-	// (10a) ADR-0144 declarative warm start: on the Sandbox's first
+	// (10a) docs/design/lifecycles.md declarative warm start: on the Sandbox's first
 	// transition into Running, attempt exactly once to claim a
 	// pre-warmed pool entry on the Pod's node and restore it into the
 	// Pod's Firecracker socket. Every failure mode resolves to a
 	// recorded ColdBoot — a restore failure never fails the Sandbox.
 	desired = r.maybeWarmStart(ctx, sb, cls, desired, prevPhase)
 
-	// (10b) Session idle eviction (ADR-0146), layered on the derived
+	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
 	// status: a Running session past its per-SandboxClass idle
 	// deadline — no Attach and no client-stream heartbeat within
 	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
@@ -969,7 +969,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 			}
 		case status.ReasonInvariantGateViolation:
 			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
-				"ADR-0145 invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
+				"docs/design/isolation.md invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
 			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after invariant-gate refusal: %w", err))
 			}
@@ -1127,7 +1127,7 @@ func (r *SandboxReconciler) maybeWarmStart(
 		ws.Outcome = setecv1alpha1.SandboxWarmStartPoolRestored
 		ws.EntryID = entryID
 	case snapshot.WarmStartRejected:
-		// ADR-0145 invariant gate refusal: the Pod's VM already holds
+		// docs/design/isolation.md invariant gate refusal: the Pod's VM already holds
 		// the unverified restored state, so cold boot is NOT a safe
 		// fallback. The Sandbox fails terminally and step (12) of the
 		// reconcile destroys the Pod.
@@ -1772,7 +1772,7 @@ func orphanReapDue(sb *setecv1alpha1.Sandbox, now time.Time, grace, retention ti
 }
 
 // ephemeralRetentionOrDefault resolves the effective post-terminal retention
-// for an ephemeral Sandbox before it is auto-destroyed (ADR-0146).
+// for an ephemeral Sandbox before it is auto-destroyed (docs/design/lifecycles.md).
 func (r *SandboxReconciler) ephemeralRetentionOrDefault() time.Duration {
 	if r.EphemeralRetention > 0 {
 		return r.EphemeralRetention
@@ -1800,7 +1800,7 @@ func ephemeralReapDue(sb *setecv1alpha1.Sandbox, now time.Time, retention time.D
 	return remaining <= 0, remaining
 }
 
-// reapExpiredEphemeral enforces ADR-0146's "auto-destroy on exit" for the
+// reapExpiredEphemeral enforces docs/design/lifecycles.md's "auto-destroy on exit" for the
 // ephemeral lifecycle. A terminal ephemeral Sandbox is kept for
 // ephemeralRetentionOrDefault() so its creator can read the outcome (Wait)
 // and drain the captured output (StreamLogs), then the reconciler deletes it;
@@ -1830,7 +1830,7 @@ func (r *SandboxReconciler) reapExpiredEphemeral(
 	}
 
 	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonEphemeralReaped, actionReapEphemeralSandbox,
-		"ephemeral Sandbox reached %s; auto-destroyed %s after it finished (ADR-0146)", sb.Status.Phase, retention)
+		"ephemeral Sandbox reached %s; auto-destroyed %s after it finished (docs/design/lifecycles.md)", sb.Status.Phase, retention)
 	logger.Info("reaping terminal ephemeral Sandbox",
 		"phase", sb.Status.Phase, "retention", retention)
 	if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {

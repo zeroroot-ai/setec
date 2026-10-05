@@ -10,7 +10,7 @@
 # that no longer exists, because an exemption outliving its field records a
 # decision about nothing.
 #
-# ADR-0094 rule 5: every entry is "build the consumer" or "delete the producer",
+# The rule: every entry is "build the consumer" or "delete the producer",
 # never defaulted to deletion. An entry here says which, and that the work is
 # tracked — it does not say the promise is kept.
 #

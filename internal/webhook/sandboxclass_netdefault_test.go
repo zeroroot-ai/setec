@@ -12,7 +12,7 @@ import (
 )
 
 // TestSandboxClassWebhook_DefaultNetworkModeConsistency verifies the
-// default-deny egress consistency rule (ADR-0052, setec#66): a class's
+// default-deny egress consistency rule (docs/design/threat-model.md, setec#66): a class's
 // defaultNetworkMode, when set alongside a restricted allowedNetworkModes
 // list, must itself be an allowed mode.
 func TestSandboxClassWebhook_DefaultNetworkModeConsistency(t *testing.T) {

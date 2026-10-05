@@ -11,7 +11,7 @@ import (
 
 // ReasonIdleTimeout is recorded on Failed when a Running session
 // Sandbox exceeded its SandboxClass's sessionIdleTimeout with no
-// recorded caller activity (ADR-0146 idle eviction). It is the session
+// recorded caller activity (docs/design/lifecycles.md idle eviction). It is the session
 // counterpart of ReasonTimeout: Timeout bounds total runtime, IdleTimeout
 // bounds unattended runtime.
 const ReasonIdleTimeout = "IdleTimeout"
@@ -60,7 +60,7 @@ func SessionIdleDeadline(
 	return LastSessionActivity(sb).Add(cls.Spec.SessionIdleTimeout.Duration), true
 }
 
-// ApplySessionIdlePolicy layers ADR-0146 idle eviction on top of a
+// ApplySessionIdlePolicy layers docs/design/lifecycles.md idle eviction on top of a
 // Derive result. A Running session past its idle deadline transitions
 // to Failed with reason IdleTimeout; every other status passes through
 // untouched. Only Running is evaluated: a Pending session is not
