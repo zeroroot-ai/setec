@@ -22,6 +22,13 @@ The code in a Sandbox is untrusted. The image, the command and the network inten
 
 On every backend the Pod controls of the [isolation](isolation.md) page apply: no privilege, no capabilities but `NET_RAW` and `NET_ADMIN`, a read-only root, no ServiceAccount token, and a NetworkPolicy that denies by default.
 
+## Pods that touch the host
+
+Two Pods of the chart touch the host on purpose. Each one is a named exception in its template:
+
+- The installer is privileged, because it writes host files and restarts containerd. It holds no Kubernetes credential (`charts/setec/templates/installer-daemonset.yaml`).
+- The device plugin runs as root with two host paths, the kubelet plugin directory and `/dev`. It is not privileged and holds no capability and no credential (`charts/setec/templates/device-plugin-daemonset.yaml`).
+
 ## Callers
 
 - Each `setec` gRPC hop uses mTLS with TLS 1.3 at least. No setting turns it off (`internal/credentials/credentials.go`).
