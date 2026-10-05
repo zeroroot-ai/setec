@@ -475,6 +475,14 @@ jobs:
       - name: Guard the tree
         run: bash scripts/check-runtime-pins.sh
 
+      # setec#173: no scaffold note and no TLS skip. Same job, because it is
+      # the same kind of guard: it reads the tree and builds nothing.
+      - name: Mutation-test the scaffold note guard
+        run: bash scripts/check-no-scaffold-notes.sh --selftest
+
+      - name: No scaffold note and no TLS skip in the tree
+        run: bash scripts/check-no-scaffold-notes.sh
+
   crd-field-consumers:
     name: Every served CRD field has a consumer
     # Runs on both lanes, like the other tree guards. ADR-0094 layer 6, the

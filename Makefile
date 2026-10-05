@@ -264,6 +264,11 @@ check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of it
 	bash scripts/check-runtime-pins.sh --selftest
 	bash scripts/check-runtime-pins.sh
 
+.PHONY: check-scaffold-notes
+check-scaffold-notes: ## Fail on a kubebuilder scaffold note or on a metrics monitor that skips the TLS check (setec#173).
+	bash scripts/check-no-scaffold-notes.sh --selftest
+	bash scripts/check-no-scaffold-notes.sh
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
@@ -309,12 +314,6 @@ verify-x86-substrate: ## Assert the x86-only substrate (ADR-0141): amd64-only im
 	}
 	HELM="$(HELM)" ./hack/verify-x86-substrate.sh $(HELM_CHART_DIR)
 
-.PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
-
 # check: org-contract CI-equivalent gate (gibson#171 slice 1.4 /
 # zeroroot-ai/.github#87). Runs the same targets CI executes on every PR.
 .PHONY: check
@@ -322,37 +321,12 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-runtime-pins ## Run the local gate (tests, credential guard, runtime pin guard — run 'make lint' separately).
-
-##@ Deployment
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
-
-.PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
-
-.PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
-
-.PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
-
-.PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+check: test guard-credentials check-runtime-pins check-scaffold-notes ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard — run 'make lint' separately).
 
 ##@ Dependencies
 
 .PHONY: bootstrap
-bootstrap: kustomize controller-gen setup-envtest golangci-lint buf ## Install all local build/test/lint tooling (uniform-contract entrypoint).
+bootstrap: controller-gen setup-envtest golangci-lint buf ## Install all local build/test/lint tooling (uniform-contract entrypoint).
 	go mod download
 
 ## Location to install dependencies to
@@ -361,9 +335,7 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 ## Tool Binaries
-KUBECTL ?= kubectl
 KIND ?= kind
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
@@ -372,7 +344,6 @@ PROTOC_GEN_GO ?= $(LOCALBIN)/protoc-gen-go
 PROTOC_GEN_GO_GRPC ?= $(LOCALBIN)/protoc-gen-go-grpc
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
 BUF_VERSION ?= v1.47.2
 PROTOC_GEN_GO_VERSION ?= v1.36.5
@@ -389,11 +360,6 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
-	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
-
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
 $(CONTROLLER_GEN): $(LOCALBIN)
