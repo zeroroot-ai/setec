@@ -67,7 +67,7 @@ func TestSPIFFEClientCredentials_RefusesServerWithUnexpectedSPIFFEID(t *testing.
 	api := startWorkloadAPI(t, ca)
 	client := spiffeClient(t, api.addr, serviceID)
 
-	impostor := "spiffe://zeroroot.ai/ns/default/sa/not-the-node-agent"
+	impostor := "spiffe://example.org/ns/default/sa/not-the-node-agent"
 	addr := serveSPIFFEPeer(t, ca, impostor)
 
 	if err := dialHealth(t, addr, client); err == nil {

@@ -59,7 +59,7 @@ type SPIFFESource struct {
 
 	// AuthorizedIDs is the allow-list of full SPIFFE IDs this
 	// component will complete a handshake with, for example
-	// "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon".
+	// "spiffe://example.org/ns/gibson/sa/gibson-daemon".
 	//
 	// Entries are full IDs, not paths: an ID is matched on its trust
 	// domain as well as its path, so the same path under a foreign
@@ -289,10 +289,13 @@ func (s *spiffeSource) identity(ctx context.Context) (tls.Certificate, error) {
 // Scoping the pool to the allow-list rather than to every bundle the
 // agent happens to hold means a federated trust domain nobody is
 // authorized to speak from cannot issue a certificate this component
-// will even parse a chain for. A trust domain that is on the allow-list
-// but has no bundle is an error, not an empty contribution: silently
-// dropping it would refuse that peer at handshake time for a reason no
-// log line explains.
+// will even parse a chain for.
+//
+// A fleet serves many enrolled clusters, each in its own trust domain
+// (ADR-0164). A domain whose federated bundle is missing is reported and
+// left out: its peers are refused, and every other domain keeps working.
+// Failing the whole pool would let one cluster with broken federation stop
+// the fleet for all of them. A pool with no authority at all is an error.
 func (s *spiffeSource) trustAnchors(ctx context.Context) (*x509.CertPool, error) {
 	if err := s.connect(ctx); err != nil {
 		return nil, err
@@ -302,16 +305,24 @@ func (s *spiffeSource) trustAnchors(ctx context.Context) (*x509.CertPool, error)
 		return nil, errors.New("SPIFFE credential source: no trust bundles held")
 	}
 	pool := x509.NewCertPool()
+	var missing []error
 	for _, td := range s.trustDomains {
 		bundle, err := bundles.GetX509BundleForTrustDomain(td)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"SPIFFE credential source: no trust bundle for %q, which an authorized peer belongs to: %w",
-				td, err)
+			missing = append(missing, fmt.Errorf(
+				"SPIFFE credential source: no trust bundle for %q, which an authorized peer belongs to; "+
+					"its peers are refused until federation delivers the bundle: %w", td, err))
+			continue
 		}
 		for _, authority := range bundle.X509Authorities() {
 			pool.AddCert(authority)
 		}
+	}
+	if len(missing) == len(s.trustDomains) {
+		return nil, errors.Join(missing...)
+	}
+	for _, err := range missing {
+		s.reportError(err)
 	}
 	return pool, nil
 }

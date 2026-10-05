@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	callerID  = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
-	serviceID = "spiffe://zeroroot.ai/ns/setec/sa/setec-frontend"
+	callerID  = "spiffe://example.org/ns/gibson/sa/gibson-daemon"
+	serviceID = "spiffe://example.org/ns/setec/sa/setec-frontend"
 )
 
 // ---------------------------------------------------------------------
@@ -78,7 +78,7 @@ func TestNew_IncompleteSPIFFESource(t *testing.T) {
 			"gibson-daemon",
 		},
 		"trust-domain-only allow-list entry": {
-			credentials.SPIFFESource{SocketPath: "/run/api.sock", AuthorizedIDs: []string{"spiffe://zeroroot.ai"}},
+			credentials.SPIFFESource{SocketPath: "/run/api.sock", AuthorizedIDs: []string{"spiffe://example.org"}},
 			"names a trust domain and no workload",
 		},
 		"malformed socket address": {
@@ -189,7 +189,7 @@ func TestSPIFFEServerCredentials_RefusesUnauthorizedSPIFFEID(t *testing.T) {
 	// Same trust domain, same CA, different workload. This is the case
 	// the whole slice exists for: the certificate is entirely valid and
 	// the peer is still refused.
-	other := "spiffe://zeroroot.ai/ns/gibson/sa/some-other-workload"
+	other := "spiffe://example.org/ns/gibson/sa/some-other-workload"
 	if err := dialHealth(t, addr, spiffeClientCreds(t, ca, other, ca)); err == nil {
 		t.Fatal("handshake from an unauthorized SPIFFE ID: want refusal, got success")
 	}
@@ -426,9 +426,10 @@ type fakeWorkloadAPI struct {
 
 	addr string
 
-	mu       sync.Mutex
-	response *workload.X509SVIDResponse
-	updated  map[chan struct{}]struct{}
+	mu        sync.Mutex
+	response  *workload.X509SVIDResponse
+	federated map[string][]byte
+	updated   map[chan struct{}]struct{}
 
 	srv      *grpc.Server
 	stopOnce sync.Once
@@ -469,7 +470,25 @@ func (f *fakeWorkloadAPI) setSVID(t *testing.T, ca *testCA, id string) {
 		X509Svid:    leaf.Raw,
 		X509SvidKey: keyDER,
 		Bundle:      ca.der,
-	}}}
+	}}, FederatedBundles: f.federated}
+	f.notify()
+}
+
+// federate adds the bundle of a foreign trust domain, as SPIRE serves the
+// bundle of each domain that a registration entry federates with.
+func (f *fakeWorkloadAPI) federate(trustDomain string, ca *testCA) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.federated == nil {
+		f.federated = map[string][]byte{}
+	}
+	f.federated["spiffe://"+trustDomain] = ca.der
+	f.response.FederatedBundles = f.federated
+	f.notify()
+}
+
+// notify wakes every open stream. The caller holds f.mu.
+func (f *fakeWorkloadAPI) notify() {
 	for ch := range f.updated {
 		select {
 		case ch <- struct{}{}:
@@ -563,4 +582,68 @@ func eventually(t *testing.T, budget time.Duration, fn func() error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("condition never held within %s: %v", budget, err)
+}
+
+// TestSPIFFEServerCredentials_FederatedClientDomain is the federation test of
+// setec#169 (ADR-0164). The fleet runs in its own trust domain. An enrolled
+// client from a second domain connects with the bundle that federation
+// delivers. A caller from a third domain is refused, with its own CA and
+// with the CA of the federated domain.
+func TestSPIFFEServerCredentials_FederatedClientDomain(t *testing.T) {
+	t.Parallel()
+	fleetCA, clientCA, strangerCA := newCA(t), newCA(t), newCA(t)
+	api := startWorkloadAPI(t, fleetCA)
+	api.federate("b.example", clientCA)
+	enrolled := "spiffe://b.example/ns/gibson/sa/gibson-daemon"
+	addr := serveHealthSPIFFE(t, api.addr, enrolled)
+
+	if err := dialHealth(t, addr, spiffeClientCreds(t, clientCA, enrolled, fleetCA)); err != nil {
+		t.Fatalf("handshake from the enrolled client of a federated domain: %v", err)
+	}
+	stranger := "spiffe://c.example/ns/gibson/sa/gibson-daemon"
+	if err := dialHealth(t, addr, spiffeClientCreds(t, strangerCA, stranger, fleetCA)); err == nil {
+		t.Fatal("handshake from a third trust domain: want refusal, got success")
+	}
+	if err := dialHealth(t, addr, spiffeClientCreds(t, clientCA, stranger, fleetCA)); err == nil {
+		t.Fatal("a third trust domain signed by the federated CA: want refusal, got success")
+	}
+}
+
+// TestSPIFFEServerCredentials_EnrolledDomainWithoutBundle proves that a
+// client domain with no federated bundle is refused while every other
+// enrolled domain keeps working: one cluster with broken federation does not
+// stop the fleet.
+func TestSPIFFEServerCredentials_EnrolledDomainWithoutBundle(t *testing.T) {
+	t.Parallel()
+	fleetCA, clientCA := newCA(t), newCA(t)
+	api := startWorkloadAPI(t, fleetCA)
+	enrolled := "spiffe://b.example/ns/gibson/sa/gibson-daemon"
+	p, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+		SocketPath:      api.addr,
+		AuthorizedIDs:   []string{callerID, enrolled},
+		OnRotationError: func(error) {},
+	}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	creds, err := p.ServerCredentials(t.Context())
+	if err != nil {
+		t.Fatalf("ServerCredentials with one domain unfederated: %v", err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer(grpc.Creds(creds))
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	addr := lis.Addr().String()
+
+	if err := dialHealth(t, addr, spiffeClientCreds(t, clientCA, enrolled, fleetCA)); err == nil {
+		t.Fatal("handshake from a domain with no federated bundle: want refusal, got success")
+	}
+	if err := dialHealth(t, addr, spiffeClientCreds(t, fleetCA, callerID, fleetCA)); err != nil {
+		t.Fatalf("handshake from the domain of the fleet: %v", err)
+	}
 }

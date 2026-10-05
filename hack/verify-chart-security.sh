@@ -338,7 +338,7 @@ FE_TLS=(--set frontend.enabled=true
 	--set frontend.tlsCertSecretName=fe-tls
 	--set frontend.tlsClientCASecretName=fe-ca
 	--set 'frontend.clients[0].name=saas'
-	--set 'frontend.clients[0].spiffeID=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon'
+	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon'
 	--set 'frontend.clients[1].name=onprem'
 	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon')
 
@@ -346,7 +346,7 @@ render "$workdir/fe-default.yaml" "${FE_TLS[@]}" \
 	--show-only templates/frontend.yaml
 strip_comments "$workdir/fe-default.yaml" "$workdir/fe-default.stripped.yaml"
 assert_contains "$workdir/fe-default.stripped.yaml" "each enrolled client reaches the frontend" \
-	"--client=saas=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon" \
+	"--client=saas=spiffe://example.org/ns/gibson/sa/gibson-daemon" \
 	"--client=onprem=spiffe://onprem.example/ns/gibson/sa/gibson-daemon"
 assert_absent "$workdir/fe-default.stripped.yaml" "no fixed shared namespace" \
 	"--sandbox-namespace"

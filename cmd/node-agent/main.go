@@ -141,7 +141,7 @@ func main() {
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
 			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
 	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
-		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://zeroroot.ai/ns/setec/sa/setec. "+
+		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://example.org/ns/setec/sa/setec. "+
 			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
 	flag.StringVar(&snapshotBackend, "snapshot-backend", "local-disk",
 		"Phase 3: storage backend identifier. Only local-disk is supported in Phase 3.")

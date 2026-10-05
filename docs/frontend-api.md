@@ -230,6 +230,12 @@ against the bundle **and** its SPIFFE ID is on the allow-list. Entries
 are full SPIFFE IDs: the trust domain is matched as well as the path, so
 the same path under a foreign trust domain is refused.
 
+An enrolled client can be in a different trust domain than the fleet. Its
+bundle comes from SPIFFE federation, through the same Workload API. When
+the bundle of one client domain is missing, the frontend refuses the
+clients of that domain, reports the failure, and keeps serving every
+other domain.
+
 Losing the Workload API is reported immediately rather than becoming
 visible when the last SVID expires.
 

@@ -252,7 +252,7 @@ func main() {
 			"--nodeagent-tls-* flags.")
 	pflag.StringArrayVar(&nodeAgentCreds.spiffeAuthorizedIDs, "nodeagent-spiffe-authorized-id", nil,
 		"Full SPIFFE ID a node-agent must present, e.g. "+
-			"spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent. Repeat for each. Required in SPIFFE "+
+			"spiffe://example.org/ns/setec/sa/setec-node-agent. Repeat for each. Required in SPIFFE "+
 			"mode; there is no accept-any-server setting.")
 
 	// Controller-runtime's zap helper registers its flags on the stdlib

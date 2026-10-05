@@ -681,6 +681,15 @@ credentials:
     # The directory containing it is hostPath-mounted read-only into each
     # component at the same path.
     socketPath: /run/spire/agent-sockets/api.sock
+    # trustDomain is the SPIFFE trust domain of this fleet, e.g.
+    # example.org. Each install has its own (ADR-0164). REQUIRED in spiffe
+    # mode with frontend.enabled=true. An enrolled client in a different
+    # domain needs a federation block (see frontend.clients).
+    trustDomain: ""
+    # className is the className of the SPIRE controller manager that
+    # handles the ClusterFederatedTrustDomain objects of this chart. Empty
+    # leaves the field out.
+    className: ""
     # authorizedIDs are full SPIFFE IDs (trust domain matched as well as
     # path), one list per trust relationship — the sets are distinct on
     # purpose: an ID authorized to call the frontend must not thereby be
@@ -697,7 +706,7 @@ credentials:
       # nodeAgent.enabled=true and snapshots.enabled=true.
       nodeAgentClients: []
       # nodeAgentServers — node-agent server IDs the operator accepts
-      # when dialing, e.g. spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent.
+      # when dialing, e.g. spiffe://example.org/ns/setec/sa/setec-node-agent.
       # Required when snapshots.enabled=true.
       nodeAgentServers: []
 
@@ -789,9 +798,22 @@ frontend:
   # default-deny policy and two RoleBindings. The policy -frontend-scope
   # limits the frontend to these writes.
   #
+  # In spiffe mode, a client whose SPIFFE ID is in a different trust domain
+  # than credentials.spiffe.trustDomain needs a federation block. The chart
+  # renders one ClusterFederatedTrustDomain for it, so SPIRE fetches the
+  # bundle of that domain. The render fails when the block is missing. The
+  # ClusterSPIFFEID of the frontend must list the domain under
+  # federatesWith; the install owns that registration.
+  #
   #   clients:
   #     - name: saas
   #       spiffeID: spiffe://example.org/ns/gibson/sa/gibson-daemon
+  #     - name: onprem
+  #       spiffeID: spiffe://onprem.example/ns/gibson/sa/gibson-daemon
+  #       federation:
+  #         bundleEndpointURL: https://spire.onprem.example:8443
+  #         bundleEndpointProfile: https_spiffe   # or https_web
+  #         endpointSPIFFEID: spiffe://onprem.example/spire/server
   clients: []
   replicas: 1
   resources:
