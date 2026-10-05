@@ -200,7 +200,7 @@ docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: installer-image
-installer-image: ## Build the setec-installer image with the runtime pins from kata.env + gvisor.env (setec#26).
+installer-image: ## Build the setec-installer image with the kata pin from kata.env (setec#26).
 	$(CONTAINER_TOOL) build -f Dockerfile.installer \
 	  $$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /') \
 	  -t ghcr.io/zeroroot-ai/setec-installer:dev .
@@ -210,7 +210,7 @@ installer-payload-guard: ## Prove the installer's payload gate: the plain gate s
 	@args="$$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"; \
 	$(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args -t setec-installer-payload-gate:check . >/dev/null; \
 	echo "payload gate: plain build passed"; \
-	for mutation in kata-junk-binary gvisor-missing-sentry; do \
+	for mutation in kata-junk-binary gvisor-planted; do \
 	  if $(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args --build-arg PAYLOAD_MUTATION=$$mutation . >/dev/null 2>&1; then \
 	    echo "payload gate CANNOT FAIL: the $$mutation payload built; the inventory guard is broken" >&2; exit 1; \
 	  fi; \
@@ -260,7 +260,7 @@ check-crd-field-consumers: unwired-version ## Fail if a served CRD field has no 
 	  -types api/v1alpha1 -exempt scripts/crd-field-consumers-exempt.txt -min-served 50
 
 .PHONY: check-runtime-pins
-check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own (kata.env / gvisor.env are the sources).
+check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own, or if the installer image names gVisor (D70).
 	bash scripts/check-runtime-pins.sh --selftest
 	bash scripts/check-runtime-pins.sh
 

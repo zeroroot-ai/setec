@@ -6,16 +6,15 @@
 # consumer that builds Dockerfile.installer.
 #
 # The payload stage refuses an empty pin, so every caller must pass all of
-# them. Before this script each caller named the pin files itself, and adding
-# gvisor.env (setec#89) left three of the four behind: the builds failed with
-# "GVISOR_VERSION: parameter not set", which reads as a broken guard rather
-# than a missing argument. Adding the next runtime means editing this list
-# once.
+# them. Each caller reads this script, not the pin files, so a change to the
+# list is one edit. The installer image carries kata only: gVisor left it by
+# owner decision D70, and gvisor.env now pins the gVisor that the e2e workflow
+# lays on its test node.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-pin_files=(kata.env gvisor.env)
+pin_files=(kata.env)
 
 for f in "${pin_files[@]}"; do
   if [ ! -f "$f" ]; then

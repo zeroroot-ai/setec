@@ -57,9 +57,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # kata.env and gvisor.env at the repo root are the one place each runtime
-  # release is pinned (setec#26, setec#89). This job reads them once;
-  # setec-installer passes the four values as build args, because
+  # kata.env at the repo root is the one place the kata release is pinned
+  # (setec#26). This job reads it once; setec-installer passes the two
+  # values as build args, because
   # Dockerfile.installer's ARGs carry no default on purpose.
   # scripts/check-runtime-pins.sh keeps it that way.
   kata-pin:
@@ -68,22 +68,17 @@ jobs:
     outputs:
       version: ${{ steps.read.outputs.version }}
       sha256: ${{ steps.read.outputs.sha256 }}
-      gvisor_version: ${{ steps.read.outputs.gvisor_version }}
-      gvisor_sha256: ${{ steps.read.outputs.gvisor_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Guard the pins and read kata.env + gvisor.env
+      - name: Guard the pins and read kata.env
         id: read
         run: |
           set -euo pipefail
           bash scripts/check-runtime-pins.sh
           . ./kata.env
-          . ./gvisor.env
           {
             echo "version=${KATA_VERSION}"
             echo "sha256=${KATA_SHA256}"
-            echo "gvisor_version=${GVISOR_VERSION}"
-            echo "gvisor_sha256=${GVISOR_SHA256}"
           } >> "$GITHUB_OUTPUT"
 
   setec:
@@ -285,21 +280,18 @@ jobs:
       # Binaries this repo does NOT compile, so the vulnerability gate asks
       # REACHABILITY for them instead of staleness (.github#163, v0.8.3).
       #
-      # Why these five. A Go stdlib finding from an image scanner is a version
+      # Why this one. A Go stdlib finding from an image scanner is a version
       # comparison: the binary's Go is behind a patch. For a binary we build that
-      # is the right question, because bumping Go is ours to do. For these it is
-      # the wrong question and has no remedy — gVisor publishes every artifact
-      # built with the Go its own go.mod names (MODULE.bazel takes the SDK from
-      # it), so release-20260928.0, the GCS bucket, the bucket's latest and even
-      # the nightly built on 2026-10-02 are all go1.26.3. That produced 11 fixable
-      # HIGH stdlib findings setec could not act on in any way, and v0.117.0
-      # shipped a git tag and a published chart with NO installer image.
+      # is the right question, because bumping Go is ours to do. For a vendored
+      # binary it has no remedy: upstream picks the Go. The gVisor binaries were
+      # the first case (11 HIGH stdlib findings, no installer image from
+      # v0.117.0). gVisor left this image by owner decision D70.
       #
       # This is NOT an allowlist. govulncheck -mode=binary reports a vulnerability
       # only when the affected SYMBOL is in the binary; a reachable finding still
       # blocks, and an analysis that does not run blocks. Checked before relying
-      # on it: these binaries are not stripped (runsc 67589 readable symbols,
-      # gvisor_sentry 63318), so binary mode runs at full precision rather than
+      # on it: the binary is not stripped (51,862 readable symbols in the kata
+      # 4.2.0 shim), so binary mode runs at full precision rather than
       # degrading to a module-level guess.
       #
       # Paths are as trivy names its Target: no leading slash. A path that is not
@@ -309,12 +301,7 @@ jobs:
       # firecracker and jailer are deliberately absent: they are Rust, so they
       # carry no Go stdlib to compare.
       vendored_binaries: |
-        opt/gvisor/runsc
-        opt/gvisor/containerd-shim-runsc-v1
-        opt/gvisor/gvisor-bin/gvisor_sentry
         opt/kata/bin/containerd-shim-kata-v2
       build_args: |
         KATA_VERSION=${{ needs.kata-pin.outputs.version }}
         KATA_SHA256=${{ needs.kata-pin.outputs.sha256 }}
-        GVISOR_VERSION=${{ needs.kata-pin.outputs.gvisor_version }}
-        GVISOR_SHA256=${{ needs.kata-pin.outputs.gvisor_sha256 }}

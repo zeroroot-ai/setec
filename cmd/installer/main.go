@@ -34,7 +34,6 @@ func main() {
 	var (
 		hostRoot     = flag.String("host-root", "/host", "mount point of the node's root filesystem inside this container")
 		payloadDir   = flag.String("payload-dir", "/opt/kata", "kata static release payload bundled in this image")
-		gvisorDir    = flag.String("gvisor-payload-dir", "/opt/gvisor", "gVisor release payload bundled in this image")
 		poolName     = flag.String("pool-name", "setec-thinpool", "devmapper thin-pool name")
 		thinpoolMode = flag.String("thinpool-mode", installer.ThinpoolModeLoop,
 			"thin-pool backing: loop (sparse files, portable default) or device (dedicated block devices)")
@@ -54,18 +53,17 @@ func main() {
 	flag.Parse()
 
 	cfg := installer.Config{
-		HostRoot:         *hostRoot,
-		PayloadDir:       *payloadDir,
-		GvisorPayloadDir: *gvisorDir,
-		PoolName:         *poolName,
-		ThinpoolMode:     *thinpoolMode,
-		LoopDir:          *loopDir,
-		LoopDataGB:       *loopDataGB,
-		LoopMetaGB:       *loopMetaGB,
-		DataDevice:       *dataDevice,
-		MetadataDevice:   *metaDevice,
-		DevmapperRoot:    *devmapperRoot,
-		BaseImageSize:    *baseImageSize,
+		HostRoot:       *hostRoot,
+		PayloadDir:     *payloadDir,
+		PoolName:       *poolName,
+		ThinpoolMode:   *thinpoolMode,
+		LoopDir:        *loopDir,
+		LoopDataGB:     *loopDataGB,
+		LoopMetaGB:     *loopMetaGB,
+		DataDevice:     *dataDevice,
+		MetadataDevice: *metaDevice,
+		DevmapperRoot:  *devmapperRoot,
+		BaseImageSize:  *baseImageSize,
 	}
 
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)

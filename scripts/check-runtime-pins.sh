@@ -25,11 +25,13 @@
 #   6. Any code line that names kata and a bare x.y.z version is a literal.
 #
 #   7. gvisor.env has exactly GVISOR_VERSION (release-YYYYMMDD.N) and
-#      GVISOR_SHA256 (64 hex), and Dockerfile.installer names neither literal
-#      and gives neither ARG a default. gVisor is pinned by the same rule for
-#      the same reason: before gvisor.env existed, the e2e workflow pulled from
-#      the release bucket's `latest`, so CI could drift to a new gVisor on any
-#      run (setec#89).
+#      GVISOR_SHA256 (64 hex). No consumer fetches gVisor from the release
+#      bucket's `latest`: before gvisor.env existed, the e2e workflow did, so
+#      CI could drift to a new gVisor on any run (setec#89).
+#   8. Dockerfile.installer names no gVisor: no GVISOR_ build arg and no
+#      gVisor release URL. gVisor left the installer image by owner decision
+#      D70 (2026-10-05). The e2e workflow lays gVisor on its test node from
+#      gvisor.env, as node preparation does on a real node.
 #
 # Usage: check-runtime-pins.sh [repo-root]     exit 1 on a violation
 #        check-runtime-pins.sh --selftest      prove every rule can fire
@@ -94,9 +96,8 @@ check() {
   return $rc
 }
 
-# check_gvisor applies rules 1-3 to the gVisor pin. gVisor has no dev script and
-# no packer recipe of its own, so rules 4-6 do not apply; its version format is
-# upstream's release-YYYYMMDD.N rather than x.y.z.
+# check_gvisor applies rules 7 and 8. Its version format is upstream's
+# release-YYYYMMDD.N rather than x.y.z.
 check_gvisor() {
   local root="$1" rc=0 env="$1/gvisor.env"
   fail() { echo "❌ $*"; rc=1; }
@@ -111,17 +112,17 @@ check_gvisor() {
   [[ "$ver" =~ ^release-[0-9]{8}\.[0-9]+$ ]] || fail "GVISOR_VERSION must be release-YYYYMMDD.N, found '${ver}'"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "GVISOR_SHA256 must be 64 lowercase hex, found '${sha}'"
 
+  # Rule 8: the installer image ships no gVisor (D70). The word `gvisor` may
+  # stay in a comment that says so, and in the name of the gate mutation that
+  # proves it. A build arg or a download is the payload coming back.
   if [ -f "$root/$DOCKERFILE" ]; then
     local d="$root/$DOCKERFILE"
-    if [ -n "$ver" ] && code_lines "$d" | grep -qF -- "$ver"; then
-      fail "$DOCKERFILE names the gVisor version literal ${ver}; read gvisor.env instead"
+    if code_lines "$d" | grep -qE 'GVISOR_[A-Z0-9_]+'; then
+      fail "$DOCKERFILE names a GVISOR_ build arg; the installer image ships no gVisor (D70)"
     fi
-    if [ -n "$sha" ] && code_lines "$d" | grep -qF -- "$sha"; then
-      fail "$DOCKERFILE names the gVisor sha256 literal; read gvisor.env instead"
+    if grep -vE '^\s*#' "$d" | grep -qE 'github\.com/google/gvisor|storage\.googleapis\.com/gvisor'; then
+      fail "$DOCKERFILE downloads gVisor; the installer image ships no gVisor (D70)"
     fi
-    grep -qE '^ARG GVISOR_VERSION\s*$' "$d" || fail "$DOCKERFILE must declare 'ARG GVISOR_VERSION' with no default"
-    grep -qE '^ARG GVISOR_SHA256\s*$'  "$d" || fail "$DOCKERFILE must declare 'ARG GVISOR_SHA256' with no default"
-    grep -qE '^ARG GVISOR_(VERSION|SHA256)=' "$d" && fail "$DOCKERFILE gives a gVisor ARG a default; the value comes from gvisor.env"
   fi
 
   # The floating-tag trap this pin exists to close: no consumer may fetch gVisor
@@ -143,7 +144,7 @@ check_gvisor() {
     fi
   done
 
-  [ $rc -eq 0 ] && echo "✅ gvisor.env is the only gVisor pin (version ${ver})"
+  [ $rc -eq 0 ] && echo "✅ gvisor.env is the only gVisor pin (version ${ver}), and the installer image names no gVisor"
   return $rc
 }
 
@@ -175,13 +176,11 @@ selftest() {
   copy; sed -i 's/^KATA_VERSION=.*/KATA_VERSION=latest/' "$t/r/kata.env"; expect fail "kata.env version that is not x.y.z"
   copy; printf 'EXTRA=1\n' >> "$t/r/kata.env"; expect fail "kata.env with an extra key"
 
-  local gver gsha
+  local gver
   gver="$(grep -E '^GVISOR_VERSION=' "$src/gvisor.env" | cut -d= -f2-)"
-  gsha="$(grep -E '^GVISOR_SHA256=' "$src/gvisor.env" | cut -d= -f2-)"
-  copy; sed -i "s/^ARG GVISOR_VERSION\$/ARG GVISOR_VERSION=${gver}/" "$t/r/$DOCKERFILE"; expect fail "gvisor ARG default re-added"
-  copy; sed -i "s/^ARG GVISOR_SHA256\$/ARG GVISOR_SHA256=${gsha}/" "$t/r/$DOCKERFILE"; expect fail "gvisor sha ARG default re-added"
-  copy; printf 'RUN echo %s\n' "$gver" >> "$t/r/$DOCKERFILE"; expect fail "gvisor version literal on a Dockerfile code line"
-  copy; printf 'RUN echo %s\n' "$gsha" >> "$t/r/$DOCKERFILE"; expect fail "gvisor sha literal on a Dockerfile code line"
+  copy; printf 'ARG GVISOR_VERSION\n' >> "$t/r/$DOCKERFILE"; expect fail "a gVisor build arg back in the installer Dockerfile"
+  copy; printf 'RUN curl -fsSL -o /tmp/g.tar.zst https://github.com/google/gvisor/releases/download/%s/gvisor-x86_64.tar.zstd\n' "$gver" >> "$t/r/$DOCKERFILE"; expect fail "a gVisor download back in the installer Dockerfile"
+  copy; printf '# gvisor left this image (D70).\n' >> "$t/r/$DOCKERFILE"; expect pass "a comment that names gVisor is ignored"
   copy; sed -i '/^GVISOR_SHA256=/d' "$t/r/gvisor.env"; expect fail "gvisor.env without the sha256"
   copy; sed -i 's/^GVISOR_VERSION=.*/GVISOR_VERSION=latest/' "$t/r/gvisor.env"; expect fail "gvisor.env version that is not release-YYYYMMDD.N"
   copy; printf 'EXTRA=1\n' >> "$t/r/gvisor.env"; expect fail "gvisor.env with an extra key"

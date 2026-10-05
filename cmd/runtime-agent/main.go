@@ -188,12 +188,11 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 // container's own $PATH cannot see host binaries like runsc, so the gvisor and
 // runc probes must look under the host mounts instead of using exec.LookPath.
 //
-// A candidate is resolved with statUnderRoot, not os.Stat. The setec installer
+// A candidate is resolved with statUnderRoot, not os.Stat. Node preparation
 // lays /usr/local/bin/runsc as a symlink to /opt/gvisor/runsc, a host-absolute
 // target. os.Stat follows that target against the CONTAINER's filesystem,
 // where it does not exist, so the probe reported "runsc binary not found" on
-// every node the installer had just prepared and no gVisor sandbox could be
-// scheduled.
+// every node that was just prepared and no gVisor sandbox could be scheduled.
 func hostLookPath(root string) func(string) (string, error) {
 	dirs := []string{
 		"/usr/local/sbin", "/usr/local/bin",

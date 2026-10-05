@@ -69,13 +69,6 @@ type Config struct {
 	// image (the directory that becomes /opt/kata on the host).
 	PayloadDir string
 
-	// GvisorPayloadDir is the gVisor release tree bundled in the installer
-	// image (the directory that becomes /opt/gvisor on the host). Its own
-	// field rather than a path derived from PayloadDir: deriving it would
-	// silently break the moment PayloadDir is overridden, and the two trees
-	// come from different upstreams with independent pins.
-	GvisorPayloadDir string
-
 	// PoolName is the devmapper thin-pool name registered with the
 	// containerd devmapper snapshotter.
 	PoolName string
@@ -121,9 +114,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.PayloadDir == "" {
 		c.PayloadDir = "/opt/kata"
-	}
-	if c.GvisorPayloadDir == "" {
-		c.GvisorPayloadDir = "/opt/gvisor"
 	}
 	if c.PoolName == "" {
 		c.PoolName = "setec-thinpool"
@@ -284,17 +274,6 @@ func (in *Installer) Converge(ctx context.Context) (Result, error) {
 		}
 		res.Changed = res.Changed || kataChanged
 	}
-
-	// 4b. gVisor payload: runsc and its containerd shim. Laid in every mode,
-	// because unlike kata-fc there is no second owner to defer to — nothing
-	// else on the node installs runsc, which is exactly why a plain
-	// `helm install` used to yield a cluster where no gvisor Sandbox could
-	// schedule (setec#89).
-	gvisorChanged, err := in.ensureGvisorPayload()
-	if err != nil {
-		return res, fmt.Errorf("installing gvisor payload: %w", err)
-	}
-	res.Changed = res.Changed || gvisorChanged
 
 	// 5. Thin-pool provisioner assets + boot ordering, then provision the
 	// pool NOW so the containerd restart below finds it.
