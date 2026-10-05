@@ -21,7 +21,8 @@ func hostTree(t *testing.T, files map[string]os.FileMode, links map[string]strin
 		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(full, []byte("#!/bin/true\n"), mode); err != nil { //nolint:gosec // G306: an executable fixture
+		//nolint:gosec // G306: an executable fixture
+		if err := os.WriteFile(full, []byte("#!/bin/true\n"), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +70,10 @@ func TestHostLookPath(t *testing.T) {
 			links: map[string]string{"/usr/bin/runsc": "../lib/gvisor/runsc"}, found: true},
 		{name: "a chain of two absolute symlinks is found",
 			files: map[string]os.FileMode{"/opt/gvisor/v1/runsc": 0o755},
-			links: map[string]string{"/usr/local/bin/runsc": "/opt/gvisor/runsc", "/opt/gvisor/runsc": "/opt/gvisor/v1/runsc"}, found: true},
+			links: map[string]string{
+				"/usr/local/bin/runsc": "/opt/gvisor/runsc",
+				"/opt/gvisor/runsc":    "/opt/gvisor/v1/runsc",
+			}, found: true},
 		// The target is not under the mounted tree. The probe cannot see the
 		// binary, so it must not vouch for it.
 		{name: "a symlink to a target that is not in the host tree is not found",
@@ -81,7 +85,10 @@ func TestHostLookPath(t *testing.T) {
 			files: map[string]os.FileMode{"/opt/gvisor/runsc/keep": 0o755},
 			links: map[string]string{"/usr/local/bin/runsc": "/opt/gvisor/runsc"}},
 		{name: "a symlink loop is not found",
-			links: map[string]string{"/usr/local/bin/runsc": "/usr/local/bin/runsc2", "/usr/local/bin/runsc2": "/usr/local/bin/runsc"}},
+			links: map[string]string{
+				"/usr/local/bin/runsc":  "/usr/local/bin/runsc2",
+				"/usr/local/bin/runsc2": "/usr/local/bin/runsc",
+			}},
 		{name: "a missing binary is not found"},
 	}
 	for _, tc := range cases {
