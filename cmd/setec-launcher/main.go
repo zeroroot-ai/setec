@@ -58,8 +58,22 @@ func run(specPath, fcBinary string, grace time.Duration, termLog, keysPath strin
 			if err != nil {
 				return err
 			}
-			return diskbuilder.Fetch(ctx, s.DiskRepo, s.ImageRef, s.ImageDisk, keys,
-				remote.WithAuthFromKeychain(authn.DefaultKeychain))
+			// A registry that is not reachable yet at Pod start is retried.
+			// A disk with a bad signature is not: it stays bad.
+			var ferr error
+			for attempt := range 6 {
+				ferr = diskbuilder.Fetch(ctx, s.DiskRepo, s.ImageRef, s.ImageDisk, keys,
+					remote.WithAuthFromKeychain(authn.DefaultKeychain))
+				if ferr == nil || errors.Is(ferr, diskbuilder.ErrBadSignature) {
+					return ferr
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(1<<attempt) * time.Second):
+				}
+			}
+			return ferr
 		},
 	}
 	code, err := l.Run(ctx)
