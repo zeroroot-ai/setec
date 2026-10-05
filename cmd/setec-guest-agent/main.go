@@ -140,8 +140,19 @@ func main() {
 	pool := newKernelPool(opts.RandomDevice)
 	go func() { errCh <- run(ctx, ln, pool, log.Printf) }()
 
-	if err := <-errCh; err != nil {
-		log.Printf("setec-guest-agent: %v", err)
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-ctx.Done():
+	}
+	if runErr != nil {
+		log.Printf("setec-guest-agent: %v", runErr)
+	}
+	// As PID 1 the agent is the machine: a stop or a failure ends it.
+	if pid1 {
+		endMachine()
+	}
+	if runErr != nil {
 		os.Exit(1)
 	}
 }

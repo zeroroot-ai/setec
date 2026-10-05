@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"syscall"
 
 	"github.com/mdlayher/vsock"
 
@@ -30,7 +31,18 @@ func prepareMachine() error {
 	if err := guestagent.PrepareRoot(guestagent.KernelArg("setec.lowerfs")); err != nil {
 		return fmt.Errorf("prepare the root: %w", err)
 	}
-	return nil
+	// Ctrl-Alt-Del from the launcher then reaches the agent as SIGINT, and
+	// the agent ends the machine itself (endMachine). The first real boot
+	// showed that a stop otherwise took the full grace period now and then.
+	return syscall.Reboot(syscall.LINUX_REBOOT_CMD_CAD_OFF)
+}
+
+// endMachine flushes the writable layer and resets the machine. With the
+// boot argument reboot=k, Firecracker then exits. PID 1 must not simply
+// exit: the kernel panics when init ends.
+func endMachine() {
+	syscall.Sync()
+	_ = syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART)
 }
 
 func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
