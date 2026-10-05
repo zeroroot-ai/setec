@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 )
 
 func TestParseDigestRef(t *testing.T) {
@@ -201,4 +202,61 @@ func TestPack_IsReproducible(t *testing.T) {
 	if sums[0] != sums[1] {
 		t.Fatalf("two packs differ: %s %s", sums[0], sums[1])
 	}
+}
+
+func TestCleanTarName(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"./": "", ".": "", "./etc/": "etc/", "./etc/passwd": "etc/passwd", "/usr/bin/sh": "usr/bin/sh",
+		"a/./b": "a/b", "usr//lib/": "usr/lib/",
+	} {
+		if got, ok := cleanTarName(in); !ok || got != want {
+			t.Errorf("cleanTarName(%q) = %q, %t; want %q", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"../etc", "a/../../b", "./.."} {
+		if _, ok := cleanTarName(bad); ok {
+			t.Errorf("cleanTarName(%q) accepted a path that leaves the root", bad)
+		}
+	}
+}
+
+// TestPack_ImageWithDotSlashNames packs a layer whose names start with
+// "./", as many image builders write them. mksquashfs refused such names
+// on the first real build of the executor image.
+func TestPack_ImageWithDotSlashNames(t *testing.T) {
+	t.Parallel()
+	out, _ := exec.Command("mksquashfs", "-help").CombinedOutput()
+	if !strings.Contains(string(out), "-tar") {
+		t.Skip("mksquashfs with -tar is not on this host")
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, h := range []*tar.Header{
+		{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "./etc/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "./etc/hostname", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+		{Name: "./etc/name", Typeflag: tar.TypeLink, Linkname: "./etc/hostname"},
+	} {
+		_ = tw.WriteHeader(h)
+		if h.Size > 0 {
+			_, _ = tw.Write([]byte("x\n"))
+		}
+	}
+	_ = tw.Close()
+	layer, err := tarballLayer(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := mutate.AppendLayers(testImage(t), layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Pack(t.Context(), img, filepath.Join(t.TempDir(), "d")); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+}
+
+func tarballLayer(b []byte) (v1.Layer, error) {
+	return tarball.LayerFromOpener(func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil })
 }

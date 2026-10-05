@@ -89,9 +89,25 @@ func imageTar(img v1.Image, w io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("diskbuilder: read the image layers: %w", err)
 		}
+		// mksquashfs refuses a path with a "." or ".." part, and image
+		// layers often start each name with "./". A name that is the root
+		// itself carries nothing; a name that climbs out is refused.
+		clean, ok := cleanTarName(h.Name)
+		if !ok {
+			return fmt.Errorf("diskbuilder: the image holds the path %q, which leaves the root", h.Name)
+		}
+		if clean == "" {
+			continue
+		}
+		h.Name = clean
+		if h.Typeflag == tar.TypeLink {
+			if h.Linkname, ok = cleanTarName(h.Linkname); !ok || h.Linkname == "" {
+				return fmt.Errorf("diskbuilder: the image holds a hard link %q to %q outside the root", h.Name, h.Linkname)
+			}
+		}
 		// The disk is the image and nothing else: the setec directory is
 		// written below, never taken from the image.
-		if strings.HasPrefix(strings.TrimPrefix(h.Name, "./"), ".setec") {
+		if clean == ".setec" || strings.HasPrefix(clean, ".setec/") {
 			continue
 		}
 		if err := tw.WriteHeader(h); err != nil {
@@ -114,6 +130,27 @@ func imageTar(img v1.Image, w io.Writer) error {
 		return err
 	}
 	return tw.Close()
+}
+
+// cleanTarName drops "." parts and a leading "/", keeps a trailing "/"
+// of a directory, and reports false for a name with a ".." part.
+func cleanTarName(n string) (string, bool) {
+	dir := strings.HasSuffix(n, "/")
+	var parts []string
+	for p := range strings.SplitSeq(n, "/") {
+		switch p {
+		case "", ".":
+		case "..":
+			return "", false
+		default:
+			parts = append(parts, p)
+		}
+	}
+	out := strings.Join(parts, "/")
+	if dir && out != "" {
+		out += "/"
+	}
+	return out, true
 }
 
 // Pack makes the squashfs disk at out from img. The time stamps of the
