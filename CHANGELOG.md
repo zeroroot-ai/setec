@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.119.0](https://github.com/zeroroot-ai/setec/compare/v0.118.3...v0.119.0) (2026-10-05)
+
+
+### Features
+
+* **network:** an egress rule names ports, port ranges and a protocol ([#200](https://github.com/zeroroot-ai/setec/issues/200)) ([934ae14](https://github.com/zeroroot-ai/setec/commit/934ae14f1e16cab89143f9e087014351088584f3))
+
 ## [0.118.3](https://github.com/zeroroot-ai/setec/compare/v0.118.2...v0.118.3) (2026-10-05)
 
 
