@@ -586,22 +586,33 @@ jobs:
           TOML
           sed -i 's/^          //' "$work/20-kata-qemu.toml"
 
-          docker cp "$work/kata.tar.zst" "${KIND_CLUSTER}-worker:/tmp/kata-qemu.tar.zst"
-          docker cp "$work/20-kata-qemu.toml" "${KIND_CLUSTER}-worker:/tmp/20-kata-qemu.toml"
+          # Not /tmp. A kind node mounts a tmpfs on /tmp, and `docker cp`
+          # writes to the container filesystem under that mount, so the copy
+          # succeeds and the file is not there for anything that runs inside
+          # the node. The first run that reached this step failed on exactly
+          # that: "tar: /tmp/kata-qemu.tar.zst: Cannot open".
+          prep=/var/lib/setec-e2e
+          docker exec "${KIND_CLUSTER}-worker" mkdir -p "$prep"
+          docker cp "$work/kata.tar.zst" "${KIND_CLUSTER}-worker:$prep/kata-qemu.tar.zst"
+          docker cp "$work/20-kata-qemu.toml" "${KIND_CLUSTER}-worker:$prep/20-kata-qemu.toml"
           docker exec "${KIND_CLUSTER}-worker" bash -euo pipefail -c '
+            prep=/var/lib/setec-e2e
+            test -s "$prep/kata-qemu.tar.zst" && test -s "$prep/20-kata-qemu.toml" \
+              || { echo "the kata archive or the containerd drop-in did not reach the node" >&2; exit 1; }
             command -v zstd >/dev/null || { apt-get update -qq && apt-get install -y -qq zstd; }
-            tar --zstd -xf /tmp/kata-qemu.tar.zst -C / \
+            tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / \
               ./opt/kata/bin/qemu-system-x86_64 \
               ./opt/kata/share/defaults/kata-containers/configuration-qemu.toml \
               ./opt/kata/share/kata-qemu 2>/dev/null \
-              || tar --zstd -xf /tmp/kata-qemu.tar.zst -C / ./opt/kata
+              || tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / ./opt/kata
             test -x /opt/kata/bin/qemu-system-x86_64 \
               || { echo "the kata-static tarball did not provide a QEMU binary" >&2; exit 1; }
             test -f /opt/kata/share/defaults/kata-containers/configuration-qemu.toml \
               || { echo "the kata-static tarball did not provide configuration-qemu.toml" >&2; exit 1; }
 
             mkdir -p /etc/containerd/config.d
-            cp /tmp/20-kata-qemu.toml /etc/containerd/config.d/20-kata-qemu.toml
+            cp "$prep/20-kata-qemu.toml" /etc/containerd/config.d/20-kata-qemu.toml
+            rm -f "$prep/kata-qemu.tar.zst"
             ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-kata-qemu-v2
             systemctl restart containerd
           '
