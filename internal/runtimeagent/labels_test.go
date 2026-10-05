@@ -279,7 +279,7 @@ func TestApply_Transition(t *testing.T) {
 }
 
 // TestBuildResultJSON_Deterministic guards the no-op check in Apply: if
-// the serialisation were not stable for identical input, every probe cycle
+// the serialization were not stable for identical input, every probe cycle
 // would look like a change and write to every Node in the cluster.
 func TestBuildResultJSON_Deterministic(t *testing.T) {
 	t.Parallel()

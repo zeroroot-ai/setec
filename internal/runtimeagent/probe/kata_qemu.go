@@ -9,7 +9,7 @@ import "context"
 // runtime is available on the host node.
 //
 // Unlike kata-fc, QEMU supports TCG software emulation in addition to
-// hardware-accelerated KVM. The probe behaviour depends on Config.AllowTCG:
+// hardware-accelerated KVM. The probe behavior depends on Config.AllowTCG:
 //
 //   - AllowTCG=false (default): the KVM device and a KVM kernel module
 //     (kvm_intel/kvm_amd on x86, built-in kvm on arm64) must both be

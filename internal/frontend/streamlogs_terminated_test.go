@@ -73,7 +73,7 @@ func (o *recordingOpener) Calls() []corev1.PodLogOptions {
 	return append([]corev1.PodLogOptions(nil), o.calls...)
 }
 
-// breakingReader yields the configured bytes and then fails, modelling
+// breakingReader yields the configured bytes and then fails, modeling
 // a follow stream the kubelet tears down when the container it was
 // following terminates mid-flight.
 type breakingReader struct {
@@ -209,7 +209,7 @@ func TestStreamLogs_FollowAttachRaceFallsBack(t *testing.T) {
 		t.Fatalf("GetLogs calls = %d, want 2 (follow attach then completed-log read)", len(calls))
 	}
 	if !calls[0].Follow {
-		t.Error("first call should have honoured the caller's Follow=true")
+		t.Error("first call should have honored the caller's Follow=true")
 	}
 	if calls[1].Follow {
 		t.Error("fallback call must not use Follow")

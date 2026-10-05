@@ -110,7 +110,7 @@ var (
 // fakeNodeAgentClient is the package-wide test double satisfying
 // snapshot.NodeAgentClient. Each RPC returns the configured response
 // and, when set, the configured error. Fields are exported so
-// individual tests can mutate behaviour through the package-wide
+// individual tests can mutate behavior through the package-wide
 // testDialer.
 type fakeNodeAgentClient struct {
 	CreateResp *setecgrpcv1.CreateSnapshotResponse
@@ -217,7 +217,7 @@ func TestMain(m *testing.M) {
 	cfg, err := testEnv.Start()
 	if err != nil {
 		// A failed envtest start FAILS the package (setec#302). This package
-		// holds every reconciler behavioural test — Phase 2/3, session
+		// holds every reconciler behavioral test — Phase 2/3, session
 		// lifecycle, pause timeouts, the invariant gate, runtime selection —
 		// so exiting 0 here reported `ok` with zero tests run and made the
 		// whole suite silently evaporate whenever KUBEBUILDER_ASSETS was

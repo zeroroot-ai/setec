@@ -10,7 +10,7 @@ import (
 
 // randID returns an opaque, unguessable lease id. crypto/rand is used so
 // a lease token cannot be guessed by another tenant; the manager still
-// scopes leases per namespace, but defence in depth is cheap here.
+// scopes leases per namespace, but defense in depth is cheap here.
 func randID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

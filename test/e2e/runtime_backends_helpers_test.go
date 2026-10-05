@@ -199,7 +199,7 @@ func operatorLeaderPod(ctx context.Context) (string, error) {
 // 127.0.0.1:<localPort>, fetches /metrics, and returns the parsed Prometheus
 // metric families. target is a kubectl resource reference such as
 // svc/<name> or deploy/<name>. The port-forward subprocess is killed when
-// ctx is cancelled.
+// ctx is canceled.
 func scrapeServiceMetrics(ctx context.Context, target, port, localPort string) (map[string]*dto.MetricFamily, error) {
 	pf := exec.CommandContext(ctx,
 		"kubectl", "port-forward",

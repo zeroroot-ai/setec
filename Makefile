@@ -269,6 +269,11 @@ check-scaffold-notes: ## Fail on a kubebuilder scaffold note or on a metrics mon
 	bash scripts/check-no-scaffold-notes.sh --selftest
 	bash scripts/check-no-scaffold-notes.sh
 
+.PHONY: check-go-comment-spelling
+check-go-comment-spelling: ## Fail on British spelling in a Go comment (setec#174).
+	bash scripts/check-go-comment-spelling.sh --selftest
+	bash scripts/check-go-comment-spelling.sh
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
@@ -321,7 +326,7 @@ verify-x86-substrate: ## Assert the x86-only substrate (ADR-0141): amd64-only im
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-runtime-pins check-scaffold-notes ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard — run 'make lint' separately).
+check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard — run 'make lint' separately).
 
 ##@ Dependencies
 

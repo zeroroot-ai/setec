@@ -37,7 +37,7 @@ type shimNamespace struct {
 	labels map[string]string
 }
 
-// toCoreNamespace materialises the minimal corev1.Namespace needed by
+// toCoreNamespace materializes the minimal corev1.Namespace needed by
 // tenancy.FromNamespace. All other Namespace fields are irrelevant to
 // tenancy identity extraction.
 func (s *shimNamespace) toCoreNamespace() *corev1.Namespace {

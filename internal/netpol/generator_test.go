@@ -633,8 +633,8 @@ func TestGenerate_UnresolvableHostIsDroppedNotWidened(t *testing.T) {
 	}
 }
 
-// TestGenerate_NoResolverConfiguredFailsClosed pins the behaviour of a
-// Config with no Resolver. A nil resolver is not a licence to fall back to
+// TestGenerate_NoResolverConfiguredFailsClosed pins the behavior of a
+// Config with no Resolver. A nil resolver is not a license to fall back to
 // the old 0.0.0.0/0 base: the entry is dropped exactly as an unresolvable
 // name is.
 func TestGenerate_NoResolverConfiguredFailsClosed(t *testing.T) {

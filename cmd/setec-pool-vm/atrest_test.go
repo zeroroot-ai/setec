@@ -22,7 +22,7 @@ import (
 )
 
 // secretSnapshotWriter emulates Firecracker writing a guest image that
-// contains a recognisable sensitive pattern.
+// contains a recognizable sensitive pattern.
 var secretMarker = bytes.Repeat([]byte("GUEST-MEMORY-SECRET-PATTERN-"), 64)
 
 func secretSnapshotWriter(state, mem string) error {

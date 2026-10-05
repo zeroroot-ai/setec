@@ -30,7 +30,7 @@ import (
 	"testing"
 )
 
-// fakeLookPath returns a LookPath function whose behaviour is controlled by
+// fakeLookPath returns a LookPath function whose behavior is controlled by
 // the found flag. When found=true it returns a synthetic binary path;
 // otherwise it returns an error that mimics exec.ErrNotFound.
 func fakeLookPath(found bool) func(string) (string, error) {

@@ -139,7 +139,7 @@ func TestLease_ColdLaunchCreatesWarmSandbox(t *testing.T) {
 		t.Fatalf("lease response missing ids: %+v", resp)
 	}
 
-	// A warm Sandbox CR exists in the namespace, labelled as a pool entry.
+	// A warm Sandbox CR exists in the namespace, labeled as a pool entry.
 	list := &setecv1alpha1.SandboxList{}
 	if err := c.List(context.Background(), list, client.InNamespace("team-a")); err != nil {
 		t.Fatalf("list: %v", err)
@@ -248,7 +248,7 @@ func TestPoolStatus_EmptyClassInvalid(t *testing.T) {
 }
 
 // startMarkRunning launches a goroutine that flips Sandboxes to Running
-// so pool readiness resolves during a test. It is cancelled (and joined)
+// so pool readiness resolves during a test. It is canceled (and joined)
 // via t.Cleanup so it never runs past the test and never calls t.Fatal.
 func startMarkRunning(t *testing.T, c client.Client, ns string) {
 	t.Helper()

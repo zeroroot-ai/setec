@@ -41,7 +41,7 @@ func bindPodToNode(t *testing.T, pod *corev1.Pod) {
 }
 
 // newPhase3Sandbox constructs a minimal Phase 3 Sandbox with room for
-// the caller to customise snapshot fields.
+// the caller to customize snapshot fields.
 func newPhase3Sandbox(name, ns string, mutators ...func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
 	sb := &setecv1alpha1.Sandbox{
 		Name: name, Namespace: ns,

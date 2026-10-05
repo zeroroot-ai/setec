@@ -84,7 +84,7 @@ func TestSandboxClassWebhook_ValidateRequests(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
 				if err == nil {

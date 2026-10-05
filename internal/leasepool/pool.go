@@ -30,7 +30,7 @@ var ErrPoolEmpty = errors.New("leasepool: no warm sandbox available")
 // the manager does not know about.
 var ErrLeaseNotFound = errors.New("leasepool: lease not found")
 
-// PoolTemplate is everything needed to materialise one pre-warmed
+// PoolTemplate is everything needed to materialize one pre-warmed
 // Sandbox for a class. The frontend derives it from the SandboxClass
 // (PreWarmImage, DefaultResources, PreWarmPoolSize) so the lease pool is
 // grounded in the existing cluster policy rather than a parallel config.
@@ -308,7 +308,7 @@ func (m *Manager) Status(sandboxClass string) (ready, target, leased int) {
 }
 
 // Run is the background replenish loop. It periodically replenishes every
-// registered class and refreshes readiness until ctx is cancelled.
+// registered class and refreshes readiness until ctx is canceled.
 func (m *Manager) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

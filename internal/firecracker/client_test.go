@@ -199,7 +199,7 @@ func TestErrorWithoutFaultMessage(t *testing.T) {
 	}
 }
 
-func TestContextCancelledBeforeRequest(t *testing.T) {
+func TestContextCanceledBeforeRequest(t *testing.T) {
 	sock := startUnixServer(t, nil)
 	c := NewClientFromSocket(sock)
 	ctx, cancel := context.WithCancel(context.Background())

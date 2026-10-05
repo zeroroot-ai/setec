@@ -37,7 +37,7 @@ type ImageCache struct {
 }
 
 // NewImageCache constructs a cache with the given puller and default
-// retry behaviour.
+// retry behavior.
 func NewImageCache(p ImagePuller) *ImageCache {
 	return &ImageCache{
 		Puller:       p,

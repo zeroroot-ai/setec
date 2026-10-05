@@ -4,7 +4,7 @@
 // sec-research demonstrates running an AFL++ fuzzer against a local target
 // binary inside a Setec-managed Firecracker microVM. The sandbox is given a
 // hard lifecycle timeout (default 1 hour) and capped CPU/memory; the program
-// streams fuzzer progress and (optionally) dumps any crash artefacts at the
+// streams fuzzer progress and (optionally) dumps any crash artifacts at the
 // end of the run.
 //
 // Usage:

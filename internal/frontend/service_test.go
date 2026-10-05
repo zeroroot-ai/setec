@@ -536,7 +536,7 @@ func TestStreamLogs_ClientCancel(t *testing.T) {
 		SandboxId: "team-a/sb/u-1",
 		Follow:    true,
 	}, stream)
-	// Cancelled context may be surfaced as Canceled or produce a
+	// Canceled context may be surfaced as Canceled or produce a
 	// nil return — both are acceptable clean-shutdown shapes.
 	if err != nil && status.Code(err) != codes.Canceled {
 		t.Fatalf("unexpected error on cancel: %v", err)

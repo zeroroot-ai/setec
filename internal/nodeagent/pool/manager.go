@@ -458,8 +458,8 @@ func (m *Manager) Release(ctx context.Context, entryID string) error {
 	return m.releaseEntry(ctx, e, true)
 }
 
-// releaseEntry tears down the on-disk artefacts for an entry. The
-// paused Firecracker process is signalled by removing its API socket
+// releaseEntry tears down the on-disk artifacts for an entry. The
+// paused Firecracker process is signaled by removing its API socket
 // file and relying on the surrounding launcher/kata machinery to reap
 // the process; the pool Manager's own contract ends at the moment
 // the entry directory is gone and the entry is out of internal state.

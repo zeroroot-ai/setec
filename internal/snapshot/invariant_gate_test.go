@@ -19,7 +19,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
-// The tests in this file pin the ADR-0145 invariant-gate behaviour at
+// The tests in this file pin the ADR-0145 invariant-gate behavior at
 // the coordinator — the single decision point every pool warm-start
 // and snapshot restore/resume passes through (setec#191).
 
@@ -126,8 +126,8 @@ func TestWarmStartFromPool_AnnotationAloneStillRejected(t *testing.T) {
 	pod := newPodForSandbox(sb, "node-a")
 	cls := newPreWarmClass()
 	cls.Annotations = map[string]string{gate.AllowUnverifiedRestoresAnnotation: "true"}
-	unlabelled := &corev1.Namespace{Name: gate.DefaultGateNamespace}
-	c := newFakeClient(t, sb, pod, cls, unlabelled)
+	unlabeled := &corev1.Namespace{Name: gate.DefaultGateNamespace}
+	c := newFakeClient(t, sb, pod, cls, unlabeled)
 	na := &fakeNodeAgentClient{
 		claimRes: res,
 		pauseRes: &setecgrpcv1.PauseSandboxResponse{Success: true},

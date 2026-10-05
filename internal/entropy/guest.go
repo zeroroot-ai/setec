@@ -39,7 +39,7 @@ type GuestHandler struct {
 	Logf func(format string, args ...any)
 }
 
-// Serve accepts connections from ln until ctx is cancelled, serving
+// Serve accepts connections from ln until ctx is canceled, serving
 // each with ServeConn on its own goroutine.
 //
 // Serve does not return until every handler it started has finished. The

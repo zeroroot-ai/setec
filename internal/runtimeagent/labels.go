@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package runtimeagent provides the node-local runtime capability detection
-// and node labelling logic for the Setec node-agent DaemonSet.
+// and node labeling logic for the Setec node-agent DaemonSet.
 //
 // Apply writes the probe outcome onto the Node's own metadata: one label per
 // backend (which is what the operator's node affinity selects on) and one
@@ -77,7 +77,7 @@ const labelPrefix = LabelPrefix
 // cycle did not probe is deleted, not left behind (see pruneStaleLabels).
 // That restraint is mirrored
 // by the admission policy the chart installs, so a build of this agent
-// that stopped honouring it would be rejected by the API server rather
+// that stopped honoring it would be rejected by the API server rather
 // than trusted.
 //
 // Apply is idempotent in the strong sense: when the Node already carries
@@ -165,7 +165,7 @@ func boolLabel(available bool) string {
 	return "false"
 }
 
-// buildResultJSON serialises the probe results into the JSON body of the
+// buildResultJSON serializes the probe results into the JSON body of the
 // ResultAnnotation: a map of backend name to its outcome.
 //
 // The value is deliberately free of timestamps. A heartbeat field would

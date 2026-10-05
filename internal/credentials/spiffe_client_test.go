@@ -218,7 +218,7 @@ func serveWith(t *testing.T, creds grpccreds.TransportCredentials) string {
 }
 
 // issueNamed writes a CA-signed server keypair valid only for dnsName —
-// no loopback IP SAN — so a client dialling 127.0.0.1 must reject it on
+// no loopback IP SAN — so a client dialing 127.0.0.1 must reject it on
 // the name. testCA.issue deliberately includes the loopback address,
 // which is what makes every other handshake test work.
 func (ca *testCA) issueNamed(t *testing.T, dir, name, dnsName string) (certPath, keyPath string) {

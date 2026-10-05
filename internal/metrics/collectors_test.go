@@ -126,7 +126,7 @@ func TestSetActive(t *testing.T) {
 	}
 }
 
-// TestEmptyTenantLabel locks in the Requirement 5.4 behaviour: an unset
+// TestEmptyTenantLabel locks in the Requirement 5.4 behavior: an unset
 // tenant is recorded as an explicit empty string rather than a missing
 // label.
 func TestEmptyTenantLabel(t *testing.T) {

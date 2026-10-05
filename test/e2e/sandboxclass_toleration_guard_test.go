@@ -99,7 +99,7 @@ func TestSandboxClasses_AreBuiltViaConstructor(t *testing.T) {
 	// The constructor must exist and must have been the thing we skipped. If
 	// it is renamed or deleted, the exemption silently starts covering
 	// nothing — or worse, the guard passes because every call site was
-	// rewritten to something it no longer recognises.
+	// rewritten to something it no longer recognizes.
 	if exempted != 1 {
 		t.Fatalf("expected to exempt exactly one %s declaration, exempted %d; "+
 			"was it renamed or duplicated?", constructorName, exempted)

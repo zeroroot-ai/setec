@@ -146,7 +146,7 @@ func main() {
 		egressHostTTL    time.Duration
 		egressHostGrace  time.Duration
 
-		// Phase 3 flags. Zero values preserve Phase 1/2 behaviour.
+		// Phase 3 flags. Zero values preserve Phase 1/2 behavior.
 		snapshotsEnabled          bool
 		nodeAgentAuthorityPattern string
 		nodeAgentNamespace        string
@@ -166,7 +166,7 @@ func main() {
 	pflag.StringVar(&nodeSelectorLabel, "node-selector-label", "katacontainers.io/kata-runtime",
 		"Label key Nodes must carry to be considered Kata-capable. "+
 			"Used by the startup prerequisite check only; scheduling uses the RuntimeClass.")
-	// Phase 2 flags. Zero values reproduce Phase 1 behaviour exactly.
+	// Phase 2 flags. Zero values reproduce Phase 1 behavior exactly.
 	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
 		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
 			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
@@ -196,7 +196,7 @@ func main() {
 	pflag.StringSliceVar(&reservedCIDRs, "reserved-cidrs", defaultReservedCIDRs(),
 		"Address ranges no Sandbox may reach. Subtracted from every permissive egress rule via "+
 			"ipBlock.except. Add this cluster's Service and Pod CIDRs. Self-hosted operators whose "+
-			"authorised scan scope is private address space must narrow this list to their own "+
+			"authorized scan scope is private address space must narrow this list to their own "+
 			"control-plane ranges instead of clearing it. May not be empty.")
 	pflag.StringSliceVar(&sandboxResolvers, "sandbox-resolvers", []string{"1.1.1.1", "8.8.8.8"},
 		"DNS servers Sandboxes resolve through. Written into each Sandbox Pod's dnsConfig and into "+
@@ -226,7 +226,7 @@ func main() {
 	// Phase 3 flags.
 	pflag.BoolVar(&snapshotsEnabled, "snapshots-enabled", false,
 		"Phase 3 kill-switch: register the Snapshot CRD controller and wire snapshot.Coordinator"+
-			" for the Sandbox reconciler. Default false preserves Phase 2 behaviour.")
+			" for the Sandbox reconciler. Default false preserves Phase 2 behavior.")
 	pflag.StringVar(&nodeAgentAuthorityPattern, "nodeagent-authority-pattern",
 		"%s.setec-node-agent.setec-system.svc:50052",
 		"Phase 3: format string that renders the gRPC authority (and TLS ServerName) for a node's "+
@@ -235,7 +235,7 @@ func main() {
 			"this string as the gRPC :authority so TLS verification checks it against the wildcard "+
 			"SAN the node-agent certificate carries. It must match that SAN pattern.")
 	pflag.StringVar(&nodeAgentNamespace, "nodeagent-namespace", "setec-system",
-		"Phase 3: namespace the node-agent DaemonSet runs in. The operator lists Pods labelled "+
+		"Phase 3: namespace the node-agent DaemonSet runs in. The operator lists Pods labeled "+
 			"app.kubernetes.io/component=node-agent in this namespace to find the one running on "+
 			"a given node.")
 	pflag.StringVar(&nodeAgentCreds.certPath, "nodeagent-tls-cert", "",
@@ -407,7 +407,7 @@ func main() {
 		SPIFFEServers: otlpSPIFFEServerIDs,
 	})
 	if err != nil {
-		setupLog.Error(err, "unable to initialise tracing")
+		setupLog.Error(err, "unable to initialize tracing")
 		os.Exit(1)
 	}
 	defer func() {
@@ -759,7 +759,7 @@ func newProbeServer(addr string, state *readyzState) manager.Runnable {
 		}
 
 		// Shut the server down gracefully when the manager's context
-		// is cancelled (SIGTERM). A short shutdown timeout keeps the
+		// is canceled (SIGTERM). A short shutdown timeout keeps the
 		// Pod's terminationGracePeriodSeconds budget intact.
 		shutdownDone := make(chan struct{})
 		go func() {

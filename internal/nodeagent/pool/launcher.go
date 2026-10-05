@@ -13,7 +13,7 @@ import (
 )
 
 // LaunchOptions describes a single pool VM the Manager wants booted
-// and paused. It is deliberately serialisable over CLI flags so the
+// and paused. It is deliberately serializable over CLI flags so the
 // production Launcher can shell out to the setec-pool-vm binary.
 type LaunchOptions struct {
 	// ClassName is the SandboxClass this entry belongs to. Recorded

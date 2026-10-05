@@ -246,12 +246,12 @@ type SandboxReconciler struct {
 	//
 	// All four of these may be nil. A nil value disables the
 	// corresponding feature and the reconciler falls through to its
-	// Phase 1 behaviour. This is the back-compat contract called out in
+	// Phase 1 behavior. This is the back-compat contract called out in
 	// design.md Requirement 8.
 
 	// ClassResolver maps a Sandbox to its effective SandboxClass. When
 	// nil, Sandboxes are reconciled without class constraint validation
-	// (Phase 1 behaviour).
+	// (Phase 1 behavior).
 	ClassResolver *class.Resolver
 
 	// MetricsCollector records Prometheus metrics on phase transitions.
@@ -293,7 +293,7 @@ type SandboxReconciler struct {
 	//
 	// Both fields may be nil. A nil Coordinator disables every Phase 3
 	// reconcile branch (snapshot create, restore, pause/resume); the
-	// reconciler then falls through to Phase 2 behaviour unchanged. The
+	// reconciler then falls through to Phase 2 behavior unchanged. The
 	// SnapshotReadyIndex (see SetupWithManager) is populated only when
 	// Coordinator is wired.
 
@@ -320,7 +320,7 @@ type SandboxReconciler struct {
 	// the same namespace by any other route carries no such label, is
 	// selected by no policy, and is consequently unrestricted. The
 	// baseline removes that state for the whole namespace, which is the
-	// one control here that does not depend on the workload labelling
+	// one control here that does not depend on the workload labeling
 	// itself correctly.
 	//
 	// It is set from --namespace-baseline-deny (default true). Turning it
@@ -334,7 +334,7 @@ type SandboxReconciler struct {
 // RBAC markers. These are consumed by controller-gen to generate the
 // ClusterRole at config/rbac/role.yaml. The markers live as a standalone
 // comment block (not attached to a declaration) because controller-gen
-// v0.20+ recognises +kubebuilder:rbac markers at package level; binding
+// v0.20+ recognizes +kubebuilder:rbac markers at package level; binding
 // them to a func's doc comment suppresses generation.
 //
 // +kubebuilder:rbac:groups=setec.zeroroot.ai,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
@@ -1954,7 +1954,7 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
 			default:
 				// Ready, Terminating, or a phase this version does not
-				// know. Honour the AfterCreate intent without
+				// know. Honor the AfterCreate intent without
 				// re-snapshotting, as before.
 				return ctrl.Result{}, nil
 			}

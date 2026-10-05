@@ -151,7 +151,7 @@ func requireTwoSandboxNodes(t *testing.T, backend string) {
 	}
 	if len(capable) < 2 {
 		t.Fatalf(`%s=1 asserts a second %s-capable node was provisioned for this run, but only %d schedulable node(s) carry %s=true: %v.
-Either the NodePool ceiling was never raised, the second m5zn.metal has not joined yet, or the runtime probe is mislabelling the nodes (setec#281 class — check the label before blaming this test).
+Either the NodePool ceiling was never raised, the second m5zn.metal has not joined yet, or the runtime probe is mislabeling the nodes (setec#281 class — check the label before blaming this test).
 Failing rather than skipping: the opt-in means capacity was paid for, so a silent skip would verify nothing at full cost.`,
 			drainCapacityEnv, backend, len(capable), label, capable)
 	}

@@ -143,7 +143,7 @@ func newSandboxClass(name string, spec setecv1alpha1.SandboxClassSpec) *setecv1a
 
 // minimalSpec returns a small but valid SandboxSpec for the happy-path tests.
 // Image is pinned to busybox since it is widely mirrored and has a small
-// uncompressed size that minimises microVM startup time.
+// uncompressed size that minimizes microVM startup time.
 //
 // SandboxClassName is set deliberately (setec#330): see e2eDefaultClassName.
 // A caller that needs the class-less resolution path clears it explicitly.

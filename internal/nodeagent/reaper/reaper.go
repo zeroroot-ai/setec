@@ -57,7 +57,7 @@ type SandboxClient interface {
 // Metrics receives reap outcomes. Fields may be nil (no-op) — keeps the reaper
 // decoupled from any specific Prometheus registry.
 type Metrics struct {
-	// Reaped is called once per successfully reaped sandbox, labelled by the
+	// Reaped is called once per successfully reaped sandbox, labeled by the
 	// sandbox's runtime handler.
 	Reaped func(handler string)
 	// Errors is called once per reap error (list or remove).
@@ -89,7 +89,7 @@ type OrphanReaper struct {
 	Metrics Metrics
 }
 
-// Run sweeps immediately, then on Interval, until ctx is cancelled. It is
+// Run sweeps immediately, then on Interval, until ctx is canceled. It is
 // intended to run in its own goroutine.
 func (r *OrphanReaper) Run(ctx context.Context) {
 	interval := r.Interval

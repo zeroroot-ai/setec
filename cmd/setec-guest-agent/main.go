@@ -73,7 +73,7 @@ func parseFlags(args []string) (Options, error) {
 	return Options{Port: uint32(port), UniquifyPort: uint32(uniquifyPort), RandomDevice: dev}, nil
 }
 
-// run serves reseed requests from ln until ctx is cancelled. Split
+// run serves reseed requests from ln until ctx is canceled. Split
 // from main so the loop is unit-testable with any net.Listener.
 func run(ctx context.Context, ln net.Listener, pool entropy.Pool, logf func(string, ...any)) error {
 	h := &entropy.GuestHandler{Pool: pool, Logf: logf}
@@ -81,7 +81,7 @@ func run(ctx context.Context, ln net.Listener, pool entropy.Pool, logf func(stri
 }
 
 // runUniquify serves restore-uniquification directives from ln until
-// ctx is cancelled. Split from main so the loop is unit-testable with
+// ctx is canceled. Split from main so the loop is unit-testable with
 // any net.Listener and injected appliers.
 func runUniquify(
 	ctx context.Context,

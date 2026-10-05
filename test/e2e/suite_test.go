@@ -779,7 +779,7 @@ func installChart() error {
 	if snapshotsEnabled() {
 		args = append(args,
 			"--set", "snapshots.enabled=true",
-			// The acknowledgement the chart requires (setec#326): it refuses
+			// The acknowledgment the chart requires (setec#326): it refuses
 			// to render a release that mounts snapshots.mTLS.caSecret without
 			// someone declaring the Secret exists, because a non-optional
 			// missing Secret wedges the Pods and surfaces as an opaque
@@ -1366,7 +1366,7 @@ func crdInstallArgs() []string {
 		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`).Output()
 	if err != nil {
 		// Cannot tell. Let helm try: on a cluster with no setec CRDs that is
-		// the correct behaviour anyway, and on one that has them the helm
+		// the correct behavior anyway, and on one that has them the helm
 		// error above is more legible than a guess made here.
 		fmt.Fprintf(os.Stderr, "e2e: could not list CRDs to determine ownership (%v); letting helm install them\n", err)
 		return nil

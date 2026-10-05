@@ -21,7 +21,7 @@ import (
 // Backend is populated by the caller from the probe's Name() return value
 // rather than set by the probe itself, keeping the result self-contained.
 // The JSON tag "-" intentionally omits Backend from the condition message
-// body — it is used as the map key in the labels.go serialisation instead.
+// body — it is used as the map key in the labels.go serialization instead.
 type CapabilityResult struct {
 	Backend   string            `json:"-"`
 	Available bool              `json:"available"`
@@ -40,7 +40,7 @@ type Probe interface {
 
 	// Check performs the capability detection and returns a result whose
 	// Backend field is left unset (the caller fills it from Name()). Check
-	// must not modify any host state and must honour context cancellation.
+	// must not modify any host state and must honor context cancellation.
 	Check(ctx context.Context) CapabilityResult
 }
 

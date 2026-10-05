@@ -81,7 +81,7 @@ func TestSandboxClassWebhook_RuntimeParams(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if !tc.wantErr {
 				if err != nil {
@@ -116,7 +116,7 @@ func TestAcceptedParamsIsDerivedNotRestated(t *testing.T) {
 	for _, k := range accepted {
 		cls := mkSandboxClass("derived", "", mkRuntime(setecruntime.BackendKataQEMU))
 		cls.Spec.Runtime.Params = map[string]string{k: "1"}
-		w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+		w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 		if _, err := w.ValidateCreate(context.Background(), cls); err != nil {
 			t.Errorf("AcceptedParams lists %q but admission rejects it: %v", k, err)
 		}

@@ -67,7 +67,7 @@ type containerdClient interface {
 // standard Docker-registry resolver for remote auth, and satisfies the
 // narrow ImagePuller interface consumed by ImageCache.
 //
-// The puller is safe for concurrent use: a mutex serialises pulls of
+// The puller is safe for concurrent use: a mutex serializes pulls of
 // the same reference so duplicate prefetch calls collapse into one
 // network round-trip.
 type ContainerdPuller struct {
@@ -148,7 +148,7 @@ func (p *ContainerdPuller) Pull(ctx context.Context, ref string) error {
 }
 
 // onceFor returns a sync.Once unique to the reference plus a results
-// cell callers read after Do returns. Serialising pulls of the same
+// cell callers read after Do returns. Serializing pulls of the same
 // ref means a burst of Prefetch calls for the same image makes exactly
 // one network round-trip.
 func (p *ContainerdPuller) onceFor(ref string) (*sync.Once, *pullResult) {

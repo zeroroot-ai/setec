@@ -160,7 +160,7 @@ func main() {
 	defer cancel()
 
 	// Bind the lease-pool background replenish loops to the process
-	// lifetime; they stop when ctx is cancelled on shutdown.
+	// lifetime; they stop when ctx is canceled on shutdown.
 	leaseSrv.Start(ctx)
 
 	go func() {

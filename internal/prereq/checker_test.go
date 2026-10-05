@@ -258,10 +258,10 @@ func TestCheck_NodeListError(t *testing.T) {
 // CheckMulti tests (task 11)
 // ---------------------------------------------------------------------------
 
-// TestCheckMulti_AllEnabledAllLabelled verifies that CheckMulti returns
+// TestCheckMulti_AllEnabledAllLabeled verifies that CheckMulti returns
 // RuntimeClassPresent=true and KataCapableNodes=true when every enabled
 // backend has a RuntimeClass and at least one Node with the backend label.
-func TestCheckMulti_AllEnabledAllLabelled(t *testing.T) {
+func TestCheckMulti_AllEnabledAllLabeled(t *testing.T) {
 	t.Parallel()
 
 	enabled := []string{"kata-fc", "gvisor"}

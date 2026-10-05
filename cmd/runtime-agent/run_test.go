@@ -151,7 +151,7 @@ func TestRunTickerDrivenSecondCycle(t *testing.T) {
 	}
 }
 
-// TestRunCtxCancelStopsLoop verifies that cancelling the context terminates
+// TestRunCtxCancelStopsLoop verifies that canceling the context terminates
 // Run promptly without blocking.
 func TestRunCtxCancelStopsLoop(t *testing.T) {
 	const nodeName = "cancel-node"
@@ -251,7 +251,7 @@ func TestProbeFailReason(t *testing.T) {
 	}
 }
 
-// TestConditionMessageContainsBackends is an integration-flavoured test that
+// TestConditionMessageContainsBackends is an integration-flavored test that
 // verifies the probe-result annotation written by a single probe cycle
 // contains the expected backend keys (JSON round-trip).
 //

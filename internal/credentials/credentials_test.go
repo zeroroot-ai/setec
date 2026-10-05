@@ -156,7 +156,7 @@ func TestClientCredentials_MissingCertFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Handshake behaviour. These assert what a peer observes — the
+// Handshake behavior. These assert what a peer observes — the
 // connection is accepted or refused — not the shape of the tls.Config.
 // Every refusal is paired with the acceptance case it is measured
 // against, so "nothing connected" cannot satisfy the suite.

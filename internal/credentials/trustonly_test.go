@@ -24,7 +24,7 @@ import (
 // does verify the peer (so it is not "TLS in name only"), and that it
 // really does present no identity (so nobody mistakes it for mTLS).
 //
-// The sharpest pairing available here is one unchanged server dialled
+// The sharpest pairing available here is one unchanged server dialed
 // under two configurations: refused against the host root store,
 // accepted against the bundle that signed it. Neither outcome is
 // reachable by accident.
@@ -50,7 +50,7 @@ func TestTrustOnlyCredentials_AcceptsServerInTheConfiguredBundle(t *testing.T) {
 	ca := newCA(t)
 	addr := serveTrustOnly(t, ca, tls.NoClientCert)
 
-	// The same server as the refusal case above, dialled with the
+	// The same server as the refusal case above, dialed with the
 	// bundle that signed it.
 	creds, err := credentials.TrustOnlyCredentials(credentials.TrustOnly{
 		CAFile: ca.writeBundle(t, filepath.Join(t.TempDir(), "ca.pem")),

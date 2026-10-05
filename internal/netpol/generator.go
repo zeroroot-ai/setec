@@ -111,7 +111,7 @@ var (
 	// reserved list is empty. An empty reserved list means every
 	// permissive rule resolves to a bare 0.0.0.0/0 — the unrestricted
 	// posture this package exists to prevent — so it is rejected at
-	// startup rather than silently honoured.
+	// startup rather than silently honored.
 	ErrNoReservedCIDRs = errors.New("netpol: at least one reserved CIDR is required")
 
 	// ErrNoReservedIPv4 and ErrNoReservedIPv6 are returned by
@@ -184,7 +184,7 @@ type Config struct {
 	// one, the entry becomes ipBlock peers for the addresses the name
 	// currently holds.
 	//
-	// A nil Resolver does NOT restore the old behaviour: an entry whose
+	// A nil Resolver does NOT restore the old behavior: an entry whose
 	// host is a name rather than a literal address is dropped and
 	// recorded on AnnotationUnresolved. There is no configuration that
 	// turns a named destination back into 0.0.0.0/0.
@@ -251,7 +251,7 @@ func (c Config) Validate() error {
 }
 
 // Generate translates a Sandbox's declared network policy into a
-// networkingv1.NetworkPolicy. Behaviour:
+// networkingv1.NetworkPolicy. Behavior:
 //
 //   - Network unset: treated as mode=none. Callers that want a class
 //     default applied must go through GenerateForClass.
@@ -292,7 +292,7 @@ func (c Config) Generate(ctx context.Context, sb *setecv1alpha1.Sandbox) (*netwo
 // only fills the gap, it never overrides an explicit choice (which the
 // admission webhook separately constrains to the class's
 // AllowedNetworkModes). A nil class, or a class with no declared default,
-// resolves to mode=none: the absence of a stated posture is not a licence
+// resolves to mode=none: the absence of a stated posture is not a license
 // to skip the policy.
 //
 // GenerateForClass never mutates sb or class.

@@ -39,18 +39,18 @@ func fakeClientWithNS(t *testing.T, objs ...client.Object) client.Client {
 		Build()
 }
 
-// gateNamespaceLabelled returns a corev1.Namespace whose name is devGateNamespace
+// gateNamespaceLabeled returns a corev1.Namespace whose name is devGateNamespace
 // and whose labels carry the allow-dev-runtimes gate.
-func gateNamespaceLabelled(label string) *corev1.Namespace {
+func gateNamespaceLabeled(label string) *corev1.Namespace {
 	return &corev1.Namespace{
 		Name:   devGateNamespace,
 		Labels: map[string]string{label: "true"},
 	}
 }
 
-// gateNamespaceUnlabelled returns a corev1.Namespace whose name is
+// gateNamespaceUnlabeled returns a corev1.Namespace whose name is
 // devGateNamespace but without the gate label.
-func gateNamespaceUnlabelled() *corev1.Namespace {
+func gateNamespaceUnlabeled() *corev1.Namespace {
 	return &corev1.Namespace{
 		Name: devGateNamespace,
 	}
@@ -236,27 +236,27 @@ func TestSandboxClassWebhook_ValidateCreate(t *testing.T) {
 			cfg:     baseConfig(),
 			class:   mkSandboxClass("x", "", mkRuntime(setecruntime.BackendKataFC, "bogus-runtime")),
 			wantErr: true,
-			wantMsg: "not a recognised backend",
+			wantMsg: "not a recognized backend",
 		},
 		// --- dev-only (runc) ---
 		{
-			name: "backend=runc, devOnly=true, gate namespace labelled → accept",
+			name: "backend=runc, devOnly=true, gate namespace labeled → accept",
 			cfg: func() *setecruntime.RuntimeConfig {
 				c := baseConfig()
 				c.Runtimes[setecruntime.BackendRunc] = setecruntime.BackendConfig{Enabled: true, DevOnly: true}
 				return c
 			}(),
-			nsObjs: []client.Object{gateNamespaceLabelled(allowLabel)},
+			nsObjs: []client.Object{gateNamespaceLabeled(allowLabel)},
 			class:  mkSandboxClass("runc", "", mkRuntime(setecruntime.BackendRunc)),
 		},
 		{
-			name: "backend=runc, devOnly=true, gate namespace NOT labelled → reject",
+			name: "backend=runc, devOnly=true, gate namespace NOT labeled → reject",
 			cfg: func() *setecruntime.RuntimeConfig {
 				c := baseConfig()
 				c.Runtimes[setecruntime.BackendRunc] = setecruntime.BackendConfig{Enabled: true, DevOnly: true}
 				return c
 			}(),
-			nsObjs:  []client.Object{gateNamespaceUnlabelled()},
+			nsObjs:  []client.Object{gateNamespaceUnlabeled()},
 			class:   mkSandboxClass("runc", "", mkRuntime(setecruntime.BackendRunc)),
 			wantErr: true,
 			wantMsg: "dev-only",
@@ -268,7 +268,7 @@ func TestSandboxClassWebhook_ValidateCreate(t *testing.T) {
 				c.Runtimes[setecruntime.BackendRunc] = setecruntime.BackendConfig{Enabled: true, DevOnly: false}
 				return c
 			}(),
-			nsObjs: []client.Object{gateNamespaceUnlabelled()},
+			nsObjs: []client.Object{gateNamespaceUnlabeled()},
 			class:  mkSandboxClass("runc", "", mkRuntime(setecruntime.BackendRunc)),
 		},
 		// --- no Runtime block → skip validation ---
@@ -365,9 +365,9 @@ func TestSandboxClassWebhook_DevOnlyFallback(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Runtimes[setecruntime.BackendRunc] = setecruntime.BackendConfig{Enabled: true, DevOnly: true}
 
-	t.Run("devOnly in fallback, gate labelled → accept", func(t *testing.T) {
+	t.Run("devOnly in fallback, gate labeled → accept", func(t *testing.T) {
 		t.Parallel()
-		c := fakeClientWithNS(t, gateNamespaceLabelled(defaultAllowDevLabel))
+		c := fakeClientWithNS(t, gateNamespaceLabeled(defaultAllowDevLabel))
 		w := webhookWith(c, cfg)
 		class := mkSandboxClass("x", "", mkRuntime(setecruntime.BackendKataFC, setecruntime.BackendRunc))
 		_, err := w.ValidateCreate(context.Background(), class)
@@ -376,14 +376,14 @@ func TestSandboxClassWebhook_DevOnlyFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("devOnly in fallback, gate not labelled → reject", func(t *testing.T) {
+	t.Run("devOnly in fallback, gate not labeled → reject", func(t *testing.T) {
 		t.Parallel()
-		c := fakeClientWithNS(t, gateNamespaceUnlabelled())
+		c := fakeClientWithNS(t, gateNamespaceUnlabeled())
 		w := webhookWith(c, cfg)
 		class := mkSandboxClass("x", "", mkRuntime(setecruntime.BackendKataFC, setecruntime.BackendRunc))
 		_, err := w.ValidateCreate(context.Background(), class)
 		if err == nil {
-			t.Fatal("expected error for unlabelled gate namespace")
+			t.Fatal("expected error for unlabeled gate namespace")
 		}
 		if !strings.Contains(err.Error(), "dev-only") {
 			t.Fatalf("error %q does not contain 'dev-only'", err.Error())

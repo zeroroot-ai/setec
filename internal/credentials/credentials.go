@@ -178,7 +178,7 @@ func (p *Provider) ServerCredentials(ctx context.Context) (grpccreds.TransportCr
 // authorization hook are set here rather than by the source, so no
 // source can weaken them.
 func (p *Provider) serverConfig(ctx context.Context) (*tls.Config, error) {
-	cert, pool, err := p.materialise(ctx)
+	cert, pool, err := p.materialize(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (p *Provider) ClientCredentials(ctx context.Context) (grpccreds.TransportCr
 // The TLS floor and the peer authorization hook are set here rather
 // than by the source, so no source can weaken them.
 func (p *Provider) clientConfig(ctx context.Context) (*tls.Config, error) {
-	cert, pool, err := p.materialise(ctx)
+	cert, pool, err := p.materialize(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -301,8 +301,8 @@ func (p *Provider) authorizeUnnamedPeer(ctx context.Context) func([][]byte, [][]
 	}
 }
 
-// materialise acquires both halves of the credential from the source.
-func (p *Provider) materialise(ctx context.Context) (tls.Certificate, *x509.CertPool, error) {
+// materialize acquires both halves of the credential from the source.
+func (p *Provider) materialize(ctx context.Context) (tls.Certificate, *x509.CertPool, error) {
 	cert, err := p.source.identity(ctx)
 	if err != nil {
 		return tls.Certificate{}, nil, err
@@ -367,7 +367,7 @@ func (s *fileSource) trustAnchors(context.Context) (*x509.CertPool, error) {
 // and does not authorize it. Narrowing that is what SPIFFE mode is for.
 func (s *fileSource) authorizePeer([][]*x509.Certificate) error { return nil }
 
-// rotates reports that files are read once, at startup — the behaviour
+// rotates reports that files are read once, at startup — the behavior
 // file mode has always had. Certificates delivered by cert-manager or
 // ESO are rotated by restarting the pod.
 func (s *fileSource) rotates() bool { return false }

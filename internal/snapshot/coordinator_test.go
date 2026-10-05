@@ -188,7 +188,7 @@ func newPodForSandbox(sb *setecv1alpha1.Sandbox, node string) *corev1.Pod {
 
 // newCoord assembles a Coordinator fed by the given fake client and
 // node-agent dialer. Metrics are always enabled (isolated registry)
-// so recording is exercised alongside the other behaviour.
+// so recording is exercised alongside the other behavior.
 func newCoord(c client.Client, dialer NodeAgentDialer) *Coordinator {
 	rec := testutil.NewFakeEventsRecorder(32)
 	return &Coordinator{

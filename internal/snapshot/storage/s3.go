@@ -69,7 +69,7 @@ type S3Config struct {
 // checkpoints never buffer fully in node-agent memory. Open verifies
 // the SHA256 while streaming and surfaces a mismatch as ErrCorrupted
 // at read time. Delete removes the object pair; an object store
-// cannot honour the interface's overwrite-before-unlink guidance, so
+// cannot honor the interface's overwrite-before-unlink guidance, so
 // callers MUST front this backend with EncryptedBackend — destroying
 // the sealed DEK is what actually erases an S3 checkpoint
 // (crypto-erase, ADR-0145 invariant 5). That destroy removes every

@@ -101,7 +101,7 @@ type Collectors struct {
 	//               "exec_failed"       — binary present but execution failed
 	//               "timeout"           — probe did not complete within deadline
 	//               "permission_denied" — insufficient privilege to run probe
-	//               "unknown"           — uncategorised error (catch-all)
+	//               "unknown"           — uncategorized error (catch-all)
 	NodeRuntimeProbeErrors *prometheus.CounterVec
 }
 
@@ -241,7 +241,7 @@ func (c *Collectors) ObserveColdStart(runtime, class string, d time.Duration) {
 // SetActive adjusts the active-sandbox gauge by delta (positive on
 // Pending→Running, negative on Running→Completed/Failed). The controller
 // is responsible for the signed delta; this helper enforces no invariants
-// beyond label normalisation.
+// beyond label normalization.
 func (c *Collectors) SetActive(tenant, class string, delta int) {
 	if c == nil {
 		return
@@ -300,7 +300,7 @@ func (c *Collectors) SetNodeRuntimeAvailable(runtime string, available bool) {
 //	"exec_failed"       — binary present but execution failed
 //	"timeout"           — probe did not complete within deadline
 //	"permission_denied" — insufficient privilege to run probe
-//	"unknown"           — uncategorised error (catch-all)
+//	"unknown"           — uncategorized error (catch-all)
 func (c *Collectors) IncNodeProbeError(backend, reason string) {
 	if c == nil {
 		return

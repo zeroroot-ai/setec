@@ -82,7 +82,7 @@ func TestSandboxClassWebhook_GuestImageIsRefused(t *testing.T) {
 			cls := mkSandboxClass("gi", "", mkRuntime(setecruntime.BackendKataFC))
 			tc.mutate(cls)
 
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 			_, err := w.ValidateCreate(context.Background(), cls)
 			if !tc.wantErr {
 				if err != nil {
@@ -112,7 +112,7 @@ func TestSandboxClassWebhook_GuestImageRefusedOnUpdateToo(t *testing.T) {
 	updated := mkSandboxClass("gi-upd", "", mkRuntime(setecruntime.BackendKataFC))
 	updated.Spec.KernelImage = "ghcr.io/org/hardened-kernel:v2"
 
-	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 	if _, err := w.ValidateUpdate(context.Background(), old, updated); err == nil {
 		t.Fatal("a live class was updated to name a guest image it cannot get")
 	}
@@ -128,7 +128,7 @@ func TestSandboxClassWebhook_GuestImageRefusedWithNilRuntime(t *testing.T) {
 	cls := mkSandboxClass("gi-nil", "", nil)
 	cls.Spec.RootfsImage = "ghcr.io/org/minimal-rootfs:v3"
 
-	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 	_, err := w.ValidateCreate(context.Background(), cls)
 	if err == nil {
 		t.Fatal("a class with no Runtime block smuggled a guest image through")
@@ -141,7 +141,7 @@ func TestSandboxClassWebhook_GuestImageRefusedWithNilRuntime(t *testing.T) {
 // TestGuestImageFieldsHaveNoReader is the premise, asserted rather than
 // believed. If someone wires either field into a controller or the podspec
 // builder, this test fails and tells them to delete the refusal above instead
-// of leaving two contradictory behaviours in the tree.
+// of leaving two contradictory behaviors in the tree.
 func TestGuestImageFieldsHaveNoReader(t *testing.T) {
 	t.Parallel()
 
