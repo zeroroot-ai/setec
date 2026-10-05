@@ -225,3 +225,54 @@ func TestConstraintViolation_String(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }
+
+// TestValidate_Scratch covers the scratch ceiling (ADR-0146, setec#172): the
+// default ceiling, a class override, a request below the class and a
+// request above it.
+func TestValidate_Scratch(t *testing.T) {
+	t.Parallel()
+	q := func(s string) *resource.Quantity { v := resource.MustParse(s); return &v }
+	sb := func(scratch *resource.Quantity) *setecv1alpha1.Sandbox {
+		return &setecv1alpha1.Sandbox{Spec: setecv1alpha1.SandboxSpec{
+			Resources: setecv1alpha1.Resources{VCPU: 1, Memory: qty("1Gi"), Scratch: scratch},
+		}}
+	}
+	cls := func(def, max *resource.Quantity) *setecv1alpha1.SandboxClass {
+		c := &setecv1alpha1.SandboxClass{Name: "c"}
+		if def != nil {
+			c.Spec.DefaultResources = &setecv1alpha1.Resources{VCPU: 1, Memory: qty("1Gi"), Scratch: def}
+		}
+		if max != nil {
+			c.Spec.MaxResources = &setecv1alpha1.Resources{VCPU: 8, Memory: qty("16Gi"), Scratch: max}
+		}
+		return c
+	}
+	for _, tc := range []struct {
+		name   string
+		sb     *setecv1alpha1.Sandbox
+		cls    *setecv1alpha1.SandboxClass
+		reject bool
+	}{
+		{"default: nothing set", sb(nil), cls(nil, nil), false},
+		{"request at the 10Gi default ceiling", sb(q("10Gi")), cls(nil, nil), false},
+		{"request above the 10Gi default ceiling", sb(q("12Gi")), cls(nil, nil), true},
+		{"class raises the ceiling, request under it", sb(q("30Gi")), cls(nil, q("40Gi")), false},
+		{"request above the class ceiling", sb(q("41Gi")), cls(nil, q("40Gi")), true},
+		{"request below the class", sb(q("1Gi")), cls(q("5Gi"), q("40Gi")), false},
+		{"class default above the class ceiling", sb(nil), cls(q("6Gi"), q("5Gi")), true},
+		{"zero request", sb(q("0")), cls(nil, nil), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Validate(tc.sb, tc.cls)
+			got := false
+			for _, x := range v {
+				if x.Field == "spec.resources.scratch" {
+					got = true
+				}
+			}
+			if got != tc.reject {
+				t.Fatalf("scratch refused = %t, want %t (%v)", got, tc.reject, v)
+			}
+		})
+	}
+}

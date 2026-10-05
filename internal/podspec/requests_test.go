@@ -62,7 +62,7 @@ func TestBuild_ClassRequests_SplitFromLimits(t *testing.T) {
 func TestBuild_ClassRequests_NilKeepsGuaranteed(t *testing.T) {
 	t.Parallel()
 	res := buildWithRequests(t, nil)
-	if diff := cmp.Diff(res.Limits, res.Requests); diff != "" {
+	if diff := cmp.Diff(cpuMem(res.Limits), cpuMem(res.Requests)); diff != "" {
 		t.Errorf("requests != limits with no class reservation (-lim +req):\n%s", diff)
 	}
 }
@@ -86,7 +86,16 @@ func TestBuild_ClassRequests_BoundedByLimits(t *testing.T) {
 		CPU:    quantityPtr("8"),
 		Memory: quantityPtr("16Gi"),
 	})
-	if diff := cmp.Diff(res.Limits, res.Requests); diff != "" {
+	if diff := cmp.Diff(cpuMem(res.Limits), cpuMem(res.Requests)); diff != "" {
 		t.Errorf("an over-budget reservation must be bounded to the limits (-lim +req):\n%s", diff)
+	}
+}
+
+// cpuMem keeps the CPU and memory of a resource list. Those two decide the
+// QoS class. Ephemeral storage has its own request and limit (ADR-0146).
+func cpuMem(rl corev1.ResourceList) corev1.ResourceList {
+	return corev1.ResourceList{
+		corev1.ResourceCPU:    rl[corev1.ResourceCPU],
+		corev1.ResourceMemory: rl[corev1.ResourceMemory],
 	}
 }

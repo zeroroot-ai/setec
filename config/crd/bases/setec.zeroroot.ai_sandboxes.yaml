@@ -454,6 +454,18 @@ spec:
                       Kubernetes resource.Quantity (e.g. "2Gi", "512Mi").
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                  scratch:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Scratch is the size limit of the writable scratch volume at /tmp.
+                      The Pod also gets an ephemeral-storage limit of Scratch plus 1 GiB.
+                      Unset takes the class default (defaultResources.scratch), else
+                      10 GiB. A Sandbox may ask for less than its class permits
+                      (maxResources.scratch, else 10 GiB), never for more.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   vcpu:
                     description: VCPU is the number of virtual CPUs to assign to the
                       microVM.
@@ -465,6 +477,10 @@ spec:
                 - memory
                 - vcpu
                 type: object
+                x-kubernetes-validations:
+                - message: memory must not exceed 64Gi
+                  rule: quantity(string(self.memory)).compareTo(quantity('64Gi'))
+                    <= 0
               sandboxClassName:
                 description: |-
                   SandboxClassName is the name of the cluster-scoped SandboxClass this

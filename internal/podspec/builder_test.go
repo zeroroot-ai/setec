@@ -149,7 +149,7 @@ func TestBuild_Success_SmallResources(t *testing.T) {
 	}
 	// With no class reservation, requests and limits are identical
 	// (Guaranteed QoS); see requests_test.go for the split.
-	if diff := cmp.Diff(req, lim); diff != "" {
+	if diff := cmp.Diff(cpuMem(req), cpuMem(lim)); diff != "" {
 		t.Errorf("requests != limits (-req +lim):\n%s", diff)
 	}
 }
