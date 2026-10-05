@@ -25,27 +25,20 @@ func ReadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	return ed25519.NewKeyFromSeed(seed), nil
 }
 
-// ReadPublicKeys reads one base64 ed25519 public key on each line of path.
-// More than one key lets the install rotate the signing key.
-func ReadPublicKeys(path string) ([]ed25519.PublicKey, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // a mounted ConfigMap
-	if err != nil {
-		return nil, err
-	}
-	var keys []ed25519.PublicKey
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		k, err := base64.StdEncoding.DecodeString(line)
+// ParsePublicKeys reads base64 ed25519 public keys. More than one key lets
+// the install rotate the signing key. An empty list is refused: a node that
+// trusts no key must not start a machine.
+func ParsePublicKeys(encoded []string) ([]ed25519.PublicKey, error) {
+	keys := make([]ed25519.PublicKey, 0, len(encoded))
+	for _, e := range encoded {
+		k, err := base64.StdEncoding.DecodeString(strings.TrimSpace(e))
 		if err != nil || len(k) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("diskbuilder: %s holds a line that is not a base64 ed25519 public key", path)
+			return nil, fmt.Errorf("diskbuilder: %q is not a base64 ed25519 public key", e)
 		}
 		keys = append(keys, ed25519.PublicKey(k))
 	}
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("diskbuilder: %s holds no public key", path)
+		return nil, fmt.Errorf("diskbuilder: no public key to check a disk with")
 	}
 	return keys, nil
 }

@@ -52,6 +52,9 @@ type LauncherOptions struct {
 	// DiskRepo is the repository of the signed image disks
 	// (setec-disk-builder). Required.
 	DiskRepo string
+	// DiskKeys are the base64 ed25519 public keys that may sign a disk.
+	// Required: the launcher refuses a disk that no key signed.
+	DiskKeys []string
 	// ResolverIPs are the DNS servers of the Pod. The launcher gives the
 	// resolv.conf of the Pod to the machine.
 	ResolverIPs []string
@@ -76,6 +79,7 @@ type launcherSpec struct {
 	MemoryMiB     int64           `json:"memoryMiB"`
 	ImageRef      string          `json:"imageRef"`
 	DiskRepo      string          `json:"diskRepo"`
+	DiskKeys      []string        `json:"diskKeys"`
 	ImageDisk     string          `json:"imageDisk"`
 	WritableDisk  string          `json:"writableDisk"`
 	WritableBytes int64           `json:"writableBytes"`
@@ -113,8 +117,8 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	if opts.Image == "" {
 		return nil, fmt.Errorf("podspec: the launcher image is empty")
 	}
-	if opts.DiskRepo == "" {
-		return nil, fmt.Errorf("podspec: the disk repository is empty")
+	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
+		return nil, fmt.Errorf("podspec: the disk repository or the disk keys are empty")
 	}
 	if !strings.Contains(sb.Spec.Image, "@sha256:") {
 		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
@@ -146,6 +150,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
 		ImageRef:      sb.Spec.Image,
 		DiskRepo:      opts.DiskRepo,
+		DiskKeys:      opts.DiskKeys,
 		ImageDisk:     launcherWorkMountPath + "/image.sqfs",
 		WritableDisk:  launcherWorkMountPath + "/writable.ext4",
 		WritableBytes: work.Value(),

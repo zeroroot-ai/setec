@@ -100,6 +100,7 @@ func launcherSandbox() *setecv1alpha1.Sandbox {
 func launcherOpts() LauncherOptions {
 	return LauncherOptions{
 		Image: "ghcr.io/zeroroot-ai/setec-launcher:test", DiskRepo: "ghcr.io/zeroroot-ai/setec-disks",
+		DiskKeys:    []string{"MCowBQYDK2VwAyEAexampleexampleexampleexampleexampleexa="},
 		ResolverIPs: []string{"1.1.1.1"},
 	}
 }
@@ -142,7 +143,7 @@ func TestBuildLauncher_SpecIsTheLauncherSpec(t *testing.T) {
 		t.Fatalf("the launcher refuses the spec of the operator: %v", err)
 	}
 	if s.VCPU != 2 || s.MemoryMiB != 2048 || s.Source.Boot == nil || s.Workload == nil || s.Workload.Argv[0] != "nmap" ||
-		s.ImageRef == "" || s.DiskRepo == "" {
+		s.ImageRef == "" || s.DiskRepo == "" || len(s.DiskKeys) != 1 {
 		t.Fatalf("the launcher read %+v", s)
 	}
 }

@@ -146,6 +146,7 @@ field diskbuilder.ImageConfig.WorkingDir	# internal/diskbuilder/diskbuilder.go
 
 # The launcher spec JSON that the operator writes into the launcher Pod; the
 # launcher reads it (TestBuildLauncher_SpecIsTheLauncherSpec ties both sides).
+field podspec.launcherSpec.DiskKeys	# internal/podspec/launcher.go
 field podspec.launcherBoot.BootArgs	# internal/podspec/launcher.go
 field podspec.launcherBoot.Initrd	# internal/podspec/launcher.go
 field podspec.launcherBoot.Kernel	# internal/podspec/launcher.go

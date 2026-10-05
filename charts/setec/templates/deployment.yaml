@@ -90,6 +90,9 @@ spec:
             {{- if not .diskRepo }}
             {{- fail "runtimes.launcher.diskRepo is required when runtimes.launcher.enabled is true: each launcher machine boots the signed disk of its image from there" }}
             {{- end }}
+            {{- if not .diskBuilder.publicKeys }}
+            {{- fail "runtimes.launcher.diskBuilder.publicKeys is required when runtimes.launcher.enabled is true: each launcher checks the disk signature with them" }}
+            {{- end }}
             {{- if not .diskBuilder.signingSecret }}
             {{- fail "runtimes.launcher.diskBuilder.signingSecret is required when runtimes.launcher.enabled is true: it signs each image disk" }}
             {{- end }}
@@ -101,6 +104,9 @@ spec:
             - --disk-registry-secret={{ . }}
             {{- end }}
             - --operator-namespace={{ $.Values.namespace }}
+            {{- range .diskBuilder.publicKeys }}
+            - --disk-public-key={{ . }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.snapshots.enabled }}

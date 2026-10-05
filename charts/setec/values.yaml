@@ -175,6 +175,10 @@ runtimes:
       # -- registrySecret is an optional kubernetes.io/dockerconfigjson
       # Secret with the push credentials of diskRepo.
       registrySecret: ""
+      # -- publicKeys are the base64 ed25519 public keys of signingSecret.
+      # Each launcher refuses a disk that none of them signed. List two
+      # while the signing key rotates. Required when enabled.
+      publicKeys: []
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
     # CI where you want to exercise the Setec control plane without a

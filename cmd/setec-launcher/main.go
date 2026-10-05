@@ -30,14 +30,12 @@ func main() {
 		fcBinary = flag.String("firecracker", "/usr/local/bin/firecracker", "the firecracker executable")
 		grace    = flag.Duration("grace", 10*time.Second, "how long a stopping guest may take before a kill")
 		termLog  = flag.String("termination-log", "/dev/termination-log", "where the typed failure reason goes")
-		keys     = flag.String("disk-keys", "/etc/setec/disk-keys/keys",
-			"the base64 ed25519 public keys that may sign an image disk, one on each line")
 	)
 	flag.Parse()
-	os.Exit(run(*specPath, *fcBinary, *grace, *termLog, *keys))
+	os.Exit(run(*specPath, *fcBinary, *grace, *termLog))
 }
 
-func run(specPath, fcBinary string, grace time.Duration, termLog, keysPath string) int {
+func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -54,7 +52,7 @@ func run(specPath, fcBinary string, grace time.Duration, termLog, keysPath strin
 		Grace:      grace,
 		AfterStart: guest.AfterStart(spec.Workload),
 		FetchDisk: func(ctx context.Context, s *launcher.Spec) error {
-			keys, err := diskbuilder.ReadPublicKeys(keysPath)
+			keys, err := diskbuilder.ParsePublicKeys(s.DiskKeys)
 			if err != nil {
 				return err
 			}

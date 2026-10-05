@@ -35,6 +35,8 @@ type Spec struct {
 	// of the disks (setec-disk-builder).
 	ImageRef string `json:"imageRef,omitempty"`
 	DiskRepo string `json:"diskRepo,omitempty"`
+	// DiskKeys are the base64 ed25519 public keys that may sign the disk.
+	DiskKeys []string `json:"diskKeys,omitempty"`
 	// WritableDisk is the writable layer of this Sandbox (vdb). The
 	// launcher makes it as a sparse file of WritableBytes when it does not
 	// exist.

@@ -136,6 +136,7 @@ func main() {
 		diskSigningSecret     string
 		diskRegistrySecret    string
 		operatorNamespace     string
+		diskPublicKeys        []string
 		otlpEndpoint          string
 		otlpInsecure          bool
 		otlpCAFile            string
@@ -188,6 +189,8 @@ func main() {
 		"Secret in the operator namespace with the ed25519 seed (key \"seed\") that signs each disk.")
 	pflag.StringVar(&diskRegistrySecret, "disk-registry-secret", "",
 		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
+	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
+		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
 	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"Namespace of the operator, where the disk builder Jobs run.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
@@ -375,9 +378,10 @@ func main() {
 		case runtimepkg.BackendRunc:
 			runtimeRegistry.Register(runtimepkg.NewRuncDispatcher(bc))
 		case runtimepkg.BackendLauncher:
-			if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") {
+			if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") ||
+				len(diskPublicKeys) == 0 {
 				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image, --disk-repo, "+
-					"--disk-builder-image, --disk-signing-secret and --operator-namespace are required")
+					"--disk-builder-image, --disk-signing-secret, --disk-public-key and --operator-namespace are required")
 				os.Exit(1)
 			}
 			runtimeRegistry.Register(runtimepkg.NewLauncherDispatcher())
@@ -499,6 +503,7 @@ func main() {
 		KeepaliveImage:        sessionKeepaliveImage,
 		LauncherImage:         launcherImage,
 		DiskRepo:              diskRepo,
+		DiskKeys:              diskPublicKeys,
 		DiskBuilder: controller.DiskBuilderConfig{
 			Image: diskBuilderImage, Namespace: operatorNamespace,
 			SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
