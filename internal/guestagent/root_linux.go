@@ -33,6 +33,7 @@ const (
 	fsTmpfs    = "tmpfs"
 	dirDev     = "/dev"
 	dirProc    = "/proc"
+	dirSys     = "/sys"
 )
 
 // PrepareRoot runs once as PID 1. It mounts the kernel file systems, joins
@@ -44,7 +45,7 @@ func PrepareRoot(lowerFS string) error {
 	if lowerFS == "" {
 		lowerFS = "squashfs"
 	}
-	for _, d := range []string{dirProc, "/sys", dirDev, "/lower", "/rw", NewRoot} {
+	for _, d := range []string{dirProc, dirSys, dirDev, "/lower", "/rw", NewRoot} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -56,7 +57,7 @@ func PrepareRoot(lowerFS string) error {
 	}{
 		{fsDevtmpfs, dirDev, fsDevtmpfs, 0, ""},
 		{fsProc, dirProc, fsProc, 0, ""},
-		{fsSysfs, "/sys", fsSysfs, 0, ""},
+		{fsSysfs, dirSys, fsSysfs, 0, ""},
 		{ImageDevice, "/lower", lowerFS, syscall.MS_RDONLY, ""},
 		{WritableDevice, "/rw", "ext4", 0, ""},
 	}
@@ -76,7 +77,7 @@ func PrepareRoot(lowerFS string) error {
 	}
 	inner := []struct{ src, dst, fs, data string }{
 		{fsProc, dirProc, fsProc, ""},
-		{fsSysfs, "/sys", fsSysfs, ""},
+		{fsSysfs, dirSys, fsSysfs, ""},
 		{fsDevtmpfs, dirDev, fsDevtmpfs, ""},
 		{"devpts", "/dev/pts", "devpts", "newinstance,ptmxmode=0666"},
 		{fsTmpfs, "/dev/shm", fsTmpfs, "mode=1777"},

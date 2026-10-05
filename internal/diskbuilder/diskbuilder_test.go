@@ -190,7 +190,7 @@ func TestPack_IsReproducible(t *testing.T) {
 	}
 	img := testImage(t)
 	dir := t.TempDir()
-	var sums []string
+	sums := make([]string, 0, 2)
 	for _, n := range []string{"a", "b"} {
 		p := filepath.Join(dir, n)
 		if err := Pack(t.Context(), img, p); err != nil {

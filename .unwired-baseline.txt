@@ -114,7 +114,7 @@ func podspec.BuildLauncher	# internal/podspec/launcher.go
 # JSON fields; the measurer counts only reads in Go.
 field launcher.bootSource.BootArgs	# internal/launcher/vmconfig.go
 field launcher.bootSource.InitrdPath	# internal/launcher/vmconfig.go
-field launcher.bootSource.KernelImagePath	# internal/launcher/vmconfig.go
+field launcher.bootSource.Kernel	# internal/launcher/vmconfig.go
 field launcher.drive.DriveID	# internal/launcher/vmconfig.go
 field launcher.drive.IsReadOnly	# internal/launcher/vmconfig.go
 field launcher.drive.IsRootDevice	# internal/launcher/vmconfig.go

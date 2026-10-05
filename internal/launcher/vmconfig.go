@@ -38,9 +38,9 @@ type vmConfig struct {
 }
 
 type bootSource struct {
-	KernelImagePath string `json:"kernel_image_path"`
-	InitrdPath      string `json:"initrd_path,omitempty"`
-	BootArgs        string `json:"boot_args"`
+	Kernel     string `json:"kernel_image_path"`
+	InitrdPath string `json:"initrd_path,omitempty"`
+	BootArgs   string `json:"boot_args"`
 }
 
 type drive struct {
@@ -89,9 +89,9 @@ func (s *Spec) bootConfig(guestMAC string) vmConfig {
 	}
 	return vmConfig{
 		BootSource: bootSource{
-			KernelImagePath: s.Source.Boot.Kernel,
-			InitrdPath:      s.Source.Boot.Initrd,
-			BootArgs:        args,
+			Kernel:     s.Source.Boot.Kernel,
+			InitrdPath: s.Source.Boot.Initrd,
+			BootArgs:   args,
 		},
 		Drives:            s.drives(),
 		MachineConfig:     machine{VCPUCount: s.VCPU, MemSizeMiB: s.MemoryMiB},
