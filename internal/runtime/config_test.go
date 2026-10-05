@@ -470,3 +470,28 @@ func TestIsDevOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestRuntimeClassBackends_LeavesOutTheLauncher proves that the prereq check
+// never looks for a RuntimeClass of the launcher, which has none.
+func TestRuntimeClassBackends_LeavesOutTheLauncher(t *testing.T) {
+	t.Parallel()
+	cfg := &RuntimeConfig{Runtimes: map[string]BackendConfig{
+		BackendKataFC:   {Enabled: true, RuntimeClassName: "kata-fc"},
+		BackendGVisor:   {Enabled: false, RuntimeClassName: "gvisor"},
+		BackendLauncher: {Enabled: true, RuntimeClassName: "launcher"},
+	}}
+	backends, names := cfg.RuntimeClassBackends()
+	if len(backends) != 1 || backends[0] != BackendKataFC {
+		t.Fatalf("backends = %v, want [%s]", backends, BackendKataFC)
+	}
+	if len(names) != 1 || names[BackendKataFC] != "kata-fc" {
+		t.Fatalf("class names = %v", names)
+	}
+
+	onlyLauncher := &RuntimeConfig{Runtimes: map[string]BackendConfig{
+		BackendLauncher: {Enabled: true},
+	}}
+	if backends, names := onlyLauncher.RuntimeClassBackends(); len(backends) != 0 || len(names) != 0 {
+		t.Fatalf("launcher only: backends = %v, names = %v; want none", backends, names)
+	}
+}

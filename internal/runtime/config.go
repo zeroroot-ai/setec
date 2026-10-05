@@ -285,6 +285,24 @@ func (c *RuntimeConfig) EnabledBackends() []string {
 	return enabled
 }
 
+// RuntimeClassBackends returns the sorted enabled backends that run their
+// Pods on a RuntimeClass, and the RuntimeClass name of each. The launcher
+// backend is not in the result: its Pod runs on the default runtime of the
+// node, so no RuntimeClass and no node label exist for it, and a check for
+// them would hold each launcher Sandbox Pending.
+func (c *RuntimeConfig) RuntimeClassBackends() ([]string, map[string]string) {
+	backends := make([]string, 0, len(c.Runtimes))
+	classNames := make(map[string]string, len(c.Runtimes))
+	for _, name := range c.EnabledBackends() {
+		if name == BackendLauncher {
+			continue
+		}
+		backends = append(backends, name)
+		classNames[name] = c.Runtimes[name].RuntimeClassName
+	}
+	return backends, classNames
+}
+
 // enabledSet returns the enabled backends as a set (map to bool) for O(1)
 // lookup during validation.
 func (c *RuntimeConfig) enabledSet() map[string]bool {

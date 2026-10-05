@@ -1076,13 +1076,8 @@ func nextLifecycleDeadline(
 // without them (setec#115).
 func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
 	{
-		classNames := make(map[string]string, len(r.RuntimeCfg.Runtimes))
-		for name, bc := range r.RuntimeCfg.Runtimes {
-			if bc.Enabled {
-				classNames[name] = bc.RuntimeClassName
-			}
-		}
-		prereqResult, err := prereq.CheckMulti(ctx, r.Client, r.RuntimeCfg.EnabledBackends(), classNames, r.NodeSelectorLabel)
+		backends, classNames := r.RuntimeCfg.RuntimeClassBackends()
+		prereqResult, err := prereq.CheckMulti(ctx, r.Client, backends, classNames, r.NodeSelectorLabel)
 		if err != nil {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("prereq check: %w", err))
 		}

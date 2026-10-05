@@ -712,15 +712,10 @@ func runStartupPrereqCheck(
 		return
 	}
 
-	// Build the per-backend class-name map for the multi-backend prereq check.
-	classNames := make(map[string]string, len(runtimeCfg.Runtimes))
-	for name, bc := range runtimeCfg.Runtimes {
-		if bc.Enabled {
-			classNames[name] = bc.RuntimeClassName
-		}
-	}
+	// The prereq check covers each enabled backend that uses a RuntimeClass.
+	backends, classNames := runtimeCfg.RuntimeClassBackends()
 
-	result, err := prereq.CheckMulti(ctx, c, runtimeCfg.EnabledBackends(), classNames, nodeSelectorLabel)
+	result, err := prereq.CheckMulti(ctx, c, backends, classNames, nodeSelectorLabel)
 	if err != nil {
 		setupLog.Info("startup prerequisite check encountered an API error",
 			"error", err.Error(),
