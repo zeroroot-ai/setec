@@ -243,6 +243,13 @@ type SandboxReconciler struct {
 	// workspace (setec#91). Set from --session-keepalive-image.
 	KeepaliveImage string
 
+	// LauncherImage and DiskRepo serve the launcher backend
+	// (docs/design/runtime.md). A Sandbox whose class selects the launcher
+	// gets a launcher Pod from this image, and its machine boots the signed
+	// disk of its image digest from DiskRepo.
+	LauncherImage string
+	DiskRepo      string
+
 	// --- Phase 2 optional dependencies ---
 	//
 	// All four of these may be nil. A nil value disables the
@@ -1666,7 +1673,16 @@ func (r *SandboxReconciler) createPod(
 	// A session with no command boots the keepalive from this image
 	// (setec#7). The builder refuses such a Sandbox when it is empty.
 	opts.KeepaliveImage = r.KeepaliveImage
-	pod, err := podspec.BuildWithOptions(sb, rcName, opts)
+	var pod *corev1.Pod
+	if sel != nil && sel.Backend == runtimepkg.BackendLauncher {
+		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
+			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
+			// Scratch here once both are on main; until then the default holds.
+			Image: r.LauncherImage, DiskRepo: r.DiskRepo, ResolverIPs: resolvers,
+		})
+	} else {
+		pod, err = podspec.BuildWithOptions(sb, rcName, opts)
+	}
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))
 	}

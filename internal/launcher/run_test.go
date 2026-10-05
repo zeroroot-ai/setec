@@ -253,3 +253,18 @@ func TestRun_FetchesTheDiskBeforeTheNetworkJoin(t *testing.T) {
 		t.Fatal("the disk was fetched after the network join")
 	}
 }
+
+// TestReadSpec_FromTheEnvironment reads the spec the way the operator passes
+// it, and checks that the env wins over the file.
+func TestReadSpec_FromTheEnvironment(t *testing.T) {
+	s := testSpec(t)
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(SpecEnv, string(raw))
+	got, err := ReadSpec("/no/such/file")
+	if err != nil || got.VCPU != 2 || got.ImageDisk != s.ImageDisk {
+		t.Fatalf("ReadSpec = %+v, %v", got, err)
+	}
+}

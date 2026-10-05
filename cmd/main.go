@@ -130,6 +130,8 @@ func main() {
 		multiTenancyEnabled   bool
 		tenantLabelKey        string
 		sessionKeepaliveImage string
+		launcherImage         string
+		diskRepo              string
 		otlpEndpoint          string
 		otlpInsecure          bool
 		otlpCAFile            string
@@ -170,6 +172,12 @@ func main() {
 	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
 		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
 			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
+	pflag.StringVar(&launcherImage, "launcher-image", "",
+		"Image of setec-launcher, with Firecracker, the guest kernel and the guest agent. "+
+			"Required when the launcher backend is enabled (docs/design/runtime.md).")
+	pflag.StringVar(&diskRepo, "disk-repo", "",
+		"Repository of the signed image disks that setec-disk-builder makes. "+
+			"Required when the launcher backend is enabled.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
@@ -354,6 +362,12 @@ func main() {
 			runtimeRegistry.Register(runtimepkg.NewGVisorDispatcher(bc))
 		case runtimepkg.BackendRunc:
 			runtimeRegistry.Register(runtimepkg.NewRuncDispatcher(bc))
+		case runtimepkg.BackendLauncher:
+			if launcherImage == "" || diskRepo == "" {
+				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image and --disk-repo are required")
+				os.Exit(1)
+			}
+			runtimeRegistry.Register(runtimepkg.NewLauncherDispatcher())
 		default:
 			setupLog.Info("unknown backend in runtimes config; skipping", "backend", backend)
 		}
@@ -470,6 +484,8 @@ func main() {
 		NetPol:                netpolCfg,
 		NamespaceBaselineDeny: nsBaselineDeny,
 		KeepaliveImage:        sessionKeepaliveImage,
+		LauncherImage:         launcherImage,
+		DiskRepo:              diskRepo,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)

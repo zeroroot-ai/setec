@@ -10,18 +10,19 @@ import (
 	"github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
-// buildAllBackendsRegistry returns a Registry pre-populated with all four real
-// Dispatcher implementations, each with a minimal BackendConfig.
+// buildAllBackendsRegistry returns a Registry pre-populated with every real
+// Dispatcher implementation, each with a minimal BackendConfig.
 func buildAllBackendsRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(NewKataFCDispatcher(BackendConfig{RuntimeClassName: BackendKataFC}))
 	r.Register(NewKataQEMUDispatcher(BackendConfig{RuntimeClassName: BackendKataQEMU}))
 	r.Register(NewGVisorDispatcher(BackendConfig{RuntimeClassName: BackendGVisor}))
 	r.Register(NewRuncDispatcher(BackendConfig{RuntimeClassName: BackendRunc}))
+	r.Register(NewLauncherDispatcher())
 	return r
 }
 
-func TestRegistry_EnabledBackends_AllFour(t *testing.T) {
+func TestRegistry_EnabledBackends_All(t *testing.T) {
 	t.Parallel()
 	r := buildAllBackendsRegistry()
 	got := r.EnabledBackends()

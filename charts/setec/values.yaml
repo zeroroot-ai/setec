@@ -145,6 +145,24 @@ runtimes:
   # runtime. NO isolation beyond namespaces and seccomp. DEV/DEBUG ONLY;
   # gated behind the namespace label setec.zeroroot.ai/allow-dev-runtimes
   # by the admission webhook. Never use in production tenancy scenarios.
+  # -- launcher is the launcher runtime (docs/design/runtime.md): one
+  # Firecracker machine in a launcher Pod that is not privileged. It needs
+  # no RuntimeClass and no node label: the Pod asks for the device resources
+  # of devicePlugin, so the scheduler places it on a node with /dev/kvm. A
+  # class names it with backend: launcher. Its image needs a digest.
+  launcher:
+    # -- enabled disabled by default until the cutover (setec#198).
+    enabled: false
+    # -- install stays false: the launcher has no RuntimeClass.
+    install: false
+    # -- image of setec-launcher, with Firecracker, the guest kernel and the
+    # guest agent.
+    image:
+      repository: ghcr.io/zeroroot-ai/setec-launcher
+      tag: ""
+    # -- diskRepo is the repository of the signed image disks that
+    # setec-disk-builder makes. Required when enabled.
+    diskRepo: ""
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
     # CI where you want to exercise the Setec control plane without a

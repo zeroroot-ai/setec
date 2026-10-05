@@ -38,6 +38,7 @@ var AllKnownBackends = []string{
 	BackendGVisor,
 	BackendKataFC,
 	BackendKataQEMU,
+	BackendLauncher,
 	BackendRunc,
 }
 

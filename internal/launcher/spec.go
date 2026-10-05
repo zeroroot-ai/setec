@@ -75,11 +75,20 @@ type SnapshotSource struct {
 	Memory string `json:"memory"`
 }
 
-// ReadSpec reads and checks a Spec file.
+// SpecEnv is the environment variable through which the operator passes
+// the spec (podspec.LauncherSpecEnv).
+const SpecEnv = "SETEC_LAUNCHER_SPEC"
+
+// ReadSpec reads and checks the spec: from SpecEnv when it is set, else
+// from the file at path.
 func ReadSpec(path string) (*Spec, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // the path is a flag of the launcher
-	if err != nil {
-		return nil, fmt.Errorf("launcher: read spec: %w", err)
+	raw := []byte(os.Getenv(SpecEnv))
+	if len(raw) == 0 {
+		var err error
+		raw, err = os.ReadFile(path) //nolint:gosec // the path is a flag of the launcher
+		if err != nil {
+			return nil, fmt.Errorf("launcher: read spec: %w", err)
+		}
 	}
 	s := &Spec{}
 	if err := json.Unmarshal(raw, s); err != nil {
