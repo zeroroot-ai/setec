@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 )
 
 // The launcher Pod (docs/design/runtime.md). One setec container starts a
@@ -32,6 +33,12 @@ const (
 	// writable layer and snapshot files.
 	launcherWorkVolume    = "work"
 	launcherWorkMountPath = "/work"
+
+	// launcherDiskVolume is the image volume of the signed disk of the
+	// image digest. The kubelet pulls it on the node, so the launcher
+	// reaches no registry through the Pod network.
+	launcherDiskVolume    = "disk"
+	launcherDiskMountPath = "/disk"
 )
 
 // LauncherCapability is the one capability of a launcher Pod. The launcher
@@ -78,9 +85,9 @@ type launcherSpec struct {
 	VCPU          int             `json:"vcpu"`
 	MemoryMiB     int64           `json:"memoryMiB"`
 	ImageRef      string          `json:"imageRef"`
-	DiskRepo      string          `json:"diskRepo"`
 	DiskKeys      []string        `json:"diskKeys"`
 	ImageDisk     string          `json:"imageDisk"`
+	DiskSignature string          `json:"diskSignature"`
 	WritableDisk  string          `json:"writableDisk"`
 	WritableBytes int64           `json:"writableBytes"`
 	WorkDir       string          `json:"workDir"`
@@ -123,6 +130,10 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	if !strings.Contains(sb.Spec.Image, "@sha256:") {
 		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
 	}
+	diskRef, err := diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	if err != nil {
+		return nil, fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
+	}
 	if sb.Spec.Resources.VCPU < 1 {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
 	}
@@ -141,17 +152,17 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	if work.IsZero() {
 		work = resource.MustParse("10Gi")
 	}
-	// The writable layer takes the scratch size; the emptyDir holds it, the
-	// downloaded image disk and the machine files, so it gets 2 GiB more.
+	// The writable layer takes the scratch size. The emptyDir holds it and
+	// the machine files, so it gets 2 GiB more.
 	workDir := work.DeepCopy()
 	workDir.Add(resource.MustParse("2Gi"))
 	spec := launcherSpec{
 		VCPU:          int(sb.Spec.Resources.VCPU),
 		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
 		ImageRef:      sb.Spec.Image,
-		DiskRepo:      opts.DiskRepo,
 		DiskKeys:      opts.DiskKeys,
-		ImageDisk:     launcherWorkMountPath + "/image.sqfs",
+		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
+		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
 		WritableDisk:  launcherWorkMountPath + "/writable.ext4",
 		WritableBytes: work.Value(),
 		WorkDir:       launcherWorkMountPath + "/vm",
@@ -205,12 +216,23 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 						Add:  []corev1.Capability{LauncherCapability},
 					},
 				},
-				VolumeMounts: []corev1.VolumeMount{{Name: launcherWorkVolume, MountPath: launcherWorkMountPath}},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: launcherWorkVolume, MountPath: launcherWorkMountPath},
+					{Name: launcherDiskVolume, MountPath: launcherDiskMountPath, ReadOnly: true},
+				},
 			}},
-			Volumes: []corev1.Volume{{
-				Name:     launcherWorkVolume,
-				EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir},
-			}},
+			Volumes: []corev1.Volume{
+				{
+					Name:         launcherWorkVolume,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir}},
+				},
+				{
+					Name: launcherDiskVolume,
+					VolumeSource: corev1.VolumeSource{Image: &corev1.ImageVolumeSource{
+						Reference: diskRef, PullPolicy: corev1.PullIfNotPresent,
+					}},
+				},
+			},
 			Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 					NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{

@@ -17,9 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
-
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/guestagent"
 	"github.com/zeroroot-ai/setec/internal/launcher"
@@ -57,27 +54,12 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 		Console:    os.Stdout,
 		Grace:      grace,
 		AfterStart: guest.AfterStart(spec.Workload),
-		FetchDisk: func(ctx context.Context, s *launcher.Spec) error {
+		CheckDisk: func(s *launcher.Spec) error {
 			keys, err := diskbuilder.ParsePublicKeys(s.DiskKeys)
 			if err != nil {
 				return err
 			}
-			// A registry that is not reachable yet at Pod start is retried.
-			// A disk with a bad signature is not: it stays bad.
-			var ferr error
-			for attempt := range 6 {
-				ferr = diskbuilder.Fetch(ctx, s.DiskRepo, s.ImageRef, s.ImageDisk, keys,
-					remote.WithAuthFromKeychain(authn.DefaultKeychain))
-				if ferr == nil || errors.Is(ferr, diskbuilder.ErrBadSignature) {
-					return ferr
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(time.Duration(1<<attempt) * time.Second):
-				}
-			}
-			return ferr
+			return diskbuilder.VerifyMounted(s.ImageDisk, s.DiskSignature, s.ImageRef, keys)
 		},
 	}
 	code, err := l.Run(ctx)

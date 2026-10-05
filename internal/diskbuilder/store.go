@@ -4,6 +4,7 @@
 package diskbuilder
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -25,14 +26,31 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
-// The registry form of a disk: an artifact with one layer, the disk
-// compressed with gzip, and the signature of the uncompressed disk in an
-// annotation of the manifest. Its tag is the hex of the
-// image digest, so one digest has one disk.
+// The registry form of a disk is an OCI image with one uncompressed tar
+// layer. The layer holds two files: the disk and its signature. A launcher
+// Pod mounts the image as an image volume, so the kubelet pulls the disk on
+// the node with the credentials of the node, and the Pod network policy
+// never has to allow the registry. The kubelet also keeps the disk in the
+// image store of the node for the next Sandbox of the same digest. Its tag
+// is the hex of the image digest, so one digest has one disk.
 const (
-	DiskMediaType       types.MediaType = "application/vnd.zeroroot.setec.disk.v1.squashfs+gzip"
-	SignatureAnnotation                 = "ai.zeroroot.setec.disk.signature"
+	// DiskFile and SignatureFile are the two files of the layer.
+	DiskFile      = "disk.sqfs"
+	SignatureFile = "disk.sig.json"
 )
+
+// DiskRef returns the reference of the disk of an image digest in repo.
+func DiskRef(repo, imageRef string) (string, error) {
+	d, err := ParseDigestRef(imageRef)
+	if err != nil {
+		return "", err
+	}
+	tag, err := diskTag(repo, d)
+	if err != nil {
+		return "", err
+	}
+	return tag.String(), nil
+}
 
 // Builder makes and stores the disk of an image digest once.
 type Builder struct {
@@ -92,20 +110,10 @@ func (b *Builder) Ensure(ctx context.Context, ref string) (name.Tag, error) {
 	if err != nil {
 		return name.Tag{}, err
 	}
-	sigJSON, err := json.Marshal(sig)
+	art, err := diskImage(dir, out, sig)
 	if err != nil {
 		return name.Tag{}, err
 	}
-	layer, err := tarball.LayerFromFile(out, tarball.WithMediaType(DiskMediaType),
-		tarball.WithCompressedCaching)
-	if err != nil {
-		return name.Tag{}, err
-	}
-	art, err := mutate.Append(empty.Image, mutate.Addendum{Layer: layer, MediaType: DiskMediaType})
-	if err != nil {
-		return name.Tag{}, err
-	}
-	art = mutate.Annotations(art, map[string]string{SignatureAnnotation: string(sigJSON)}).(v1.Image) //nolint:forcetypeassert // Annotations of an Image is an Image
 	if err := remote.Write(tag, art, opts...); err != nil {
 		return name.Tag{}, fmt.Errorf("diskbuilder: push %s: %w", tag, err)
 	}
@@ -117,54 +125,91 @@ func isNotFound(err error) bool {
 	return errors.As(err, &te) && te.StatusCode == http.StatusNotFound
 }
 
-// Fetch is the node side: it downloads the disk of ref to dest and checks
-// its signature before it returns. A disk that fails the check is deleted.
-func Fetch(ctx context.Context, diskRepo, ref, dest string, keys []ed25519.PublicKey, opts ...remote.Option) error {
-	d, err := ParseDigestRef(ref)
+// diskImage makes the OCI image of a disk and its signature.
+func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
+	sigJSON, err := json.Marshal(sig)
+	if err != nil {
+		return nil, err
+	}
+	layerPath := filepath.Join(dir, "layer.tar")
+	if err := writeLayer(layerPath, disk, sigJSON); err != nil {
+		return nil, err
+	}
+	layer, err := tarball.LayerFromFile(layerPath, tarball.WithMediaType(types.OCIUncompressedLayer))
+	if err != nil {
+		return nil, err
+	}
+	base := mutate.MediaType(empty.Image, types.OCIManifestSchema1)
+	base = mutate.ConfigMediaType(base, types.OCIConfigJSON)
+	base, err = mutate.ConfigFile(base, &v1.ConfigFile{
+		Architecture: "amd64", OS: "linux",
+		RootFS: v1.RootFS{Type: "layers"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mutate.Append(base, mutate.Addendum{Layer: layer, MediaType: types.OCIUncompressedLayer})
+}
+
+// writeLayer writes a tar with the disk and its signature. The headers carry
+// no time and no owner, so one disk always gives one layer digest.
+func writeLayer(path, disk string, sigJSON []byte) error {
+	f, err := os.Create(path) //nolint:gosec // a path in the build directory
 	if err != nil {
 		return err
 	}
-	tag, err := diskTag(diskRepo, d)
+	tw := tar.NewWriter(f)
+	werr := writeLayerEntries(tw, disk, sigJSON)
+	if cerr := tw.Close(); werr == nil {
+		werr = cerr
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}
+
+func writeLayerEntries(tw *tar.Writer, disk string, sigJSON []byte) error {
+	d, err := os.Open(disk) //nolint:gosec // the disk that this builder made
 	if err != nil {
 		return err
 	}
-	opts = append([]remote.Option{remote.WithContext(ctx)}, opts...)
-	art, err := remote.Image(tag, opts...)
-	if err != nil {
-		return fmt.Errorf("diskbuilder: fetch %s: %w", tag, err)
-	}
-	m, err := art.Manifest()
+	defer func() { _ = d.Close() }()
+	st, err := d.Stat()
 	if err != nil {
 		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: DiskFile, Mode: 0o444, Size: st.Size(), Format: tar.FormatPAX}); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, d); err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: SignatureFile, Mode: 0o444, Size: int64(len(sigJSON)), Format: tar.FormatPAX,
+	}); err != nil {
+		return err
+	}
+	_, err = tw.Write(sigJSON)
+	return err
+}
+
+// VerifyMounted is the check of a launcher before the machine uses a disk.
+// The disk and the signature come from the image volume of the Pod. The
+// signature must name imageRef, match the disk bytes and be valid under
+// one of keys.
+func VerifyMounted(disk, sigFile, imageRef string, keys []ed25519.PublicKey) error {
+	d, err := ParseDigestRef(imageRef)
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(sigFile) //nolint:gosec // a path of the launcher spec
+	if err != nil {
+		return fmt.Errorf("%w: read the signature: %w", ErrBadSignature, err)
 	}
 	var sig Signature
-	if err := json.Unmarshal([]byte(m.Annotations[SignatureAnnotation]), &sig); err != nil {
-		return fmt.Errorf("%w: no signature on %s", ErrBadSignature, tag)
+	if err := json.Unmarshal(raw, &sig); err != nil {
+		return fmt.Errorf("%w: the signature is not valid JSON", ErrBadSignature)
 	}
-	layers, err := art.Layers()
-	if err != nil || len(layers) != 1 {
-		return fmt.Errorf("diskbuilder: %s must hold one disk layer: %v", tag, err)
-	}
-	rc, err := layers[0].Uncompressed()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rc.Close() }()
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o444) //nolint:gosec // a path of the node agent
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, rc); err != nil {
-		_ = f.Close()
-		_ = os.Remove(dest)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := Verify(keys, sig, d.DigestStr(), dest); err != nil {
-		_ = os.Remove(dest)
-		return err
-	}
-	return nil
+	return Verify(keys, sig, d.DigestStr(), disk)
 }

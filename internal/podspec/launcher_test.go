@@ -76,6 +76,33 @@ func TestBuildLauncher_HasExactlyOneCapability(t *testing.T) {
 	}
 }
 
+// TestBuildLauncher_MountsTheDiskAsAnImageVolume proves that the kubelet
+// pulls the disk of the image digest on the node. The Pod network policy
+// then never has to allow the disk registry.
+func TestBuildLauncher_MountsTheDiskAsAnImageVolume(t *testing.T) {
+	t.Parallel()
+	pod := launcherOrFatal(t)
+	want := "ghcr.io/zeroroot-ai/setec-disks:" + strings.Repeat("7", 64)
+	var found bool
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == launcherDiskVolume {
+			found = v.Image != nil && v.Image.Reference == want && v.Image.PullPolicy == corev1.PullIfNotPresent
+		}
+	}
+	if !found {
+		t.Fatalf("no image volume %q of %s in %+v", launcherDiskVolume, want, pod.Spec.Volumes)
+	}
+	var ro bool
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == launcherDiskVolume {
+			ro = m.ReadOnly && m.MountPath == launcherDiskMountPath
+		}
+	}
+	if !ro {
+		t.Fatal("the disk volume is not mounted read-only at " + launcherDiskMountPath)
+	}
+}
+
 func TestBuildLauncher_RefusesAnIncompleteSandbox(t *testing.T) {
 	t.Parallel()
 	if _, err := BuildLauncher(launcherSandbox(), LauncherOptions{DiskRepo: "r"}); err == nil {
@@ -119,7 +146,8 @@ func TestBuildLauncher_CarriesTheSpec(t *testing.T) {
 	if err := json.Unmarshal([]byte(c.Env[0].Value), &s); err != nil {
 		t.Fatal(err)
 	}
-	if s.VCPU != 2 || s.MemoryMiB != 2048 || s.WritableBytes != 10<<30 || s.DiskRepo != "ghcr.io/zeroroot-ai/setec-disks" ||
+	if s.VCPU != 2 || s.MemoryMiB != 2048 || s.WritableBytes != 10<<30 || s.ImageDisk != "/disk/disk.sqfs" ||
+		s.DiskSignature != "/disk/disk.sig.json" ||
 		!strings.HasSuffix(s.ImageRef, strings.Repeat("7", 64)) || s.Workload.Argv[0] != "nmap" || s.Workload.Env[0] != "MISSION=7" {
 		t.Fatalf("spec = %+v", s)
 	}
@@ -143,7 +171,7 @@ func TestBuildLauncher_SpecIsTheLauncherSpec(t *testing.T) {
 		t.Fatalf("the launcher refuses the spec of the operator: %v", err)
 	}
 	if s.VCPU != 2 || s.MemoryMiB != 2048 || s.Source.Boot == nil || s.Workload == nil || s.Workload.Argv[0] != "nmap" ||
-		s.ImageRef == "" || s.DiskRepo == "" || len(s.DiskKeys) != 1 {
+		s.ImageRef == "" || s.DiskSignature == "" || len(s.DiskKeys) != 1 {
 		t.Fatalf("the launcher read %+v", s)
 	}
 }

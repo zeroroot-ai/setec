@@ -69,9 +69,10 @@ type Launcher struct {
 	// Format makes the file system of a new writable layer. Nil uses
 	// MkfsExt4.
 	Format Formatter
-	// FetchDisk downloads the image disk of Spec.ImageRef and checks its
-	// signature. It runs when the image disk is not in place yet.
-	FetchDisk func(ctx context.Context, s *Spec) error
+	// CheckDisk checks the signature of the image disk before the machine
+	// uses it. The disk comes from the image volume of the Pod. Nil checks
+	// nothing, which only a test does.
+	CheckDisk func(s *Spec) error
 	// AfterStart runs once the machine runs, with the identity of the Pod.
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
@@ -88,11 +89,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	if err := os.MkdirAll(l.Spec.WorkDir, 0o700); err != nil {
 		return LaunchFailedExit, fail(ReasonDisks, err)
 	}
-	// The disk comes first. Once the network is joined, every frame of the
-	// Pod goes to the machine, and the launcher itself can reach nothing.
-	if _, statErr := os.Stat(l.Spec.ImageDisk); os.IsNotExist(statErr) && l.Spec.ImageRef != "" && l.FetchDisk != nil {
-		if err := l.FetchDisk(ctx, l.Spec); err != nil {
-			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("fetch the image disk: %w", err))
+	// The kubelet pulled the disk into the image volume of the Pod on the
+	// node, outside the Pod network. The launcher reaches no registry.
+	if l.CheckDisk != nil {
+		if err := l.CheckDisk(l.Spec); err != nil {
+			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("check the image disk: %w", err))
 		}
 	}
 	defer func() {

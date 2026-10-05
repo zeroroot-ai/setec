@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -231,26 +230,34 @@ func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return str
 
 func noFormat(string) error { return nil }
 
-// TestRun_FetchesTheDiskBeforeTheNetworkJoin pins the order that the first
-// real boot found: after the join, each frame of the Pod goes to the
-// machine, so a download after it can reach nothing.
-func TestRun_FetchesTheDiskBeforeTheNetworkJoin(t *testing.T) {
+// TestRun_ChecksTheDiskBeforeTheNetworkJoin proves that a disk that fails
+// its check stops the launch before the network join, with a typed reason.
+func TestRun_ChecksTheDiskBeforeTheNetworkJoin(t *testing.T) {
 	t.Parallel()
 	s := testSpec(t)
-	s.ImageDisk = filepath.Join(t.TempDir(), "fetched.sqfs")
-	s.ImageRef = "registry.example/tool@sha256:" + strings.Repeat("a", 64)
 	nw := &fakeNet{}
-	var joinedAtFetch int
+	var joinedAtCheck int
+	checked := 0
 	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second, Format: noFormat,
-		FetchDisk: func(_ context.Context, s *Spec) error {
-			joinedAtFetch = nw.joined
-			return os.WriteFile(s.ImageDisk, []byte("disk"), 0o600)
+		CheckDisk: func(*Spec) error {
+			joinedAtCheck = nw.joined
+			checked++
+			return nil
 		}}
 	if _, err := l.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if joinedAtFetch != 0 {
-		t.Fatal("the disk was fetched after the network join")
+	if checked != 1 || joinedAtCheck != 0 {
+		t.Fatalf("checked = %d, joined at the check = %d; want one check before the join", checked, joinedAtCheck)
+	}
+
+	bad := errors.New("the disk has no valid signature")
+	l = &Launcher{Spec: testSpec(t), Net: &fakeNet{}, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second,
+		Format: noFormat, CheckDisk: func(*Spec) error { return bad }}
+	code, err := l.Run(t.Context())
+	var le *Error
+	if code != LaunchFailedExit || !errors.As(err, &le) || le.Reason != ReasonDisks || !errors.Is(err, bad) {
+		t.Fatalf("Run = %d, %v; want exit %d with reason %s", code, err, LaunchFailedExit, ReasonDisks)
 	}
 }
 

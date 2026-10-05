@@ -27,6 +27,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 func TestParseDigestRef(t *testing.T) {
@@ -144,17 +145,61 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 		t.Fatal("Ensure accepted a tag")
 	}
 
-	dest := filepath.Join(t.TempDir(), "disk.sqfs")
-	if err := Fetch(t.Context(), b.DiskRepo, ref, dest, []ed25519.PublicKey{pub}); err != nil {
-		t.Fatalf("Fetch with the right key: %v", err)
+	// The node side: the kubelet unpacks the one layer into an image
+	// volume, and the launcher checks the two files.
+	art, err := remote.Image(tag1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mt, _ := art.MediaType(); mt != types.OCIManifestSchema1 {
+		t.Fatalf("manifest media type = %s", mt)
+	}
+	layers, err := art.Layers()
+	if err != nil || len(layers) != 1 {
+		t.Fatalf("layers = %d, %v; want 1", len(layers), err)
+	}
+	if mt, _ := layers[0].MediaType(); mt != types.OCIUncompressedLayer {
+		t.Fatalf("layer media type = %s", mt)
+	}
+	mnt := t.TempDir()
+	untar(t, mutate.Extract(art), mnt)
+	disk, sigFile := filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile)
+	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{pub}); err != nil {
+		t.Fatalf("VerifyMounted with the right key: %v", err)
 	}
 	other, _, _ := ed25519.GenerateKey(nil)
-	dest2 := filepath.Join(t.TempDir(), "disk.sqfs")
-	if err := Fetch(t.Context(), b.DiskRepo, ref, dest2, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
-		t.Fatalf("Fetch with a wrong key = %v, want ErrBadSignature", err)
+	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("VerifyMounted with a wrong key = %v, want ErrBadSignature", err)
 	}
-	if _, err := os.Stat(dest2); !os.IsNotExist(err) {
-		t.Fatal("a refused disk stays on the node")
+	if err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
+	}
+	if got, err := DiskRef(b.DiskRepo, ref); err != nil || got != tag1.String() {
+		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
+	}
+}
+
+// untar writes the files of a tar stream into dir.
+func untar(t *testing.T, rc io.ReadCloser, dir string) {
+	t.Helper()
+	defer func() { _ = rc.Close() }()
+	tr := tar.NewReader(rc)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(filepath.Join(dir, filepath.Base(h.Name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(f, tr); err != nil { //nolint:gosec // a test archive of a few bytes
+			t.Fatal(err)
+		}
+		_ = f.Close()
 	}
 }
 

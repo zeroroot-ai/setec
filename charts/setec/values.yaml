@@ -161,7 +161,9 @@ runtimes:
       repository: ghcr.io/zeroroot-ai/setec-launcher
       tag: ""
     # -- diskRepo is the repository of the signed image disks that
-    # setec-disk-builder makes. Required when enabled.
+    # setec-disk-builder makes. Required when enabled. Each launcher Pod
+    # mounts its disk as an image volume (Kubernetes 1.35 or later), so the
+    # kubelet pulls it with the image credentials of the node.
     diskRepo: ""
     # -- diskBuilder runs as a Job in the operator namespace before the
     # first launcher Pod of an image digest.
