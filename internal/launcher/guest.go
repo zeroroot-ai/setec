@@ -7,10 +7,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
@@ -133,4 +135,66 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 // NewGuest returns the Guest of s.
 func NewGuest(s *Spec) *Guest {
 	return &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf"}
+}
+
+// Exec runs p in the machine through the guest agent: stdin goes in as
+// frames, stdout and stderr come back, and the exit code of p is returned.
+// It is the relay of `setec-launcher exec`, which the frontend runs in the
+// launcher container (docs/design/lifecycles.md).
+func (g *Guest) Exec(ctx context.Context, p guestagent.Process, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	c, r, err := g.dial(ctx, guestagent.ControlPort)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Time{})
+	if err := guestagent.WriteLine(c, guestagent.Request{Op: guestagent.OpExec, Process: &p}); err != nil {
+		return 0, err
+	}
+	var resp guestagent.Response
+	if err := guestagent.ReadLine(r, &resp); err != nil {
+		return 0, err
+	}
+	if !resp.OK {
+		return 0, fmt.Errorf("guest agent exec: %s", resp.Error)
+	}
+	var wmu sync.Mutex
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := stdin.Read(buf)
+			if n > 0 {
+				wmu.Lock()
+				werr := guestagent.WriteFrame(c, guestagent.FrameStdin, buf[:n])
+				wmu.Unlock()
+				if werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				wmu.Lock()
+				_ = guestagent.WriteFrame(c, guestagent.FrameStdinEOF, nil)
+				wmu.Unlock()
+				return
+			}
+		}
+	}()
+	for {
+		t, data, err := guestagent.ReadFrame(r)
+		if err != nil {
+			return 0, fmt.Errorf("the exec stream ended before its exit code: %w", err)
+		}
+		switch t {
+		case guestagent.FrameStdout:
+			if _, err := stdout.Write(data); err != nil {
+				return 0, err
+			}
+		case guestagent.FrameStderr:
+			if _, err := stderr.Write(data); err != nil {
+				return 0, err
+			}
+		case guestagent.FrameExit:
+			return guestagent.ExitCode(data), nil
+		}
+	}
 }

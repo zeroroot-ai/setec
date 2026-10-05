@@ -24,6 +24,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc/codes"
@@ -432,7 +433,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	// Serve the captured log instead.
 	follow := req.GetFollow() && !workloadContainerTerminated(pod)
 
-	window := logWindow{Follow: follow}
+	window := logWindow{Follow: follow, Container: podContainer(pod)}
 	if tail > 0 {
 		window.TailLines = &tail
 	}
@@ -465,7 +466,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	if outcome.SourceErr == nil {
 		return nil
 	}
-	return s.resumeAfterBrokenLogStream(ctx, ns, podName, stream, outcome)
+	return s.resumeAfterBrokenLogStream(ctx, ns, podName, window.Container, stream, outcome)
 }
 
 // resumeAfterBrokenLogStream recovers the tail of a log stream that
@@ -482,7 +483,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 // most of it away is work proportional to the run, not to the gap.
 func (s *Service) resumeAfterBrokenLogStream(
 	ctx context.Context,
-	ns, podName string,
+	ns, podName, container string,
 	stream setecv1grpc.SandboxService_StreamLogsServer,
 	first relayOutcome,
 ) error {
@@ -490,7 +491,7 @@ func (s *Service) resumeAfterBrokenLogStream(
 		// The caller is gone; a broken read is the expected shape.
 		return nil
 	}
-	window := logWindow{}
+	window := logWindow{Container: container}
 	if !first.Anchor.Stamp.IsZero() {
 		// SinceTime has one-second resolution, so the window opens at
 		// the top of the anchor's second and relayLogStream drops the
@@ -539,6 +540,11 @@ func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
 // logWindow selects which part of a container's log a read covers.
 // The zero value is the whole log the kubelet still holds, read to EOF.
 type logWindow struct {
+	// Container is the container to read. Empty reads the workload
+	// container of a RuntimeClass Pod; a launcher Pod sets "launcher",
+	// whose log is the console of the machine.
+	Container string
+
 	// Follow keeps the read open for new lines after the existing ones.
 	Follow bool
 
@@ -557,8 +563,12 @@ type logWindow struct {
 // itself in the log, and relayLogStream strips them before the bytes
 // reach the caller.
 func (w logWindow) options() *corev1.PodLogOptions {
+	container := w.Container
+	if container == "" {
+		container = workloadContainerName
+	}
 	return &corev1.PodLogOptions{
-		Container:  workloadContainerName,
+		Container:  container,
 		Follow:     w.Follow,
 		Timestamps: true,
 		TailLines:  w.TailLines,
@@ -595,6 +605,20 @@ func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string
 }
 
 // workloadContainerTerminated reports whether the Pod's workload
+// podContainer is the container whose log is the Sandbox log: the
+// launcher container of a launcher Pod (the console of the machine), else
+// the workload container.
+func podContainer(pod *corev1.Pod) string {
+	if pod != nil {
+		for _, c := range pod.Spec.Containers {
+			if c.Name == podspec.LauncherContainerName {
+				return c.Name
+			}
+		}
+	}
+	return workloadContainerName
+}
+
 // container has already exited, so following it would attach to
 // nothing. A Pod can still report Running while its single workload
 // container has terminated, so the container status is authoritative;
@@ -604,8 +628,9 @@ func workloadContainerTerminated(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
+	name := podContainer(pod)
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == workloadContainerName {
+		if cs.Name == name {
 			return cs.State.Terminated != nil
 		}
 	}

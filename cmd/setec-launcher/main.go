@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
+	"github.com/zeroroot-ai/setec/internal/guestagent"
 	"github.com/zeroroot-ai/setec/internal/launcher"
 )
 
@@ -32,6 +33,11 @@ func main() {
 		termLog  = flag.String("termination-log", "/dev/termination-log", "where the typed failure reason goes")
 	)
 	flag.Parse()
+	// setec-launcher exec -- ARGV runs ARGV in the machine of this Pod. The
+	// frontend runs it through pods/exec (docs/design/lifecycles.md).
+	if flag.NArg() > 0 && flag.Arg(0) == "exec" {
+		os.Exit(execInMachine(*specPath, flag.Args()[1:]))
+	}
 	os.Exit(run(*specPath, *fcBinary, *grace, *termLog))
 }
 
@@ -95,4 +101,30 @@ func report(termLog string, err error) int {
 	fmt.Fprintln(os.Stderr, "setec-launcher:", msg)
 	_ = os.WriteFile(termLog, []byte(msg), 0o600) //nolint:gosec // the path is a flag of the launcher
 	return launcher.LaunchFailedExit
+}
+
+// execInMachine relays one command to the guest agent and exits with its
+// exit code. A relay failure exits 126, as a shell does for a command that
+// cannot run.
+func execInMachine(specPath string, args []string) int {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "setec-launcher exec: no command")
+		return 126
+	}
+	spec, err := launcher.ReadSpec(specPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "setec-launcher exec:", err)
+		return 126
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	code, err := launcher.NewGuest(spec).Exec(ctx, guestagent.Process{Argv: args}, os.Stdin, os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "setec-launcher exec:", err)
+		return 126
+	}
+	return code
 }

@@ -130,12 +130,8 @@ field launcher.vsockDevice.UDSPath	# internal/launcher/vmconfig.go
 # Called through the error interface by errors.As and errors.Unwrap.
 method launcher.Error.Error	# internal/launcher/run.go
 method launcher.Error.Unwrap	# internal/launcher/run.go
-# The exec client reads these: exec and logs through the setec API and the
-# guest agent (setec#192). The guest agent of setec#189 writes them.
-const guestagent.FrameStderr	# internal/guestagent/protocol.go
-const guestagent.FrameStdout	# internal/guestagent/protocol.go
+# The copy-out client reads this; it comes with the file copy of the API.
 field guestagent.Response.Size	# internal/guestagent/protocol.go
-func guestagent.ExitCode	# internal/guestagent/protocol.go
 # The disk builder writes the image config into the disk as JSON, and the
 # guest agent in the machine reads it (guestagent.WithImageDefaults, setec#190).
 field diskbuilder.ImageConfig.Cmd	# internal/diskbuilder/diskbuilder.go

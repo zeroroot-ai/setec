@@ -7,6 +7,7 @@ package launcher
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -20,6 +21,18 @@ import (
 
 	"github.com/zeroroot-ai/setec/internal/guestagent"
 )
+
+// One supervisor for the package: a process has one reaper of SIGCHLD, and
+// a second one would take the exit status of a child of the first.
+var (
+	supOnce sync.Once
+	sup     *guestagent.Supervisor
+)
+
+func testSupervisor() *guestagent.Supervisor {
+	supOnce.Do(func() { sup = guestagent.NewSupervisor("") })
+	return sup
+}
 
 // fakeMux is the host side of the Firecracker vsock device: it answers
 // "CONNECT <port>" and splices the connection to the guest agent.
@@ -84,8 +97,7 @@ func TestGuest_AfterStartBootConfiguresTheNetworkThenStartsTheWorkload(t *testin
 	}
 	exits := make(chan int, 1)
 	rn := &recNet{}
-	sup := guestagent.NewSupervisor("")
-	srv := &guestagent.Server{Sup: sup, Net: rn, Console: os.Stderr,
+	srv := &guestagent.Server{Sup: testSupervisor(), Net: rn, Console: os.Stderr,
 		ReportExit: func(code int) error { exits <- code; return nil }}
 	go func() { _ = srv.Serve(t.Context(), ln) }()
 	uds := filepath.Join(dir, VsockSocket)
@@ -112,5 +124,33 @@ func TestGuest_AfterStartBootConfiguresTheNetworkThenStartsTheWorkload(t *testin
 		}
 	case <-ctx.Done():
 		t.Fatal("the workload did not report an exit")
+	}
+}
+
+// TestGuest_ExecRelaysStdioAndTheExitCode runs the relay of
+// `setec-launcher exec` against the real guest agent server.
+func TestGuest_ExecRelaysStdioAndTheExitCode(t *testing.T) {
+	dir, err := os.MkdirTemp("", "lx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	agentSock := filepath.Join(dir, "agent.sock")
+	ln, err := net.Listen("unix", agentSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &guestagent.Server{Sup: testSupervisor(), Console: os.Stderr,
+		ReportExit: func(int) error { return nil }}
+	go func() { _ = srv.Serve(t.Context(), ln) }()
+	uds := filepath.Join(dir, VsockSocket)
+	fakeMux(t, uds, agentSock)
+
+	var out, errOut bytes.Buffer
+	code, err := (&Guest{UDS: uds}).Exec(t.Context(),
+		guestagent.Process{Argv: []string{"sh", "-c", "read x; echo got $x; echo e >&2; exit 5"}},
+		strings.NewReader("hi\n"), &out, &errOut)
+	if err != nil || code != 5 || out.String() != "got hi\n" || errOut.String() != "e\n" {
+		t.Fatalf("Exec = %d, %v, stdout=%q stderr=%q", code, err, out.String(), errOut.String())
 	}
 }
