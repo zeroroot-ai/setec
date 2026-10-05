@@ -120,7 +120,7 @@ func (s *Server) startWorkload(p *Process) error {
 			return
 		}
 		defer func() { _ = devnull.Close() }()
-		run, serr := s.Sup.Start(*p, devnull, s.Console, s.Console)
+		run, serr := s.Sup.Start(WithImageDefaults(s.Sup.Root, *p), devnull, s.Console, s.Console)
 		if serr != nil {
 			err = serr
 			// The launcher waits for an exit report, so a workload that
@@ -158,7 +158,7 @@ func (s *Server) exec(c net.Conn, r *bufio.Reader, p *Process) {
 		_ = WriteLine(c, Response{Error: err.Error()})
 		return
 	}
-	run, err := s.Sup.Start(*p, inR, outW, errW)
+	run, err := s.Sup.Start(WithImageDefaults(s.Sup.Root, *p), inR, outW, errW)
 	_ = inR.Close()
 	_ = outW.Close()
 	_ = errW.Close()

@@ -27,8 +27,14 @@ type Spec struct {
 	VCPU      int `json:"vcpu"`
 	MemoryMiB int `json:"memoryMiB"`
 
-	// ImageDisk is the read-only disk of the image digest (vda).
+	// ImageDisk is the read-only disk of the image digest (vda). With
+	// ImageRef set, the launcher downloads it there and checks its
+	// signature before the machine starts.
 	ImageDisk string `json:"imageDisk"`
+	// ImageRef is the image with its digest, and DiskRepo the repository
+	// of the disks (setec-disk-builder).
+	ImageRef string `json:"imageRef,omitempty"`
+	DiskRepo string `json:"diskRepo,omitempty"`
 	// WritableDisk is the writable layer of this Sandbox (vdb). The
 	// launcher makes it as a sparse file of WritableBytes when it does not
 	// exist.
@@ -101,8 +107,8 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: the boot kernel must be an absolute path")
 	case s.Source.Snapshot != nil && (!filepath.IsAbs(s.Source.Snapshot.State) || !filepath.IsAbs(s.Source.Snapshot.Memory)):
 		return errors.New("launcher: the snapshot state and memory must be absolute paths")
-	case s.Source.Boot != nil && (s.Workload == nil || len(s.Workload.Argv) == 0):
-		return errors.New("launcher: a boot needs a workload with an argv")
+	case s.Source.Boot != nil && s.Workload == nil:
+		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
 	}
 	return nil
 }

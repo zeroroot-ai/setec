@@ -143,3 +143,10 @@ const guestagent.FrameStderr	# internal/guestagent/protocol.go
 const guestagent.FrameStdout	# internal/guestagent/protocol.go
 field guestagent.Response.Size	# internal/guestagent/protocol.go
 func guestagent.ExitCode	# internal/guestagent/protocol.go
+# The disk builder writes the image config into the disk as JSON, and the
+# guest agent in the machine reads it (guestagent.WithImageDefaults, setec#190).
+field diskbuilder.ImageConfig.Cmd	# internal/diskbuilder/diskbuilder.go
+field diskbuilder.ImageConfig.Entrypoint	# internal/diskbuilder/diskbuilder.go
+field diskbuilder.ImageConfig.Env	# internal/diskbuilder/diskbuilder.go
+field diskbuilder.ImageConfig.User	# internal/diskbuilder/diskbuilder.go
+field diskbuilder.ImageConfig.WorkingDir	# internal/diskbuilder/diskbuilder.go

@@ -17,6 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/launcher"
 )
 
@@ -26,12 +30,14 @@ func main() {
 		fcBinary = flag.String("firecracker", "/usr/local/bin/firecracker", "the firecracker executable")
 		grace    = flag.Duration("grace", 10*time.Second, "how long a stopping guest may take before a kill")
 		termLog  = flag.String("termination-log", "/dev/termination-log", "where the typed failure reason goes")
+		keys     = flag.String("disk-keys", "/etc/setec/disk-keys/keys",
+			"the base64 ed25519 public keys that may sign an image disk, one on each line")
 	)
 	flag.Parse()
-	os.Exit(run(*specPath, *fcBinary, *grace, *termLog))
+	os.Exit(run(*specPath, *fcBinary, *grace, *termLog, *keys))
 }
 
-func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
+func run(specPath, fcBinary string, grace time.Duration, termLog, keysPath string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -47,6 +53,14 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 		Console:    os.Stdout,
 		Grace:      grace,
 		AfterStart: guest.AfterStart(spec.Workload),
+		FetchDisk: func(ctx context.Context, s *launcher.Spec) error {
+			keys, err := diskbuilder.ReadPublicKeys(keysPath)
+			if err != nil {
+				return err
+			}
+			return diskbuilder.Fetch(ctx, s.DiskRepo, s.ImageRef, s.ImageDisk, keys,
+				remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		},
 	}
 	code, err := l.Run(ctx)
 	if err != nil {

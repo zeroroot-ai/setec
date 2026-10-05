@@ -69,6 +69,9 @@ type Launcher struct {
 	// Format makes the file system of a new writable layer. Nil uses
 	// MkfsExt4.
 	Format Formatter
+	// FetchDisk downloads the image disk of Spec.ImageRef and checks its
+	// signature. It runs when the image disk is not in place yet.
+	FetchDisk func(ctx context.Context, s *Spec) error
 	// AfterStart runs once the machine runs, with the identity of the Pod.
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
@@ -93,6 +96,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	pn, err := l.Net.Join()
 	if err != nil {
 		return LaunchFailedExit, fail(ReasonNetwork, err)
+	}
+	if _, statErr := os.Stat(l.Spec.ImageDisk); os.IsNotExist(statErr) && l.Spec.ImageRef != "" && l.FetchDisk != nil {
+		if err := l.FetchDisk(ctx, l.Spec); err != nil {
+			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("fetch the image disk: %w", err))
+		}
 	}
 	format := l.Format
 	if format == nil {
