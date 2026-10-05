@@ -74,7 +74,9 @@ const AllCIDR = "0.0.0.0/0"
 
 // annotationPrefixAllow prefixes the per-port annotation recording the
 // host a caller declared. The rule itself carries resolved addresses, so
-// this preserves the human-readable intent alongside them.
+// this preserves the human-readable intent alongside them. The suffix is
+// the port, "<port>-<endPort>" for a range, and it starts with "udp-" for
+// a UDP entry.
 const annotationPrefixAllow = "setec.zeroroot.ai/allow-"
 
 // AnnotationSuppressed records allow-list entries that were dropped
@@ -132,6 +134,11 @@ var (
 	// ErrInvalidCIDR is returned when a configured or declared address
 	// block does not parse.
 	ErrInvalidCIDR = errors.New("netpol: invalid CIDR")
+
+	// ErrInvalidPorts is returned when an allow-list entry does not
+	// state its ports in exactly one valid form. The CRD schema refuses
+	// such an entry at admission, and the function checks again.
+	ErrInvalidPorts = errors.New("netpol: invalid allow-list ports")
 
 	// ErrInvalidResolver is returned when a configured resolver is not
 	// a bare IP address.
@@ -255,8 +262,8 @@ func (c Config) Validate() error {
 //     port with the operator's reserved ranges subtracted, plus DNS to
 //     the configured resolvers. This is the posture for workloads that
 //     must reach arbitrary external endpoints.
-//   - mode=egress-allow-list: deny-all ingress; one port-scoped egress
-//     rule per Allow entry, each naming the addresses the declared host
+//   - mode=egress-allow-list: deny-all ingress; one egress rule per
+//     Allow entry, scoped to the ports the entry names, each naming the addresses the declared host
 //     resolves to (or the caller's explicit CIDR) with the reserved
 //     ranges subtracted, plus DNS to the configured resolvers. An entry
 //     whose host cannot be resolved is dropped, not widened.
@@ -615,7 +622,7 @@ func externalOnly(sb *setecv1alpha1.Sandbox, reserved []string, head []networkin
 }
 
 // egressAllowList returns a policy that denies all ingress and permits
-// egress only to the declared destinations, each rule scoped to its port
+// egress only to the declared destinations, each rule scoped to its ports
 // and stripped of the reserved ranges, after the head rules (DNS and the
 // class's selector allowances).
 //
@@ -666,11 +673,20 @@ func (c Config) egressAllowList(
 
 	var suppressed, unresolved []string
 	for _, a := range allow {
+		// A malformed port declaration is the caller's error and aborts
+		// the whole policy, the same as a malformed CIDR.
+		ports, err := portsFor(a)
+		if err != nil {
+			return nil, err
+		}
+
 		// Record the declared intent for audit regardless of what
 		// happens below, so an operator reading the policy sees what was
 		// asked for as well as what was granted.
-		np.Annotations = appendAnnotation(np.Annotations,
-			fmt.Sprintf("%s%d", annotationPrefixAllow, a.Port), a.Host)
+		for _, p := range ports {
+			np.Annotations = appendAnnotation(np.Annotations,
+				annotationPrefixAllow+strings.ReplaceAll(p.String(), "/", "-"), a.Host)
+		}
 
 		bases, err := c.basesFor(ctx, a)
 		if err != nil {
@@ -680,13 +696,13 @@ func (c Config) egressAllowList(
 			if !errors.Is(err, ErrResolveFailed) {
 				return nil, err
 			}
-			unresolved = append(unresolved, fmt.Sprintf("%s:%d", a.Host, a.Port))
+			unresolved = append(unresolved, droppedEntries(a.Host, ports)...)
 			continue
 		}
 		if len(bases) == 0 {
 			// The name answered with nothing. Same posture as a failed
 			// lookup, reported the same way.
-			unresolved = append(unresolved, fmt.Sprintf("%s:%d", a.Host, a.Port))
+			unresolved = append(unresolved, droppedEntries(a.Host, ports)...)
 			continue
 		}
 
@@ -711,18 +727,17 @@ func (c Config) egressAllowList(
 		}
 
 		if len(peers) == 0 {
-			suppressed = append(suppressed, fmt.Sprintf("%s:%d", a.Host, a.Port))
+			suppressed = append(suppressed, droppedEntries(a.Host, ports)...)
 			continue
 		}
 
-		port := intstr.FromInt32(a.Port)
-		proto := corev1.ProtocolTCP
+		rulePorts := make([]networkingv1.NetworkPolicyPort, 0, len(ports))
+		for _, p := range ports {
+			rulePorts = append(rulePorts, p.policyPort())
+		}
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
-			To: peers,
-			Ports: []networkingv1.NetworkPolicyPort{{
-				Protocol: &proto,
-				Port:     &port,
-			}},
+			To:    peers,
+			Ports: rulePorts,
 		})
 	}
 
@@ -739,6 +754,97 @@ func (c Config) egressAllowList(
 	// Ingress is deliberately nil — no ingress rules combined with
 	// PolicyTypeIngress denies all inbound traffic.
 	return np, nil
+}
+
+// allowPort is one port or one port range of an allow-list entry, after
+// the two declaration forms (Port and Ports) became one.
+type allowPort struct {
+	protocol corev1.Protocol
+	port     int32
+	// endPort is 0 for a single port.
+	endPort int32
+}
+
+// String renders the port for the annotations: "443" for one TCP port,
+// "1-65535" for a TCP range, and a "udp/" prefix for UDP. One TCP port
+// keeps the form it had before an entry could state a range.
+func (p allowPort) String() string {
+	s := fmt.Sprintf("%d", p.port)
+	if p.endPort != 0 {
+		s = fmt.Sprintf("%d-%d", p.port, p.endPort)
+	}
+	if p.protocol == corev1.ProtocolUDP {
+		return "udp/" + s
+	}
+	return s
+}
+
+// policyPort renders the port as a NetworkPolicy port. A range uses
+// endPort, which Kubernetes enforces with a numeric port only.
+func (p allowPort) policyPort() networkingv1.NetworkPolicyPort {
+	proto := p.protocol
+	port := intstr.FromInt32(p.port)
+	out := networkingv1.NetworkPolicyPort{Protocol: &proto, Port: &port}
+	if p.endPort != 0 {
+		end := p.endPort
+		out.EndPort = &end
+	}
+	return out
+}
+
+// portsFor turns the port declaration of one allow-list entry into the
+// ports its rule names. An entry sets exactly one of Port and Ports. Port
+// means that one TCP port.
+//
+// The function never answers with an empty list. A NetworkPolicy rule
+// with no ports permits every port of every protocol, so an entry that
+// names no port must be an error and never a rule.
+func portsFor(a setecv1alpha1.NetworkAllow) ([]allowPort, error) {
+	if (a.Port != 0) == (len(a.Ports) > 0) {
+		return nil, fmt.Errorf("%w: %q: set exactly one of port and ports", ErrInvalidPorts, a.Host)
+	}
+	if a.Port != 0 {
+		if !validPort(a.Port) {
+			return nil, fmt.Errorf("%w: %q: port %d is outside 1-65535", ErrInvalidPorts, a.Host, a.Port)
+		}
+		return []allowPort{{protocol: corev1.ProtocolTCP, port: a.Port}}, nil
+	}
+
+	out := make([]allowPort, 0, len(a.Ports))
+	for _, p := range a.Ports {
+		proto := p.Protocol
+		if proto == "" {
+			proto = corev1.ProtocolTCP
+		}
+		if proto != corev1.ProtocolTCP && proto != corev1.ProtocolUDP {
+			return nil, fmt.Errorf("%w: %q: protocol %q is not TCP or UDP", ErrInvalidPorts, a.Host, p.Protocol)
+		}
+		if !validPort(p.Port) {
+			return nil, fmt.Errorf("%w: %q: port %d is outside 1-65535", ErrInvalidPorts, a.Host, p.Port)
+		}
+		entry := allowPort{protocol: proto, port: p.Port}
+		if p.EndPort != nil && *p.EndPort != p.Port {
+			if !validPort(*p.EndPort) || *p.EndPort < p.Port {
+				return nil, fmt.Errorf("%w: %q: endPort %d is not in %d-65535",
+					ErrInvalidPorts, a.Host, *p.EndPort, p.Port)
+			}
+			entry.endPort = *p.EndPort
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func validPort(p int32) bool { return p >= 1 && p <= 65535 }
+
+// droppedEntries names each port of a dropped allow-list entry as
+// "host:port", the form of AnnotationSuppressed and AnnotationUnresolved.
+func droppedEntries(host string, ports []allowPort) []string {
+	out := make([]string, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, host+":"+p.String())
+	}
+	return out
 }
 
 // basesFor resolves one allow-list entry to the address blocks its rule

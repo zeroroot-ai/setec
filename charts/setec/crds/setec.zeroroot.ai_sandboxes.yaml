@@ -340,7 +340,9 @@ spec:
                     items:
                       description: |-
                         NetworkAllow describes a single permitted egress destination when
-                        NetworkMode is egress-allow-list.
+                        NetworkMode is egress-allow-list. An entry states its ports in exactly
+                        one of two forms: Port, for one TCP port, or Ports, for a list of ports
+                        and port ranges with a protocol each.
                       properties:
                         cidr:
                           description: |-
@@ -370,16 +372,63 @@ spec:
                           minLength: 1
                           type: string
                         port:
-                          description: Port is the destination TCP port permitted
-                            for this host.
+                          description: |-
+                            Port is the one destination TCP port permitted for this host. Set
+                            Ports instead for a port range, for more than one port, or for UDP.
                           format: int32
                           maximum: 65535
                           minimum: 1
                           type: integer
+                        ports:
+                          description: |-
+                            Ports is the list of destination ports and port ranges permitted
+                            for this host, each with its protocol. A port scan of a target
+                            needs this form: one range from 1 to 65535 permits every port.
+                          items:
+                            description: NetworkAllowPort is one port or one port
+                              range of a NetworkAllow entry.
+                            properties:
+                              endPort:
+                                description: |-
+                                  EndPort is the last port of the range. When it is not set, the
+                                  entry permits Port only. Port 1 with EndPort 65535 permits every
+                                  port of the protocol.
+                                format: int32
+                                maximum: 65535
+                                minimum: 1
+                                type: integer
+                              port:
+                                description: |-
+                                  Port is the destination port, or the first port of the range when
+                                  EndPort is set.
+                                format: int32
+                                maximum: 65535
+                                minimum: 1
+                                type: integer
+                              protocol:
+                                default: TCP
+                                description: Protocol is the transport protocol of
+                                  the range. It defaults to TCP.
+                                enum:
+                                - TCP
+                                - UDP
+                                type: string
+                            required:
+                            - port
+                            type: object
+                            x-kubernetes-validations:
+                            - message: endPort must not be lower than port
+                              rule: '!has(self.endPort) || self.endPort >= self.port'
+                          maxItems: 32
+                          type: array
+                          x-kubernetes-list-type: atomic
                       required:
                       - host
-                      - port
                       type: object
+                      x-kubernetes-validations:
+                      - message: set exactly one of port and ports
+                        rule: has(self.port) != (has(self.ports) && size(self.ports)
+                          > 0)
                     type: array
                   mode:
                     default: none

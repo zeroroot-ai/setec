@@ -46,7 +46,7 @@ const (
 
 	// NetworkModeEgressAllowList restricts egress to the destinations
 	// declared in Network.Allow. Each entry is rendered as its own
-	// port-scoped egress rule, and each rule carries the same reserved
+	// egress rule scoped to the ports the entry names, and each rule carries the same reserved
 	// range subtraction as external-only unless the SandboxClass
 	// explicitly exempts a range via spec.egressExemptCIDRs.
 	NetworkModeEgressAllowList NetworkMode = "egress-allow-list"
@@ -205,8 +205,36 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory"`
 }
 
+// NetworkAllowPort is one port or one port range of a NetworkAllow entry.
+// +kubebuilder:validation:XValidation:rule="!has(self.endPort) || self.endPort >= self.port",message="endPort must not be lower than port"
+type NetworkAllowPort struct {
+	// Protocol is the transport protocol of the range. It defaults to TCP.
+	// +kubebuilder:validation:Enum=TCP;UDP
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+
+	// Port is the destination port, or the first port of the range when
+	// EndPort is set.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +required
+	Port int32 `json:"port"`
+
+	// EndPort is the last port of the range. When it is not set, the
+	// entry permits Port only. Port 1 with EndPort 65535 permits every
+	// port of the protocol.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	EndPort *int32 `json:"endPort,omitempty"`
+}
+
 // NetworkAllow describes a single permitted egress destination when
-// NetworkMode is egress-allow-list.
+// NetworkMode is egress-allow-list. An entry states its ports in exactly
+// one of two forms: Port, for one TCP port, or Ports, for a list of ports
+// and port ranges with a protocol each.
+// +kubebuilder:validation:XValidation:rule="has(self.port) != (has(self.ports) && size(self.ports) > 0)",message="set exactly one of port and ports"
 type NetworkAllow struct {
 	// Host is the DNS name or IP address permitted as an egress target.
 	//
@@ -224,11 +252,20 @@ type NetworkAllow struct {
 	// +required
 	Host string `json:"host"`
 
-	// Port is the destination TCP port permitted for this host.
+	// Port is the one destination TCP port permitted for this host. Set
+	// Ports instead for a port range, for more than one port, or for UDP.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
-	// +required
-	Port int32 `json:"port"`
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// Ports is the list of destination ports and port ranges permitted
+	// for this host, each with its protocol. A port scan of a target
+	// needs this form: one range from 1 to 65535 permits every port.
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	// +optional
+	Ports []NetworkAllowPort `json:"ports,omitempty"`
 
 	// CIDR optionally pins this entry to an address block, replacing
 	// resolution of Host for this rule.
