@@ -5,32 +5,33 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: tuesday
+      day: monday
+      time: "09:00"
     open-pull-requests-limit: 5
     labels:
       - dependencies
       - go
     groups:
-      patch-and-minor:
+      go-deps:
+        patterns:
+          - '*'
         update-types:
           - minor
           - patch
-    # grpc v1.84.0 is newer than v1.83.2 and is also inside a LATER affected
-    # range of GO-2026-6443, so "bump to the latest" walks back into the
-    # advisory. The ignore names the one affected release, so it lifts itself
-    # when a fixed stable release ships. `direct-require-advisories` catches it
-    # either way (setec#97).
     ignore:
       - dependency-name: google.golang.org/grpc
         versions:
           - 1.84.0
 
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: gomod
     directory: /examples/ai-code-exec
     schedule:
       interval: weekly
-      day: tuesday
-    open-pull-requests-limit: 3
+      day: monday
+      time: "09:00"
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - go
@@ -45,12 +46,22 @@ updates:
         versions:
           - 1.84.0
 
+    groups:
+      go-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: gomod
     directory: /examples/ci-sandbox
     schedule:
       interval: weekly
-      day: tuesday
-    open-pull-requests-limit: 3
+      day: monday
+      time: "09:00"
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - go
@@ -65,12 +76,22 @@ updates:
         versions:
           - 1.84.0
 
+    groups:
+      go-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: gomod
     directory: /examples/sec-research
     schedule:
       interval: weekly
-      day: tuesday
-    open-pull-requests-limit: 3
+      day: monday
+      time: "09:00"
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - go
@@ -85,39 +106,76 @@ updates:
         versions:
           - 1.84.0
 
+    groups:
+      go-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: gomod
     directory: /hack/lintconfig
     schedule:
       interval: weekly
-      day: tuesday
-    open-pull-requests-limit: 3
+      day: monday
+      time: "09:00"
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - go
       - ci
 
+    groups:
+      go-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-      day: tuesday
+      day: monday
+      time: "09:00"
     open-pull-requests-limit: 5
     labels:
       - dependencies
       - ci
     groups:
-      actions:
+      codeql-action:
+        patterns:
+          - github/codeql-action*
+      actions-deps:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - github/codeql-action*
         update-types:
-          - major
           - minor
           - patch
-
+    commit-message:
+      prefix: chore(deps)
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
-      day: tuesday
+      day: monday
+      time: "09:00"
     open-pull-requests-limit: 3
     labels:
       - dependencies
       - docker
+    groups:
+      docker-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: chore(deps)
