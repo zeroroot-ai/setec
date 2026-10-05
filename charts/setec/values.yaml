@@ -188,6 +188,31 @@ defaults:
     # "static" mode was removed; the operator rejects it at config load.)
     nodeCapabilitiesMode: probe
 
+# -- devicePlugin offers /dev/kvm and /dev/net/tun of each fleet node to
+# launcher Pods as the resources setec.zeroroot.ai/kvm and
+# setec.zeroroot.ai/tun (setec#187). The launcher Pod is then not
+# privileged. Each fleet node must expose /dev/kvm; a node without it
+# advertises the devices as unhealthy and gets no launcher Pod.
+devicePlugin:
+  image:
+    repository: ghcr.io/zeroroot-ai/setec-device-plugin
+    # -- tag defaults to .Chart.AppVersion when left empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- count is how many launcher Pods one node may run at one time. Each
+  # takes one share of each device. 110 is the default Pod limit of a node.
+  count: 110
+  # -- tolerations default to matching every taint, so each fleet node
+  # offers its devices.
+  tolerations:
+    - operator: Exists
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 32Mi
+
 # -- runtimeAgent configures the per-node capabilities probing DaemonSet that
 # writes setec.zeroroot.ai/runtime.<backend>=true|false labels and the
 # SetecRuntimes Node status condition.

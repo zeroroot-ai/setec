@@ -96,3 +96,16 @@ method webhook.SnapshotValidator.ValidateCreate	# internal/webhook/snapshot_webh
 method webhook.SnapshotValidator.ValidateDelete	# internal/webhook/snapshot_webhook.go:70
 method webhook.SnapshotValidator.ValidateUpdate	# internal/webhook/snapshot_webhook.go:65
 var frontend.ErrNoPeerCert	# internal/frontend/auth.go:23
+
+# The kubelet calls these through the gRPC DevicePluginServer interface
+# (RegisterDevicePluginServer), which the measurer does not follow (setec#187).
+method deviceplugin.Plugin.Allocate	# internal/deviceplugin/plugin.go
+method deviceplugin.Plugin.GetDevicePluginOptions	# internal/deviceplugin/plugin.go
+method deviceplugin.Plugin.GetPreferredAllocation	# internal/deviceplugin/plugin.go
+method deviceplugin.Plugin.ListAndWatch	# internal/deviceplugin/plugin.go
+method deviceplugin.Plugin.PreStartContainer	# internal/deviceplugin/plugin.go
+# The launcher Pod spec of setec#187. The operator starts using it in
+# setec#188, which adds the launcher; that change removes these three lines.
+const podspec.KVMResource	# internal/podspec/launcher.go
+const podspec.TunResource	# internal/podspec/launcher.go
+func podspec.BuildLauncher	# internal/podspec/launcher.go

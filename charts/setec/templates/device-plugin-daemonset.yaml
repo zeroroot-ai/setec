@@ -1,0 +1,90 @@
+{{- /*
+=============================================================================
+The KVM device plugin (setec#187).
+=============================================================================
+
+It offers /dev/kvm and /dev/net/tun of each fleet node as the extended
+resources setec.zeroroot.ai/kvm and setec.zeroroot.ai/tun. A launcher Pod
+asks for one of each, and the kubelet puts the two devices into that
+container only. So the launcher Pod is not privileged and mounts nothing
+from the host (docs/design/runtime.md).
+
+EXCEPTIONS TO THE SECURE POD RULE. Two Pods of this chart touch the host on
+purpose, and each one is named here with its reason:
+
+  1. This DaemonSet. It runs as root and mounts two host paths: the kubelet
+     device plugin directory, because the kubelet finds a plugin by its
+     socket there, and /dev (at /host/dev), so the plugin can see whether
+     each device exists. It is not privileged, it drops every capability, it has no
+     ServiceAccount token and no host network.
+  2. The launcher Pod (internal/podspec/launcher.go). It has the one
+     capability NET_ADMIN, to join the machine to the Pod network
+     interface. It is not privileged and mounts nothing from the host.
+*/ -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "setec.fullname" . }}-device-plugin
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-plugin
+spec:
+  selector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: device-plugin
+  template:
+    metadata:
+      labels:
+        {{- include "setec.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: device-plugin
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      priorityClassName: system-node-critical
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        {{- toYaml .Values.devicePlugin.tolerations | nindent 8 }}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        kubernetes.io/os: linux
+      containers:
+        - name: device-plugin
+          image: "{{ .Values.devicePlugin.image.repository }}:{{ .Values.devicePlugin.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.devicePlugin.image.pullPolicy }}
+          args:
+            - --count={{ .Values.devicePlugin.count }}
+          securityContext:
+            # Root, to write its socket into the kubelet directory, which
+            # root owns. No capability and no privilege.
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.devicePlugin.resources | nindent 12 }}
+          volumeMounts:
+            - name: device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
+            # Not at /dev: the container runtime mounts the termination log
+            # into /dev of the container, which fails on a read-only /dev.
+            - name: dev
+              mountPath: /host/dev
+              readOnly: true
+      volumes:
+        - name: device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+            type: Directory
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory

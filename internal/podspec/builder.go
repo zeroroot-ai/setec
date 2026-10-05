@@ -331,7 +331,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			Privileged:               new(false),
 			ReadOnlyRootFilesystem:   new(true),
 			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
+				Drop: []corev1.Capability{dropAllCapabilities},
 				Add:  append([]corev1.Capability(nil), sandboxCapabilities...),
 			},
 		},
@@ -677,7 +677,7 @@ func keepaliveInstaller(image string) corev1.Container {
 			AllowPrivilegeEscalation: new(false),
 			Privileged:               new(false),
 			ReadOnlyRootFilesystem:   new(true),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{dropAllCapabilities}},
 		},
 	}
 }
