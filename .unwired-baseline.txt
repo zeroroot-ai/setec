@@ -148,7 +148,7 @@ field podspec.launcherBoot.Initrd	# internal/podspec/launcher.go
 field podspec.launcherBoot.Kernel	# internal/podspec/launcher.go
 field podspec.launcherProcess.Argv	# internal/podspec/launcher.go
 field podspec.launcherSource.Boot	# internal/podspec/launcher.go
-field podspec.launcherSpec.DiskRepo	# internal/podspec/launcher.go
+field podspec.launcherSpec.DiskSignature	# internal/podspec/launcher.go
 field podspec.launcherSpec.ImageDisk	# internal/podspec/launcher.go
 field podspec.launcherSpec.ImageRef	# internal/podspec/launcher.go
 field podspec.launcherSpec.MemoryMiB	# internal/podspec/launcher.go

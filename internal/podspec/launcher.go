@@ -223,14 +223,14 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			}},
 			Volumes: []corev1.Volume{
 				{
-					Name:         launcherWorkVolume,
-					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir}},
+					Name:     launcherWorkVolume,
+					EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir},
 				},
 				{
 					Name: launcherDiskVolume,
-					VolumeSource: corev1.VolumeSource{Image: &corev1.ImageVolumeSource{
+					Image: &corev1.ImageVolumeSource{
 						Reference: diskRef, PullPolicy: corev1.PullIfNotPresent,
-					}},
+					},
 				},
 			},
 			Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
