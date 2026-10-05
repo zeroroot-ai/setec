@@ -18,6 +18,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
@@ -458,4 +461,35 @@ func deleteRuntimeClass(g Gomega, name string) {
 // only compared for non-nilness inside gomega.
 func errorf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
+}
+
+// TestSamples_TheAPIServerAcceptsEachSample creates each Sandbox under
+// config/samples against the real CRD schema (setec#173). A sample that the
+// schema refuses is a broken first step for an operator who copies it.
+func TestSamples_TheAPIServerAcceptsEachSample(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "samples")
+
+	dir := filepath.Join("..", "..", "config", "samples")
+	paths, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	g.Expect(err).NotTo(HaveOccurred())
+	// A floor. A glob that matched no file would pass with no sample read.
+	g.Expect(len(paths)).To(BeNumerically(">=", 2), "samples under %s", dir)
+
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			g := NewWithT(t)
+			data, err := os.ReadFile(path) //nolint:gosec // the path comes from a glob of the repo's own samples
+			g.Expect(err).NotTo(HaveOccurred())
+
+			sb := &setecv1alpha1.Sandbox{}
+			g.Expect(yaml.UnmarshalStrict(data, sb)).To(Succeed(), "the sample names a field that the type does not have")
+			g.Expect(sb.APIVersion).To(Equal(setecv1alpha1.GroupVersion.String()))
+			g.Expect(sb.Kind).To(Equal("Sandbox"))
+
+			sb.Namespace = ns
+			g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+			_ = testClient.Delete(testCtx, sb)
+		})
+	}
 }

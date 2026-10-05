@@ -27,7 +27,8 @@ internal/webhook/*             Validation/defaulting (if present)
 config/crd/bases/*             Generated CRDs (DO NOT EDIT)
 config/rbac/role.yaml          Generated RBAC (DO NOT EDIT)
 config/samples/*               Example CRs (edit these)
-Makefile                       Build/test/deploy commands
+charts/setec/*                 The Helm chart, the one install path
+Makefile                       Build/test commands
 PROJECT                        Kubebuilder metadata Auto-generated (DO NOT EDIT)
 ```
 
@@ -167,20 +168,26 @@ Tests use **Ginkgo + Gomega** (BDD style). Check `suite_test.go` for setup.
 
 ## Deployment Workflow
 
+The Helm chart in `charts/setec` is the one install path. The repo has no
+kustomize install tree and no `make deploy` target.
+
 ```bash
-# 1. Regenerate manifests
+# 1. Regenerate manifests. This also copies the CRDs into charts/setec/crds.
 make manifests generate
 
-# 2. Build & deploy
+# 2. Build the image
 export IMG=<registry>/<project>:tag
 make docker-build docker-push IMG=$IMG  # Or: kind load docker-image $IMG --name <cluster>
-make deploy IMG=$IMG
 
-# 3. Test
-kubectl apply -k config/samples/
+# 3. Install the chart. charts/setec/README.md lists the values that an
+#    install requires.
+helm upgrade --install setec charts/setec -n <namespace> -f <your values file>
 
-# 4. Debug
-kubectl logs -n <project>-system deployment/<project>-controller-manager -c manager -f
+# 4. Test
+kubectl apply -n <sandbox namespace> -f config/samples/setec_v1alpha1_sandbox.yaml
+
+# 5. Debug
+kubectl get pods -n <namespace>
 ```
 
 ### API Design
@@ -265,37 +272,8 @@ Generated code includes: status conditions (`metav1.Condition`), finalizers, own
 
 ## Distribution Options
 
-### Option 1: YAML Bundle (Kustomize)
-
-```bash
-# Generate dist/install.yaml from Kustomize manifests
-make build-installer IMG=<registry>/<project>:tag
-```
-
-**Key points:**
-- The `dist/install.yaml` is generated from Kustomize manifests (CRDs, RBAC, Deployment)
-- Commit this file to your repository for easy distribution
-- Users only need `kubectl` to install (no additional tools required)
-
-**Example:** Users install with a single command:
-```bash
-kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/install.yaml
-```
-
-### Option 2: kustomize deploy (controller into a live cluster)
-
-This repo does not use the kubebuilder `helm/v2-alpha` plugin — `make
-helm-deploy` / `helm-status` / `helm-uninstall` / `helm-history` /
-`helm-rollback` do not exist. The actual targets are the standard
-kustomize ones:
-
-```bash
-make install                 # apply CRDs to the cluster in ~/.kube/config
-make deploy   IMG=<img>      # deploy the controller (kustomize)
-make undeploy                # remove the controller
-make uninstall               # remove the CRDs
-make helm-lint               # lint the packaged chart, if present
-```
+The Helm chart in `charts/setec` is the one distribution. A release publishes
+the chart and the images. Run `make helm-lint` to lint the chart.
 
 ### Publish Container Image
 
