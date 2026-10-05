@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# The launcher image (docs/design/runtime.md): setec-launcher, Firecracker,
+# the guest kernel, and the initrd with the guest agent as /init.
+#
+# Pins: firecracker.env (FIRECRACKER_VERSION, FIRECRACKER_SHA256) and
+# kernel/kernel.env. The build args carry no default, so a build that forgets
+# them fails here.
+
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY api/ api/
+COPY cmd/ cmd/
+COPY internal/ internal/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/setec-launcher ./cmd/setec-launcher && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/setec-guest-agent ./cmd/setec-guest-agent
+# The initrd holds the guest agent as /init and nothing else.
+RUN apt-get update -qq && apt-get install -y -qq cpio >/dev/null && \
+    mkdir -p /initrd/dev && cp /out/setec-guest-agent /initrd/init && \
+    mknod /initrd/dev/console c 5 1 && mknod /initrd/dev/null c 1 3 && \
+    cd /initrd && find . | LC_ALL=C sort | cpio -o -H newc --quiet --reproducible > /out/initrd.cpio
+
+# The guest kernel, from kernel/kernel.env and kernel/x86_64.defconfig. The
+# build cache keeps this stage until one of the two files changes.
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS kernel
+RUN apt-get update -qq && apt-get install -y -qq bc bison flex libelf-dev libssl-dev dwarves xz-utils >/dev/null
+WORKDIR /src
+COPY kernel/ kernel/
+COPY scripts/build-guest-kernel.sh scripts/
+RUN bash scripts/build-guest-kernel.sh /out
+
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS firecracker
+ARG FIRECRACKER_VERSION
+ARG FIRECRACKER_SHA256
+RUN set -eu; \
+    test -n "${FIRECRACKER_VERSION}" || { echo "FIRECRACKER_VERSION build arg is empty: pass it from firecracker.env" >&2; exit 1; }; \
+    test -n "${FIRECRACKER_SHA256}" || { echo "FIRECRACKER_SHA256 build arg is empty: pass it from firecracker.env" >&2; exit 1; }; \
+    curl -fsSL --retry 3 -o /tmp/fc.tgz \
+      "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz"; \
+    echo "${FIRECRACKER_SHA256}  /tmp/fc.tgz" | sha256sum -c -; \
+    mkdir -p /fc && tar -xzf /tmp/fc.tgz -C /fc; \
+    cp "/fc/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /firecracker
+
+# mkfs.ext4 formats the writable layer, so the runtime needs e2fsprogs.
+FROM ghcr.io/zeroroot-ai/mirror/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+RUN apk add --no-cache e2fsprogs
+COPY --from=firecracker /firecracker /usr/local/bin/firecracker
+COPY --from=builder /out/setec-launcher /usr/local/bin/setec-launcher
+COPY --from=builder /out/initrd.cpio /opt/setec/initrd.cpio
+COPY --from=kernel /out/vmlinux /opt/setec/vmlinux
+COPY LICENSE /licenses/LICENSE
+ENTRYPOINT ["/usr/local/bin/setec-launcher"]

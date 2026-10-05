@@ -22,3 +22,9 @@
 # Re-include the license text. `**` above hides it, and both Dockerfiles
 # copy it into /licenses so the published images carry it (Apache-2.0 §4(a)).
 !LICENSE
+
+# Re-include the guest kernel pin, its config and its build script.
+# Dockerfile.launcher builds the guest kernel from them.
+!kernel/kernel.env
+!kernel/x86_64.defconfig
+!scripts/build-guest-kernel.sh
