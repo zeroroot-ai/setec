@@ -33,9 +33,9 @@ const (
 // +kubebuilder:validation:Optional
 type SandboxClassRuntime struct {
 	// Backend is the isolation runtime to use for Sandboxes in this class.
-	// Must be one of the four supported backends. When unset the operator
+	// Must be one of the five supported backends. When unset the operator
 	// falls back to the cluster default declared in Helm values.
-	// +kubebuilder:validation:Enum=kata-fc;kata-qemu;gvisor;runc
+	// +kubebuilder:validation:Enum=kata-fc;kata-qemu;gvisor;runc;launcher
 	// +optional
 	Backend string `json:"backend,omitempty"`
 
@@ -47,8 +47,8 @@ type SandboxClassRuntime struct {
 	Params map[string]string `json:"params,omitempty"`
 
 	// Fallback is an ordered list of backend names to attempt when no node
-	// advertises the requested Backend. Each entry must be one of the four
-	// supported values. The operator tries each in order; the first backend
+	// advertises the requested Backend. Each entry must be one of the five
+	// supported backends. The operator tries each in order; the first backend
 	// with a capable node wins. status.runtime.chosen records the final
 	// selection.
 	//
