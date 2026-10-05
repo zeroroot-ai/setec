@@ -75,3 +75,9 @@ jobs:
             echo "mutation $mutation was refused"
           done
           echo "every mutated build was refused: the inventory guard can fail"
+
+  # Every workflow file is a valid workflow. A reference to a step or a matrix
+  # key that does not exist is not an error to GitHub: it is an empty string
+  # (zeroroot-ai/.github#185).
+  workflow-lint:
+    uses: zeroroot-ai/.github/.github/workflows/workflow-lint.yml@b4a4e65b792669f8f736091a66896c65a51e3004 # v0.12.0
