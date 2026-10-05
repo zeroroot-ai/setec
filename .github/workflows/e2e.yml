@@ -582,27 +582,67 @@ jobs:
             privileged_without_host_devices = true
             pod_annotations = ["io.katacontainers.*"]
             [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-qemu.options]
-              ConfigPath = "/opt/kata/share/defaults/kata-containers/configuration-qemu.toml"
+              ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml"
           TOML
           sed -i 's/^          //' "$work/20-kata-qemu.toml"
 
-          docker cp "$work/kata.tar.zst" "${KIND_CLUSTER}-worker:/tmp/kata-qemu.tar.zst"
-          docker cp "$work/20-kata-qemu.toml" "${KIND_CLUSTER}-worker:/tmp/20-kata-qemu.toml"
+          # Not /tmp. A kind node mounts a tmpfs on /tmp, and `docker cp`
+          # writes to the container filesystem under that mount, so the copy
+          # succeeds and the file is not there for anything that runs inside
+          # the node. The first run that reached this step failed on exactly
+          # that: "tar: /tmp/kata-qemu.tar.zst: Cannot open".
+          prep=/var/lib/setec-e2e
+          docker exec "${KIND_CLUSTER}-worker" mkdir -p "$prep"
+          docker cp "$work/kata.tar.zst" "${KIND_CLUSTER}-worker:$prep/kata-qemu.tar.zst"
+          docker cp "$work/20-kata-qemu.toml" "${KIND_CLUSTER}-worker:$prep/20-kata-qemu.toml"
           docker exec "${KIND_CLUSTER}-worker" bash -euo pipefail -c '
+            prep=/var/lib/setec-e2e
+            test -s "$prep/kata-qemu.tar.zst" && test -s "$prep/20-kata-qemu.toml" \
+              || { echo "the kata archive or the containerd drop-in did not reach the node" >&2; exit 1; }
             command -v zstd >/dev/null || { apt-get update -qq && apt-get install -y -qq zstd; }
-            tar --zstd -xf /tmp/kata-qemu.tar.zst -C / \
+            # The kata 4.x kata-static archive is runtime-rs only. Its QEMU
+            # configuration is runtime-rs/configuration-qemu-runtime-rs.toml and
+            # its shim is /opt/kata/runtime-rs/bin/containerd-shim-kata-v2. The
+            # first draft of this step asked for configuration-qemu.toml and
+            # linked the Go shim of the kata-fc payload, a layout this archive
+            # never had. It also fell back to extracting all of ./opt/kata with
+            # the error output discarded, which hid that.
+            #
+            # Named members only, no fallback: a member this archive does not
+            # have fails here with tar naming it. The kernel and the guest
+            # image are the same files the kata-fc payload ships, from the same
+            # pin, so writing them again changes nothing.
+            cfg=/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml
+            shim=/opt/kata/runtime-rs/bin/containerd-shim-kata-v2
+            share=/opt/kata/share/kata-containers
+            tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / \
               ./opt/kata/bin/qemu-system-x86_64 \
-              ./opt/kata/share/defaults/kata-containers/configuration-qemu.toml \
-              ./opt/kata/share/kata-qemu 2>/dev/null \
-              || tar --zstd -xf /tmp/kata-qemu.tar.zst -C / ./opt/kata
-            test -x /opt/kata/bin/qemu-system-x86_64 \
-              || { echo "the kata-static tarball did not provide a QEMU binary" >&2; exit 1; }
-            test -f /opt/kata/share/defaults/kata-containers/configuration-qemu.toml \
-              || { echo "the kata-static tarball did not provide configuration-qemu.toml" >&2; exit 1; }
+              ./opt/kata/share/kata-qemu \
+              ./opt/kata/libexec/virtiofsd \
+              ./opt/kata/runtime-rs/bin/containerd-shim-kata-v2 \
+              ./opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml \
+              ./opt/kata/share/kata-containers/vmlinux.container \
+              ./opt/kata/share/kata-containers/kata-containers.img
+            # The kernel and the image are symlinks to versioned files. Their
+            # targets are read from the node, so no file name of one kata
+            # release is written here.
+            tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / \
+              "./opt/kata/share/kata-containers/$(readlink "$share/vmlinux.container")" \
+              "./opt/kata/share/kata-containers/$(readlink "$share/kata-containers.img")"
+            # Every path the configuration names must exist on the node. A
+            # handler that loads and then fails at launch is the failure this
+            # step exists to prevent (setec#93).
+            for f in "$cfg" "$shim" /opt/kata/bin/qemu-system-x86_64 /opt/kata/libexec/virtiofsd \
+                "$share/vmlinux.container" "$share/kata-containers.img"; do
+              test -s "$f" || { echo "kata-qemu prep: $f is missing on the node" >&2; exit 1; }
+            done
+            grep -q "^path = \"/opt/kata/bin/qemu-system-x86_64\"" "$cfg" \
+              || { echo "kata-qemu prep: $cfg does not name the QEMU binary this step laid" >&2; exit 1; }
 
             mkdir -p /etc/containerd/config.d
-            cp /tmp/20-kata-qemu.toml /etc/containerd/config.d/20-kata-qemu.toml
-            ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-kata-qemu-v2
+            cp "$prep/20-kata-qemu.toml" /etc/containerd/config.d/20-kata-qemu.toml
+            rm -f "$prep/kata-qemu.tar.zst"
+            ln -sf "$shim" /usr/local/bin/containerd-shim-kata-qemu-v2
             systemctl restart containerd
           '
 
