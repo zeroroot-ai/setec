@@ -158,8 +158,20 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	if err != nil || len(layers) != 1 {
 		t.Fatalf("layers = %d, %v; want 1", len(layers), err)
 	}
-	if mt, _ := layers[0].MediaType(); mt != types.OCIUncompressedLayer {
+	if mt, _ := layers[0].MediaType(); mt != types.OCILayer {
 		t.Fatalf("layer media type = %s", mt)
+	}
+	// The stored bytes must be what the media type says: the first real
+	// pull failed on gzip bytes under the media type of a plain tar.
+	blob, err := layers[0].Compressed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	magic := make([]byte, 2)
+	_, err = io.ReadFull(blob, magic)
+	_ = blob.Close()
+	if err != nil || magic[0] != 0x1f || magic[1] != 0x8b {
+		t.Fatalf("the stored layer is not gzip: % x, %v", magic, err)
 	}
 	mnt := t.TempDir()
 	untar(t, mutate.Extract(art), mnt)

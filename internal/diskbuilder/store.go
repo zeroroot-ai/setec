@@ -26,8 +26,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
-// The registry form of a disk is an OCI image with one uncompressed tar
-// layer. The layer holds two files: the disk and its signature. A launcher
+// The registry form of a disk is an OCI image with one gzip tar layer. The layer holds two files: the disk and its signature. A launcher
 // Pod mounts the image as an image volume, so the kubelet pulls the disk on
 // the node with the credentials of the node, and the Pod network policy
 // never has to allow the registry. The kubelet also keeps the disk in the
@@ -135,7 +134,11 @@ func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 	if err := writeLayer(layerPath, disk, sigJSON); err != nil {
 		return nil, err
 	}
-	layer, err := tarball.LayerFromFile(layerPath, tarball.WithMediaType(types.OCIUncompressedLayer))
+	// LayerFromFile compresses the tar with gzip, so the media type must say
+	// gzip. A registry stores the compressed bytes, and the node reads the
+	// media type to unpack them.
+	layer, err := tarball.LayerFromFile(layerPath, tarball.WithMediaType(types.OCILayer),
+		tarball.WithCompressedCaching)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +151,7 @@ func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	return mutate.Append(base, mutate.Addendum{Layer: layer, MediaType: types.OCIUncompressedLayer})
+	return mutate.Append(base, mutate.Addendum{Layer: layer, MediaType: types.OCILayer})
 }
 
 // writeLayer writes a tar with the disk and its signature. The headers carry
