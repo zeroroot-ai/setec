@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -126,7 +125,7 @@ func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 func TestLabelPairResolver_ExactlyOneNamespacePerPair(t *testing.T) {
 	t.Parallel()
 	ns := func(name string, labels map[string]string) *corev1.Namespace {
-		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+		return &corev1.Namespace{Name: name, Labels: labels}
 	}
 	pairA, _ := tenancy.NewPair("cluster-a", "acme")
 	pairB, _ := tenancy.NewPair("cluster-b", "acme")

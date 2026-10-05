@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -378,8 +379,6 @@ func (s *LeaseService) waitLoggable(ctx context.Context, ns, podName string) err
 
 // withPairLabels adds the labels of the owner pair to labels and returns it.
 func withPairLabels(labels map[string]string, p tenancy.Pair) map[string]string {
-	for k, v := range pairLabels(p) {
-		labels[k] = v
-	}
+	maps.Copy(labels, pairLabels(p))
 	return labels
 }

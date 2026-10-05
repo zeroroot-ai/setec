@@ -6,6 +6,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,9 +53,7 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 			Command:          appendStrings(tmpl.Command, b.idleCommand),
 		},
 	}
-	for k, v := range tmpl.Labels {
-		sb.Labels[k] = v
-	}
+	maps.Copy(sb.Labels, tmpl.Labels)
 	if tmpl.VCPU > 0 {
 		sb.Spec.Resources = setecv1alpha1.Resources{VCPU: tmpl.VCPU}
 		if tmpl.Memory != "" {

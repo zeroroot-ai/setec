@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -147,8 +146,8 @@ func (pairResolver) NamespaceFor(_ context.Context, p tenancy.Pair) (string, err
 
 func sandboxIn(ns, name string) *setecv1alpha1.Sandbox {
 	return &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: "uid-1"},
-		Status:     setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseCompleted},
+		Namespace: ns, Name: name, UID: "uid-1",
+		Status: setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseCompleted},
 	}
 }
 
@@ -203,7 +202,7 @@ func TestScope_EachPairReachesOnlyItsOwnSandbox(t *testing.T) {
 // namespace of the pair and writes the pair on it.
 func TestLaunch_RecordsThePair(t *testing.T) {
 	t.Parallel()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sbx-cluster-b-acme"}}
+	ns := &corev1.Namespace{Name: "sbx-cluster-b-acme"}
 	s := &Service{
 		Client:     newClient(t, ns),
 		Enrollment: testEnrollment(t),
