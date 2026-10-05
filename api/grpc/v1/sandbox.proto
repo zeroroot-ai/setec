@@ -154,6 +154,11 @@ message LaunchRequest {
 
   // Lifecycle constraints (timeout). Optional.
   Lifecycle lifecycle = 7;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 8;
 }
 
 // LaunchResponse identifies the Sandbox created for the caller.
@@ -257,6 +262,11 @@ message StreamLogsRequest {
   // output. Zero sends the whole log the kubelet still holds.
   // Negative is INVALID_ARGUMENT.
   int64 tail_lines = 3;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 4;
 }
 
 // StreamLogsResponse is a single-stream log payload. `stream` is "stdout" or
@@ -269,6 +279,11 @@ message StreamLogsResponse {
 // WaitRequest blocks until the given Sandbox reaches a terminal phase.
 message WaitRequest {
   string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 2;
 }
 
 // WaitResponse carries the Sandbox's terminal outcome.
@@ -300,6 +315,11 @@ message KillRequest {
   // Zero keeps the Pod's own terminationGracePeriodSeconds (the
   // Kubernetes default of 30 s). Negative is INVALID_ARGUMENT.
   int64 grace_seconds = 2;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 3;
 }
 
 // KillResponse is currently empty; a Sandbox that could not be deleted
@@ -312,6 +332,11 @@ message KillResponse {}
 // never be reached with an old handle.
 message AttachRequest {
   string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 2;
 }
 
 // AttachResponse confirms the handle resolved to a live session and
@@ -384,6 +409,11 @@ message SessionExecStart {
   // wrapping argv in a shell and silently changing its meaning.
   // Callers that want either should run their own shell explicitly.
   repeated string command = 2;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 3;
 }
 
 // SandboxServiceExecResponse is one message of the server half of an

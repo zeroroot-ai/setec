@@ -67,6 +67,11 @@ message LeaseRequest {
   // cold-launching when the pool has no ready Sandbox. Useful for callers
   // that only ever want the fast path.
   bool fail_if_empty = 2;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 3;
 }
 
 // LeaseResponse identifies the claimed Sandbox and the lease over it.
@@ -96,6 +101,11 @@ message ExecRequest {
 
   // env overlays environment variables for this execution. Optional.
   map<string, string> env = 3;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 4;
 }
 
 // ExecResponse is a single chunk of the executing command's output, or
@@ -117,6 +127,11 @@ message ExecResponse {
 // ReleaseRequest releases a lease and destroys its Sandbox.
 message ReleaseRequest {
   string lease_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 2;
 }
 
 // ReleaseResponse is currently empty; failures surface via gRPC status.
@@ -125,6 +140,11 @@ message ReleaseResponse {}
 // PoolStatusRequest selects a class's pool.
 message PoolStatusRequest {
   string sandbox_class = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox. It is a DNS label. The frontend refuses an empty value. The
+  // pair of the caller cluster and this tenant selects the namespace of
+  // the sandbox, and a call on a sandbox of a different pair is refused.
+  string tenant = 2;
 }
 
 // PoolStatusResponse reports the warm fill level for a class.
