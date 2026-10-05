@@ -170,6 +170,121 @@ func TestPhase2_NetworkPolicyOwnerReference(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: the API server refuses an allow-list entry that does not state
+// its ports in exactly one valid form. A NetworkPolicy rule with no ports
+// permits every port, so such an entry must never reach the generator.
+// ---------------------------------------------------------------------------
+
+func TestPhase2_AllowListPortsAreRefusedAtAdmission(t *testing.T) {
+	ns := newNamespace(t, "p2-netpol-ports-refused")
+	end := int32(80)
+
+	cases := map[string]struct {
+		allow   setecv1alpha1.NetworkAllow
+		wantMsg string
+	}{
+		"neither port nor ports": {
+			allow:   setecv1alpha1.NetworkAllow{Host: "api.example.com"},
+			wantMsg: "set exactly one of port and ports",
+		},
+		"both port and ports": {
+			allow: setecv1alpha1.NetworkAllow{
+				Host: "api.example.com", Port: 443,
+				Ports: []setecv1alpha1.NetworkAllowPort{{Port: 80}},
+			},
+			wantMsg: "set exactly one of port and ports",
+		},
+		"an endPort below the port": {
+			allow: setecv1alpha1.NetworkAllow{
+				Host:  "api.example.com",
+				Ports: []setecv1alpha1.NetworkAllowPort{{Port: 443, EndPort: &end}},
+			},
+			wantMsg: "endPort must not be lower than port",
+		},
+		"a protocol that is not TCP or UDP": {
+			allow: setecv1alpha1.NetworkAllow{
+				Host:  "api.example.com",
+				Ports: []setecv1alpha1.NetworkAllowPort{{Protocol: corev1.ProtocolSCTP, Port: 443}},
+			},
+			wantMsg: "Unsupported value",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			sb := newSandbox(ns, "refused", func(s *setecv1alpha1.Sandbox) {
+				s.Spec.Network = &setecv1alpha1.Network{
+					Mode:  setecv1alpha1.NetworkModeEgressAllowList,
+					Allow: []setecv1alpha1.NetworkAllow{tc.allow},
+				}
+			})
+			err := testClient.Create(testCtx, sb)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "err = %v", err)
+			g.Expect(err.Error()).To(ContainSubstring(tc.wantMsg))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: an allow-list entry in the ports form produces one egress rule
+// that carries each port range with its protocol.
+// ---------------------------------------------------------------------------
+
+func TestPhase2_NetworkPolicyEgressAllowListPortsForm(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "p2-netpol-ports")
+	end := int32(65535)
+
+	sb := newSandbox(ns, "portsform", func(s *setecv1alpha1.Sandbox) {
+		s.Spec.Network = &setecv1alpha1.Network{
+			Mode: setecv1alpha1.NetworkModeEgressAllowList,
+			Allow: []setecv1alpha1.NetworkAllow{{
+				Host: "203.0.113.7",
+				Ports: []setecv1alpha1.NetworkAllowPort{
+					// No protocol: the CRD default must make it TCP.
+					{Port: 1, EndPort: &end},
+					{Protocol: corev1.ProtocolUDP, Port: 161},
+				},
+			}},
+		}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+	_ = waitForPod(g, ns, sb.Name)
+
+	np := &networkingv1.NetworkPolicy{}
+	g.Eventually(func() error {
+		return testClient.Get(testCtx, types.NamespacedName{
+			Namespace: ns,
+			Name:      sb.Name + netpol.NetworkPolicySuffix,
+		}, np)
+	}, convergeTimeout, convergeInterval).Should(Succeed())
+
+	var rule *networkingv1.NetworkPolicyEgressRule
+	for i := range np.Spec.Egress {
+		for _, peer := range np.Spec.Egress[i].To {
+			if peer.IPBlock != nil && peer.IPBlock.CIDR == "203.0.113.7/32" {
+				rule = &np.Spec.Egress[i]
+			}
+		}
+	}
+	g.Expect(rule).NotTo(BeNil(), "no egress rule names the declared address: %+v", np.Spec.Egress)
+	g.Expect(rule.Ports).To(HaveLen(2))
+
+	g.Expect(*rule.Ports[0].Protocol).To(Equal(corev1.ProtocolTCP))
+	g.Expect(rule.Ports[0].Port.IntValue()).To(Equal(1))
+	g.Expect(rule.Ports[0].EndPort).NotTo(BeNil())
+	g.Expect(*rule.Ports[0].EndPort).To(Equal(int32(65535)))
+
+	g.Expect(*rule.Ports[1].Protocol).To(Equal(corev1.ProtocolUDP))
+	g.Expect(rule.Ports[1].Port.IntValue()).To(Equal(161))
+	g.Expect(rule.Ports[1].EndPort).To(BeNil())
+
+	_ = testClient.Delete(testCtx, sb)
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: egress-allow-list produces a NetworkPolicy with DNS plus
 // one egress rule per entry in spec.network.allow.
 // ---------------------------------------------------------------------------

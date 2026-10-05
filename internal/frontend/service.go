@@ -212,10 +212,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 			Mode: setecv1alpha1.NetworkMode(n.GetMode()),
 		}
 		for _, a := range n.GetAllow() {
-			sb.Spec.Network.Allow = append(sb.Spec.Network.Allow, setecv1alpha1.NetworkAllow{
-				Host: a.GetHost(),
-				Port: int32(a.GetPort()),
-			})
+			sb.Spec.Network.Allow = append(sb.Spec.Network.Allow, networkAllowFromProto(a))
 		}
 	}
 	sb.Spec.Lifecycle = lifecycle
@@ -846,4 +843,28 @@ func grpcCodeFor(err error) codes.Code {
 	default:
 		return codes.Internal
 	}
+}
+
+// networkAllowFromProto copies one allow-list entry of a Launch request
+// into its Sandbox.spec.network.allow form. It does not judge the entry:
+// the CRD schema refuses a malformed one when the Sandbox is created, and
+// grpcCodeFor reports that refusal as InvalidArgument.
+func networkAllowFromProto(a *setecv1grpc.NetworkAllow) setecv1alpha1.NetworkAllow {
+	out := setecv1alpha1.NetworkAllow{
+		Host: a.GetHost(),
+		Port: int32(a.GetPort()),
+		CIDR: a.GetCidr(),
+	}
+	for _, p := range a.GetPorts() {
+		port := setecv1alpha1.NetworkAllowPort{
+			Protocol: corev1.Protocol(p.GetProtocol()),
+			Port:     int32(p.GetPort()),
+		}
+		if end := p.GetEndPort(); end != 0 {
+			endPort := int32(end)
+			port.EndPort = &endPort
+		}
+		out.Ports = append(out.Ports, port)
+	}
+	return out
 }

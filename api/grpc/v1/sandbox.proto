@@ -147,7 +147,9 @@ message LaunchRequest {
   // Resource budget. Required for classes without DefaultResources.
   Resources resources = 5;
 
-  // Network policy intent. Optional; defaults to mode=full.
+  // Network policy intent. Optional. When it is not set, the Sandbox takes
+  // the default network mode of its SandboxClass, and mode "none" when the
+  // class states no default.
   Network network = 6;
 
   // Lifecycle constraints (timeout). Optional.
@@ -180,14 +182,35 @@ message Resources {
 
 // Network mirrors Sandbox.spec.network.
 message Network {
-  string mode = 1; // one of: full, egress-allow-list, none
+  string mode = 1; // one of: external-only, egress-allow-list, none
   repeated NetworkAllow allow = 2;
 }
 
-// NetworkAllow mirrors Sandbox.spec.network.allow entries.
+// NetworkAllow mirrors Sandbox.spec.network.allow entries. An entry states
+// its ports in exactly one of two forms: port, for one TCP port, or ports,
+// for a list of ports and port ranges with a protocol each.
 message NetworkAllow {
+  // host is a DNS name or an IP address.
   string host = 1;
+  // port is the one TCP port permitted for this host. Leave it 0 when
+  // ports is set.
   uint32 port = 2;
+  // cidr pins this entry to an address block. When it is set, the operator
+  // does not resolve host.
+  string cidr = 3;
+  // ports is the list of ports and port ranges permitted for this host.
+  repeated NetworkAllowPort ports = 4;
+}
+
+// NetworkAllowPort mirrors Sandbox.spec.network.allow[].ports entries.
+message NetworkAllowPort {
+  // protocol is "TCP" or "UDP". Empty means TCP.
+  string protocol = 1;
+  // port is the destination port, or the first port of the range when
+  // end_port is set.
+  uint32 port = 2;
+  // end_port is the last port of the range. 0 means port only.
+  uint32 end_port = 3;
 }
 
 // Lifecycle mirrors Sandbox.spec.lifecycle.
