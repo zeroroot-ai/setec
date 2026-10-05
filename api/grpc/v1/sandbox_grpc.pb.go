@@ -76,7 +76,7 @@ type SandboxServiceClient interface {
 	// reattach works across frontend restarts by construction.
 	//
 	// Attach also registers caller activity for the session, which
-	// exempts it from per-SandboxClass idle eviction (ADR-0006: a
+	// exempts it from per-SandboxClass idle eviction (ADR-0146: a
 	// session in active use is never idle-reaped).
 	//
 	// Failure shapes (each carries an AttachFailure detail so callers
@@ -87,12 +87,12 @@ type SandboxServiceClient interface {
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
 	//     the session is over (terminal phase, or teardown in progress).
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
-	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+	//     the ephemeral lifecycle has no reattach semantics (ADR-0146).
 	Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error)
 	// Exec runs a command INSIDE an existing session Sandbox's running
 	// microVM and streams its stdio, so a session can be worked on
 	// across many turns instead of being limited to the single
-	// immutable spec.command it booted with (ADR-0008).
+	// immutable spec.command it booted with (ADR-0148).
 	//
 	// This is not LeaseService.Exec: that verb launches a fresh
 	// one-shot Sandbox per call and shares nothing between calls. This
@@ -123,10 +123,10 @@ type SandboxServiceClient interface {
 	//
 	// An in-flight Exec registers as session activity for the whole of
 	// its run, so a long build can never be idle-evicted underneath the
-	// caller (ADR-0006).
+	// caller (ADR-0146).
 	//
 	// A session whose VM is paused or suspended is resumed first and
-	// the command runs once it is back (ADR-0006 suspend/resume); the
+	// the command runs once it is back (ADR-0146 suspend/resume); the
 	// caller sees only the added latency.
 	//
 	// Failure shapes (each carries an AttachFailure detail, the same
@@ -136,7 +136,7 @@ type SandboxServiceClient interface {
 	//     Sandbox.
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
-	//     ephemeral; its one command is its whole life (ADR-0006).
+	//     ephemeral; its one command is its whole life (ADR-0146).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
 	// These are RPC-level errors raised before the command starts, so
@@ -266,7 +266,7 @@ type SandboxServiceServer interface {
 	// reattach works across frontend restarts by construction.
 	//
 	// Attach also registers caller activity for the session, which
-	// exempts it from per-SandboxClass idle eviction (ADR-0006: a
+	// exempts it from per-SandboxClass idle eviction (ADR-0146: a
 	// session in active use is never idle-reaped).
 	//
 	// Failure shapes (each carries an AttachFailure detail so callers
@@ -277,12 +277,12 @@ type SandboxServiceServer interface {
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
 	//     the session is over (terminal phase, or teardown in progress).
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
-	//     the ephemeral lifecycle has no reattach semantics (ADR-0006).
+	//     the ephemeral lifecycle has no reattach semantics (ADR-0146).
 	Attach(context.Context, *AttachRequest) (*AttachResponse, error)
 	// Exec runs a command INSIDE an existing session Sandbox's running
 	// microVM and streams its stdio, so a session can be worked on
 	// across many turns instead of being limited to the single
-	// immutable spec.command it booted with (ADR-0008).
+	// immutable spec.command it booted with (ADR-0148).
 	//
 	// This is not LeaseService.Exec: that verb launches a fresh
 	// one-shot Sandbox per call and shares nothing between calls. This
@@ -313,10 +313,10 @@ type SandboxServiceServer interface {
 	//
 	// An in-flight Exec registers as session activity for the whole of
 	// its run, so a long build can never be idle-evicted underneath the
-	// caller (ADR-0006).
+	// caller (ADR-0146).
 	//
 	// A session whose VM is paused or suspended is resumed first and
-	// the command runs once it is back (ADR-0006 suspend/resume); the
+	// the command runs once it is back (ADR-0146 suspend/resume); the
 	// caller sees only the added latency.
 	//
 	// Failure shapes (each carries an AttachFailure detail, the same
@@ -326,7 +326,7 @@ type SandboxServiceServer interface {
 	//     Sandbox.
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
-	//     ephemeral; its one command is its whole life (ADR-0006).
+	//     ephemeral; its one command is its whole life (ADR-0146).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
 	// These are RPC-level errors raised before the command starts, so

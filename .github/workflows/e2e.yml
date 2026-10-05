@@ -9,7 +9,7 @@
 # runner. The worker node mounts the runner's /dev, so it sees /dev/kvm, and
 # setec's own installer DaemonSet converges it to boot kata-fc: the kata
 # payload, the devmapper thin-pool and the containerd registration
-# (ADR-0003). The cluster runs Calico, so NetworkPolicy is enforced the way
+# (ADR-0143). The cluster runs Calico, so NetworkPolicy is enforced the way
 # production CNIs enforce it. hack/kind-kvm.yaml has the details. No metal
 # node, no ARC scale-set, no AWS account.
 #
@@ -31,7 +31,7 @@
 #     this same kind cluster (setec#16).
 #   - the `merge_group` trigger. The suites take tens of minutes, so they do
 #     not gate a merge. They run nightly and on demand, and feed the tracking
-#     issue below (ADR-0012: exit tests run on main and on a schedule).
+#     issue below (ADR-0080: exit tests run on main and on a schedule).
 #
 # Triggers: the nightly schedule and manual `workflow_dispatch`.
 
@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   # ----------------------------------------------------------------------
-  # build-images — GitHub-hosted (ADR-0060: no metal needed to build a Go
+  # build-images — GitHub-hosted (no metal needed to build a Go
   # binary + container image, only to run it). Publishes sha-tagged images
   # that the `suites` job installs (its `needs:` + image-tag inputs below),
   # so the suites exercise this commit's exact build.
@@ -145,7 +145,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       # The installer prepares the `suites` job's kind worker to boot kata-fc
-      # (ADR-0003). On a kata-deploy node it is also what makes a kata-fc
+      # (ADR-0143). On a kata-deploy node it is also what makes a kata-fc
       # microVM boot at all (setec#9): kata-deploy points the fc handler
       # at the devmapper snapshotter and configures neither a thin-pool nor
       # the snapshotter, so without the installer every kata-fc Sandbox
@@ -198,7 +198,7 @@ jobs:
   #                cluster could not run: the admission webhook, and the
   #                RuntimeClass delete in TestSandbox_ZZ_NoRuntimeClass.
   #        phase3  snapshots on: snapshot/restore, the pool, and both
-  #                ADR-0005 invariants. Snapshots are an install-time
+  #                ADR-0145 invariants. Snapshots are an install-time
   #                switch, and TestPhase3_UpgradeFromPhase2 needs them off.
   #
   # A SKIP fails the step. A skipped scenario is not a verified one, and the
@@ -263,7 +263,7 @@ jobs:
       SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-runtime-agent
       SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
       # setec's own installer prepares the node: kata payload, devmapper
-      # thin-pool, containerd registration (ADR-0003). There is no kata-deploy
+      # thin-pool, containerd registration (ADR-0143). There is no kata-deploy
       # on this cluster, so the installer runs in full mode.
       SETEC_E2E_INSTALLER: "1"
       SETEC_E2E_INSTALLER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-installer
@@ -897,7 +897,7 @@ jobs:
             "The nightly \`e2e / suites\` run failed: ${RUN_URL}" \
             "" \
             "These are the Go e2e scenarios that had no runner before setec#298 — the" \
-            "ADR-0005 invariants, egress confinement, the phase2/phase3 lifecycle, and" \
+            "ADR-0145 invariants, egress confinement, the phase2/phase3 lifecycle, and" \
             "the \`TestEnv_KVMPresent\` guard. A red run here means one of those" \
             "invariants is unverified, not that CI is untidy." \
             "" \
