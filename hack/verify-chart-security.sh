@@ -208,6 +208,28 @@ assert_absent "$workdir/guard-off-agent.yaml" "node guard is omitted when disabl
 	"setec-runtime-agent-node-guard"
 
 # ---------------------------------------------------------------------------
+# KVM device plugin (setec#187). It is a named exception to the secure pod
+# rule: root and two host paths. It must never be privileged, never hold a
+# capability or a ServiceAccount token, and never mount more of the host.
+# ---------------------------------------------------------------------------
+render "$workdir/devplugin.yaml" --show-only templates/device-plugin-daemonset.yaml
+strip_comments "$workdir/devplugin.yaml" "$workdir/devplugin.stripped.yaml"
+note "KVM device plugin (setec#187)"
+assert_contains "$workdir/devplugin.stripped.yaml" "the device plugin is rendered and offers both devices to the kubelet" \
+	"app.kubernetes.io/component: device-plugin" \
+	"path: /var/lib/kubelet/device-plugins" \
+	"automountServiceAccountToken: false" \
+	"allowPrivilegeEscalation: false" \
+	'drop: ["ALL"]'
+assert_absent "$workdir/devplugin.stripped.yaml" "the device plugin is not privileged" "privileged: true"
+assert_absent "$workdir/devplugin.stripped.yaml" "the device plugin adds no capability" "add:"
+if [ "$(grep -c 'hostPath:' "$workdir/devplugin.stripped.yaml")" -eq 2 ]; then
+	pass "the device plugin mounts exactly two host paths"
+else
+	fail "the device plugin must mount exactly two host paths (the kubelet plugin directory and /dev)"
+fi
+
+# ---------------------------------------------------------------------------
 # Portable node installer (ADR-0143, setec#187).
 #
 # The installer is privileged by design (it writes host files and
