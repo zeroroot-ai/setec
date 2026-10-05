@@ -252,21 +252,6 @@ func (in *Installer) detectConfigVersion(ctx context.Context, flavor runtimeFlav
 
 // runtimeTableName returns the CRI runtime table prefix for the config
 // schema version.
-// gvisorRuntimeTableName returns the CRI runtime table prefix for the runsc
-// handler, on the same schema split as kata-fc.
-//
-// The 2.x path is not cosmetic. containerd 2.x SILENTLY IGNORES a runtime
-// registered under the 1.x `io.containerd.grpc.v1.cri` table: the stanza is
-// present, containerd starts clean, and kubelet then fails the pod with
-// `no runtime for "runsc" is configured`. Proven on kind-vanilla running
-// containerd v2.1.1.
-func gvisorRuntimeTableName(version int) string {
-	if version >= 3 {
-		return `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc`
-	}
-	return `plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc`
-}
-
 func runtimeTableName(version int) string {
 	if version >= 3 {
 		return `plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-fc`
@@ -338,15 +323,6 @@ func (in *Installer) registrationTOML(version int, mode convergeMode) string {
     ConfigPath = "%s"
 `, table, table, kataFCConf)
 
-	// gvisor. No snapshotter override: runsc runs on the node's default
-	// snapshotter (overlayfs on a stock node), unlike Firecracker which needs a
-	// block device per container rootfs. No pod_annotations either, because
-	// runsc consumes none.
-	gvisorTable := gvisorRuntimeTableName(version)
-	fmt.Fprintf(&b, `
-[%s]
-  runtime_type = "io.containerd.runsc.v1"
-`, gvisorTable)
 	return b.String()
 }
 

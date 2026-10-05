@@ -38,10 +38,10 @@ func hostTree(t *testing.T, files map[string]os.FileMode, links map[string]strin
 	return root
 }
 
-// The installer lays /usr/local/bin/runsc as a symlink with a host-absolute
+// Node preparation lays /usr/local/bin/runsc as a symlink with a host-absolute
 // target. Before statUnderRoot, the lookup followed that target against the
-// test machine's own filesystem and reported "not found", so a node the
-// installer had just prepared advertised runtime.gvisor=false.
+// test machine's own filesystem and reported "not found", so a node that was
+// just prepared advertised runtime.gvisor=false.
 func TestHostLookPath_FollowsAnAbsoluteSymlinkInsideTheHostRoot(t *testing.T) {
 	root := hostTree(t,
 		map[string]os.FileMode{"/opt/gvisor/runsc": 0o755},
@@ -49,7 +49,7 @@ func TestHostLookPath_FollowsAnAbsoluteSymlinkInsideTheHostRoot(t *testing.T) {
 
 	got, err := hostLookPath(root)("runsc")
 	if err != nil {
-		t.Fatalf("runsc laid by the installer was not found: %v", err)
+		t.Fatalf("runsc laid by node preparation was not found: %v", err)
 	}
 	if want := filepath.Join(root, "/usr/local/bin/runsc"); got != want {
 		t.Fatalf("path = %q, want %q", got, want)

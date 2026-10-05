@@ -125,15 +125,15 @@ spec:
             - name: host-usr-local-bin
               mountPath: /host/usr/local/bin
               readOnly: true
-            # The installer lays gVisor under /opt/gvisor and links
-            # /usr/local/bin/runsc to it. The gvisor probe follows that link,
-            # so the target has to be visible here.
+            # Node preparation lays gVisor under /opt/gvisor and links
+            # /usr/local/bin/runsc to it (the setec installer does not: D70).
+            # The gvisor probe follows that link, so the target has to be
+            # visible here.
             #
-            # /opt and not /opt/gvisor: the installer replaces /opt/gvisor by
-            # staging a sibling directory and renaming it into place. A mount
-            # of the directory itself keeps showing the one that was renamed
-            # away, so an agent that started before the installer finished
-            # would report gvisor absent until its pod restarted.
+            # /opt and not /opt/gvisor: a preparation step that replaces
+            # /opt/gvisor by renaming a staged directory into place would
+            # leave a mount of the directory itself showing the old one, so
+            # the agent would report gvisor absent until its pod restarted.
             - name: host-opt
               mountPath: /host/opt
               readOnly: true

@@ -364,11 +364,11 @@ jobs:
         #     bit. The runtime-agent runs as non-root and cannot traverse
         #     into the directory to read the containerd config, so it would
         #     never label the node kata-fc capable. Real nodes ship 0755.
-        #   - gVisor is bring-your-own. The installer lays down kata only,
-        #     and TestRuntimeBackends_* boot a gvisor Sandbox beside the
-        #     kata-fc one, and fall back to gvisor when kata-fc is gone.
-        #     runsc itself comes from the installer now (setec#89), pinned by
-        #     gvisor.env, so this step no longer installs it.
+        #   - gVisor is bring-your-own. The installer lays down kata only
+        #     (owner decision D70), and TestRuntimeBackends_* boot a gvisor
+        #     Sandbox beside the kata-fc one, and fall back to gvisor when
+        #     kata-fc is gone. So this step lays runsc, as node preparation
+        #     does on a real node, pinned by gvisor.env.
         run: |
           set -euo pipefail
           docker exec "${KVM_NODE}" test -c /dev/kvm || {
@@ -395,14 +395,27 @@ jobs:
           tar -xzf "${cdir}/${tarball}" -C "${cdir}" bin/containerd
           docker cp "${cdir}/bin/containerd" "${KVM_NODE}:/usr/local/bin/containerd"
 
-          # gVisor is NOT laid here any more. The setec installer lays it, from
-          # the gvisor.env pin, as part of normal node preparation (setec#89) —
-          # so this job no longer has its own copy of that logic, and the
-          # existing gvisor scenarios are what prove the installer did it.
-          #
-          # This block also fetched from the release bucket's `latest`, so CI
-          # could drift onto a new gVisor on any run. scripts/check-runtime-pins.sh
-          # now fails on exactly that pattern.
+          # gVisor, laid as node preparation lays it on a staging or EKS node:
+          # the whole release tree under /opt/gvisor, because runsc reads its
+          # sentry from gvisor-bin/ beside its resolved path, and two links on
+          # PATH for containerd. The installer image ships no gVisor (D70).
+          # The pin is gvisor.env, never the bucket's `latest`:
+          # scripts/check-runtime-pins.sh fails on that pattern.
+          . ./gvisor.env
+          gdir="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "${gdir}/gvisor.tar.zst" \
+            "https://github.com/google/gvisor/releases/download/${GVISOR_VERSION}/gvisor-x86_64.tar.zstd"
+          echo "${GVISOR_SHA256}  ${gdir}/gvisor.tar.zst" | sha256sum -c -
+          mkdir -p "${gdir}/opt/gvisor"
+          tar --zstd -xf "${gdir}/gvisor.tar.zst" -C "${gdir}/opt/gvisor"
+          docker cp "${gdir}/opt/gvisor" "${KVM_NODE}:/opt/gvisor"
+          docker exec "${KVM_NODE}" sh -c 'set -e
+            test -x /opt/gvisor/runsc
+            test -x /opt/gvisor/containerd-shim-runsc-v1
+            test -x /opt/gvisor/gvisor-bin/gvisor_sentry
+            ln -sf /opt/gvisor/runsc /usr/local/bin/runsc
+            ln -sf /opt/gvisor/containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
+            runsc --version'
           # discard_unpacked_layers = false here, before this node ever pulls
           # any image, not only in the installer's own drop-in it writes
           # later (setec#91): setec's own images (manager, runtime-agent,

@@ -41,8 +41,8 @@ jobs:
 
   # The installer's payload gate, proven to fail (setec#17). The gate is a
   # stage of Dockerfile.installer that asserts the pruned kata tree holds
-  # exactly the binaries the kata-fc handler runs, and that the gvisor tree
-  # holds runsc, its shim and its sentry. This job builds that stage plain,
+  # exactly the binaries the kata-fc handler runs, and that the payload holds
+  # no gVisor tree (owner decision D70). This job builds that stage plain,
   # which must pass, then once per PAYLOAD_MUTATION, each of which must fail.
   # A guard that cannot fail is the recurring defect class in this org; this
   # is the proof that this one can. The pins come from
@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           args="$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"
-          for mutation in kata-junk-binary gvisor-missing-sentry; do
+          for mutation in kata-junk-binary gvisor-planted; do
             # shellcheck disable=SC2086
             if docker build -f Dockerfile.installer --target payload-gate $args \
                  --build-arg "PAYLOAD_MUTATION=$mutation" . ; then

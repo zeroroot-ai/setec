@@ -51,16 +51,14 @@ func (f *fakeRunner) called(prefix string) int {
 // hostFixture builds a fake host root with KVM, host tools, and the
 // requested runtime flavor, plus a payload directory.
 type hostFixture struct {
-	root          string
-	payload       string
-	gvisorPayload string
+	root    string
+	payload string
 }
 
 func newHostFixture(t *testing.T, flavor string) hostFixture {
 	t.Helper()
 	root := t.TempDir()
 	payload := t.TempDir()
-	gvisorPayload := t.TempDir()
 
 	// KVM device + module, and the thin-pool's device node, which udev
 	// creates on a real node when setec-thinpool.service activates the pool.
@@ -97,20 +95,7 @@ func newHostFixture(t *testing.T, flavor string) hostFixture {
 	}
 	mustWrite(t, filepath.Join(payload, "share/defaults/kata-containers/configuration-fc.toml"), "# fc config\n")
 
-	// gVisor payload tree. gvisor_sentry is a separate binary under
-	// gvisor-bin/ in modern releases, and runsc refuses to create a sandbox
-	// without it under the default sidecar policy, so the fixture carries it
-	// like any other required artifact (setec#89).
-	mustWrite(t, filepath.Join(gvisorPayload, "VERSION"), "release-20260928.0\n")
-	for _, rel := range []string{
-		"runsc",
-		"containerd-shim-runsc-v1",
-		"gvisor-bin/gvisor_sentry",
-	} {
-		mustExecutable(t, filepath.Join(gvisorPayload, rel))
-	}
-
-	return hostFixture{root: root, payload: payload, gvisorPayload: gvisorPayload}
+	return hostFixture{root: root, payload: payload}
 }
 
 func mustWrite(t *testing.T, path, content string) {
@@ -143,10 +128,9 @@ func mustMkdir(t *testing.T, path string) {
 func newTestInstaller(t *testing.T, fx hostFixture, runner Runner) *Installer {
 	t.Helper()
 	inst, err := New(Config{
-		HostRoot:         fx.root,
-		PayloadDir:       fx.payload,
-		GvisorPayloadDir: fx.gvisorPayload,
-		Runner:           runner,
+		HostRoot:   fx.root,
+		PayloadDir: fx.payload,
+		Runner:     runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +194,17 @@ func TestConvergeFreshStockContainerdNode(t *testing.T) {
 	}
 	if !strings.Contains(dropin, `pool_name = "setec-thinpool"`) {
 		t.Errorf("drop-in missing pool name:\n%s", dropin)
+	}
+	// gVisor left the installer (owner decision D70). The installer lays
+	// no gVisor tree, links no runsc and registers no runsc handler. A node
+	// that runs the gvisor backend gets all three from its own preparation.
+	if strings.Contains(dropin, "runsc") {
+		t.Errorf("drop-in registers a runsc handler, want none:\n%s", dropin)
+	}
+	for _, p := range []string{"opt/gvisor", "usr/local/bin/runsc", "usr/local/bin/containerd-shim-runsc-v1"} {
+		if _, err := os.Lstat(filepath.Join(fx.root, p)); !os.IsNotExist(err) {
+			t.Errorf("%s exists after converge, want no gVisor on the node from the installer (err=%v)", p, err)
+		}
 	}
 	mainCfg := readFile(t, filepath.Join(fx.root, "etc/containerd/config.toml"))
 	if !strings.Contains(mainCfg, `imports = ["/etc/containerd/config.d/*.toml"]`) {
@@ -853,11 +848,10 @@ func TestEnvChangeRestartsThinpoolUnit(t *testing.T) {
 	// Same host, bigger pool: the env changes, so the oneshot must be
 	// restarted (a plain start is a no-op with RemainAfterExit).
 	inst2, err := New(Config{
-		HostRoot:         fx.root,
-		PayloadDir:       fx.payload,
-		GvisorPayloadDir: fx.gvisorPayload,
-		LoopDataGB:       200,
-		Runner:           runner,
+		HostRoot:   fx.root,
+		PayloadDir: fx.payload,
+		LoopDataGB: 200,
+		Runner:     runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -892,11 +886,10 @@ func TestRestartFailureSurfacesUnitName(t *testing.T) {
 	runner.respond["containerd config default"] = fakeResponse{out: "version = 2\n"}
 	runner.respond["systemctl is-active containerd.service"] = fakeResponse{out: "activating\n"}
 	inst, err := New(Config{
-		HostRoot:         fx.root,
-		PayloadDir:       fx.payload,
-		GvisorPayloadDir: fx.gvisorPayload,
-		RestartTimeout:   10 * 1e6, // 10ms — fail fast in tests
-		Runner:           runner,
+		HostRoot:       fx.root,
+		PayloadDir:     fx.payload,
+		RestartTimeout: 10 * 1e6, // 10ms — fail fast in tests
+		Runner:         runner,
 	}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
