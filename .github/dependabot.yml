@@ -25,7 +25,6 @@ updates:
 
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: gomod
     directory: /examples/ai-code-exec
     schedule:
@@ -56,7 +55,6 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: gomod
     directory: /examples/ci-sandbox
     schedule:
@@ -87,7 +85,6 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: gomod
     directory: /examples/sec-research
     schedule:
@@ -118,7 +115,6 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: gomod
     directory: /hack/lintconfig
     schedule:
@@ -140,7 +136,6 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -165,7 +160,6 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -185,4 +179,3 @@ updates:
           - patch
     commit-message:
       prefix: chore(deps)
-      include: scope
