@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.118.2](https://github.com/zeroroot-ai/setec/compare/v0.118.1...v0.118.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **build:** no build file names a platform other than linux/amd64 ([#166](https://github.com/zeroroot-ai/setec/issues/166)) ([f22aa38](https://github.com/zeroroot-ai/setec/commit/f22aa388599fa6d68174ba688739747528608bee)), closes [#160](https://github.com/zeroroot-ai/setec/issues/160)
+* **rework:** the agent sees the gvisor the installer laid ([#157](https://github.com/zeroroot-ai/setec/issues/157)) ([aa198a8](https://github.com/zeroroot-ai/setec/commit/aa198a88a978ccda68d3badb1d29005ea6468070))
+* **rework:** the kata pin reaches the e2e suites again ([#150](https://github.com/zeroroot-ai/setec/issues/150)) ([eb50285](https://github.com/zeroroot-ai/setec/commit/eb50285574546fdb50f03d39bff0fd8603a1e247)), closes [#147](https://github.com/zeroroot-ai/setec/issues/147)
+* **rework:** the kata-qemu e2e prep reaches the node and uses the kata 4.x layout ([#152](https://github.com/zeroroot-ai/setec/issues/152)) ([54385ab](https://github.com/zeroroot-ai/setec/commit/54385ab5e8a0eb6a979dce0d5b55051b8fc37286))
+
 ## [0.118.1](https://github.com/zeroroot-ai/setec/compare/v0.118.0...v0.118.1) (2026-10-04)
 
 
