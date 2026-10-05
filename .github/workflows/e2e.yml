@@ -71,7 +71,7 @@ jobs:
       # same release the installer image was built from. Two different kata
       # releases on one node is the shape where a handler loads and then fails
       # at launch (setec#93).
-      kata_version: ${{ steps.kata.outputs.version }}
+      kata_version: ${{ steps.pins.outputs.kata_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -157,10 +157,13 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
+          . ./kata.env
+          test -n "${KATA_VERSION}" || { echo "::error::kata.env sets no KATA_VERSION"; exit 1; }
           {
             echo "build_args<<EOF_ARGS"
             scripts/runtime-build-args.sh
             echo "EOF_ARGS"
+            echo "kata_version=${KATA_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build + push installer (Dockerfile.installer)
