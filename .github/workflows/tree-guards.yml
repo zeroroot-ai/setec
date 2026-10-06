@@ -81,3 +81,9 @@ jobs:
   # (zeroroot-ai/.github#185).
   workflow-lint:
     uses: zeroroot-ai/.github/.github/workflows/workflow-lint.yml@b4a4e65b792669f8f736091a66896c65a51e3004 # v0.12.0
+
+  # Each ADR citation names a live ADR of the public index docs/adr-index.md,
+  # a copy of the file in zeroroot-ai/gibson (gibson#908). The action runs its
+  # self-test with known wrong citations before it scans this tree.
+  adr-citations:
+    uses: zeroroot-ai/.github/.github/workflows/adr-citations.yml@96b8fa3f95163ce097194672a80f1317830503d4 # v0.17.5
