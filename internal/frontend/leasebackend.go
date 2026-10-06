@@ -45,7 +45,7 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 		Namespace:    tmpl.Namespace,
 		Labels: map[string]string{
 			leaseClassLabel: tmpl.SandboxClass,
-			leasePoolLabel:  "true",
+			leasePoolLabel:  labelOn,
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: tmpl.SandboxClass,

@@ -25,6 +25,8 @@ const (
 	// SandboxNamespaceLabel marks a namespace that holds Sandboxes only.
 	// The host guard and the scope policy of the frontend bind to it.
 	SandboxNamespaceLabel = "setec.zeroroot.ai/sandbox-namespace"
+	// labelOn is the value of a label that marks an object.
+	labelOn = "true"
 
 	// PairNamespacePrefix starts the name of each namespace that the
 	// frontend makes for a pair.
@@ -75,7 +77,7 @@ func (n *NamespaceProvisioner) NamespaceFor(ctx context.Context, p tenancy.Pair)
 	}
 
 	want := maps.Clone(p.Labels())
-	want[SandboxNamespaceLabel] = "true"
+	want[SandboxNamespaceLabel] = labelOn
 	ns := &corev1.Namespace{}
 	err := n.Client.Get(ctx, types.NamespacedName{Name: name}, ns)
 	if apierrors.IsNotFound(err) {
@@ -88,7 +90,7 @@ func (n *NamespaceProvisioner) NamespaceFor(ctx context.Context, p tenancy.Pair)
 	if err != nil {
 		return "", fmt.Errorf("namespace %s of pair %s: %w", name, p, err)
 	}
-	if !p.IsOwnerOf(ns.Labels) || ns.Labels[SandboxNamespaceLabel] != "true" {
+	if !p.IsOwnerOf(ns.Labels) || ns.Labels[SandboxNamespaceLabel] != labelOn {
 		return "", fmt.Errorf("namespace %s exists with labels %v; it is not the namespace of pair %s",
 			name, ns.Labels, p.String())
 	}
