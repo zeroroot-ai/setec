@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.121.0](https://github.com/zeroroot-ai/setec/compare/v0.120.0...v0.121.0) (2026-10-06)
+
+
+### Features
+
+* **credentials:** federate with each enrolled cluster and remove the trust domain literal ([#216](https://github.com/zeroroot-ai/setec/issues/216)) ([1c89465](https://github.com/zeroroot-ai/setec/commit/1c894650cac18635371cedf93cfe9cc00d55188b)), closes [#169](https://github.com/zeroroot-ai/setec/issues/169)
+* **fork:** a caller forks a launcher sandbox into several sandboxes ([87d1e6c](https://github.com/zeroroot-ai/setec/commit/87d1e6c95ac11486a6bce38a0e8d19dd72f6465a)), closes [#195](https://github.com/zeroroot-ai/setec/issues/195)
+* **frontend:** a launcher session suspends and resumes with its workspace ([#226](https://github.com/zeroroot-ai/setec/issues/226)) ([fea537b](https://github.com/zeroroot-ai/setec/commit/fea537bd6e15eb7b2cbff5c02bc8617f880a0a52))
+* **frontend:** a running launcher sandbox forks into several sandboxes ([#228](https://github.com/zeroroot-ai/setec/issues/228)) ([87d1e6c](https://github.com/zeroroot-ai/setec/commit/87d1e6c95ac11486a6bce38a0e8d19dd72f6465a))
+* **kernel:** one pinned, minimal guest kernel with its config in the repo ([#222](https://github.com/zeroroot-ai/setec/issues/222)) ([5efaa55](https://github.com/zeroroot-ai/setec/commit/5efaa554c4574a91409ac7ac6a3b4f5b6cf4e2c5))
+* **launcher:** a launcher class runs each sandbox as a Firecracker machine in its pod ([#223](https://github.com/zeroroot-ai/setec/issues/223)) ([38129f1](https://github.com/zeroroot-ai/setec/commit/38129f1419f704a531848cb74db90f39d66da8af))
+* **limits:** a sandbox has a memory ceiling, a scratch limit and an ephemeral-storage limit ([#217](https://github.com/zeroroot-ai/setec/issues/217)) ([0a996b1](https://github.com/zeroroot-ai/setec/commit/0a996b1a0f2937d8be724735cda50156ebe1b1ae))
+* **pool:** a launcher class keeps a warm pool of clean bases ([#225](https://github.com/zeroroot-ai/setec/issues/225)) ([8c12ff8](https://github.com/zeroroot-ai/setec/commit/8c12ff86219e202ed9d89e21ffce5a74f4a066ea))
+* **session:** a durable launcher session survives a drain and a node loss ([#227](https://github.com/zeroroot-ai/setec/issues/227)) ([918a313](https://github.com/zeroroot-ai/setec/commit/918a313778cca51b05e0343cb1a7a1a99ca3fb75))
+* **snapshot:** a caller keeps the state of a sandbox for review ([#229](https://github.com/zeroroot-ai/setec/issues/229)) ([ec2de45](https://github.com/zeroroot-ai/setec/commit/ec2de45f33ece95fb454dd29b6b502d3855f3fc1)), closes [#196](https://github.com/zeroroot-ai/setec/issues/196)
+* **snapshot:** a launcher Sandbox snapshots and restores through the node agent ([#224](https://github.com/zeroroot-ai/setec/issues/224)) ([17b47c4](https://github.com/zeroroot-ai/setec/commit/17b47c48672f0ef5d21c8db23431ecd6ce577c50))
+
 ## [0.120.0](https://github.com/zeroroot-ai/setec/compare/v0.119.0...v0.120.0) (2026-10-06)
 
 
