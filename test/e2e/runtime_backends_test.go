@@ -30,8 +30,8 @@ limitations under the License.
 //   - The Setec operator running in testNamespace with the metrics service
 //     exposed as "setec-metrics" on port 8080.
 //
-// kata-qemu requires /dev/kvm on the test node; the test is skipped when the
-// capability label is absent so the suite passes on KVM-less CI runners.
+// kata-qemu is not a scenario: it leaves setec at the cutover (setec#198), and
+// it only failed in the daily run (setec#219).
 
 package e2e
 
@@ -63,9 +63,7 @@ const metricsScrapeDuration = 30 * time.Second
 const runtimeLabelPrefix = "setec.zeroroot.ai/runtime."
 
 // TestRuntimeBackends_Smoke runs a per-backend smoke test for each of
-// {kata-fc, kata-qemu, gvisor}. kata-qemu is skipped when no node in the
-// cluster carries the capability label (KVM absent or label not set). After
-// all three launches complete, /metrics is scraped to confirm that
+// {kata-fc, gvisor}. After both launches complete, /metrics is scraped to confirm that
 // setec_sandbox_cold_start_seconds samples exist with runtime="kata-fc" and
 // runtime="gvisor" labels.
 func TestRuntimeBackends_Smoke(t *testing.T) {
@@ -76,19 +74,12 @@ func TestRuntimeBackends_Smoke(t *testing.T) {
 	}
 	scenarios := []scenario{
 		{"kata-fc", "smoke-kata-fc", "smoke-sb-kata-fc"},
-		{"kata-qemu", "smoke-kata-qemu", "smoke-sb-kata-qemu"},
 		{"gvisor", "smoke-gvisor", "smoke-sb-gvisor"},
 	}
 
 	for _, sc := range scenarios {
 		sc := sc // capture loop variable
 		t.Run("backend="+sc.backend, func(t *testing.T) {
-			// kata-qemu requires KVM and the matching node label. Skip early when
-			// the label is absent — the operator won't find a capable node.
-			if sc.backend == "kata-qemu" {
-				skipIfNodeLabelMissing(t, runtimeLabelPrefix+"kata-qemu")
-			}
-
 			ctx := context.Background()
 
 			// Create the SandboxClass referencing this backend.
