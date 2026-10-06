@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.123.0](https://github.com/zeroroot-ai/setec/compare/v0.122.0...v0.123.0) (2026-10-06)
+
+
+### Features
+
+* **frontend:** a Snapshot call and a launch from that snapshot ([#243](https://github.com/zeroroot-ai/setec/issues/243)) ([511b032](https://github.com/zeroroot-ai/setec/commit/511b03268d6b1c00f01f17ef8a678fae78c383d3))
+
 ## [0.122.0](https://github.com/zeroroot-ai/setec/compare/v0.121.0...v0.122.0) (2026-10-06)
 
 
