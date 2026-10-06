@@ -16,6 +16,8 @@ service SandboxService {
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
   rpc Wait(WaitRequest) returns (WaitResponse);
   rpc Kill(KillRequest) returns (KillResponse);
+  rpc Suspend(SuspendRequest) returns (SuspendResponse);
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
   rpc Exec(stream SandboxServiceExecRequest) returns (stream SandboxServiceExecResponse);
 }
@@ -392,6 +394,24 @@ message KillRequest {
   window short.
 - A negative `grace_seconds` is `INVALID_ARGUMENT`.
 - A Sandbox that is already gone returns success. `Kill` is idempotent.
+
+## Suspend and resume a session (`Suspend`, `Resume`)
+
+`Suspend` checkpoints a session and releases its microVM. The session
+keeps its workspace and its checkpoint, and it uses no compute while it
+is suspended. `Resume` starts a new microVM that loads the checkpoint.
+The session runs again only after the isolation checks pass.
+
+- Only a session of a class with `sessionCheckpoint` suspends. Any other
+  Sandbox gets `FAILED_PRECONDITION`.
+- A class with checkpoints also suspends an idle session: by default
+  after 10 minutes with no attach, no exec and no client stream
+  (`sessionIdleTimeout`). An `Attach` or an `Exec` resumes such a session.
+- A session that stays suspended longer than
+  `sessionCheckpoint.suspendedTTL` (7 days by default) is recycled: the
+  Sandbox goes with its checkpoint, its key and its workspace.
+- Both calls are idempotent. Each takes `sandbox_id` and `tenant`, as
+  `Kill` does.
 
 ## Streaming logs
 

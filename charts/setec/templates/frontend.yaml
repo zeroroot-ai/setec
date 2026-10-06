@@ -152,6 +152,11 @@ rules:
   - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxes]
     verbs: [create, delete, get, list, patch, watch]
+  # read: Suspend checks that the class of a session has checkpoints
+  # (setec#193), and the lease service reads the pool class.
+  - apiGroups: ["setec.zeroroot.ai"]
+    resources: [sandboxclasses]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]

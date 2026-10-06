@@ -89,6 +89,7 @@ const (
 	eventReasonCheckpointTaken        = "SessionCheckpointTaken"
 	eventReasonSessionKEKCreated      = "SessionKEKCreated"
 	eventReasonSessionKEKDeleted      = "SessionKEKDeleted"
+	eventReasonSessionRecycled        = "SessionRecycled"
 )
 
 // sessionCheckpointPolicy returns the class's checkpoint spec when the
@@ -195,8 +196,11 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// (b) Restore-on-running-edge: the fresh VM is up and a restore is
 	// pending — load the checkpoint into it (transparent resume), or
 	// degrade to restart-from-workspace as a distinct condition.
+	// A launcher resume Pod waits for the checkpoint and is Ready only
+	// after the load, so for it the running Pod, not the Running phase,
+	// starts the restore.
 	if ck := sb.Status.Checkpoint; ck != nil && ck.PendingRestore &&
-		desired.Phase == setecv1alpha1.SandboxPhaseRunning &&
+		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || isLauncherSandbox(sb)) &&
 		pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp.IsZero() {
 		return r.restorePendingCheckpoint(ctx, logger, sb, policy)
 	}
@@ -261,7 +265,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 			due = time.Since(sb.Status.StartedAt.Time) >= policy.Interval.Duration
 		}
 		if due {
-			if err := r.takeCheckpoint(ctx, logger, sb, policy); err != nil {
+			if err := r.takeCheckpoint(ctx, logger, sb, policy, false); err != nil {
 				// A failed periodic checkpoint must not kill a healthy
 				// session: record and retry on the next interval tick.
 				logger.Error(err, "periodic session checkpoint failed; VM keeps running")
@@ -298,6 +302,7 @@ func (r *SandboxReconciler) takeCheckpoint(
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
 	policy *setecv1alpha1.SessionCheckpointSpec,
+	leavePaused bool,
 ) error {
 	if err := r.ensureSessionKEK(ctx, sb); err != nil {
 		return err
@@ -314,7 +319,7 @@ func (r *SandboxReconciler) takeCheckpoint(
 	}
 	backend := policy.CheckpointBackend()
 
-	ref, size, err := r.Coordinator.CheckpointSession(ctx, sb, backend, seq, kek)
+	ref, size, err := r.Coordinator.CheckpointSession(ctx, sb, backend, seq, kek, leavePaused)
 	if err != nil {
 		return fmt.Errorf("checkpoint session: %w", err)
 	}
@@ -366,7 +371,9 @@ func (r *SandboxReconciler) suspendSession(
 	pod *corev1.Pod,
 	reason string,
 ) (ctrl.Result, error) {
-	ckErr := r.takeCheckpoint(ctx, logger, sb, policy)
+	// A launcher machine stays paused after the suspend checkpoint until
+	// its Pod ends, so its workspace never runs ahead of the memory.
+	ckErr := r.takeCheckpoint(ctx, logger, sb, policy, isLauncherSandbox(sb))
 	if ckErr != nil {
 		if reason != reasonCheckpointOnDrain {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError,
@@ -449,18 +456,18 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 			"docs/design/isolation.md invariant gate refused checkpoint resume #%d (%v); destroying the VM that received the unverified state — session restarts from durable workspace",
 			ck.Sequence, restoreErr)
 		logger.Error(restoreErr, "invariant gate refused session checkpoint resume; destroying VM")
-		podName := sb.Status.PodName
-		if podName == "" {
-			podName = sb.Name + "-vm"
-		}
-		pod := &corev1.Pod{}
-		if perr := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: podName}, pod); perr == nil && pod.DeletionTimestamp.IsZero() {
-			if derr := r.Delete(ctx, pod); derr != nil && !apierrors.IsNotFound(derr) {
-				return ctrl.Result{}, true, fmt.Errorf("delete Pod after invariant-gate refusal: %w", derr)
-			}
+		if err := r.deleteSessionPod(ctx, sb); err != nil {
+			return ctrl.Result{}, true, fmt.Errorf("after invariant-gate refusal: %w", err)
 		}
 	case restoreErr != nil:
 		recovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
+		// A launcher resume Pod waits for a checkpoint that will not
+		// come. It goes, and the next Pod boots against the workspace.
+		if isLauncherSandbox(sb) {
+			if err := r.deleteSessionPod(ctx, sb); err != nil {
+				return ctrl.Result{}, true, err
+			}
+		}
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
 			"Checkpoint restore failed (%v); session restarted from durable workspace — no data lost, process state since checkpoint #%d gone",
 			restoreErr, ck.Sequence)
@@ -567,4 +574,48 @@ func (r *SandboxReconciler) teardownSessionCheckpoint(
 				"ref", ck.Ref, "error", delErr.Error())
 		}
 	}
+}
+
+// deleteSessionPod deletes the VM Pod of a session, if it exists.
+func (r *SandboxReconciler) deleteSessionPod(ctx context.Context, sb *setecv1alpha1.Sandbox) error {
+	podName := sb.Status.PodName
+	if podName == "" {
+		podName = sb.Name + "-vm"
+	}
+	pod := &corev1.Pod{}
+	if perr := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: podName}, pod); perr == nil && pod.DeletionTimestamp.IsZero() {
+		if derr := r.Delete(ctx, pod); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete the session Pod: %w", derr)
+		}
+	}
+	return nil
+}
+
+// pendingCheckpoint reports whether a session resumes from a checkpoint:
+// its next launcher Pod loads it instead of a boot.
+func pendingCheckpoint(sb *setecv1alpha1.Sandbox) bool {
+	return sb.Status.Checkpoint != nil && sb.Status.Checkpoint.PendingRestore && sb.Status.Checkpoint.Ref != ""
+}
+
+// recycleIfExpired deletes a session that stayed suspended longer than the
+// SuspendedTTL of its class (setec#193). The teardown of the Sandbox then
+// deletes its checkpoint, its key and its workspace. A session within its
+// time waits, and the reconcile returns at its deadline.
+func (r *SandboxReconciler) recycleIfExpired(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+) (ctrl.Result, error) {
+	since := sb.CreationTimestamp.Time
+	if sb.Status.LastTransitionTime != nil {
+		since = sb.Status.LastTransitionTime.Time
+	}
+	deadline := since.Add(sessionCheckpointPolicy(sb, cls).RecycleAfter())
+	if wait := time.Until(deadline); wait > 0 {
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionRecycled, actionManageCheckpoint,
+		"Session suspended since %s; recycled with its checkpoint, key and workspace", since.UTC().Format(time.RFC3339))
+	if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("recycle the suspended session: %w", err)
+	}
+	return ctrl.Result{}, nil
 }

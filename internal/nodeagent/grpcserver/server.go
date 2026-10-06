@@ -251,8 +251,11 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 
 	// Resume the source VM now that the state+memory pair is on
 	// disk. A resume failure is reported but does not prevent
-	// Storage.Save (the persisted snapshot is still valid).
-	_ = fc.Resume(ctx)
+	// Storage.Save (the persisted snapshot is still valid). A suspend
+	// keeps the machine paused until its Pod ends.
+	if !in.GetLeavePaused() {
+		_ = fc.Resume(ctx)
+	}
 
 	// A base for the warm pool holds no tenant data. The scan runs on the
 	// plaintext files before the store sees them, and a finding stops the

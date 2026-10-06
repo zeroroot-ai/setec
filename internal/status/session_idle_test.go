@@ -179,3 +179,21 @@ func TestApplySessionIdlePolicy_CheckpointClassDefersToSuspend(t *testing.T) {
 		t.Fatalf("checkpoint-enabled class must not idle-evict; got %s/%s", out.Phase, out.Reason)
 	}
 }
+
+// TestSessionIdleDeadline_DefaultForAClassWithCheckpoints pins the default
+// of setec#193: a class with checkpoints and no idle time suspends after
+// 10 minutes with no activity.
+func TestSessionIdleDeadline_DefaultForAClassWithCheckpoints(t *testing.T) {
+	t.Parallel()
+	sb := sessionSandbox(time.Hour, "")
+	cls := &setecv1alpha1.SandboxClass{}
+	cls.Spec.SessionCheckpoint = &setecv1alpha1.SessionCheckpointSpec{}
+	got, ok := SessionIdleDeadline(sb, cls)
+	if !ok || !got.Equal(LastSessionActivity(sb).Add(10*time.Minute)) {
+		t.Fatalf("SessionIdleDeadline = %v, %v; want last activity + 10m", got, ok)
+	}
+	cls.Spec.SessionIdleTimeout = &metav1.Duration{}
+	if _, ok := SessionIdleDeadline(sb, cls); ok {
+		t.Fatal("an explicit zero idle time still suspends")
+	}
+}

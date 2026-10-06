@@ -619,7 +619,7 @@ func (r *SandboxReconciler) handleMissingPod(
 	// checkpoint.
 	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended {
 		if !suspendedSandboxAction(sb) {
-			return ctrl.Result{}, nil
+			return r.recycleIfExpired(ctx, sb, cls)
 		}
 		logger.Info("resuming suspended session", "reason", sb.Status.Reason)
 	}
@@ -703,7 +703,9 @@ func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.Persiste
 	}
 
 	var volumeMode *corev1.PersistentVolumeMode
-	if backend == runtimepkg.BackendKataFC {
+	// Firecracker has no virtio-fs: the workspace reaches the machine as a
+	// block device, for kata-fc and for the launcher.
+	if backend == runtimepkg.BackendKataFC || backend == runtimepkg.BackendLauncher {
 		block := corev1.PersistentVolumeBlock
 		volumeMode = &block
 	}
@@ -856,8 +858,12 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// the Suspended phase steady until the Pod is gone (setec#194).
 	// Deriving from the dying Pod here would flip the phase back to
 	// Running and re-trigger the suspend.
+	// The Pod may still show no deletion in the cache while it already
+	// carries the suspend mark: deriving from it then flipped the phase to
+	// Running, the next reconcile made a new Pod, and a session asked to
+	// stay suspended came back at once (found in setec#193).
 	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
-		!pod.DeletionTimestamp.IsZero() {
+		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "") {
 		return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
 	}
 
@@ -1711,7 +1717,8 @@ func (r *SandboxReconciler) createPod(
 			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
 			// Scratch here once both are on main; until then the default holds.
 			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
-			Restore: sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "", NodeName: nodeName,
+			Restore:     (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") || pendingCheckpoint(sb),
+			NodeName:    nodeName,
 			FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
 			CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
 		})

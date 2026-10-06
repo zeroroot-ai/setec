@@ -221,3 +221,9 @@ func (r *SandboxReconciler) classOrNil(ctx context.Context, sb *setecv1alpha1.Sa
 	}
 	return cls
 }
+
+// isLauncherSandbox reports whether the machine of sb runs in a launcher
+// Pod.
+func isLauncherSandbox(sb *setecv1alpha1.Sandbox) bool {
+	return sb.Status.Runtime != nil && sb.Status.Runtime.Chosen == runtimepkg.BackendLauncher
+}

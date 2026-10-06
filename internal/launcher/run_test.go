@@ -375,3 +375,44 @@ func TestSpec_BaseBootsWithNoWorkload(t *testing.T) {
 		t.Fatal("a base with a workload was accepted")
 	}
 }
+
+// TestPrepareDisks_FormatsANewWorkspaceOnce proves that the first launch of
+// a session formats its empty workspace and a later launch keeps it.
+func TestPrepareDisks_FormatsANewWorkspaceOnce(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	s.WorkspaceDevice = filepath.Join(t.TempDir(), "ws")
+	if err := os.WriteFile(s.WorkspaceDevice, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(s.WorkDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	formats := 0
+	fake := func(path string) error {
+		formats++
+		if path != s.WorkspaceDevice && path != s.WritableDisk {
+			t.Fatalf("formatted %s", path)
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		_, err = f.WriteAt([]byte{0x53, 0xEF}, ext4MagicOffset)
+		return err
+	}
+	if err := s.prepareDisks(fake); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.prepareDisks(fake); err != nil {
+		t.Fatal(err)
+	}
+	// One format of the writable layer and one of the workspace.
+	if formats != 2 {
+		t.Fatalf("formats = %d, want 2: the workspace is formatted once", formats)
+	}
+	if _, err := os.Readlink(filepath.Join(s.WorkDir, workspaceLink)); err != nil {
+		t.Fatalf("no workspace link: %v", err)
+	}
+}

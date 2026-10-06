@@ -53,8 +53,15 @@ func SessionIdleDeadline(
 	if sb == nil || !sb.Spec.IsSession() {
 		return time.Time{}, false
 	}
-	if cls == nil || cls.Spec.SessionIdleTimeout == nil ||
-		cls.Spec.SessionIdleTimeout.Duration <= 0 {
+	if cls == nil {
+		return time.Time{}, false
+	}
+	if cls.Spec.SessionIdleTimeout == nil || cls.Spec.SessionIdleTimeout.Duration <= 0 {
+		// A class with checkpoints suspends an idle session instead of
+		// failing it, so it gets the default idle time (setec#193).
+		if cls.Spec.SessionCheckpoint != nil && cls.Spec.SessionIdleTimeout == nil {
+			return LastSessionActivity(sb).Add(setecv1alpha1.DefaultSessionIdleTimeout), true
+		}
 		return time.Time{}, false
 	}
 	return LastSessionActivity(sb).Add(cls.Spec.SessionIdleTimeout.Duration), true

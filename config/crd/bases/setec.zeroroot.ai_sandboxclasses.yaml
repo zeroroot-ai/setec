@@ -680,6 +680,12 @@ spec:
                       Unset or zero disables periodic checkpoints; checkpoints are
                       then taken only on suspend and drain.
                     type: string
+                  suspendedTTL:
+                    description: |-
+                      SuspendedTTL is how long a suspended session is kept. A session
+                      suspended for longer is recycled: the Sandbox is deleted with its
+                      checkpoint, its key and its workspace. Defaults to 7 days.
+                    type: string
                 type: object
               sessionIdleTimeout:
                 description: |-

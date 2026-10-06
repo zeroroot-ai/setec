@@ -728,3 +728,21 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 func (f *fakeFirecracker) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
 	return f.CreateSnapshot(ctx, state, mem)
 }
+
+// TestCreateSnapshot_LeavePausedKeepsTheMachinePaused proves that a
+// suspend checkpoint does not resume the machine (setec#193).
+func TestCreateSnapshot_LeavePausedKeepsTheMachinePaused(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc, nil)
+	cli := newBufconnClient(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
+		SandboxId: "ns/s", SnapshotId: "snap-1", StorageBackend: "local-disk", SourcePodUid: testPodUID, LeavePaused: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fc.pauseCalls == 0 || fc.resumeOK {
+		t.Fatalf("pause=%d resume=%v; want a paused machine", fc.pauseCalls, fc.resumeOK)
+	}
+}

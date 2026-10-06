@@ -57,7 +57,9 @@ method frontend.Service.Attach	# internal/frontend/attach.go:47
 method frontend.Service.Exec	# internal/frontend/exec.go:87
 method frontend.Service.Kill	# internal/frontend/service.go:350
 method frontend.Service.Launch	# internal/frontend/service.go:160
+method frontend.Service.Resume	# internal/frontend/suspend.go
 method frontend.Service.StreamLogs	# internal/frontend/service.go:400
+method frontend.Service.Suspend	# internal/frontend/suspend.go
 method frontend.Service.Wait	# internal/frontend/service.go:301
 method frontend.execStreamWriter.Write	# internal/frontend/exec.go:538
 method grpcserver.Server.QueryPool	# internal/nodeagent/grpcserver/server.go:559
@@ -181,3 +183,6 @@ field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go
 field podspec.launcherSpec.Base	# internal/podspec/launcher.go
 field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go
 field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go
+# The session workspace of a launcher Pod (setec#193): a wire field of the
+# launcher spec.
+field podspec.launcherSpec.WorkspaceDevice	# internal/podspec/launcher.go
