@@ -156,3 +156,25 @@ func TestSnapshotValidator_Delete(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 }
+
+// TestSnapshotValidator_PinLimit pins the storage limit of setec#196: a
+// pin is refused when the pinned kept Snapshots of the namespace would
+// pass the limit, and a pin of a Snapshot that is not kept is refused.
+func TestSnapshotValidator_PinLimit(t *testing.T) {
+	ctx := context.Background()
+	mk := func(name string, size int64, kept, pinned bool) *setecv1alpha1.Snapshot {
+		s := mkSnapshotCR("t", name, nil)
+		s.Spec.Size, s.Spec.Kept, s.Spec.Pinned = size, kept, pinned
+		return s
+	}
+	v := &SnapshotValidator{Client: newFakeClientSnapshot(t, mk("a", 6, true, true)), PinnedLimitBytes: 10}
+	if _, err := v.ValidateUpdate(ctx, nil, mk("b", 4, true, true)); err != nil {
+		t.Fatalf("a pin within the limit: %v", err)
+	}
+	if _, err := v.ValidateUpdate(ctx, nil, mk("c", 5, true, true)); err == nil {
+		t.Fatal("a pin above the limit was accepted")
+	}
+	if _, err := v.ValidateUpdate(ctx, nil, mk("d", 1, false, true)); err == nil {
+		t.Fatal("a pin of a Snapshot that is not kept was accepted")
+	}
+}

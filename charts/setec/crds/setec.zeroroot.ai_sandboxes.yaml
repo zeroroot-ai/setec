@@ -481,6 +481,12 @@ spec:
                 - message: memory must not exceed 64Gi
                   rule: quantity(string(self.memory)).compareTo(quantity('64Gi'))
                     <= 0
+              review:
+                description: |-
+                  Review makes a review Sandbox: the one kind of Sandbox that loads a
+                  kept Snapshot (setec#196). A review Sandbox must have network mode
+                  none.
+                type: boolean
               sandboxClassName:
                 description: |-
                   SandboxClassName is the name of the cluster-scoped SandboxClass this
@@ -517,6 +523,13 @@ spec:
                       Forkable lets other Sandboxes of the same namespace start from the
                       Snapshot: the forks of setec#195. Each fork loads the state with a
                       new identity, new randomness and its own writable layer.
+                    type: boolean
+                  kept:
+                    description: |-
+                      Kept keeps the Snapshot for a later review (setec#196). A kept
+                      Snapshot is sealed with the key of its tenant in the S3-compatible
+                      store, opens only in a review Sandbox, and expires after 30 days
+                      unless a person pins it.
                     type: boolean
                   name:
                     description: |-

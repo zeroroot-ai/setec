@@ -88,15 +88,25 @@ func (s *Service) Fork(ctx context.Context, req *setecv1grpc.ForkRequest) (*sete
 // forkSnapshot asks the operator for a forkable snapshot of src and waits
 // until it is Ready.
 func (s *Service) forkSnapshot(ctx context.Context, src *setecv1alpha1.Sandbox, ttl time.Duration) (string, error) {
+	return s.snapshotAndWait(ctx, src, forkSnapshotPrefix, func(sp *setecv1alpha1.SandboxSnapshotSpec) {
+		sp.Forkable = true
+		sp.TTL = &metav1.Duration{Duration: ttl}
+	})
+}
+
+// snapshotAndWait asks the operator for a snapshot of src, named with
+// prefix and shaped by set, and waits until it is Ready.
+func (s *Service) snapshotAndWait(
+	ctx context.Context, src *setecv1alpha1.Sandbox, prefix string, set func(*setecv1alpha1.SandboxSnapshotSpec),
+) (string, error) {
 	suffix := make([]byte, 4)
 	_, _ = rand.Read(suffix)
-	snapName := forkSnapshotPrefix + src.Name + "-" + hex.EncodeToString(suffix)
+	snapName := prefix + src.Name + "-" + hex.EncodeToString(suffix)
 	original := src.DeepCopy()
 	src.Spec.Snapshot = &setecv1alpha1.SandboxSnapshotSpec{
-		Create: true, Name: snapName, Forkable: true,
-		AfterCreate: setecv1alpha1.SandboxSnapshotAfterCreateRunning,
-		TTL:         &metav1.Duration{Duration: ttl},
+		Create: true, Name: snapName, AfterCreate: setecv1alpha1.SandboxSnapshotAfterCreateRunning,
 	}
+	set(src.Spec.Snapshot)
 	if err := s.Client.Patch(ctx, src, client.MergeFrom(original)); err != nil {
 		return "", status.Errorf(grpcCodeFor(err), "ask for the snapshot: %v", err)
 	}

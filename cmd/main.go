@@ -29,6 +29,7 @@ import (
 	grpccreds "google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -137,6 +138,7 @@ func main() {
 		diskRegistrySecret    string
 		operatorNamespace     string
 		warmPoolNamespace     string
+		keptPinnedLimit       string
 		diskPublicKeys        []string
 		otlpEndpoint          string
 		otlpInsecure          bool
@@ -194,6 +196,8 @@ func main() {
 		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
 	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"Namespace of the operator, where the disk builder Jobs run.")
+	pflag.StringVar(&keptPinnedLimit, "kept-pinned-limit", "20Gi",
+		"Storage limit of the pinned kept Snapshots of one tenant (setec#196).")
 	pflag.StringVar(&warmPoolNamespace, "warm-pool-namespace", "",
 		"Sandbox namespace that holds the warm pool bases of launcher classes. No tenant may use it. "+
 			"Empty turns the launcher warm pool off.")
@@ -578,7 +582,12 @@ func main() {
 			os.Exit(1)
 		}
 		if snapshotsEnabled {
-			snapVal := &webhook.SnapshotValidator{Client: mgr.GetClient()}
+			pinLimit, err := resource.ParseQuantity(keptPinnedLimit)
+			if err != nil {
+				setupLog.Error(err, "invalid --kept-pinned-limit")
+				os.Exit(1)
+			}
+			snapVal := &webhook.SnapshotValidator{Client: mgr.GetClient(), PinnedLimitBytes: pinLimit.Value()}
 			if err := snapVal.SetupWebhookWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to set up snapshot webhook")
 				os.Exit(1)

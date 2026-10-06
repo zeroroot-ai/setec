@@ -128,6 +128,17 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 		}
 	}
 
+	// A kept Snapshot opens only in a review Sandbox with no network
+	// (setec#196).
+	if snap.Spec.Kept && (!sb.Spec.Review || sb.Spec.Network == nil || sb.Spec.Network.Mode != setecv1alpha1.NetworkModeNone) {
+		out = append(out, ConstraintViolation{
+			Field: fieldSnapshotRef,
+			Message: fmt.Sprintf(
+				"Snapshot %q is kept: it opens only in a review Sandbox (spec.review: true) with network mode none",
+				snap.Name),
+		})
+	}
+
 	// CPU template. The guest of a snapshot saw the CPU features of its
 	// template, so it loads only into a machine with the same template
 	// (setec#105).

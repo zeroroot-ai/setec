@@ -178,6 +178,13 @@ type SandboxSnapshotSpec struct {
 	// +optional
 	TTL *metav1.Duration `json:"ttl,omitempty"`
 
+	// Kept keeps the Snapshot for a later review (setec#196). A kept
+	// Snapshot is sealed with the key of its tenant in the S3-compatible
+	// store, opens only in a review Sandbox, and expires after 30 days
+	// unless a person pins it.
+	// +optional
+	Kept bool `json:"kept,omitempty"`
+
 	// Forkable lets other Sandboxes of the same namespace start from the
 	// Snapshot: the forks of setec#195. Each fork loads the state with a
 	// new identity, new randomness and its own writable layer.
@@ -457,6 +464,12 @@ type SandboxSpec struct {
 	// gRPC service. Phase 3 feature.
 	// +optional
 	SnapshotRef *SandboxSnapshotRef `json:"snapshotRef,omitempty"`
+
+	// Review makes a review Sandbox: the one kind of Sandbox that loads a
+	// kept Snapshot (setec#196). A review Sandbox must have network mode
+	// none.
+	// +optional
+	Review bool `json:"review,omitempty"`
 }
 
 // EffectiveLifecycleMode returns the lifecycle mode the Sandbox follows,

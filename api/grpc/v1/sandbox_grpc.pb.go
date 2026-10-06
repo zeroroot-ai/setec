@@ -34,6 +34,8 @@ const (
 	SandboxService_Suspend_FullMethodName    = "/setec.v1.SandboxService/Suspend"
 	SandboxService_Resume_FullMethodName     = "/setec.v1.SandboxService/Resume"
 	SandboxService_Fork_FullMethodName       = "/setec.v1.SandboxService/Fork"
+	SandboxService_Keep_FullMethodName       = "/setec.v1.SandboxService/Keep"
+	SandboxService_Pin_FullMethodName        = "/setec.v1.SandboxService/Pin"
 	SandboxService_Attach_FullMethodName     = "/setec.v1.SandboxService/Attach"
 	SandboxService_Exec_FullMethodName       = "/setec.v1.SandboxService/Exec"
 )
@@ -90,6 +92,16 @@ type SandboxServiceClient interface {
 	// the source can fork it. The snapshot is deleted after
 	// snapshot_ttl_seconds once no fork still needs it.
 	Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (*ForkResponse, error)
+	// Keep takes a snapshot of a running launcher sandbox for a later
+	// review (setec#196). The snapshot is sealed with the key of the
+	// tenant, opens only in a review sandbox with no network (see
+	// LaunchRequest.review_snapshot), and is deleted after 30 days unless
+	// a person pins it.
+	Keep(ctx context.Context, in *KeepRequest, opts ...grpc.CallOption) (*KeepResponse, error)
+	// Pin keeps a kept snapshot past its 30 days, or lets it expire again.
+	// The pinned snapshots of a tenant count against a storage limit, and a
+	// pin above it is FAILED_PRECONDITION.
+	Pin(ctx context.Context, in *PinRequest, opts ...grpc.CallOption) (*PinResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -255,6 +267,26 @@ func (c *sandboxServiceClient) Fork(ctx context.Context, in *ForkRequest, opts .
 	return out, nil
 }
 
+func (c *sandboxServiceClient) Keep(ctx context.Context, in *KeepRequest, opts ...grpc.CallOption) (*KeepResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KeepResponse)
+	err := c.cc.Invoke(ctx, SandboxService_Keep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxServiceClient) Pin(ctx context.Context, in *PinRequest, opts ...grpc.CallOption) (*PinResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PinResponse)
+	err := c.cc.Invoke(ctx, SandboxService_Pin_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AttachResponse)
@@ -330,6 +362,16 @@ type SandboxServiceServer interface {
 	// the source can fork it. The snapshot is deleted after
 	// snapshot_ttl_seconds once no fork still needs it.
 	Fork(context.Context, *ForkRequest) (*ForkResponse, error)
+	// Keep takes a snapshot of a running launcher sandbox for a later
+	// review (setec#196). The snapshot is sealed with the key of the
+	// tenant, opens only in a review sandbox with no network (see
+	// LaunchRequest.review_snapshot), and is deleted after 30 days unless
+	// a person pins it.
+	Keep(context.Context, *KeepRequest) (*KeepResponse, error)
+	// Pin keeps a kept snapshot past its 30 days, or lets it expire again.
+	// The pinned snapshots of a tenant count against a storage limit, and a
+	// pin above it is FAILED_PRECONDITION.
+	Pin(context.Context, *PinRequest) (*PinResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -436,6 +478,12 @@ func (UnimplementedSandboxServiceServer) Resume(context.Context, *ResumeRequest)
 }
 func (UnimplementedSandboxServiceServer) Fork(context.Context, *ForkRequest) (*ForkResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Fork not implemented")
+}
+func (UnimplementedSandboxServiceServer) Keep(context.Context, *KeepRequest) (*KeepResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Keep not implemented")
+}
+func (UnimplementedSandboxServiceServer) Pin(context.Context, *PinRequest) (*PinResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Pin not implemented")
 }
 func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
@@ -583,6 +631,42 @@ func _SandboxService_Fork_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_Keep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KeepRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).Keep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_Keep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).Keep(ctx, req.(*KeepRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxService_Pin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PinRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).Pin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_Pin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).Pin(ctx, req.(*PinRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AttachRequest)
 	if err := dec(in); err != nil {
@@ -638,6 +722,14 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Fork",
 			Handler:    _SandboxService_Fork_Handler,
+		},
+		{
+			MethodName: "Keep",
+			Handler:    _SandboxService_Keep_Handler,
+		},
+		{
+			MethodName: "Pin",
+			Handler:    _SandboxService_Pin_Handler,
 		},
 		{
 			MethodName: "Attach",

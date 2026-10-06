@@ -145,7 +145,8 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Step 4: TTL check. TTL is only acted on when the snapshot has
 	// no active Sandbox references; a referenced snapshot is kept
 	// alive regardless of age.
-	if snap.Spec.TTL != nil && snap.Spec.TTL.Duration > 0 && count == 0 {
+	// A pinned kept Snapshot does not expire (setec#196).
+	if snap.Spec.TTL != nil && snap.Spec.TTL.Duration > 0 && count == 0 && !snap.Spec.Pinned {
 		age := time.Since(snap.CreationTimestamp.Time)
 		if age >= snap.Spec.TTL.Duration {
 			if err := r.Delete(ctx, snap); err != nil && !apierrors.IsNotFound(err) {

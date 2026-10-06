@@ -116,3 +116,51 @@ func TestIsOwnFork(t *testing.T) {
 		t.Fatal("a Sandbox of another owner loads a fork")
 	}
 }
+
+// TestValidate_KeptOpensOnlyInAReviewWithNoNetwork pins the review rule of
+// setec#196.
+func TestValidate_KeptOpensOnlyInAReviewWithNoNetwork(t *testing.T) {
+	snap := &setecv1alpha1.Snapshot{Namespace: "t-a", Name: "kept-1"}
+	snap.Spec = setecv1alpha1.SnapshotSpec{Kept: true, StorageRef: "r", SourceSandbox: "s"}
+	sb := &setecv1alpha1.Sandbox{Namespace: "t-a", Name: "x"}
+	if len(Validate(sb, snap, nil)) == 0 {
+		t.Fatal("a normal launch from a kept snapshot was accepted")
+	}
+	sb.Spec.Review = true
+	if len(Validate(sb, snap, nil)) == 0 {
+		t.Fatal("a review Sandbox with a network was accepted")
+	}
+	sb.Spec.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeNone}
+	if v := Validate(sb, snap, nil); len(v) != 0 {
+		t.Fatalf("a review Sandbox with no network was refused: %v", v)
+	}
+	if !isReviewOf(sb, snap) {
+		t.Fatal("the gate does not trust a review of the own namespace")
+	}
+}
+
+// TestCreateSnapshot_KeptIsSealedWithTheTenantKey pins the store of
+// setec#196: a kept Snapshot goes to the S3 store with the key of its
+// tenant, which the first kept Snapshot makes, and lives 30 days.
+func TestCreateSnapshot_KeptIsSealedWithTheTenantKey(t *testing.T) {
+	sb := newSandboxForCoord()
+	sb.Spec.Snapshot.Kept = true
+	pod := newPodForSandbox(sb, "node-a")
+	c := newFakeClient(t, sb, pod)
+	na := &fakeNodeAgentClient{createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: "t-a-snap-1"}}
+	if err := newCoord(c, &fakeDialer{client: na}).CreateSnapshot(context.Background(), sb); err != nil {
+		t.Fatal(err)
+	}
+	key := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: TenantKEKSecret}, key); err != nil {
+		t.Fatalf("the tenant key: %v", err)
+	}
+	if na.lastCreate.GetStorageBackend() != KeptBackend || string(na.lastCreate.GetSessionKek()) != string(key.Data["kek"]) {
+		t.Fatalf("create = backend %q, key sent %v", na.lastCreate.GetStorageBackend(), len(na.lastCreate.GetSessionKek()))
+	}
+	got := &setecv1alpha1.Snapshot{}
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got)
+	if !got.Spec.Kept || got.Spec.StorageBackend != KeptBackend || got.Spec.TTL == nil || got.Spec.TTL.Duration != DefaultKeptTTL {
+		t.Fatalf("kept snapshot = %+v", got.Spec)
+	}
+}
