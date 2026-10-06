@@ -22,6 +22,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"k8s.io/client-go/util/retry"
+
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/metrics"
@@ -30,18 +32,23 @@ import (
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 )
 
-// The warm pool of a launcher class (setec#103). A base is a full Snapshot
-// of a launcher machine that booted the pool image of the class and ran no
-// workload. The pool keeps PreWarmPoolSize Ready bases, each on another
-// node, for as long as Sandboxes ask for the image.
+// The warm pool of a launcher class (setec#103, setec#238). A base is a
+// full Snapshot of a launcher machine that booted a pool image of the class
+// and ran no workload. A pool image is an image by digest that a Sandbox of
+// the class asked for with the default resources, in the last 7 days. The
+// pool keeps PreWarmPoolSize Ready bases of each pool image, each on another
+// node.
 const (
-	// warmPoolIdle is how long a pool keeps its bases with no Sandbox
-	// that asks for its image.
+	// warmPoolIdle is how long a pool keeps the bases of an image with no
+	// Sandbox that asks for it.
 	warmPoolIdle = 7 * 24 * time.Hour
+	// maxPoolImages caps the pool images of one class. A class whose
+	// Sandboxes ask for more images keeps the most recent ones.
+	maxPoolImages = 32
 	// warmPoolRequeue is the interval of a pool check.
 	warmPoolRequeue = 30 * time.Second
-	// lastUsedStep is the smallest step of the LastUsed stamp, so a busy
-	// class is not written on each Sandbox.
+	// lastUsedStep is the smallest step of the LastUsed stamp of an image,
+	// so a busy class is not written on each Sandbox.
 	lastUsedStep = time.Hour
 	// baseWriteTimeout is how long a base may stay in Creating after its
 	// Pod is gone before the pool drops it.
@@ -77,14 +84,51 @@ func (r *WarmPoolReconciler) now() time.Time {
 
 // poolActive reports whether a class keeps a warm pool of launcher bases.
 func poolActive(cls *setecv1alpha1.SandboxClass) bool {
-	return cls != nil && cls.Spec.PreWarmPoolSize > 0 && strings.Contains(cls.Spec.PreWarmImage, "@sha256:") &&
+	return cls != nil && cls.Spec.PreWarmPoolSize > 0 &&
 		cls.Spec.DefaultResources != nil && cls.Spec.Runtime != nil &&
 		cls.Spec.Runtime.Backend == runtimepkg.BackendLauncher
 }
 
-// baseKeyOf is the key of the current base of a pool class.
-func baseKeyOf(cls *setecv1alpha1.SandboxClass, launcherImage string) string {
-	return snapshot.BaseKey(cls.Spec.PreWarmImage, launcherImage, cls.Spec.CPUTemplate, *cls.Spec.DefaultResources)
+// poolEligible reports whether sb can use the pool of its class: it asks
+// for an image by digest with the default resources of the class, it names
+// no snapshot, and it is not a session. A session needs its workspace
+// device, which a base never had.
+func poolEligible(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) bool {
+	return poolActive(cls) && strings.Contains(sb.Spec.Image, "@sha256:") &&
+		(sb.Spec.SnapshotRef == nil || sb.Spec.SnapshotRef.Name == "") && !sb.Spec.IsSession() &&
+		sameResources(sb.Spec.Resources, *cls.Spec.DefaultResources)
+}
+
+// baseKeyOf is the key of the current base of image in a pool class.
+func baseKeyOf(cls *setecv1alpha1.SandboxClass, image, launcherImage string) string {
+	return snapshot.BaseKey(image, launcherImage, cls.Spec.CPUTemplate, *cls.Spec.DefaultResources)
+}
+
+// poolImages returns the pool images of cls at now, with their keys: each
+// image of the status that a Sandbox asked for in the last 7 days, and the
+// first pool image (spec.preWarmImage), which counts as asked for at the
+// creation of the class.
+func (r *WarmPoolReconciler) poolImages(cls *setecv1alpha1.SandboxClass, now time.Time) []setecv1alpha1.SandboxClassWarmPoolImage {
+	var out []setecv1alpha1.SandboxClassWarmPoolImage
+	seen := map[string]bool{}
+	add := func(image string, lastUsed metav1.Time) {
+		if seen[image] || now.Sub(lastUsed.Time) > warmPoolIdle {
+			return
+		}
+		seen[image] = true
+		out = append(out, setecv1alpha1.SandboxClassWarmPoolImage{
+			Image: image, LastUsed: lastUsed, Key: baseKeyOf(cls, image, r.LauncherImage),
+		})
+	}
+	if ws := cls.Status.WarmPool; ws != nil {
+		for _, im := range ws.Images {
+			add(im.Image, im.LastUsed)
+		}
+	}
+	if img := cls.Spec.PreWarmImage; strings.Contains(img, "@sha256:") {
+		add(img, cls.CreationTimestamp)
+	}
+	return out
 }
 
 // Reconcile keeps the pool of one class.
@@ -108,138 +152,134 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		r.Metrics.SetWarmPool(cls.Name, 0, 0)
 		return ctrl.Result{}, r.patchStatus(ctx, cls, nil)
 	}
-	// The signature of the pool image comes before any base: an image
-	// that does not verify gets no base at all.
-	if res, stop, err := r.gateOnImage(ctx, cls, bases, pods); stop || err != nil {
-		return res, err
-	}
-
-	key := baseKeyOf(cls, r.LauncherImage)
-	want := int(cls.Spec.PreWarmPoolSize)
-	if lu := cls.Status.WarmPool; lu != nil && lu.LastUsed != nil && r.now().Sub(lu.LastUsed.Time) > warmPoolIdle {
-		want = 0
-	}
-
-	ready, nodes, err := r.pruneBases(ctx, bases, pods, key, want)
+	images := r.poolImages(cls, r.now())
+	// The signature of each pool image comes before any base of it. The
+	// bases of an image that does not verify go, because its key leaves
+	// keys. An image whose check runs keeps its bases and starts none.
+	states, err := r.checkImages(ctx, cls, images)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	building := r.stepBasePods(ctx, cls, pods, key, bases, nodes)
+	keys := make(map[string]string, len(images))
+	for _, im := range images {
+		if states[im.Image] != verifyFailed {
+			keys[im.Key] = im.Image
+		}
+	}
+	want := int(cls.Spec.PreWarmPoolSize)
 
-	if ready+building < want {
-		if err := r.startBase(ctx, cls, key, nodes); err != nil {
-			logger.Error(err, "start a base")
+	ready, nodes, err := r.pruneBases(ctx, bases, pods, keys, want)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	building := r.stepBasePods(ctx, cls, pods, keys, bases, nodes)
+
+	// One new base Pod for each image that is short of bases, each pass.
+	for _, im := range images {
+		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want {
+			if err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key]); err != nil {
+				logger.Error(err, "start a base", "image", im.Image)
+			}
 		}
 	}
 	// A base Pod of this pass may have made a base, so the count is read
 	// again.
-	n, err := r.readyBases(ctx, cls.Name, key)
+	counts, err := r.readyBases(ctx, cls.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	r.Metrics.SetWarmPool(cls.Name, n, want)
-	if err := r.patchStatus(ctx, cls, &setecv1alpha1.SandboxClassWarmPoolStatus{Ready: int32(n), Key: key}); err != nil { //nolint:gosec // a count of a small pool
+	total := 0
+	for i := range images {
+		images[i].Ready = int32(min(counts[images[i].Key], want)) //nolint:gosec // a count of a small pool
+		total += counts[images[i].Key]
+	}
+	r.Metrics.SetWarmPool(cls.Name, total, want*len(images))
+	if err := r.patchStatus(ctx, cls, images); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: warmPoolRequeue}, nil
 }
 
-// pruneBases deletes a stale or failed base, and each base above the
-// wanted count. It returns the count of Ready bases, and the nodes that
-// hold a base.
+// pruneBases deletes a stale or failed base, and each base of an image
+// above the wanted count. keys maps the current key of each pool image to
+// the image. It returns the count of Ready bases and the nodes that hold a
+// base, for each key.
 func (r *WarmPoolReconciler) pruneBases(
-	ctx context.Context, bases []setecv1alpha1.Snapshot, pods []corev1.Pod, key string, want int,
-) (ready int, nodes map[string]bool, err error) {
-	nodes = map[string]bool{}
+	ctx context.Context, bases []setecv1alpha1.Snapshot, pods []corev1.Pod, keys map[string]string, want int,
+) (ready map[string]int, nodes map[string]map[string]bool, err error) {
+	ready = map[string]int{}
+	nodes = map[string]map[string]bool{}
 	for i := range bases {
 		b := &bases[i]
+		k := b.Annotations[snapshot.BaseKeyAnnotation]
+		_, current := keys[k]
 		switch {
-		case b.Annotations[snapshot.BaseKeyAnnotation] != key, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
-			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && ready >= want:
+		case !current, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
+			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && ready[k] >= want:
 			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
-				return 0, nil, errwrap.Wrap(err, "client.Writer.Delete")
+				return nil, nil, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
-			ready++
-			nodes[b.Spec.Node] = true
+			ready[k]++
+			addNode(nodes, k, b.Spec.Node)
 		case !slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == b.Name }) &&
 			r.now().Sub(b.CreationTimestamp.Time) > baseWriteTimeout:
 			// The write of this base stopped with its Pod, for example
 			// at a restart of the operator. It never becomes Ready.
 			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
-				return 0, nil, errwrap.Wrap(err, "client.Writer.Delete")
+				return nil, nil, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		default:
-			nodes[b.Spec.Node] = true
+			addNode(nodes, k, b.Spec.Node)
 		}
 	}
 	return ready, nodes, nil
 }
 
+// addNode records that node holds or soon holds a base of key.
+func addNode(nodes map[string]map[string]bool, key, node string) {
+	if node == "" {
+		return
+	}
+	if nodes[key] == nil {
+		nodes[key] = map[string]bool{}
+	}
+	nodes[key][node] = true
+}
+
 // stepBasePods moves each base Pod on, and adds its node to nodes. It
-// returns the count of Pods that still build a base.
+// returns the count of Pods that still build a base, for each key.
 func (r *WarmPoolReconciler) stepBasePods(
-	ctx context.Context, cls *setecv1alpha1.SandboxClass, pods []corev1.Pod, key string,
-	bases []setecv1alpha1.Snapshot, nodes map[string]bool,
-) int {
-	building := 0
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, pods []corev1.Pod, keys map[string]string,
+	bases []setecv1alpha1.Snapshot, nodes map[string]map[string]bool,
+) map[string]int {
+	building := map[string]int{}
 	for i := range pods {
 		p := &pods[i]
-		done, err := r.stepBasePod(ctx, cls, p, key, bases)
+		k := p.Annotations[snapshot.BaseKeyAnnotation]
+		done, err := r.stepBasePod(ctx, cls, p, keys, bases)
 		if err != nil {
 			log.FromContext(ctx).Error(err, "base Pod step", "pod", p.Name)
 		}
 		if !done {
-			building++
+			building[k]++
 		}
 		// The node of a base Pod holds a base now or soon.
-		if p.Spec.NodeName != "" {
-			nodes[p.Spec.NodeName] = true
-		}
+		addNode(nodes, k, p.Spec.NodeName)
 	}
 	return building
-}
-
-// gateOnImage checks the signature of the pool image. stop is true while
-// the check runs, and when the image does not verify: the pool then drops
-// each base and sets the condition ImageNotVerified.
-func (r *WarmPoolReconciler) gateOnImage(
-	ctx context.Context, cls *setecv1alpha1.SandboxClass, bases []setecv1alpha1.Snapshot, pods []corev1.Pod,
-) (res ctrl.Result, stop bool, err error) {
-	state, msg, err := r.ensureImageVerified(ctx, cls)
-	if err != nil {
-		return ctrl.Result{}, true, err
-	}
-	switch state {
-	case verifyFailed:
-		reason := reasonImageNotVerified
-		if cls.Spec.PreWarmImageSignature == nil {
-			reason = reasonImageNoSigner
-		}
-		if err := r.deleteAll(ctx, cls.Name, bases, pods); err != nil {
-			return ctrl.Result{}, true, err
-		}
-		r.Metrics.SetWarmPool(cls.Name, 0, int(cls.Spec.PreWarmPoolSize))
-		if err := r.setImageCondition(ctx, cls, true, reason, msg); err != nil {
-			return ctrl.Result{}, true, err
-		}
-		return ctrl.Result{RequeueAfter: warmPoolRequeue}, true, r.patchStatus(ctx, cls, nil)
-	case verifyPending:
-		return ctrl.Result{RequeueAfter: diskBuildRequeue}, true, nil
-	case verifyPassed:
-	}
-	return ctrl.Result{}, false, r.setImageCondition(ctx, cls, false, reasonImageVerified,
-		"the pool image has a signature of the named signer")
 }
 
 // stepBasePod moves one base Pod on. A Ready Pod (its guest agent answers)
 // gets its base snapshot, and then the Pod goes. A Pod that ended or that
 // has an old key goes. It reports whether the Pod is done.
 func (r *WarmPoolReconciler) stepBasePod(
-	ctx context.Context, cls *setecv1alpha1.SandboxClass, p *corev1.Pod, key string, bases []setecv1alpha1.Snapshot,
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, p *corev1.Pod, keys map[string]string, bases []setecv1alpha1.Snapshot,
 ) (bool, error) {
+	key := p.Annotations[snapshot.BaseKeyAnnotation]
+	image, current := keys[key]
 	ended := p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded
-	if ended || p.Annotations[snapshot.BaseKeyAnnotation] != key || !p.DeletionTimestamp.IsZero() {
+	if ended || !current || !p.DeletionTimestamp.IsZero() {
 		return true, client.IgnoreNotFound(r.Delete(ctx, p))
 	}
 	if !isPodReady(p) {
@@ -249,17 +289,19 @@ func (r *WarmPoolReconciler) stepBasePod(
 		// The snapshot exists or is in flight: the Pod is done.
 		return true, client.IgnoreNotFound(r.Delete(ctx, p))
 	}
-	err := r.Coordinator.CreateBase(ctx, p, cls, cls.Spec.PreWarmImage, key)
+	err := r.Coordinator.CreateBase(ctx, p, cls, image, key)
 	if derr := r.Delete(ctx, p); client.IgnoreNotFound(derr) != nil && err == nil {
 		err = derr
 	}
 	return true, err
 }
 
-// startBase creates one base Pod on a node that holds no base of the
-// class yet. The disk of the image comes first.
-func (r *WarmPoolReconciler) startBase(ctx context.Context, cls *setecv1alpha1.SandboxClass, key string, nodes map[string]bool) error {
-	done, err := ensureDisk(ctx, r.Client, r.DiskBuilder, r.DiskRepo, cls.Spec.PreWarmImage)
+// startBase creates one base Pod of image on a node that holds no base of
+// the image yet. The disk of the image comes first.
+func (r *WarmPoolReconciler) startBase(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, image, key string, nodes map[string]bool,
+) error {
+	done, err := ensureDisk(ctx, r.Client, r.DiskBuilder, r.DiskRepo, image)
 	if err != nil || !done {
 		return err
 	}
@@ -269,7 +311,7 @@ func (r *WarmPoolReconciler) startBase(ctx context.Context, cls *setecv1alpha1.S
 	if len(name) > 63 {
 		name = fmt.Sprintf("base-%s-%s", key[:12], hex.EncodeToString(suffix))
 	}
-	pod, err := podspec.BuildLauncherBase(name, r.Namespace, cls.Spec.PreWarmImage, *cls.Spec.DefaultResources, podspec.LauncherOptions{
+	pod, err := podspec.BuildLauncherBase(name, r.Namespace, image, *cls.Spec.DefaultResources, podspec.LauncherOptions{
 		Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, CPUTemplate: cls.Spec.CPUTemplate,
 	})
 	if err != nil {
@@ -307,16 +349,16 @@ func (r *WarmPoolReconciler) list(ctx context.Context, class string) ([]setecv1a
 	return bases.Items, pods.Items, nil
 }
 
-// readyBases counts the Ready bases of a class with key.
-func (r *WarmPoolReconciler) readyBases(ctx context.Context, class, key string) (int, error) {
+// readyBases counts the Ready bases of a class, for each key.
+func (r *WarmPoolReconciler) readyBases(ctx context.Context, class string) (map[string]int, error) {
 	bases, _, err := r.list(ctx, class)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	n := map[string]int{}
 	for i := range bases {
-		if bases[i].Status.Phase == setecv1alpha1.SnapshotPhaseReady && bases[i].Annotations[snapshot.BaseKeyAnnotation] == key {
-			n++
+		if bases[i].Status.Phase == setecv1alpha1.SnapshotPhaseReady {
+			n[bases[i].Annotations[snapshot.BaseKeyAnnotation]]++
 		}
 	}
 	return n, nil
@@ -343,17 +385,53 @@ func (r *WarmPoolReconciler) deleteAll(ctx context.Context, class string, bases 
 	return nil
 }
 
-// patchStatus writes the pool status of a class and keeps LastUsed.
-func (r *WarmPoolReconciler) patchStatus(ctx context.Context, cls *setecv1alpha1.SandboxClass, ws *setecv1alpha1.SandboxClassWarmPoolStatus) error {
-	if ws != nil && cls.Status.WarmPool != nil {
-		ws.LastUsed = cls.Status.WarmPool.LastUsed
+// patchStatus writes the pool images of a class. A Sandbox may have
+// stamped an image since the class was read, so it reads the class again
+// and keeps each image that the new read holds and that is not idle. A
+// conflict with such a stamp retries. A nil images clears the pool.
+func (r *WarmPoolReconciler) patchStatus(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, images []setecv1alpha1.SandboxClassWarmPoolImage,
+) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		fresh := &setecv1alpha1.SandboxClass{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(cls), fresh); err != nil {
+			return errwrap.Wrap(err, "client.Reader.Get")
+		}
+		var ws *setecv1alpha1.SandboxClassWarmPoolStatus
+		if images != nil {
+			ws = &setecv1alpha1.SandboxClassWarmPoolStatus{Images: mergePoolImages(fresh.Status.WarmPool, images, r.now())}
+		}
+		if equality.Semantic.DeepEqual(fresh.Status.WarmPool, ws) {
+			return nil
+		}
+		orig := fresh.DeepCopy()
+		fresh.Status.WarmPool = ws
+		return errwrap.Wrap(r.Status().Patch(ctx, fresh, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})),
+			"client.SubResourceWriter.Patch")
+	})
+	return errwrap.Wrap(err, "retry.RetryOnConflict")
+}
+
+// mergePoolImages joins the computed pool images with the images of the
+// live status. A live image that is not idle stays, with the later of the
+// two stamps, so a Sandbox that asked for it since the read is not lost.
+func mergePoolImages(
+	live *setecv1alpha1.SandboxClassWarmPoolStatus, computed []setecv1alpha1.SandboxClassWarmPoolImage, now time.Time,
+) []setecv1alpha1.SandboxClassWarmPoolImage {
+	out := slices.Clone(computed)
+	if live != nil {
+		for _, l := range live.Images {
+			i := slices.IndexFunc(out, func(c setecv1alpha1.SandboxClassWarmPoolImage) bool { return c.Image == l.Image })
+			switch {
+			case i >= 0 && l.LastUsed.After(out[i].LastUsed.Time):
+				out[i].LastUsed = l.LastUsed
+			case i < 0 && now.Sub(l.LastUsed.Time) <= warmPoolIdle:
+				out = append(out, l)
+			}
+		}
 	}
-	if equality.Semantic.DeepEqual(cls.Status.WarmPool, ws) {
-		return nil
-	}
-	orig := cls.DeepCopy()
-	cls.Status.WarmPool = ws
-	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
+	slices.SortFunc(out, func(a, b setecv1alpha1.SandboxClassWarmPoolImage) int { return strings.Compare(a.Image, b.Image) })
+	return out
 }
 
 // SetupWithManager registers the reconciler. A change of a base Pod or a
@@ -375,21 +453,15 @@ func (r *WarmPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // --- the Sandbox side ---------------------------------------------------
 
-// selectBase returns a Ready, clean base with the current key for a
-// Sandbox that can warm start, or nil. A Sandbox can when its class keeps
-// a pool, it asks for the pool image with the default size of the class,
-// and it names no snapshot.
+// selectBase returns a Ready, clean base with the current key of the image
+// of sb, or nil. Only a Sandbox that is poolEligible can warm start.
 func (r *SandboxReconciler) selectBase(
 	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
 ) (*setecv1alpha1.Snapshot, error) {
-	// A session needs its workspace device, which a base never had, so a
-	// session always boots or loads its own checkpoint.
-	if !poolActive(cls) || r.WarmPoolNamespace == "" || (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") ||
-		sb.Spec.IsSession() ||
-		sb.Spec.Image != cls.Spec.PreWarmImage || !sameResources(sb.Spec.Resources, *cls.Spec.DefaultResources) {
+	if r.WarmPoolNamespace == "" || !poolEligible(sb, cls) {
 		return nil, nil
 	}
-	key := baseKeyOf(cls, r.LauncherImage)
+	key := baseKeyOf(cls, sb.Spec.Image, r.LauncherImage)
 	bases := &setecv1alpha1.SnapshotList{}
 	if err := r.List(ctx, bases, client.InNamespace(r.WarmPoolNamespace),
 		client.MatchingLabels{snapshot.BaseLabel: snapshot.BaseLabelValue, snapshot.BaseClassLabel: cls.Name}); err != nil {
@@ -410,23 +482,56 @@ func sameResources(a, b setecv1alpha1.Resources) bool {
 	return a.VCPU == b.VCPU && a.Memory.Cmp(b.Memory) == 0
 }
 
-// markPoolUsed stamps LastUsed on the pool status of a class when a
-// Sandbox asks for the pool image, at most once an hour.
+// markPoolUsed stamps the image of sb in the pool status of its class, at
+// most once an hour for each image. A new image joins the pool. A class
+// keeps at most maxPoolImages images, the most recent ones.
 func (r *SandboxReconciler) markPoolUsed(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) error {
-	if !poolActive(cls) || sb.Spec.Image != cls.Spec.PreWarmImage {
+	if !poolEligible(sb, cls) {
 		return nil
 	}
 	now := time.Now()
-	if ws := cls.Status.WarmPool; ws != nil && ws.LastUsed != nil && now.Sub(ws.LastUsed.Time) < lastUsedStep {
-		return nil
+	if ws := cls.Status.WarmPool; ws != nil {
+		for _, im := range ws.Images {
+			if im.Image == sb.Spec.Image && now.Sub(im.LastUsed.Time) < lastUsedStep {
+				return nil
+			}
+		}
 	}
-	orig := cls.DeepCopy()
-	if cls.Status.WarmPool == nil {
-		cls.Status.WarmPool = &setecv1alpha1.SandboxClassWarmPoolStatus{}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		fresh := &setecv1alpha1.SandboxClass{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(cls), fresh); err != nil {
+			return errwrap.Wrap(err, "client.Reader.Get")
+		}
+		orig := fresh.DeepCopy()
+		if fresh.Status.WarmPool == nil {
+			fresh.Status.WarmPool = &setecv1alpha1.SandboxClassWarmPoolStatus{}
+		}
+		fresh.Status.WarmPool.Images = stampImage(fresh.Status.WarmPool.Images, sb.Spec.Image, metav1.NewTime(now))
+		return errwrap.Wrap(r.Status().Patch(ctx, fresh, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})),
+			"client.SubResourceWriter.Patch")
+	})
+	return errwrap.Wrap(err, "retry.RetryOnConflict")
+}
+
+// stampImage sets the LastUsed of image to now, and adds the image when it
+// is new. Past maxPoolImages, the image with the oldest stamp goes.
+func stampImage(images []setecv1alpha1.SandboxClassWarmPoolImage, image string, now metav1.Time) []setecv1alpha1.SandboxClassWarmPoolImage {
+	if i := slices.IndexFunc(images, func(im setecv1alpha1.SandboxClassWarmPoolImage) bool { return im.Image == image }); i >= 0 {
+		images[i].LastUsed = now
+		return images
 	}
-	t := metav1.NewTime(now)
-	cls.Status.WarmPool.LastUsed = &t
-	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
+	images = append(images, setecv1alpha1.SandboxClassWarmPoolImage{Image: image, LastUsed: now})
+	if len(images) > maxPoolImages {
+		oldest := 0
+		for i := range images {
+			if images[i].LastUsed.Before(&images[oldest].LastUsed) {
+				oldest = i
+			}
+		}
+		images = slices.Delete(images, oldest, oldest+1)
+	}
+	slices.SortFunc(images, func(a, b setecv1alpha1.SandboxClassWarmPoolImage) int { return strings.Compare(a.Image, b.Image) })
+	return images
 }
 
 // isPodReady reports whether the Ready condition of p is True: for a

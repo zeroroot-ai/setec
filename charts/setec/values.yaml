@@ -89,12 +89,13 @@ launcher:
     # signing key rotates. Required.
     publicKeys: []
   # -- warmPool keeps the bases of each class with a pool (preWarmPoolSize,
-  # preWarmImage with a digest, its signer preWarmImageSignature,
-  # defaultResources). The operator checks the cosign signature of the
-  # image before the first base. A base is a snapshot of a
-  # machine that booted the image and ran no workload. A Sandbox of the
-  # class with that image and size loads a base instead of a boot
-  # (setec#103). Needs snapshots.enabled.
+  # the signer preWarmImageSignature, defaultResources). A class keeps
+  # bases of each image by digest that its Sandboxes asked for in the last
+  # 7 days, and of its optional first image preWarmImage. The operator
+  # checks the cosign signature of each image before its first base. A
+  # base is a snapshot of a machine that booted the image and ran no
+  # workload. A Sandbox of the class with that image and size loads a base
+  # instead of a boot (setec#103, setec#238). Needs snapshots.enabled.
   warmPool:
     # -- namespace holds the base Pods and the base Snapshots. It must be
     # one of sandboxNamespaces, and no tenant may use it. Empty turns the

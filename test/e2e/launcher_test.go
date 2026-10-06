@@ -274,32 +274,35 @@ func waitGone(t *testing.T, key client.ObjectKey, timeout time.Duration) {
 }
 
 // waitForWarmPoolReady waits until the warm pool of a class has a Ready
-// base and returns the class.
+// base of image.
 func waitForWarmPoolReady(
-	ctx context.Context, t *testing.T, class string, timeout time.Duration,
-) *setecv1alpha1.SandboxClass {
+	ctx context.Context, t *testing.T, class, image string, timeout time.Duration,
+) *setecv1alpha1.SandboxClassWarmPoolImage {
 	t.Helper()
-	return waitForWarmPool(ctx, t, class, timeout, func(*setecv1alpha1.SandboxClassWarmPoolStatus) bool { return true })
+	return waitForWarmPool(ctx, t, class, image, timeout, func(*setecv1alpha1.SandboxClassWarmPoolImage) bool { return true })
 }
 
-// waitForWarmPool waits until the warm pool of a class has a Ready base
-// for which ok holds.
-func waitForWarmPool(ctx context.Context, t *testing.T, class string, timeout time.Duration,
-	ok func(*setecv1alpha1.SandboxClassWarmPoolStatus) bool,
-) *setecv1alpha1.SandboxClass {
+// waitForWarmPool waits until the warm pool of a class has a Ready base of
+// image for which ok holds, and returns the pool of the image.
+func waitForWarmPool(ctx context.Context, t *testing.T, class, image string, timeout time.Duration,
+	ok func(*setecv1alpha1.SandboxClassWarmPoolImage) bool,
+) *setecv1alpha1.SandboxClassWarmPoolImage {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	cls := &setecv1alpha1.SandboxClass{}
 	for time.Now().Before(deadline) {
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: class}, cls); err == nil {
-			if ws := cls.Status.WarmPool; ws != nil && ws.Ready >= 1 && ok(ws) {
-				return cls
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: class}, cls); err == nil && cls.Status.WarmPool != nil {
+			for i := range cls.Status.WarmPool.Images {
+				im := &cls.Status.WarmPool.Images[i]
+				if im.Image == image && im.Ready >= 1 && ok(im) {
+					return im
+				}
 			}
 		}
 		time.Sleep(5 * time.Second)
 	}
 	out, _ := exec.Command("kubectl", "-n", launcherCfg.warmPoolNamespace, "get", "pods,snapshots,events").CombinedOutput()
-	t.Fatalf("the warm pool of %s has no Ready base after %s; status %+v\n%s", class, timeout, cls.Status.WarmPool, out)
+	t.Fatalf("the warm pool of %s has no Ready base of %s after %s; status %+v\n%s", class, image, timeout, cls.Status.WarmPool, out)
 	return nil
 }
 
@@ -337,8 +340,8 @@ func TestLauncher_WarmPool(t *testing.T) {
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), cls) })
 
 	start := time.Now()
-	ready := waitForWarmPoolReady(ctx, t, clsName, 15*time.Minute)
-	key := ready.Status.WarmPool.Key
+	ready := waitForWarmPoolReady(ctx, t, clsName, poolImage, 15*time.Minute)
+	key := ready.Key
 	t.Logf("first base Ready in %s, key %s", time.Since(start).Round(time.Second), key)
 
 	// Invariant 1 and 4: each base comes from the class image, in the pool
@@ -376,7 +379,7 @@ func TestLauncher_WarmPool(t *testing.T) {
 			t.Errorf("%s has the hostname %q", name, seen[len(seen)-1].hostname)
 		}
 		if i == 0 {
-			waitForWarmPoolReady(ctx, t, clsName, 15*time.Minute)
+			waitForWarmPoolReady(ctx, t, clsName, poolImage, 15*time.Minute)
 		}
 	}
 
@@ -388,8 +391,8 @@ func TestLauncher_WarmPool(t *testing.T) {
 	if err := k8sClient.Patch(ctx, cls, patch); err != nil {
 		t.Fatalf("change the size of %s: %v", clsName, err)
 	}
-	waitForWarmPool(ctx, t, clsName, 15*time.Minute,
-		func(ws *setecv1alpha1.SandboxClassWarmPoolStatus) bool { return ws.Key != "" && ws.Key != key })
+	waitForWarmPool(ctx, t, clsName, poolImage, 15*time.Minute,
+		func(im *setecv1alpha1.SandboxClassWarmPoolImage) bool { return im.Key != "" && im.Key != key })
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		stale := 0

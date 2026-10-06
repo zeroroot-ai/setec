@@ -210,7 +210,7 @@ deletes the backing Pod; status converges to `Failed` with
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
 | `lastTransitionTime` | `metav1.Time` | Timestamp of the most recent phase change. |
-| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (docs/design/lifecycles.md) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a warm base, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
+| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (docs/design/lifecycles.md) for Sandboxes whose class declares `preWarmPoolSize > 0` and that ask for an image by digest with the default resources of the class. `outcome` is `PoolRestored` (started from a warm base, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
 | `checkpoint` | object | Session memory-checkpoint bookkeeping (session + class `sessionCheckpoint` only). `ref`/`backend`/`sequence`/`takenAt`/`sizeBytes` describe the single retained checkpoint (a new one replaces its predecessor; a restore consumes it). `pendingRestore` marks a fresh VM that must restore from `ref`. `lastRecovery` reports how the most recent VM (re)start recovered: `ResumedFromCheckpoint` (process continued) or `RestartedFromWorkspace` (the distinct degraded condition — the process restarted against the durable workspace; no data lost). While `Suspended`, `status.reason` is one of `SuspendedIdle`, `UserSuspended`, or `CheckpointOnDrain`. |
 
 ## Phase state machine
@@ -296,8 +296,9 @@ Administrators author classes; tenants reference them by name in
   admission with a message that names setec#198. A class that skipped
   admission cannot run a Sandbox either: the operator fails the Sandbox
   with the reason `UnsupportedBackend`.
-- A class with `spec.preWarmPoolSize` needs `spec.preWarmImage` by digest,
-  `spec.defaultResources`, and `spec.preWarmImageSignature`: a keyless
+- A class with `spec.preWarmPoolSize` needs `spec.defaultResources` and
+  `spec.preWarmImageSignature`, and a `spec.preWarmImage` by digest when
+  it names one. The signature is a keyless
   `issuer` and `identity`, or a `publicKey`, not both.
 - `spec.requests.cpu` and `spec.requests.memory`, when set, must be
   positive and must not exceed `spec.maxResources` when the class
@@ -400,13 +401,15 @@ Three additive fields on `SandboxSpec`:
 
 These fields of `SandboxClassSpec` belong to the pool and the pause:
 
-- `preWarmPoolSize` (int; default 0). The number of warm bases of the
-  class: snapshots of a machine that booted `preWarmImage` and ran no
-  workload. A Sandbox of the class with that image and size loads a base
-  instead of a boot.
-- `preWarmImage` (string, by digest; required when pool size is non-zero)
+- `preWarmPoolSize` (int; default 0). The number of warm bases of each
+  pool image of the class: snapshots of a machine that booted the image
+  and ran no workload. A pool image is an image by digest that a Sandbox
+  of the class asked for with the default resources in the last 7 days.
+  Such a Sandbox loads a base instead of a boot.
+- `preWarmImage` (string, by digest; optional). A first pool image, warm
+  from the creation of the class.
 - `preWarmImageSignature` (object; required when pool size is non-zero).
-  The signer of `preWarmImage`: `issuer` and `identity` of a keyless
+  The signer of each pool image: `issuer` and `identity` of a keyless
   cosign signature, or a PEM `publicKey`. The operator builds no base from
   an image without a signature of this signer, and sets the condition
   `ImageNotVerified` on the class. See [snapshots](snapshots.md).

@@ -28,11 +28,11 @@ spec:
       name: Max-Memory
       priority: 1
       type: string
-    - jsonPath: .status.warmPool.ready
+    - jsonPath: .status.warmPool.images[*].ready
       name: Pool-Ready
-      type: integer
-    - jsonPath: .status.warmPool.key
-      name: Pool-Key
+      type: string
+    - jsonPath: .status.warmPool.images[*].image
+      name: Pool-Images
       priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
@@ -516,11 +516,11 @@ spec:
                 type: object
               preWarmImage:
                 description: |-
-                  PreWarmImage is the OCI reference baked into pre-warmed pool
-                  entries. Sandboxes requesting a different image fall through to
-                  the cold-boot path. The format follows the usual OCI reference
-                  grammar; validation beyond non-empty is a webhook concern so the
-                  CRD schema remains minimal.
+                  PreWarmImage is an optional first pool image, by digest. The pool
+                  warms it from the creation of the class, before any Sandbox asks
+                  for it. Like every pool image, it has no base after 7 days in which
+                  no Sandbox of the class asked for it. Each other image by digest
+                  joins the pool on its first request.
                 type: string
               preWarmImageSignature:
                 description: |-
@@ -548,9 +548,11 @@ spec:
               preWarmPoolSize:
                 description: |-
                   PreWarmPoolSize is the number of warm pool bases that the operator
-                  keeps for this class (setec#103). Zero disables the pool. When
-                  non-zero, PreWarmImage with a digest and DefaultResources must be
-                  set; the webhook enforces both.
+                  keeps for each pool image of this class (setec#103, setec#238). A
+                  pool image is an image by digest that a Sandbox of the class asked
+                  for with the default resources, in the last 7 days. Zero disables
+                  the pool. When non-zero, DefaultResources must be set; the webhook
+                  enforces it.
                 format: int32
                 minimum: 0
                 type: integer
@@ -787,22 +789,43 @@ spec:
               warmPool:
                 description: WarmPool reports the warm pool of a launcher class (setec#103).
                 properties:
-                  key:
+                  images:
                     description: |-
-                      Key is the hash of the inputs of the current base: the image
-                      digest, the launcher image, the CPU template and the machine size.
-                    type: string
-                  lastUsed:
-                    description: |-
-                      LastUsed is the last time a Sandbox of the class asked for the pool
-                      image. A pool whose image nobody ran for 7 days keeps no base.
-                    format: date-time
-                    type: string
-                  ready:
-                    description: Ready is the number of Ready bases with the current
-                      key.
-                    format: int32
-                    type: integer
+                      Images is the pool of each image that a Sandbox of the class asked
+                      for in the last 7 days.
+                    items:
+                      description: SandboxClassWarmPoolImage is the pool of one image
+                        of a class.
+                      properties:
+                        image:
+                          description: Image is the OCI reference of the image, by
+                            digest.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the hash of the inputs of the current base of the image: the
+                            image digest, the launcher image, the CPU template and the machine
+                            size.
+                          type: string
+                        lastUsed:
+                          description: |-
+                            LastUsed is the last time a Sandbox of the class asked for the
+                            image. The pool drops the image, and its bases, 7 days later.
+                          format: date-time
+                          type: string
+                        ready:
+                          description: Ready is the number of Ready bases with the
+                            current key.
+                          format: int32
+                          type: integer
+                      required:
+                      - image
+                      - lastUsed
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - image
+                    x-kubernetes-list-type: map
                 type: object
             type: object
         required:

@@ -148,18 +148,20 @@ type SandboxClassSpec struct {
 	Default bool `json:"default,omitempty"`
 
 	// PreWarmPoolSize is the number of warm pool bases that the operator
-	// keeps for this class (setec#103). Zero disables the pool. When
-	// non-zero, PreWarmImage with a digest and DefaultResources must be
-	// set; the webhook enforces both.
+	// keeps for each pool image of this class (setec#103, setec#238). A
+	// pool image is an image by digest that a Sandbox of the class asked
+	// for with the default resources, in the last 7 days. Zero disables
+	// the pool. When non-zero, DefaultResources must be set; the webhook
+	// enforces it.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	PreWarmPoolSize int32 `json:"preWarmPoolSize,omitempty"`
 
-	// PreWarmImage is the OCI reference baked into pre-warmed pool
-	// entries. Sandboxes requesting a different image fall through to
-	// the cold-boot path. The format follows the usual OCI reference
-	// grammar; validation beyond non-empty is a webhook concern so the
-	// CRD schema remains minimal.
+	// PreWarmImage is an optional first pool image, by digest. The pool
+	// warms it from the creation of the class, before any Sandbox asks
+	// for it. Like every pool image, it has no base after 7 days in which
+	// no Sandbox of the class asked for it. Each other image by digest
+	// joins the pool on its first request.
 	// +optional
 	PreWarmImage string `json:"preWarmImage,omitempty"`
 
@@ -419,19 +421,34 @@ const ConditionImageNotVerified = "ImageNotVerified"
 
 // SandboxClassWarmPoolStatus is the state of the warm pool of a class.
 type SandboxClassWarmPoolStatus struct {
-	// Ready is the number of Ready bases with the current key.
+	// Images is the pool of each image that a Sandbox of the class asked
+	// for in the last 7 days.
 	// +optional
-	Ready int32 `json:"ready,omitempty"`
+	// +listType=map
+	// +listMapKey=image
+	Images []SandboxClassWarmPoolImage `json:"images,omitempty"`
+}
 
-	// Key is the hash of the inputs of the current base: the image
-	// digest, the launcher image, the CPU template and the machine size.
+// SandboxClassWarmPoolImage is the pool of one image of a class.
+type SandboxClassWarmPoolImage struct {
+	// Image is the OCI reference of the image, by digest.
+	// +required
+	Image string `json:"image"`
+
+	// LastUsed is the last time a Sandbox of the class asked for the
+	// image. The pool drops the image, and its bases, 7 days later.
+	// +required
+	LastUsed metav1.Time `json:"lastUsed"`
+
+	// Key is the hash of the inputs of the current base of the image: the
+	// image digest, the launcher image, the CPU template and the machine
+	// size.
 	// +optional
 	Key string `json:"key,omitempty"`
 
-	// LastUsed is the last time a Sandbox of the class asked for the pool
-	// image. A pool whose image nobody ran for 7 days keeps no base.
+	// Ready is the number of Ready bases with the current key.
 	// +optional
-	LastUsed *metav1.Time `json:"lastUsed,omitempty"`
+	Ready int32 `json:"ready,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -440,8 +457,8 @@ type SandboxClassWarmPoolStatus struct {
 // +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Max-VCPU",type=integer,JSONPath=`.spec.maxResources.vcpu`,priority=1
 // +kubebuilder:printcolumn:name="Max-Memory",type=string,JSONPath=`.spec.maxResources.memory`,priority=1
-// +kubebuilder:printcolumn:name="Pool-Ready",type=integer,JSONPath=`.status.warmPool.ready`
-// +kubebuilder:printcolumn:name="Pool-Key",type=string,JSONPath=`.status.warmPool.key`,priority=1
+// +kubebuilder:printcolumn:name="Pool-Ready",type=string,JSONPath=`.status.warmPool.images[*].ready`
+// +kubebuilder:printcolumn:name="Pool-Images",type=string,JSONPath=`.status.warmPool.images[*].image`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SandboxClass is a cluster-scoped, administrator-authored resource that

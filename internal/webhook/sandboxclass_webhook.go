@@ -122,22 +122,18 @@ func (w *SandboxClassWebhook) validate(class *setecv1alpha1.SandboxClass) (admis
 }
 
 // validatePreWarm enforces the coherence rules of the warm pool of a
-// class (setec#103): a non-zero pool size needs a PreWarmImage with a
-// digest, because a base belongs to one digest, and DefaultResources,
-// because a base boots with them.
+// class (setec#103, setec#238): a non-zero pool size needs
+// DefaultResources, because a base boots with them. A first pool image
+// is optional, and it needs a digest, because a base belongs to one
+// digest.
 func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	var errs field.ErrorList
 	specPath := field.NewPath("spec")
 	if class.Spec.PreWarmPoolSize <= 0 {
 		return nil
 	}
-	switch {
-	case class.Spec.PreWarmImage == "":
-		errs = append(errs, field.Required(specPath.Child("preWarmImage"),
-			fmt.Sprintf("preWarmPoolSize=%d requires preWarmImage: the operator boots each base from the class image",
-				class.Spec.PreWarmPoolSize)))
-	case !strings.Contains(class.Spec.PreWarmImage, "@sha256:"):
-		errs = append(errs, field.Invalid(specPath.Child("preWarmImage"), class.Spec.PreWarmImage,
+	if img := class.Spec.PreWarmImage; img != "" && !strings.Contains(img, "@sha256:") {
+		errs = append(errs, field.Invalid(specPath.Child("preWarmImage"), img,
 			"a pool needs an image with a digest: a base belongs to one digest"))
 	}
 	if class.Spec.DefaultResources == nil {

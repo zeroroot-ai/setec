@@ -1487,7 +1487,7 @@ func (r *SandboxReconciler) createPod(
 	}
 	if base != nil {
 		nodeName = base.Spec.Node
-	} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
+	} else if poolEligible(sb, cls) {
 		r.countWarmStart(cls, "miss")
 		r.recordColdBoot(ctx, sb)
 	}

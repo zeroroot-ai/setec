@@ -147,7 +147,7 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 	})
 
 	// Step 1: wait for the warm pool to hold a Ready base.
-	waitForWarmPoolReady(ctx, t, clsName, 10*time.Minute)
+	waitForWarmPoolReady(ctx, t, clsName, poolImage, 10*time.Minute)
 
 	// Step 2: a pool-eligible Sandbox in a non-dev namespace. The node
 	// restores the entry but cannot verify the reseed, so the gate

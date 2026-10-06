@@ -15,8 +15,9 @@ import (
 )
 
 // TestSandboxClassWebhook_ValidatePreWarm covers the warm pool of a class
-// (setec#103): an active pool needs an image with a digest, the default
-// resources of the class, and the signer of the image.
+// (setec#103, setec#238): an active pool needs the default resources of
+// the class and the signer of its images, and a first pool image, when
+// set, needs a digest.
 func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 	t.Parallel()
 	digest := "ghcr.io/org/tools@sha256:" + strings.Repeat("a", 64)
@@ -41,7 +42,7 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 	}{
 		{name: "no pool", class: mk(0, "")},
 		{name: "a pool with a digest and a size", class: withDefaultResources(mk(2, digest))},
-		{name: "a pool with no image", class: withDefaultResources(mk(2, "")), wantErr: true, wantMsg: "requires preWarmImage"},
+		{name: "a pool with no first image learns its images", class: withDefaultResources(mk(2, ""))},
 		{name: "a pool with a tag", class: withDefaultResources(mk(2, "ghcr.io/org/tools:v1")), wantErr: true, wantMsg: "digest"},
 		{name: "a pool with no size", class: mk(2, digest), wantErr: true, wantMsg: "defaultResources"},
 		{name: "a pool with no signer", class: unsigned, wantErr: true, wantMsg: "preWarmImageSignature"},
@@ -65,18 +66,18 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 }
 
 // TestSandboxClassWebhook_ValidatePreWarm_NilRuntime pins that the
-// trio rules still apply when Runtime is nil (webhook defaulting
-// bypassed, e.g. --dry-run): the pairing errors must surface even
-// without a backend to check.
+// pool rules still apply when Runtime is nil (webhook defaulting
+// bypassed, e.g. --dry-run): the error must surface even without a
+// backend to check.
 func TestSandboxClassWebhook_ValidatePreWarm_NilRuntime(t *testing.T) {
 	t.Parallel()
 	cls := mkSandboxClass("pw-nil", nil)
-	cls.Spec.PreWarmPoolSize = 2 // no image
+	cls.Spec.PreWarmPoolSize = 2 // no default resources
 
 	w := classWebhook(t)
 	_, err := w.ValidateCreate(context.Background(), cls)
-	if err == nil || !strings.Contains(err.Error(), "requires preWarmImage") {
-		t.Fatalf("expected preWarmImage pairing error with nil Runtime, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "defaultResources") {
+		t.Fatalf("expected the defaultResources error with nil Runtime, got: %v", err)
 	}
 }
 
