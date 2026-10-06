@@ -29,8 +29,6 @@ var ErrNotFound = errors.New("launchersandbox: no launcher machine for this pod 
 type Paths struct {
 	// APISocket is the Firecracker API socket on the host.
 	APISocket string
-	// HybridVsock is the vsock socket of the machine on the host.
-	HybridVsock string
 	// FCRoot is the work volume of the Pod on the host. FCMount is where
 	// the launcher, and so Firecracker, sees it.
 	FCRoot  string
@@ -86,10 +84,9 @@ func (r Resolver) Resolve(_ context.Context, podUID string) (Paths, error) {
 		return Paths{}, fmt.Errorf("launchersandbox: %w", err)
 	}
 	return Paths{
-		APISocket:   filepath.Join(vm, podspec.LauncherAPISocket),
-		HybridVsock: filepath.Join(vm, podspec.LauncherVsockSocket),
-		FCRoot:      work,
-		FCMount:     podspec.LauncherWorkMountPath,
+		APISocket: filepath.Join(vm, podspec.LauncherAPISocket),
+		FCRoot:    work,
+		FCMount:   podspec.LauncherWorkMountPath,
 	}, nil
 }
 

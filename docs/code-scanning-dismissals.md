@@ -93,10 +93,11 @@ the name check. CodeQL flags the field, not the replacement.
 **#23 `go/weak-sensitive-data-hashing`, `internal/snapshot/secretscan/scanner.go`.**
 `Version()` hashes the builtin detector rule names and regex patterns with
 SHA-256 to derive a detector-set version string. No credential is hashed.
-CodeQL matched the word "password" in a rule name.
+CodeQL matched the word "password" in a rule name. `Version()` left in
+setec#198 with the pool path that read it, so this alert closes as fixed.
 
 **Reverses if** a name-bearing certificate contract replaces the unnamed
-peer path, or `Version()` starts hashing anything but rule definitions.
+peer path.
 
 ### Entry 8 — Scorecard Token-Permissions alerts #2 to #17, dismissed (setec#21)
 

@@ -14,6 +14,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
+	setecLimits "github.com/zeroroot-ai/setec/internal/limits"
 )
 
 // The launcher Pod (docs/design/runtime.md). One setec container starts a
@@ -43,11 +44,10 @@ const (
 )
 
 // The files of a launcher Pod that the node agent and the launcher share,
-// as the Pod sees them. internal/launcher holds the same socket names, and
-// a test keeps the two equal.
+// as the Pod sees them. internal/launcher holds the same API socket name,
+// and a test keeps the two equal.
 const (
-	LauncherAPISocket   = "api.sock"
-	LauncherVsockSocket = "v.sock"
+	LauncherAPISocket = "api.sock"
 	// LauncherWritableDisk is the writable layer of the machine. A
 	// snapshot holds it with the memory.
 	LauncherWritableDisk = LauncherWorkMountPath + "/writable.ext4"
@@ -291,6 +291,10 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	// the machine files, so it gets 2 GiB more.
 	workDir := work.DeepCopy()
 	workDir.Add(resource.MustParse("2Gi"))
+	// The ephemeral-storage limit covers the work volume plus the headroom
+	// for logs (setec#172), so a full work volume cannot fill the disk of
+	// the node.
+	limits[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralLimit(workDir)
 	spec := launcherSpec{
 		VCPU:          int(sb.Spec.Resources.VCPU),
 		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
@@ -464,6 +468,11 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 // the limit, as an extended resource needs.
 func launcherRequests(limits corev1.ResourceList, req *setecv1alpha1.ResourceRequests) corev1.ResourceList {
 	requests := limits.DeepCopy()
+	// The scheduler sets aside the headroom that every Pod uses. The limit
+	// stops the Pod that grows.
+	if _, ok := limits[corev1.ResourceEphemeralStorage]; ok {
+		requests[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralHeadroom.DeepCopy()
+	}
 	if req == nil {
 		return requests
 	}

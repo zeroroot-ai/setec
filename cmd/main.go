@@ -501,7 +501,7 @@ func main() {
 			}
 		}
 		// SandboxClass defaulting + validating webhook: one backend.
-		scWebhook := &webhook.SandboxClassWebhook{Client: mgr.GetClient()}
+		scWebhook := &webhook.SandboxClassWebhook{}
 		if err := scWebhook.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up SandboxClass webhook")
 			os.Exit(1)

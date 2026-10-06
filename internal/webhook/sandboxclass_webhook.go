@@ -17,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -36,10 +35,9 @@ import (
 //   - a validating webhook that refuses a removed backend with the reason,
 //     and checks the coherence of the network, pool, session and resource
 //     fields.
-type SandboxClassWebhook struct {
-	// Client is a controller-runtime reader. Required.
-	Client client.Client
-}
+//
+// It reads no other object, so it holds no client.
+type SandboxClassWebhook struct{}
 
 // Compile-time interface assertions. A broken refactor produces a build error
 // rather than a runtime admission failure.

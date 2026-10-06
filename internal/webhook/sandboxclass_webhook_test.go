@@ -8,35 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	setecruntime "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
-// schemeWithCore returns a scheme with the setec CRDs and the core types.
-func schemeWithCore(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	s := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(s))
-	utilruntime.Must(setecv1alpha1.AddToScheme(s))
-	return s
-}
-
-// fakeClientWithNS returns a fake client that holds objs.
-func fakeClientWithNS(t *testing.T, objs ...client.Object) client.Client {
-	t.Helper()
-	return fake.NewClientBuilder().WithScheme(schemeWithCore(t)).WithObjects(objs...).Build()
-}
-
-// classWebhook returns a SandboxClassWebhook on an empty fake client.
+// classWebhook returns a SandboxClassWebhook.
 func classWebhook(t *testing.T) *SandboxClassWebhook {
 	t.Helper()
-	return &SandboxClassWebhook{Client: fakeClientWithNS(t)}
+	return &SandboxClassWebhook{}
 }
 
 // mkSandboxClass constructs a minimal SandboxClass for use in tests.

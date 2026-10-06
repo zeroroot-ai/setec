@@ -28,7 +28,7 @@ func TestResolve_FindsTheWorkVolumeOfALauncherPod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.APISocket != filepath.Join(work, "vm", "api.sock") || p.HybridVsock != filepath.Join(work, "vm", "v.sock") {
+	if p.APISocket != filepath.Join(work, "vm", "api.sock") {
 		t.Fatalf("paths = %+v", p)
 	}
 	// Firecracker sees the work volume at /work, so a file the node agent

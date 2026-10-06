@@ -117,8 +117,6 @@ const (
 	EventReasonNodeAgentUnreachable   = "NodeAgentUnreachable"
 	EventReasonSnapshotNameConflict   = "SnapshotNameConflict"
 	EventReasonSnapshotNodeGone       = "SnapshotNodeGone"
-	EventReasonWarmStartRestored      = "WarmStartRestored"
-	EventReasonWarmStartColdBoot      = "WarmStartColdBoot"
 	// EventReasonInvariantGateViolation is the typed reason surfaced
 	// when the docs/design/isolation.md invariant gate refuses a restore/resume: one
 	// or more per-restore invariant verifications did not pass and no
@@ -130,31 +128,6 @@ const (
 	// invariant verifications. Deliberately loud: dev-mode is an
 	// auditable exception, not a quiet default.
 	EventReasonUnverifiedRestoreAllowed = "UnverifiedRestoreAllowed"
-)
-
-// WarmStartOutcome classifies the result of a pool warm-start attempt.
-// The values are bounded so they can double as metric label values.
-type WarmStartOutcome string
-
-const (
-	// WarmStartRestored: a pool entry was claimed and its state
-	// restored into the launcher Pod of the Sandbox.
-	WarmStartRestored WarmStartOutcome = "restored"
-	// WarmStartMiss: no compatible pool entry existed on the
-	// Sandbox's node; the Sandbox continues its cold boot.
-	WarmStartMiss WarmStartOutcome = "miss"
-	// WarmStartError: an entry was claimed but the restore failed, or
-	// the node-agent was unreachable; the Sandbox continues its cold
-	// boot.
-	WarmStartError WarmStartOutcome = "error"
-	// WarmStartRejected: the restore itself succeeded node-side but
-	// the docs/design/isolation.md invariant gate refused to serve it — at least one
-	// per-restore invariant verification did not pass and no dev-mode
-	// opt-out is active. Unlike every other failure mode this does NOT
-	// fall back to cold boot: the Sandbox's VM already holds the
-	// unverified restored state, so the caller must destroy the
-	// Sandbox.
-	WarmStartRejected WarmStartOutcome = "rejected"
 )
 
 // actionRecordSnapshotPhase is the action constant for events emitted

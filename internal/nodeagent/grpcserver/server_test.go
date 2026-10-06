@@ -34,12 +34,10 @@ type fakeFirecracker struct {
 	mu         sync.Mutex
 	pauseCalls int
 	resumeOK   bool
-	loadCalls  []string
 	createOK   bool
 
 	pauseErr  error
 	createErr error
-	loadErr   error
 	// root is the directory the fake runs "chrooted" in: it resolves
 	// the paths it is handed under root, as a jailed Firecracker does.
 	root            string
@@ -71,15 +69,6 @@ func (f *fakeFirecracker) CreateSnapshot(_ context.Context, state, mem string) e
 	f.createOK = true
 	return nil
 }
-func (f *fakeFirecracker) LoadSnapshot(_ context.Context, state, mem string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.loadErr != nil {
-		return f.loadErr
-	}
-	f.loadCalls = append(f.loadCalls, state+"|"+mem)
-	return nil
-}
 
 // host maps a path that Firecracker sees in the launcher Pod to the host.
 func (f *fakeFirecracker) host(p string) string {
@@ -105,10 +94,9 @@ func (m fakeMachine) Resolve(_ context.Context, podUID string) (launchersandbox.
 		_ = os.WriteFile(disk, []byte("DISK"), 0o600)
 	}
 	return launchersandbox.Paths{
-		APISocket:   filepath.Join(m.root, "vm", podspec.LauncherAPISocket),
-		HybridVsock: filepath.Join(m.root, "vm", podspec.LauncherVsockSocket),
-		FCRoot:      m.root,
-		FCMount:     podspec.LauncherWorkMountPath,
+		APISocket: filepath.Join(m.root, "vm", podspec.LauncherAPISocket),
+		FCRoot:    m.root,
+		FCMount:   podspec.LauncherWorkMountPath,
 	}, nil
 }
 
@@ -426,9 +414,6 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
-	}
-	if len(fc.loadCalls) != 0 {
-		t.Fatalf("LoadSnapshot called %d times for a rejected snapshot_id", len(fc.loadCalls))
 	}
 	assertNoDirCreated(t, root, workDir)
 }

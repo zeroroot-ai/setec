@@ -759,8 +759,9 @@ spec:
                     type: string
                   outcome:
                     description: |-
-                      Outcome is PoolRestored when the Sandbox started from a pool
-                      entry, ColdBoot otherwise.
+                      Outcome is PoolRestored when the Sandbox loaded a base, ColdBoot
+                      when the pool had none, and Rejected when a loaded base failed the
+                      invariant gate.
                     enum:
                     - PoolRestored
                     - ColdBoot

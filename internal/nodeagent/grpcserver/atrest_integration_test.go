@@ -54,9 +54,6 @@ func (f *capturingFC) CreateSnapshot(_ context.Context, state, mem string) error
 	return os.WriteFile(f.host(mem), guestSecret, 0o600)
 }
 
-// LoadSnapshot is the call of the launcher, not of the node agent.
-func (f *capturingFC) LoadSnapshot(context.Context, string, string) error { return nil }
-
 // launcherReadingMemory plays the launcher of one restore: it waits for
 // the staged marker, reads the staged memory and confirms the guest.
 func launcherReadingMemory(t *testing.T, p launchersandbox.Paths) <-chan []byte {

@@ -44,9 +44,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -349,77 +347,6 @@ func chunkNonce(prefix []byte, counter uint32, final bool) []byte {
 		nonce[gcmNonceSize-1] = 1
 	}
 	return nonce
-}
-
-// EncryptFile replaces the plaintext file at path with its encrypted
-// form: the ciphertext is written to a sibling temp file, fsynced, the
-// plaintext is zero-overwritten and unlinked, and the temp file is
-// renamed into place. On any error the plaintext file is left intact.
-func EncryptFile(path string, dek []byte) error {
-	src, err := os.Open(path) //nolint:gosec // path is node-agent controlled, not attacker input
-	if err != nil {
-		return fmt.Errorf("atrest: open %q: %w", path, err)
-	}
-	tmp := path + ".enc.tmp"
-	dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // sibling of node-agent controlled path
-	if err != nil {
-		_ = src.Close()
-		return fmt.Errorf("atrest: create %q: %w", tmp, err)
-	}
-	_, encErr := Encrypt(dst, src, dek)
-	if serr := dst.Sync(); encErr == nil {
-		encErr = serr
-	}
-	if cerr := dst.Close(); encErr == nil {
-		encErr = cerr
-	}
-	_ = src.Close()
-	if encErr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("atrest: encrypt %q: %w", path, encErr)
-	}
-	// Plaintext existed on disk; zero it before unlink so residual
-	// bytes are not trivially recoverable, then move the ciphertext in.
-	if err := Shred(path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("atrest: shred plaintext %q: %w", path, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("atrest: rename %q: %w", tmp, err)
-	}
-	return nil
-}
-
-// DecryptFile streams the encrypted file at src into a plaintext file
-// at dst (0600) and returns the lowercase-hex SHA-256 of the plaintext,
-// computed in the same pass. Used by restore paths that must hand
-// Firecracker a plaintext state file; the digest lets them check the
-// recovered bytes against a recorded verdict (e.g. the pool entry's
-// secret-scan record, docs/design/isolation.md invariant 1) without a second read.
-func DecryptFile(src, dst string, dek []byte) (string, error) {
-	in, err := os.Open(src) //nolint:gosec // node-agent controlled path
-	if err != nil {
-		return "", fmt.Errorf("atrest: open %q: %w", src, err)
-	}
-	defer func() { _ = in.Close() }()
-	dr, err := NewDecryptingReader(in, dek)
-	if err != nil {
-		return "", err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // node-agent controlled path
-	if err != nil {
-		return "", fmt.Errorf("atrest: create %q: %w", dst, err)
-	}
-	h := sha256.New()
-	_, cpErr := io.Copy(io.MultiWriter(out, h), dr)
-	if cerr := out.Close(); cpErr == nil {
-		cpErr = cerr
-	}
-	if cpErr != nil {
-		_ = os.Remove(dst)
-		return "", fmt.Errorf("atrest: decrypt %q: %w", src, cpErr)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Shred zero-overwrites the data of the file at path (single pass),

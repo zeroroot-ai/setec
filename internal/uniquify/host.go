@@ -171,22 +171,3 @@ func (u *VsockUniquifier) Uniquify(ctx context.Context, udsPath string, spec Spe
 	}
 	return report, nil
 }
-
-// UniquifyFirst tries each candidate vsock UDS path in order and
-// returns the first verified report. It fails when the candidate list
-// is empty or every candidate fails — callers treat that as a
-// fail-closed restore.
-func UniquifyFirst(ctx context.Context, u Uniquifier, candidates []string, spec Spec) (Report, error) {
-	if len(candidates) == 0 {
-		return Report{}, errors.New("uniquify: no vsock UDS candidates to uniquify through")
-	}
-	var errs []error
-	for _, path := range candidates {
-		report, err := u.Uniquify(ctx, path, spec)
-		if err == nil {
-			return report, nil
-		}
-		errs = append(errs, fmt.Errorf("%s: %w", path, err))
-	}
-	return Report{}, fmt.Errorf("uniquify: failed on every candidate: %w", errors.Join(errs...))
-}

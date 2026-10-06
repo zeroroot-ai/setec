@@ -358,30 +358,6 @@ func TestVsockReseeder_FailsClosedOnDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestReseedFirst_TriesCandidatesInOrder(t *testing.T) {
-	pool := &fakePool{}
-	dir := t.TempDir()
-	good := startFakeVsockMux(t, dir, "", &GuestHandler{Pool: pool})
-	missing := filepath.Join(dir, "missing.sock")
-
-	r := NewVsockReseeder()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := ReseedFirst(ctx, r, []string{missing, good}); err != nil {
-		t.Fatalf("ReseedFirst: %v", err)
-	}
-	if len(pool.received()) != 1 {
-		t.Fatal("the good candidate must have been reseeded")
-	}
-
-	if err := ReseedFirst(ctx, r, []string{missing}); err == nil {
-		t.Fatal("ReseedFirst must fail when every candidate fails")
-	}
-	if err := ReseedFirst(ctx, r, nil); err == nil {
-		t.Fatal("ReseedFirst must fail on an empty candidate list")
-	}
-}
-
 // TestReseed_RestoredClonesDiverge is the unit-level divergence proof:
 // two "guests" (fake entropy pools) that would otherwise share the
 // exact CSPRNG state captured in a common snapshot receive provably

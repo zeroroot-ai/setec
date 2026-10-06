@@ -389,3 +389,19 @@ func (r *SandboxReconciler) countWarmStart(cls *setecv1alpha1.SandboxClass, outc
 		r.MetricsCollector.IncWarmStart(outcome, cls.Name)
 	}
 }
+
+// recordColdBoot records in status.warmStart that a Sandbox of a pool class
+// found no Ready base and boots cold. A failed write is not fatal: the
+// Sandbox boots either way, and the counter already holds the miss.
+func (r *SandboxReconciler) recordColdBoot(ctx context.Context, sb *setecv1alpha1.Sandbox) {
+	if sb.Status.WarmStart != nil {
+		return
+	}
+	original := sb.DeepCopy()
+	sb.Status.WarmStart = &setecv1alpha1.SandboxWarmStartStatus{
+		Outcome: setecv1alpha1.SandboxWarmStartColdBoot, Reason: "miss",
+	}
+	if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+		log.FromContext(ctx).Info("record the cold boot of a pool miss", "error", err.Error())
+	}
+}

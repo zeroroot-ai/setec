@@ -673,10 +673,9 @@ const (
 	// SandboxWarmStartPoolRestored means the Sandbox loaded a base of the
 	// warm pool of its class.
 	SandboxWarmStartPoolRestored SandboxWarmStartOutcome = "PoolRestored"
-	// SandboxWarmStartColdBoot means no pool entry was used (pool
-	// empty, node-agent unreachable, or restore failed) and the
-	// Sandbox continued its normal cold boot. Cold boot is the
-	// fallback, never a failure.
+	// SandboxWarmStartColdBoot means the warm pool of the class had no
+	// Ready base for the Sandbox, and the Sandbox booted cold. Cold boot
+	// is the fallback, never a failure.
 	SandboxWarmStartColdBoot SandboxWarmStartOutcome = "ColdBoot"
 	// SandboxWarmStartRejected means the restore succeeded node-side
 	// but the docs/design/isolation.md invariant gate refused to serve it: one or more
@@ -690,8 +689,9 @@ const (
 // SandboxWarmStartStatus reports the pool warm-start outcome for one
 // Sandbox.
 type SandboxWarmStartStatus struct {
-	// Outcome is PoolRestored when the Sandbox started from a pool
-	// entry, ColdBoot otherwise.
+	// Outcome is PoolRestored when the Sandbox loaded a base, ColdBoot
+	// when the pool had none, and Rejected when a loaded base failed the
+	// invariant gate.
 	Outcome SandboxWarmStartOutcome `json:"outcome"`
 
 	// EntryID identifies the consumed pool entry when Outcome is

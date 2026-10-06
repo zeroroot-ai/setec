@@ -205,9 +205,8 @@ func TestBuildLauncher_SpecIsTheLauncherSpec(t *testing.T) {
 // equal on the wire.
 func TestLauncherFileNamesMatchTheLauncher(t *testing.T) {
 	t.Parallel()
-	if LauncherAPISocket != launcher.APISocket || LauncherVsockSocket != launcher.VsockSocket {
-		t.Fatalf("socket names differ: %s %s and %s %s",
-			LauncherAPISocket, LauncherVsockSocket, launcher.APISocket, launcher.VsockSocket)
+	if LauncherAPISocket != launcher.APISocket {
+		t.Fatalf("socket names differ: %s and %s", LauncherAPISocket, launcher.APISocket)
 	}
 	if LauncherStagedNoReseed != launcher.StagedNoReseed {
 		t.Fatalf("staged markers differ: %s and %s", LauncherStagedNoReseed, launcher.StagedNoReseed)
@@ -433,11 +432,35 @@ func TestBuildLauncher_ClassRequestsLowerTheReservation(t *testing.T) {
 		}
 	}
 
-	// No class reservation: requests equal limits (Guaranteed QoS).
+	// No class reservation: requests equal limits, except the ephemeral
+	// storage, which requests the headroom only.
 	plain := launcherOrFatal(t).Spec.Containers[0].Resources
 	for name, limit := range plain.Limits {
+		if name == corev1.ResourceEphemeralStorage {
+			continue
+		}
 		if got := plain.Requests[name]; got.Cmp(limit) != 0 {
 			t.Fatalf("%s request = %s, want the limit %s", name, got.String(), limit.String())
 		}
+	}
+}
+
+// TestBuildLauncher_EphemeralStorageLimit pins the ephemeral-storage limit
+// of the launcher Pod (setec#172): the work volume, the scratch size plus
+// 2Gi, plus the headroom for logs. The request is the headroom.
+func TestBuildLauncher_EphemeralStorageLimit(t *testing.T) {
+	t.Parallel()
+	opts := launcherOpts()
+	opts.Scratch = resource.MustParse("4Gi")
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatalf("BuildLauncher: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got, want := res.Limits[corev1.ResourceEphemeralStorage], resource.MustParse("7Gi"); got.Cmp(want) != 0 {
+		t.Fatalf("ephemeral-storage limit = %s, want %s", got.String(), want.String())
+	}
+	if got, want := res.Requests[corev1.ResourceEphemeralStorage], resource.MustParse("1Gi"); got.Cmp(want) != 0 {
+		t.Fatalf("ephemeral-storage request = %s, want %s", got.String(), want.String())
 	}
 }

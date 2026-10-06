@@ -51,12 +51,6 @@ type Client interface {
 	// sparse file. The machine must track dirty pages, and it MUST be
 	// Paused first.
 	CreateDiffSnapshot(ctx context.Context, statePath, memPath string) error
-
-	// LoadSnapshot restores a VM from the provided host paths. Called
-	// on a freshly-started Firecracker process whose API is ready
-	// but which has not yet been configured via the usual
-	// /boot-source + /drives sequence.
-	LoadSnapshot(ctx context.Context, statePath, memPath string) error
 }
 
 // httpClient carries the HTTP machinery plus an optional override
@@ -197,23 +191,6 @@ func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, 
 		"track_dirty_pages": true,
 		"resume_vm":         true,
 	})
-}
-
-// LoadSnapshot issues PUT /snapshot/load and asks Firecracker to
-// resume the VM on success (enable_diff_snapshots=false; Phase 3 uses
-// full snapshots only). The guest memory comes from a File
-// mem_backend: Firecracker v1.12.1 deprecates mem_file_path for loads.
-func (c *httpClient) LoadSnapshot(ctx context.Context, statePath, memPath string) error {
-	body := map[string]any{
-		keySnapshotPath: statePath,
-		"mem_backend": map[string]string{
-			"backend_type": "File",
-			"backend_path": memPath,
-		},
-		"enable_diff_snapshots": false,
-		"resume_vm":             true,
-	}
-	return c.do(ctx, http.MethodPut, "/snapshot/load", body)
 }
 
 // SendCtrlAltDel asks the guest behind socketPath to stop. With the boot

@@ -1405,6 +1405,7 @@ func (r *SandboxReconciler) createPod(
 		nodeName = base.Spec.Node
 	} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
 		r.countWarmStart(cls, "miss")
+		r.recordColdBoot(ctx, sb)
 	}
 	// The identity of the Sandbox (setec#235): its own key, outside
 	// the machine, and the generation that the next token carries.
