@@ -41,6 +41,8 @@ func TestFrontendScope_OnlyPairNamespacesAndTheirGrants(t *testing.T) {
 		"--set", "credentials.spiffe.trustDomain=example.org",
 		"--set", "frontend.clients[0].name=saas",
 		"--set", "frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon",
+		"--set", "systemPolicy.frontendCallers[0].namespace=gibson",
+		"--set", `systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon`,
 		"--show-only", "templates/frontend-scope-policy.yaml")
 	cmd.Stdout = &out
 	g.Expect(cmd.Run()).To(Succeed())

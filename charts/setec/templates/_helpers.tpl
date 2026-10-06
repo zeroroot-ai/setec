@@ -77,6 +77,19 @@ the security posture.
 {{- end -}}
 
 {{/*
+setec.trustDomain is the SPIFFE trust domain of this install (ADR-0164):
+global.spire.trustDomain when a parent chart sets it, else
+credentials.spiffe.trustDomain. It is empty when neither is set.
+*/}}
+{{- define "setec.trustDomain" -}}
+{{- $td := dig "spire" "trustDomain" "" (.Values.global | default dict) -}}
+{{- if not $td -}}
+{{- $td = .Values.credentials.spiffe.trustDomain -}}
+{{- end -}}
+{{- $td -}}
+{{- end -}}
+
+{{/*
 setec.clientSPIFFEID is the SPIFFE ID of one enrolled frontend client
 (setec#233). Call it with (dict "client" <entry> "root" $).
 
@@ -107,10 +120,7 @@ An entry with both, or with neither, fails the render.
 {{- if or (not $path) (contains "://" $path) (regexMatch "\\s" $path) -}}
 {{- fail (printf "frontend.clients entry %q: spiffePath must be a path such as platform/daemon, got %q" $c.name $c.spiffePath) -}}
 {{- end -}}
-{{- $td := dig "spire" "trustDomain" "" ($root.Values.global | default dict) -}}
-{{- if not $td -}}
-{{- $td = $root.Values.credentials.spiffe.trustDomain -}}
-{{- end -}}
+{{- $td := include "setec.trustDomain" $root -}}
 {{- if not $td -}}
 {{- fail (printf "frontend.clients entry %q: spiffePath needs a trust domain: set global.spire.trustDomain or credentials.spiffe.trustDomain" $c.name) -}}
 {{- end -}}

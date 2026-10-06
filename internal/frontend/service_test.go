@@ -696,7 +696,7 @@ func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
 	t.Parallel()
 	cls := &setecv1alpha1.SandboxClass{}
 	cls.Name = testSandboxClass
-	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"}
+	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "launcher"}
 	s := &Service{Client: newClient(t, cls), AuthDisabled: true, DefaultNamespace: "team-a"}
 
 	launch := func(class string) *setecv1grpc.LaunchResponse {
@@ -709,8 +709,8 @@ func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
 		}
 		return resp
 	}
-	if resp := launch(testSandboxClass); resp.GetSandboxClass() != testSandboxClass || resp.GetRuntime() != "kata-fc" {
-		t.Fatalf("response = class %q runtime %q, want %q and kata-fc", resp.GetSandboxClass(), resp.GetRuntime(), testSandboxClass)
+	if resp := launch(testSandboxClass); resp.GetSandboxClass() != testSandboxClass || resp.GetRuntime() != "launcher" {
+		t.Fatalf("response = class %q runtime %q, want %q and launcher", resp.GetSandboxClass(), resp.GetRuntime(), testSandboxClass)
 	}
 	if resp := launch("missing"); resp.GetRuntime() != "" {
 		t.Fatalf("runtime of an unresolved class = %q, want empty", resp.GetRuntime())

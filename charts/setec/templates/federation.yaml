@@ -5,7 +5,8 @@ Federation with each enrolled client cluster (setec#169, ADR-0164).
 
 Each install has its own SPIFFE trust domain. An enrolled client whose
 SPIFFE ID is in a different trust domain than this fleet
-(credentials.spiffe.trustDomain) needs the trust bundle of its domain. SPIRE
+(setec.trustDomain: global.spire.trustDomain, else
+credentials.spiffe.trustDomain) needs the trust bundle of its domain. SPIRE
 fetches it from the bundle endpoint of that domain and serves it to the
 frontend through the Workload API. This template asks SPIRE for it, with one
 ClusterFederatedTrustDomain (spire-controller-manager) for each such client.
@@ -18,9 +19,9 @@ The SPIFFE registration of the frontend (its ClusterSPIFFEID) must list the
 same domains under federatesWith. The install owns that registration.
 */ -}}
 {{- if .Values.frontend.enabled }}
-{{- $own := .Values.credentials.spiffe.trustDomain -}}
+{{- $own := include "setec.trustDomain" . -}}
 {{- if not $own }}
-{{- fail "credentials.spiffe.trustDomain is required with frontend.enabled=true: it names the trust domain of this fleet, so the chart can tell which enrolled clients need federation (ADR-0164)" }}
+{{- fail "a trust domain is required with frontend.enabled=true: set global.spire.trustDomain or credentials.spiffe.trustDomain. It names the trust domain of this fleet, so the chart can tell which enrolled clients need federation (ADR-0164)" }}
 {{- end }}
 {{- range .Values.frontend.clients }}
 {{- $domain := regexReplaceAll "^spiffe://([^/]+).*$" (include "setec.clientSPIFFEID" (dict "client" . "root" $)) "${1}" }}

@@ -583,7 +583,9 @@ allowance_refused "a port with an unknown protocol fails the render" \
 # ---------------------------------------------------------------------------
 note "the setec namespace network policy"
 SP_ALL=("${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
-	--set snapshots.mTLS.caProvided=true --set snapshots.s3.bucket=setec-snapshots)
+	--set snapshots.s3.bucket=setec-snapshots
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}')
 render "$workdir/sp-all.yaml" "${SP_ALL[@]}"
 if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec-system >"$workdir/sp-all.out"; then
 	pass "each component of the setec namespace has an allow, under a default deny with DNS"
