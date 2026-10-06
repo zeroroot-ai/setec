@@ -40,10 +40,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // SandboxService is the gRPC frontend for launching and observing Setec
-// Sandboxes. Every hop uses mTLS (ADR-0142). The client certificate names
+// Sandboxes. Every hop uses mTLS (docs/design/threat-model.md). The client certificate names
 // the caller and carries no tenancy: tenant data isolation is the job of
 // the caller, and the job of Setec is the isolation of untrusted code
-// (ADR-0052). The frontend translates these RPCs to Sandbox
+// (docs/design/threat-model.md). The frontend translates these RPCs to Sandbox
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
@@ -51,7 +51,7 @@ const (
 // This is the stable v1 (setec.v1) isolation ABI. It is a general-purpose
 // microVM isolation surface and carries NO datastore, workspace-binding,
 // or zeroroot-platform coupling: Setec is a standalone OSS sandbox runtime
-// (ADR-0056) and holds no data plane. The surface is WIRE-stable — guarded
+// and holds no data plane. The surface is WIRE-stable — guarded
 // by `buf breaking` (WIRE) in CI — so existing wire encodings remain
 // compatible across releases.
 type SandboxServiceClient interface {
@@ -78,7 +78,7 @@ type SandboxServiceClient interface {
 	// reattach works across frontend restarts by construction.
 	//
 	// Attach also registers caller activity for the session, which
-	// exempts it from per-SandboxClass idle eviction (ADR-0146: a
+	// exempts it from per-SandboxClass idle eviction (docs/design/lifecycles.md: a
 	// session in active use is never idle-reaped).
 	//
 	// Failure shapes (each carries an AttachFailure detail so callers
@@ -89,12 +89,12 @@ type SandboxServiceClient interface {
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
 	//     the session is over (terminal phase, or teardown in progress).
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
-	//     the ephemeral lifecycle has no reattach semantics (ADR-0146).
+	//     the ephemeral lifecycle has no reattach semantics (docs/design/lifecycles.md).
 	Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error)
 	// Exec runs a command INSIDE an existing session Sandbox's running
 	// microVM and streams its stdio, so a session can be worked on
 	// across many turns instead of being limited to the single
-	// immutable spec.command it booted with (ADR-0148).
+	// immutable spec.command it booted with (docs/design/lifecycles.md).
 	//
 	// This is not LeaseService.Exec: that verb launches a fresh
 	// one-shot Sandbox per call and shares nothing between calls. This
@@ -125,10 +125,10 @@ type SandboxServiceClient interface {
 	//
 	// An in-flight Exec registers as session activity for the whole of
 	// its run, so a long build can never be idle-evicted underneath the
-	// caller (ADR-0146).
+	// caller (docs/design/lifecycles.md).
 	//
 	// A session whose VM is paused or suspended is resumed first and
-	// the command runs once it is back (ADR-0146 suspend/resume); the
+	// the command runs once it is back (docs/design/lifecycles.md suspend/resume); the
 	// caller sees only the added latency.
 	//
 	// Failure shapes (each carries an AttachFailure detail, the same
@@ -138,7 +138,7 @@ type SandboxServiceClient interface {
 	//     Sandbox.
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
-	//     ephemeral; its one command is its whole life (ADR-0146).
+	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
 	// These are RPC-level errors raised before the command starts, so
@@ -232,10 +232,10 @@ type SandboxService_ExecClient = grpc.BidiStreamingClient[SandboxServiceExecRequ
 // for forward compatibility.
 //
 // SandboxService is the gRPC frontend for launching and observing Setec
-// Sandboxes. Every hop uses mTLS (ADR-0142). The client certificate names
+// Sandboxes. Every hop uses mTLS (docs/design/threat-model.md). The client certificate names
 // the caller and carries no tenancy: tenant data isolation is the job of
 // the caller, and the job of Setec is the isolation of untrusted code
-// (ADR-0052). The frontend translates these RPCs to Sandbox
+// (docs/design/threat-model.md). The frontend translates these RPCs to Sandbox
 // CR CRUD; all cluster-side policy — SandboxClass constraints,
 // ResourceQuota, NetworkPolicy — applies identically to direct CR
 // consumers and frontend clients.
@@ -243,7 +243,7 @@ type SandboxService_ExecClient = grpc.BidiStreamingClient[SandboxServiceExecRequ
 // This is the stable v1 (setec.v1) isolation ABI. It is a general-purpose
 // microVM isolation surface and carries NO datastore, workspace-binding,
 // or zeroroot-platform coupling: Setec is a standalone OSS sandbox runtime
-// (ADR-0056) and holds no data plane. The surface is WIRE-stable — guarded
+// and holds no data plane. The surface is WIRE-stable — guarded
 // by `buf breaking` (WIRE) in CI — so existing wire encodings remain
 // compatible across releases.
 type SandboxServiceServer interface {
@@ -270,7 +270,7 @@ type SandboxServiceServer interface {
 	// reattach works across frontend restarts by construction.
 	//
 	// Attach also registers caller activity for the session, which
-	// exempts it from per-SandboxClass idle eviction (ADR-0146: a
+	// exempts it from per-SandboxClass idle eviction (docs/design/lifecycles.md: a
 	// session in active use is never idle-reaped).
 	//
 	// Failure shapes (each carries an AttachFailure detail so callers
@@ -281,12 +281,12 @@ type SandboxServiceServer interface {
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the Sandbox exists but
 	//     the session is over (terminal phase, or teardown in progress).
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is ephemeral;
-	//     the ephemeral lifecycle has no reattach semantics (ADR-0146).
+	//     the ephemeral lifecycle has no reattach semantics (docs/design/lifecycles.md).
 	Attach(context.Context, *AttachRequest) (*AttachResponse, error)
 	// Exec runs a command INSIDE an existing session Sandbox's running
 	// microVM and streams its stdio, so a session can be worked on
 	// across many turns instead of being limited to the single
-	// immutable spec.command it booted with (ADR-0148).
+	// immutable spec.command it booted with (docs/design/lifecycles.md).
 	//
 	// This is not LeaseService.Exec: that verb launches a fresh
 	// one-shot Sandbox per call and shares nothing between calls. This
@@ -317,10 +317,10 @@ type SandboxServiceServer interface {
 	//
 	// An in-flight Exec registers as session activity for the whole of
 	// its run, so a long build can never be idle-evicted underneath the
-	// caller (ADR-0146).
+	// caller (docs/design/lifecycles.md).
 	//
 	// A session whose VM is paused or suspended is resumed first and
-	// the command runs once it is back (ADR-0146 suspend/resume); the
+	// the command runs once it is back (docs/design/lifecycles.md suspend/resume); the
 	// caller sees only the added latency.
 	//
 	// Failure shapes (each carries an AttachFailure detail, the same
@@ -330,7 +330,7 @@ type SandboxServiceServer interface {
 	//     Sandbox.
 	//   - FAILED_PRECONDITION + SESSION_ENDED: the session is over.
 	//   - FAILED_PRECONDITION + NOT_A_SESSION: the Sandbox is
-	//     ephemeral; its one command is its whole life (ADR-0146).
+	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
 	// These are RPC-level errors raised before the command starts, so

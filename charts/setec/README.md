@@ -20,7 +20,7 @@ to reconcile `Sandbox` resources into Kata-runtime Pods.
   a VM with nested virtualization enabled). Setec runs Firecracker
   microVMs, which require `/dev/kvm`. arm64 is unsupported for the
   untrusted-execution plane
-  (ADR-0141): every published setec
+  (docs/design/runtime.md): every published setec
   image is single-arch `linux/amd64`, the node-agent and runtime-agent
   DaemonSets hardcode a `kubernetes.io/arch: amd64` nodeSelector, and every
   Sandbox Pod carries a matching required node affinity, so mixed-arch
@@ -28,7 +28,7 @@ to reconcile `Sandbox` resources into Kata-runtime Pods.
 - `helm` 3.8 or later.
 
 Kata Containers itself is NOT a prerequisite for `kata-fc`: the chart
-ships a portable installer DaemonSet (ADR-0143, `installer.enabled=true`
+ships a portable installer DaemonSet (docs/design/runtime.md, `installer.enabled=true`
 by default) that converges every x86 KVM-capable Node — it lays down the
 stock Kata + Firecracker release bundled in its image, provisions the
 containerd devmapper thin-pool with boot ordering (containerd never
@@ -279,7 +279,7 @@ verify the expected new manifests appear via `helm template`.
   `IssuerRef`.
 - `nodeAgent.enabled=true` installs the DaemonSet targeting the
   `nodeAgent.nodeSelector` (default `katacontainers.io/kata-runtime=true`)
-  plus a hardcoded `kubernetes.io/arch=amd64` selector (ADR-0141).
+  plus a hardcoded `kubernetes.io/arch=amd64` selector (docs/design/runtime.md).
   Provide `thinpoolDataDevice` and `thinpoolMetadataDevice` block devices per
   node. The agent exposes Prometheus metrics on port 9090. It runs privileged
   (SYS_ADMIN only) because device-mapper control requires it.

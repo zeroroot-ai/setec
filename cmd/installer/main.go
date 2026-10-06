@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Command installer is the portable node installer DaemonSet binary
-// (ADR-0143, issue #187). It converges the node it runs on to boot
+// (docs/design/runtime.md, issue #187). It converges the node it runs on to boot
 // kata-fc Firecracker microVMs — stock Kata payload, devmapper thin-pool
 // with boot ordering, containerd registration — then idles, re-verifying
 // on an interval. All convergence logic lives in internal/installer and

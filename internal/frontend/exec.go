@@ -316,7 +316,7 @@ func (s *Service) resolveLiveSession(
 
 	// The UID pins the handle to one session. A same-name Sandbox
 	// created after the original ended is a different session and must
-	// not be reachable through the old handle (ADR-0145 invariant 3:
+	// not be reachable through the old handle (docs/design/isolation.md invariant 3:
 	// never cross-session reuse).
 	if string(sb.UID) != uid {
 		return nil, attachFailure(codes.NotFound,
@@ -327,7 +327,7 @@ func (s *Service) resolveLiveSession(
 	if !sb.Spec.IsSession() {
 		return nil, attachFailure(codes.FailedPrecondition,
 			setecv1grpc.AttachFailure_REASON_NOT_A_SESSION, "",
-			"Sandbox %q is ephemeral; only lifecycle.mode=session supports this (ADR-0146)", name)
+			"Sandbox %q is ephemeral; only lifecycle.mode=session supports this (docs/design/lifecycles.md)", name)
 	}
 
 	if !sb.DeletionTimestamp.IsZero() {
@@ -345,7 +345,7 @@ func (s *Service) resolveLiveSession(
 
 // ensureSessionRunning brings the session's microVM to Running and
 // waits for it, so an exec against an idle-suspended session resumes it
-// rather than failing (ADR-0146). Flipping spec.desiredState is the
+// rather than failing (docs/design/lifecycles.md). Flipping spec.desiredState is the
 // same lever a client has; the controllers own the actual resume.
 func (s *Service) ensureSessionRunning(ctx context.Context, ns, name string) error {
 	deadline := time.Now().Add(s.execReadyBudget())

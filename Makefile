@@ -190,7 +190,7 @@ build-guest-agent: ## Build the static in-guest setec-guest-agent (bundle into m
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
-# setec publishes each image for linux/amd64 only (ADR-0141), and
+# setec publishes each image for linux/amd64 only (docs/design/runtime.md), and
 # hack/verify-x86-substrate.sh fails when this file names another platform.
 .PHONY: image
 image: docker-build ## Uniform-contract alias for docker-build.
@@ -317,7 +317,7 @@ helm-verify-credentials: ## Render both credential modes and assert the install-
 	HELM="$(HELM)" ./hack/verify-chart-credentials.sh $(HELM_CHART_DIR)
 
 .PHONY: verify-x86-substrate
-verify-x86-substrate: ## Assert the x86-only substrate (ADR-0141): amd64-only images + arch selectors.
+verify-x86-substrate: ## Assert the x86-only substrate (docs/design/runtime.md): amd64-only images + arch selectors.
 	@command -v $(HELM) >/dev/null 2>&1 || { \
 		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
 		exit 1; \

@@ -119,7 +119,7 @@ func TestPauseTimeout_UnboundedWithoutCap(t *testing.T) {
 		"without a class cap a paused Sandbox must stay Paused")
 }
 
-// TestPauseTimeout_CheckpointSessionSuspends asserts the ADR-0146
+// TestPauseTimeout_CheckpointSessionSuspends asserts the docs/design/lifecycles.md
 // alternative: a checkpoint-enabled session paused past the cap is
 // suspended — checkpoint retained, microVM released — not failed, and
 // holds Suspended while desiredState stays Paused. Flipping

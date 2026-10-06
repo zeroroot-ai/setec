@@ -47,7 +47,7 @@ type GuestHandler struct {
 // stopped" — callers that treat it as "all work is done" (every caller does)
 // could observe a handler still running afterwards. In the guest agent that
 // means SIGTERM can cut a reseed injection or a uniquify directive off
-// mid-flight, and for entropy that is an ADR-0145 concern: the reseed is what
+// mid-flight, and for entropy that is an docs/design/isolation.md concern: the reseed is what
 // stands between a restored clone and a duplicated RNG stream, so "mostly
 // completes before shutdown" is not the guarantee the invariant needs
 // (setec#319).

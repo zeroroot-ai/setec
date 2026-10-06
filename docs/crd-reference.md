@@ -77,7 +77,7 @@ status:
 | `network.allow[].ports[].endPort` | int32 (`1`–`65535`) | no | — | Last port of the range. It must not be lower than `port`. `port: 1` with `endPort: 65535` permits every port of the protocol. |
 | `network.allow[].cidr` | string | no | — | Address block this entry is pinned to, replacing resolution of `host` for that rule. Set it when the destination range is genuinely known, or when the name does not resolve from inside the cluster. |
 | `lifecycle` | object | no | `{}` | Lifecycle selection and runtime constraints applied to the Sandbox. |
-| `lifecycle.mode` | enum `ephemeral` \| `session` | no | `ephemeral` | Which lifecycle the Sandbox follows (ADR-0146). `ephemeral` is today's run-to-completion behavior, unchanged. `session` is long-lived with a durable `/workspace` PVC and explicit teardown. **Immutable** — the admission webhook rejects any update that changes the effective mode. See [`spec.lifecycle.mode`](#speclifecyclemode). |
+| `lifecycle.mode` | enum `ephemeral` \| `session` | no | `ephemeral` | Which lifecycle the Sandbox follows (docs/design/lifecycles.md). `ephemeral` is today's run-to-completion behavior, unchanged. `session` is long-lived with a durable `/workspace` PVC and explicit teardown. **Immutable** — the admission webhook rejects any update that changes the effective mode. See [`spec.lifecycle.mode`](#speclifecyclemode). |
 | `lifecycle.workspace` | object | no (session only) | `{}` | Durable per-session workspace volume configuration. Rejected at admission unless `lifecycle.mode: session`. |
 | `lifecycle.workspace.size` | resource.Quantity | no | `10Gi` | Requested capacity of the workspace PVC. Must be > 0. |
 | `lifecycle.workspace.storageClassName` | string | no | cluster default | StorageClass the workspace PVC is provisioned from. Any CSI driver works. **Encryption at rest is this StorageClass's responsibility** — point it at a class whose driver encrypts volumes; Setec adds no encryption layer of its own. |
@@ -142,7 +142,7 @@ operator can detect that. Verify enforcement on the cluster itself.
 
 ### `spec.lifecycle.mode`
 
-A Sandbox declares one of two lifecycles (ADR-0146). The mode is
+A Sandbox declares one of two lifecycles (docs/design/lifecycles.md). The mode is
 immutable for the life of the object; to change it, delete the Sandbox
 and create a new one.
 
@@ -166,7 +166,7 @@ Sandbox, or `Kill` on the gRPC frontend):
   CSI PVC named `<sandbox>-workspace` *before* the Pod and mounts it at
   `/workspace`. Data written there survives VM restart and node loss —
   on node failure the CSI driver re-attaches the claim to the failover
-  node (ADR-0147). Any CSI driver works; there is no cloud-specific
+  node (docs/design/storage.md). Any CSI driver works; there is no cloud-specific
   storage dependency. On the kata-fc backend the claim is `volumeMode:
   Block` instead of the default `Filesystem`: Kata Containers +
   Firecracker has no virtio-fs, so a filesystem-mode volume's guest
@@ -176,7 +176,7 @@ Sandbox, or `Kill` on the gRPC frontend):
   as ext4 (once — never reformatting an existing filesystem), mounts it,
   and then execs the Sandbox's own command (or falls into its usual
   no-command reap loop), so the workload still just sees an ordinary
-  writable directory at `/workspace` (ADR-0147 addendum, setec#91).
+  writable directory at `/workspace` (docs/design/storage.md addendum, setec#91).
   gVisor and runc are unaffected and keep the filesystem-mode
   claim.
 - **VM restart, not completion.** The workload exiting (any exit code)
@@ -202,7 +202,7 @@ Sandbox, or `Kill` on the gRPC frontend):
   `setec.zeroroot.ai/workspace-teardown` finalizer: the Pod is deleted,
   then the workspace PVC is deleted; the CSI driver destroys the volume
   and every byte of session data with it. One session per VM and per
-  workspace — nothing is reusable across sessions (ADR-0145
+  workspace — nothing is reusable across sessions (docs/design/isolation.md
   invariant 3). Pair `storageClassName` with an encrypting StorageClass
   so at-rest deletion is also a cryptographic erase.
 
@@ -221,12 +221,12 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` \| `Paused` \| `Snapshotting` \| `Restoring` \| `Suspended` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. `Suspended` (session + class `sessionCheckpoint` only) means the microVM was checkpointed to the portable store and released; no Pod exists while suspended, and the workspace PVC plus the checkpoint survive. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, ADR-0146), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, docs/design/lifecycles.md), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
 | `lastTransitionTime` | `metav1.Time` | Timestamp of the most recent phase change. |
-| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (ADR-0144) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a claimed pool entry, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
+| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (docs/design/lifecycles.md) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a claimed pool entry, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
 | `checkpoint` | object | Session memory-checkpoint bookkeeping (session + class `sessionCheckpoint` only). `ref`/`backend`/`sequence`/`takenAt`/`sizeBytes` describe the single retained checkpoint (a new one replaces its predecessor; a restore consumes it). `pendingRestore` marks a fresh VM that must restore from `ref`. `lastRecovery` reports how the most recent VM (re)start recovered: `ResumedFromCheckpoint` (process continued) or `RestartedFromWorkspace` (the distinct degraded condition — the process restarted against the durable workspace; no data lost). While `Suspended`, `status.reason` is one of `SuspendedIdle`, `UserSuspended`, or `CheckpointOnDrain`. |
 
 ## Phase state machine

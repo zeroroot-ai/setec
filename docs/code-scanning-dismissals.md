@@ -22,7 +22,7 @@ re-audit when the threat model changes.
 | `trivy-setec-node-agent` | `Dockerfile` | Per-node pool/snapshot agent. |
 | `trivy-setec-runtime-agent` | `Dockerfile` | Per-node runtime prober. |
 | `trivy-setec-guest-agent` | `Dockerfile` | Static in-guest binary; not a runnable service image. |
-| `trivy-setec-installer` | `Dockerfile.installer` | The node installer. **Additionally carries the stock kata-containers static release as an immutable payload** (ADR-0143). |
+| `trivy-setec-installer` | `Dockerfile.installer` | The node installer. **Additionally carries the stock kata-containers static release as an immutable payload** (docs/design/runtime.md). |
 
 Five of the six scan clean. **Every finding this repo has ever carried belongs
 to `trivy-setec-installer`, and every one of them is inside the kata payload —
@@ -54,7 +54,7 @@ boundary. It sits between two inputs:
   running **untrusted code by design**. A workload that compromises its guest
   agent is then speaking directly to the shim's parser.
 
-Per ADR-0052 the split is: a cross-tenant leak is a `gibson` bug, **a sandbox
+Per docs/design/threat-model.md the split is: a cross-tenant leak is a `gibson` bug, **a sandbox
 escape is a `setec` bug.** The shim is on setec's side of that line. A
 remote-code-execution or memory-safety defect in the shim's guest-facing path is
 a sandbox-escape primitive, not a contained finding.
@@ -217,7 +217,7 @@ v1.7.35`. The only levers are:
    `zeroroot-ai/.github` `version-links.yaml` watches kata releases, so a new
    one shows in the org version-drift tracker (Entry 10).
 2. Build the shim from source against patched deps, which would abandon the
-   stock-static-release property ADR-0143 exists to preserve. That is an
+   stock-static-release property docs/design/runtime.md exists to preserve. That is an
    architecture decision, not a triage decision.
 
 Re-audit on every kata pin bump, with the procedure below. The kata payload
@@ -294,7 +294,7 @@ Not a dismissal. Owner decision 2026-09-07, option 2 of three: take the
 shim (`containerd-shim-kata-v2`), Firecracker and the jailer, so the
 `kata-fc` path is unchanged. Alternatives declined: stay on 3.32.0 with the
 20 findings open, or build the 3.32.0 shim from source (a kata fork to
-maintain, and the ADR-0143 stock-release property lost).
+maintain, and the docs/design/runtime.md stock-release property lost).
 
 What moved, in lockstep as before: `Dockerfile.installer` (tarball name and
 pin), `packer/eks-kata-fc-ami/*` (same), `development/k3s/scripts/20-install-kata.sh`

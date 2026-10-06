@@ -122,7 +122,7 @@ const (
 	AttachFailure_REASON_SESSION_ENDED AttachFailure_Reason = 2
 	// REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
 	// REASON_NOT_A_SESSION: the Sandbox follows the ephemeral
-	// lifecycle, which rejects reattach (ADR-0146).
+	// lifecycle, which rejects reattach (docs/design/lifecycles.md).
 	AttachFailure_REASON_NOT_A_SESSION AttachFailure_Reason = 3
 	// REASON_SESSION_NOT_RUNNING: Exec-only. The session is live but
 	// its microVM could not be brought to Running in time — it is
@@ -625,7 +625,7 @@ func (x *NetworkAllowPort) GetEndPort() uint32 {
 type Lifecycle struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Timeout string                 `protobuf:"bytes,1,opt,name=timeout,proto3" json:"timeout,omitempty"` // Go-style duration: "30m", "8h"
-	// mode selects the Sandbox lifecycle (ADR-0146): "ephemeral"
+	// mode selects the Sandbox lifecycle (docs/design/lifecycles.md): "ephemeral"
 	// (default when empty; run-to-completion, auto-destroy, stateless)
 	// or "session" (long-lived, durable /workspace volume, explicit
 	// teardown via Kill). Mode is immutable for the life of a Sandbox.

@@ -283,7 +283,7 @@ func (c Config) Generate(ctx context.Context, sb *setecv1alpha1.Sandbox) (*netwo
 	return c.generate(ctx, sb, nil)
 }
 
-// GenerateForClass is the class-aware entry point (ADR-0052, setec#66). It
+// GenerateForClass is the class-aware entry point (docs/design/threat-model.md, setec#66). It
 // resolves the Sandbox's effective network posture, applying the
 // SandboxClass default when the Sandbox does not declare its own
 // spec.network, then produces the policy.

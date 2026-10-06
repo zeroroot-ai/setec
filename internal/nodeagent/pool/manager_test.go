@@ -162,7 +162,7 @@ func (l *fakeLauncher) Launch(ctx context.Context, opts LaunchOptions) error {
 	// sidecar (junk bytes are fine for the manager's purposes — it
 	// only ever shreds it), a class-image-boot provenance record, and
 	// a clean secret-scan verdict, without which Claim refuses the
-	// entry (ADR-0145 invariants 4 and 1).
+	// entry (docs/design/isolation.md invariants 4 and 1).
 	_ = os.WriteFile(entryDir+"/"+poolentry.DEKFile, []byte("sealed-dek"), 0o600)
 	if err := poolentry.WriteProvenance(entryDir, poolentry.Provenance{
 		Source:   poolentry.SourceClassImageBoot,

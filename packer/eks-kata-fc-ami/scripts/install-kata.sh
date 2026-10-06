@@ -21,7 +21,7 @@ set -euo pipefail
 : "${KATA_VERSION:?KATA_VERSION must be set (e.g. 4.1.0)}"
 : "${KATA_SHA256:?KATA_SHA256 must be set — kata >= 3.28.0 releases carry no .sha256sum sidecars, so an unpinned bake cannot be verified. Pin the sha256 of kata-go-static-${KATA_VERSION}-amd64.tar.zst (keep in lockstep with Dockerfile.installer).}"
 
-# x86 only (ADR-0141).
+# x86 only (docs/design/runtime.md).
 ARCH=amd64
 TARBALL="kata-go-static-${KATA_VERSION}-${ARCH}.tar.zst"
 URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${TARBALL}"

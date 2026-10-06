@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Command setec-keepalive is the boot command of a session Sandbox that
-// declares no spec.command (setec#7, ADR-0146), and also the command
+// declares no spec.command (setec#7, docs/design/lifecycles.md), and also the command
 // every kata-fc session boots first to prepare its durable workspace
 // before running its own command, if it has one (setec#91).
 //

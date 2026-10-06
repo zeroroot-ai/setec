@@ -68,7 +68,7 @@ func TestBuild_SessionMountsWorkspacePVC(t *testing.T) {
 // (no lifecycle block at all) and an explicit "ephemeral" produce Pods
 // with no workspace volume, no workspace mount, and no fsGroup — and
 // that both spellings produce byte-for-byte identical Pods, which is
-// the "ephemeral stays exactly today's behavior" contract of ADR-0146.
+// the "ephemeral stays exactly today's behavior" contract of docs/design/lifecycles.md.
 func TestBuild_EphemeralHasNoWorkspace(t *testing.T) {
 	t.Parallel()
 

@@ -234,7 +234,7 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 	}
 	// The bare LocalDiskBackend does not attest encryption at rest, so
 	// the signal for the operator-side invariant gate must be false —
-	// never inferred (ADR-0145 invariant 5).
+	// never inferred (docs/design/isolation.md invariant 5).
 	if resp.GetEncryptedAtRest() {
 		t.Fatal("encrypted_at_rest must be false for an unencrypted backend")
 	}

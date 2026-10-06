@@ -141,7 +141,7 @@ func (w *SandboxClassWebhook) ValidateDelete(_ context.Context, _ *setecv1alpha1
 func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 
-	// Default-deny egress consistency (ADR-0052, setec#66): when a class
+	// Default-deny egress consistency (docs/design/threat-model.md, setec#66): when a class
 	// both restricts the allowed network modes and declares a default mode,
 	// the default it would silently apply to a Sandbox MUST itself be an
 	// allowed mode. Otherwise the operator would synthesise a posture the
@@ -158,7 +158,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		))
 	}
 
-	// Pre-warm pool knobs (ADR-0144, setec#188). The three fields are one
+	// Pre-warm pool knobs (docs/design/lifecycles.md, setec#188). The three fields are one
 	// declarative surface: a pool needs an image to bake, and a TTL of zero
 	// or less would recycle entries in a hot loop.
 	allErrs = append(allErrs, validatePreWarm(class)...)
@@ -362,7 +362,7 @@ func validateRuntimeParams(class *setecv1alpha1.SandboxClass) field.ErrorList {
 
 // validatePreWarm enforces the coherence rules of the declarative
 // pre-warm pool surface (PreWarmPoolSize / PreWarmImage / PreWarmTTL,
-// ADR-0144):
+// docs/design/lifecycles.md):
 //
 //   - a non-zero pool size requires a PreWarmImage — the node-agent
 //     bakes pool entries from the class image and has nothing to boot

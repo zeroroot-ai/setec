@@ -26,7 +26,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/status"
 )
 
-// Session-checkpoint machinery (setec#194, ADR-0146 L2 / ADR-0147).
+// Session-checkpoint machinery (setec#194, docs/design/lifecycles.md L2 / docs/design/storage.md).
 //
 // A session Sandbox whose class enables spec.sessionCheckpoint gets:
 //
@@ -231,7 +231,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// past the class maxPauseDuration has held a paused microVM's full
 	// memory reservation for the whole cap. With checkpoints enabled
 	// the cap suspends instead of hard-failing: checkpoint, release the
-	// microVM, keep the session recoverable (ADR-0146 L2). The suspend
+	// microVM, keep the session recoverable (docs/design/lifecycles.md L2). The suspend
 	// holds until desiredState returns to Running.
 	if desired.Phase == setecv1alpha1.SandboxPhasePaused {
 		if deadline, ok := status.PauseDeadline(desired, cls); ok && !time.Now().Before(deadline) {
@@ -415,7 +415,7 @@ func (r *SandboxReconciler) suspendSession(
 
 // restorePendingCheckpoint loads the pending checkpoint into the fresh
 // session VM. The checkpoint is CONSUMED by the attempt no matter how
-// it ends (ADR-0145 forbids restoring the same state twice): on
+// it ends (docs/design/isolation.md forbids restoring the same state twice): on
 // success the session continues (ResumedFromCheckpoint); on failure
 // the already-running cold-booted VM carries on against the durable
 // workspace, surfaced as the distinct RestartedFromWorkspace
@@ -438,15 +438,15 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	}
 	switch {
 	case errors.Is(restoreErr, snapshot.ErrInvariantGateViolation):
-		// ADR-0145 invariant gate refusal: the VM already holds the
+		// docs/design/isolation.md invariant gate refusal: the VM already holds the
 		// checkpoint state but its verifications did not pass, so the
 		// VM is DESTROYED — never served. The session itself survives
-		// per ADR-0146: the deleted Pod is recreated and the fresh VM
+		// per docs/design/lifecycles.md: the deleted Pod is recreated and the fresh VM
 		// cold-boots against the durable workspace (the checkpoint is
 		// consumed below either way).
 		recovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
 		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
-			"ADR-0145 invariant gate refused checkpoint resume #%d (%v); destroying the VM that received the unverified state — session restarts from durable workspace",
+			"docs/design/isolation.md invariant gate refused checkpoint resume #%d (%v); destroying the VM that received the unverified state — session restarts from durable workspace",
 			ck.Sequence, restoreErr)
 		logger.Error(restoreErr, "invariant gate refused session checkpoint resume; destroying VM")
 		podName := sb.Status.PodName

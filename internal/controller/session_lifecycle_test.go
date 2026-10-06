@@ -3,7 +3,7 @@
 
 package controller
 
-// Session-lifecycle scenarios (ADR-0146/0147): the durable workspace
+// Session-lifecycle scenarios (docs/design/lifecycles.md and docs/design/storage.md): the durable workspace
 // PVC is created before the Pod, an exited session VM is restarted
 // rather than finished, and explicit teardown wipes the workspace.
 //
@@ -225,7 +225,7 @@ func TestNewWorkspacePVC_VolumeModePerBackend(t *testing.T) {
 
 // TestNewWorkspacePVC_NeverMutatesFilesystemBackendsAcrossCalls is the
 // failing fixture for the "one code path per backend decision point"
-// contract (ADR-0027): calling newWorkspacePVC for kata-fc must not
+// contract (one cutover, no parallel path): calling newWorkspacePVC for kata-fc must not
 // leave any shared state that leaks into a later call for a
 // filesystem-mode backend. Sharing a *corev1.PersistentVolumeMode
 // pointer across calls, for example, would make this fail.

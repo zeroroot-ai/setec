@@ -39,7 +39,7 @@ const (
 	ReasonContainerExitedNonZero = "ContainerExitedNonZero"
 
 	// ReasonInvariantGateViolation is recorded on Failed when the
-	// ADR-0145 invariant gate refused a snapshot restore/resume: the
+	// docs/design/isolation.md invariant gate refused a snapshot restore/resume: the
 	// node restored state into the Sandbox's VM but one or more
 	// per-restore invariant verifications did not pass and no dev-mode
 	// opt-out was active. Terminal — the VM holds unverified restored
@@ -48,7 +48,7 @@ const (
 
 	// ReasonSessionVMRestarting is recorded on Pending when a session
 	// Sandbox's VM exited or died. A session ends only on explicit
-	// teardown (ADR-0146), so a dead VM is not terminal: the controller
+	// teardown (docs/design/lifecycles.md), so a dead VM is not terminal: the controller
 	// deletes the exited Pod and recreates it, and the fresh VM
 	// re-mounts the durable workspace PVC.
 	ReasonSessionVMRestarting = "SessionVMRestarting"
@@ -115,7 +115,7 @@ func Derive(
 		return out
 	}
 
-	// Session lifecycle (ADR-0146): the workload exiting does not end the
+	// Session lifecycle (docs/design/lifecycles.md): the workload exiting does not end the
 	// session — only explicit teardown does. A terminal Pod therefore maps
 	// to Pending/SessionVMRestarting instead of Completed/Failed; the
 	// controller reacts by deleting the dead Pod and recreating it against

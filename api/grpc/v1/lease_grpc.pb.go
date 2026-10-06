@@ -53,8 +53,8 @@ const (
 //     back to its warm target.
 //
 // Like SandboxService every hop is mTLS, and the certificate names the
-// caller and carries no tenancy (ADR-0142, ADR-0052). It carries NO
-// datastore or zeroroot-platform coupling (ADR-0056). It is
+// caller and carries no tenancy (docs/design/threat-model.md). It carries NO
+// datastore or zeroroot-platform coupling. It is
 // an additive surface layered on the v1 isolation ABI; the WIRE breaking
 // gate guards its wire stability the same way it guards SandboxService.
 type LeaseServiceClient interface {
@@ -154,8 +154,8 @@ func (c *leaseServiceClient) PoolStatus(ctx context.Context, in *PoolStatusReque
 //     back to its warm target.
 //
 // Like SandboxService every hop is mTLS, and the certificate names the
-// caller and carries no tenancy (ADR-0142, ADR-0052). It carries NO
-// datastore or zeroroot-platform coupling (ADR-0056). It is
+// caller and carries no tenancy (docs/design/threat-model.md). It carries NO
+// datastore or zeroroot-platform coupling. It is
 // an additive surface layered on the v1 isolation ABI; the WIRE breaking
 // gate guards its wire stability the same way it guards SandboxService.
 type LeaseServiceServer interface {

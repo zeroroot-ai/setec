@@ -271,7 +271,7 @@ func poolEntriesGauge(families map[string]*dto.MetricFamily, class string) (floa
 	return total, found
 }
 
-// TestPhase3_PoolWarmStartLifecycle exercises the ADR-0144 declarative
+// TestPhase3_PoolWarmStartLifecycle exercises the docs/design/lifecycles.md declarative
 // pre-warm pool end to end (setec#188): setting preWarmPoolSize on a
 // SandboxClass builds the pool, an ephemeral Sandbox of that class
 // warm-starts from a claimed entry inside a real kata-fc Pod, and

@@ -13,7 +13,7 @@ import (
 // CIDs 0-2 are reserved (hypervisor / loopback / host).
 const FirstGuestCID uint32 = 3
 
-// CIDAllocator is the node-local vsock context-id authority (ADR-0145
+// CIDAllocator is the node-local vsock context-id authority (docs/design/isolation.md
 // invariant 2: "a unique vsock CID per restore"). It serves two
 // cooperating callers on one node-agent:
 //

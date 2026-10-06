@@ -52,6 +52,9 @@ Multi-group layout organizes APIs by group name (e.g., `batch`, `apps`). Check t
 
 ## Critical Rules
 
+### Design pages change with the design
+`docs/architecture.md` and `docs/design/*.md` describe the code on `main`. A pull request that changes a design changes its page too. A code comment that needs a design reason points to one of these pages. It never cites a private record number.
+
 ### Never Edit These (Auto-Generated)
 - `config/crd/bases/*.yaml` - from `make manifests`
 - `config/rbac/role.yaml` - from `make manifests`

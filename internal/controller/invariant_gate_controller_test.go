@@ -27,7 +27,7 @@ import (
 // eligible Sandbox against a node-agent that reports a "successful"
 // restore MISSING its per-restore verifications (the shape produced by
 // a node opted out via --entropy-reseed=off / --restore-uniquify=off,
-// setec#191). The ADR-0145 invariant gate must reject: outcome
+// setec#191). The docs/design/isolation.md invariant gate must reject: outcome
 // Rejected, Sandbox Failed with the typed InvariantGateViolation
 // reason, and the Pod holding the unverified state destroyed. Cold
 // boot is deliberately NOT the fallback here — the VM already received
@@ -118,7 +118,7 @@ func TestSessionCheckpoint_GateRefusalDestroysVM(t *testing.T) {
 	finalizeTerminatingPod(g, ns, sb.Name, firstPod.UID)
 
 	// Degrade the node's restore response: success without any
-	// ADR-0145 verification — the shape a verification-suppressed
+	// docs/design/isolation.md verification — the shape a verification-suppressed
 	// node-agent produces.
 	testDialer.client.RestoreRes = &setecgrpcv1.RestoreSandboxResponse{Success: true}
 	t.Cleanup(func() { testDialer.client.RestoreRes = nil })

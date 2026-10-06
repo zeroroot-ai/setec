@@ -8,8 +8,8 @@ name: images
 # All service images share a single Dockerfile; CMD build-arg selects the
 # binary. setec-installer builds from Dockerfile.installer instead: it
 # additionally bundles the pinned kata-containers static release as an
-# immutable payload (ADR-0143, setec#187) and is amd64-only — the kata
-# payload is x86 (ADR-0141) and the chart's installer DaemonSet pins
+# immutable payload (docs/design/runtime.md, setec#187) and is amd64-only — the kata
+# payload is x86 (docs/design/runtime.md) and the chart's installer DaemonSet pins
 # kubernetes.io/arch: amd64.
 # setec-guest-agent is not a runnable service image: it exists so microVM
 # rootfs builders can COPY the static binary out of it (the in-guest half
@@ -26,7 +26,7 @@ name: images
 # workflow_call in the same run and passes the fresh tag as version_tag.
 # The tags trigger + tag_pattern remain for hand-pushed tags (which DO fire).
 #
-# Images are single-arch linux/amd64 ONLY (ADR-0141, setec#186): the sandbox
+# Images are single-arch linux/amd64 ONLY (docs/design/runtime.md, setec#186): the sandbox
 # substrate is x86 exclusively, so no multi-arch manifests are published and
 # nothing silently attempts arm64. This supersedes the brief multi-arch
 # window opened for setec#132 — mixed-arch clusters converge via the
@@ -274,7 +274,7 @@ jobs:
       # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
       # go.mod names a Go the pinned base does not carry.
       go_toolchain_local: true
-      # amd64 only: the bundled kata static payload is x86 (ADR-0141).
+      # amd64 only: the bundled kata static payload is x86 (docs/design/runtime.md).
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       # Binaries this repo does NOT compile, so the vulnerability gate asks

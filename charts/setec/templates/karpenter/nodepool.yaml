@@ -1,7 +1,7 @@
 {{- /*
 Karpenter NodePool that provisions x86 bare-metal nodes from the baked
 kata-fc AMI ON DEMAND and scales to zero when no kata Sandbox is running.
-The sandbox substrate is x86 only (ADR-0141), so the arch requirement is
+The sandbox substrate is x86 only (docs/design/runtime.md), so the arch requirement is
 hardcoded to amd64 — Sandbox Pods carry a kubernetes.io/arch=amd64
 affinity, and an arm64 pool could never satisfy them.
 Rendered only when karpenter.enabled=true; requires the Karpenter v1 CRDs

@@ -1,6 +1,6 @@
 {{- if .Values.installer.enabled }}
 {{- include "setec.validateInstaller" . -}}
-# Portable node installer (ADR-0143, issue #187). Converges any x86
+# Portable node installer (docs/design/runtime.md, issue #187). Converges any x86
 # KVM-capable node to boot kata-fc Firecracker microVMs: stock Kata
 # payload from the image, devmapper thin-pool with boot ordering,
 # containerd registration. Idempotent and ownership-aware — see

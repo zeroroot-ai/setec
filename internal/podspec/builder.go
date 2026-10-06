@@ -184,7 +184,7 @@ const (
 	scratchMountPath = "/tmp"
 
 	// WorkspaceVolumeName is the Pod volume name for the durable
-	// per-session workspace PVC (session lifecycle only, ADR-0146/0147).
+	// per-session workspace PVC (session lifecycle only, docs/design/lifecycles.md and docs/design/storage.md).
 	WorkspaceVolumeName = "workspace"
 
 	// WorkspaceMountPath is where the session workspace is mounted
@@ -224,7 +224,7 @@ func WorkspacePVCName(sandboxName string) string {
 //
 // NET_RAW and NET_ADMIN are required by raw-socket network tooling: with
 // them dropped, half-open port scanning and packet crafting stop working
-// and the product cannot do its job. Per ADR-0052 the containment
+// and the product cannot do its job. Per docs/design/threat-model.md the containment
 // boundary for untrusted execution is the microVM, not the container
 // capability set, so re-adding these two costs nothing that the guest
 // boundary was not already carrying. Everything else stays dropped.
@@ -380,7 +380,7 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 		// SYS_ADMIN together with allowPrivilegeEscalation: false, so
 		// the wrapper sets no_new_privs itself before the exec.
 		//
-		// Per ADR-0052 this costs nothing extra on kata-fc: the microVM
+		// Per docs/design/threat-model.md this costs nothing extra on kata-fc: the microVM
 		// the whole Pod runs in is the containment boundary. It never
 		// reaches `privileged`, which the chart's admission policy
 		// refuses in a Sandbox namespace (sandbox-namespace-host-guard,

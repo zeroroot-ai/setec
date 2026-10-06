@@ -2,7 +2,7 @@
 // Copyright 2026 Zero Root AI
 
 // Package workspace formats and mounts the durable per-session
-// workspace volume for the kata-fc backend (setec#91, ADR-0147
+// workspace volume for the kata-fc backend (setec#91, docs/design/storage.md
 // addendum).
 //
 // Kata Containers + Firecracker carries no virtio-fs, so kata cannot
@@ -22,7 +22,7 @@
 // restart (a node dying, an eviction, an explicit Pod delete), and each
 // of those incarnations runs this package's logic again. Reformatting
 // an already-formatted device would silently destroy the very corpus
-// ADR-0146/0147 promise a session never loses, so FormatOnce checks for
+// docs/design/lifecycles.md and docs/design/storage.md promise a session never loses, so FormatOnce checks for
 // an existing filesystem before ever calling mkfs.
 package workspace
 
@@ -129,7 +129,7 @@ func FormatOnce(device string) error {
 
 // Mount mounts device at target as ext4.
 //
-// Requires CAP_SYS_ADMIN. Per ADR-0052 that costs nothing extra on
+// Requires CAP_SYS_ADMIN. Per docs/design/threat-model.md that costs nothing extra on
 // kata-fc: the sandbox's containment boundary is the microVM the whole
 // Pod runs inside, not this container's own capability set — the same
 // reasoning that already re-adds NET_RAW/NET_ADMIN to the kata-fc

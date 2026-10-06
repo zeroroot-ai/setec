@@ -75,7 +75,7 @@ func TestGVisorDispatcher_NodeAffinity(t *testing.T) {
 	}
 
 	// Third expression: architecture constraint. The sandbox substrate is
-	// x86 only (ADR-0141), so every backend pins kubernetes.io/arch=amd64.
+	// x86 only (docs/design/runtime.md), so every backend pins kubernetes.io/arch=amd64.
 	if exprs[2].Key != archLabelKey {
 		t.Errorf("MatchExpressions[2].Key = %q, want kubernetes.io/arch", exprs[2].Key)
 	}

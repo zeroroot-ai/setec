@@ -4,7 +4,7 @@
 // Package tenancy owns the tenant of a Sandbox. A TenantID comes from a
 // Kubernetes namespace label or from the tenant field of a frontend request.
 // It never comes from a certificate: a certificate names a workload, not a
-// tenant (ADR-0142). A Pair joins the enrolled client cluster of the caller
+// tenant (docs/design/isolation.md). A Pair joins the enrolled client cluster of the caller
 // and the tenant, and it selects the namespace of the Sandbox. Every value is
 // validated to be safe as a DNS-1123 label.
 //

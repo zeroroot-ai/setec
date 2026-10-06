@@ -47,7 +47,7 @@ import (
 
 const (
 	// defaultFirecrackerBinary is where setec's own installer DaemonSet leaves
-	// the Firecracker binary — the default node-prep path (ADR-0143), and the
+	// the Firecracker binary — the default node-prep path (docs/design/runtime.md), and the
 	// path the stock configuration-fc.toml references.
 	//
 	// Shared with the installer via firecracker.HostBinaryPath so the two
@@ -58,7 +58,7 @@ const (
 	defaultFirecrackerBinary = firecracker.HostBinaryPath
 
 	// defaultKeyFile is the node-local KEK the per-entry DEK is sealed
-	// with (ADR-0145 invariant 5). Matches the node-agent's
+	// with (docs/design/isolation.md invariant 5). Matches the node-agent's
 	// --snapshot-key-file default.
 	defaultKeyFile = "/var/lib/setec/keys/node.key"
 
@@ -84,7 +84,7 @@ const (
 	// node-agent does not pass an explicit --guest-cid. 0-2 are
 	// reserved (hypervisor/loopback/host); 3 is the conventional
 	// first guest CID. Production pool boots ALWAYS pass an explicit
-	// node-unique CID from the node-agent's allocator (ADR-0145
+	// node-unique CID from the node-agent's allocator (docs/design/isolation.md
 	// invariant 2) so two entries never share one.
 	defaultGuestCID = 3
 )
@@ -138,7 +138,7 @@ func parseFlags(args []string) (Options, error) {
 			"(created on first use). Snapshot state is ALWAYS encrypted at rest; there is no opt-out.")
 	fs.UintVar(&o.GuestCID, "guest-cid", defaultGuestCID,
 		"vsock context id assigned to the guest; the node-agent allocates a node-unique "+
-			"value per pool entry (ADR-0145 invariant 2). Must be >= 3 (0-2 are reserved)")
+			"value per pool entry (docs/design/isolation.md invariant 2). Must be >= 3 (0-2 are reserved)")
 
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -161,7 +161,7 @@ func parseFlags(args []string) (Options, error) {
 		missing = append(missing, "--pool-entry-id")
 	}
 	if o.KeyFile == "" {
-		// Encryption at rest is not optional (ADR-0145 invariant 5);
+		// Encryption at rest is not optional (docs/design/isolation.md invariant 5);
 		// an explicitly-emptied flag is a misconfiguration.
 		missing = append(missing, "--key-file")
 	}
@@ -257,7 +257,7 @@ func runLauncher(
 		return fmt.Errorf("mkdir %q: %w", entryDir, mkErr)
 	}
 
-	// Template provenance (ADR-0145 invariant 4): this launcher only
+	// Template provenance (docs/design/isolation.md invariant 4): this launcher only
 	// ever snapshots the VM it cold-boots itself from the class
 	// kernel/rootfs/image. A LIVE process already answering on the
 	// requested socket would mean snapshotting a pre-existing —
@@ -265,7 +265,7 @@ func runLauncher(
 	if socketAlive(o.SocketPath) {
 		return fmt.Errorf(
 			"socket %q has a live listener; refusing to snapshot a pre-existing VM "+
-				"(template provenance, ADR-0145 invariant 4)", o.SocketPath)
+				"(template provenance, docs/design/isolation.md invariant 4)", o.SocketPath)
 	}
 	// Clean any stale (dead) socket file so Firecracker can bind.
 	if rmErr := os.Remove(o.SocketPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
@@ -318,7 +318,7 @@ func runLauncher(
 		return fmt.Errorf("verify snapshot: %w", err)
 	}
 
-	// Secret-scan the freshly written plaintext pair (ADR-0145
+	// Secret-scan the freshly written plaintext pair (docs/design/isolation.md
 	// invariant 1): a pool entry that carries secret-shaped material
 	// is never persisted — the launch fails and the cleanup path
 	// removes every artifact. On a clean scan the verdict (scanner
@@ -330,7 +330,7 @@ func runLauncher(
 		return fmt.Errorf("secret scan: %w", err)
 	}
 
-	// Encrypt the entry at rest (ADR-0145 invariant 5): a fresh
+	// Encrypt the entry at rest (docs/design/isolation.md invariant 5): a fresh
 	// per-entry DEK encrypts both files in place (the plaintext is
 	// zero-overwritten before unlink), and the DEK is sealed with the
 	// node KEK under an AAD binding the entry's identity, its
@@ -415,7 +415,7 @@ func configureAndBoot(ctx context.Context, _ firecracker.Client, o Options) erro
 
 	// Attach a virtio-rng (entropy) device so the guest kernel has a
 	// continuous host-backed entropy source. This is the snapshot RNG-safety
-	// mechanism (ADR-0052, setec#66): a microVM restored from a Snapshot would
+	// mechanism (docs/design/threat-model.md, setec#66): a microVM restored from a Snapshot would
 	// otherwise resume with the exact CRNG state captured at snapshot time —
 	// every clone shares it, making nonces/keys/IDs predictable across
 	// restores. With virtio-rng present, the guest's add_hwgenerator_randomness
@@ -474,7 +474,7 @@ func socketAlive(path string) bool {
 
 // scanEntryClean runs the secret scanner over the plaintext
 // state/memory pair and returns the clean verdict to record in the
-// entry artifact (ADR-0145 invariant 1). Any finding fails the bake:
+// entry artifact (docs/design/isolation.md invariant 1). Any finding fails the bake:
 // findings are logged redacted, and the returned error wraps
 // secretscan.ErrSecretsFound so the caller's cleanup path destroys
 // the entry. A dirty verdict is therefore never persisted.

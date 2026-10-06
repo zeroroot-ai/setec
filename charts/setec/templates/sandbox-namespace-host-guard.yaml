@@ -20,7 +20,7 @@
 # PSA `baseline` denies exactly this set — and also denies adding
 # capabilities outside the container-runtime default set. Sandbox Pods add
 # NET_ADMIN (see internal/podspec/builder.go: raw-socket network tooling
-# genuinely needs it, and per ADR-0052 the containment boundary for
+# genuinely needs it, and per docs/design/threat-model.md the containment boundary for
 # untrusted execution is the microVM, not the container capability set).
 # Labelling a Sandbox namespace `pod-security.kubernetes.io/enforce=baseline`
 # would therefore reject the operator's own Pods. This policy applies the

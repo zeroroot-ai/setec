@@ -19,7 +19,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
-// The tests in this file pin the ADR-0145 invariant-gate behavior at
+// The tests in this file pin the docs/design/isolation.md invariant-gate behavior at
 // the coordinator — the single decision point every pool warm-start
 // and snapshot restore/resume passes through (setec#191).
 

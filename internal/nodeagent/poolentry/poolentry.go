@@ -6,7 +6,7 @@
 // template-provenance record — shared by the writer (cmd/setec-pool-vm)
 // and the consumer (internal/nodeagent/pool).
 //
-// The package exists so ADR-0145 invariants 1, 4 and 5 are enforced
+// The package exists so docs/design/isolation.md invariants 1, 4 and 5 are enforced
 // at the artifact layer with one definition:
 //
 //   - Invariant 1 (clean base): every pool entry carries the
@@ -52,13 +52,13 @@ const (
 	ProvenanceFile = "provenance.json"
 
 	// ScanFile records the secret-scan verdict for the entry's
-	// plaintext state/memory pair, produced at bake time (ADR-0145
+	// plaintext state/memory pair, produced at bake time (docs/design/isolation.md
 	// invariant 1).
 	ScanFile = "scan.json"
 
 	// SourceClassImageBoot is the ONLY provenance source a pool entry
 	// may carry: a cold boot from the class's kernel/rootfs/image
-	// (ADR-0145 invariant 4). There is deliberately no constant for
+	// (docs/design/isolation.md invariant 4). There is deliberately no constant for
 	// any other source — a used/dirty sandbox is never a template.
 	SourceClassImageBoot = "class-image-boot"
 )
@@ -66,13 +66,13 @@ const (
 // ErrProvenance is returned by Verify when an entry's provenance
 // record is missing, unreadable, or claims any source other than the
 // class-image boot path.
-var ErrProvenance = errors.New("poolentry: template provenance violation (ADR-0145 invariant 4)")
+var ErrProvenance = errors.New("poolentry: template provenance violation (docs/design/isolation.md invariant 4)")
 
 // ErrScanVerdict is returned by VerifyScan when an entry's secret-scan
 // verdict is missing, unreadable, incomplete, or not clean. Absence of
 // the verdict is a violation: an unscanned entry is never handed out
 // (fail closed).
-var ErrScanVerdict = errors.New("poolentry: clean-base scan verdict violation (ADR-0145 invariant 1)")
+var ErrScanVerdict = errors.New("poolentry: clean-base scan verdict violation (docs/design/isolation.md invariant 1)")
 
 // Provenance describes how a pool entry was built.
 type Provenance struct {
@@ -88,7 +88,7 @@ type Provenance struct {
 
 // ScanVerdict records the secret-scan outcome for an entry's plaintext
 // state/memory pair, produced by the bake path immediately before the
-// pair is encrypted at rest. It is the per-entry evidence for ADR-0145
+// pair is encrypted at rest. It is the per-entry evidence for docs/design/isolation.md
 // invariant 1 (clean base), independent of the provenance record
 // (invariant 4).
 type ScanVerdict struct {

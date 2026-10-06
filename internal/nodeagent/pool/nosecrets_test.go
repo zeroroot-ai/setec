@@ -12,7 +12,7 @@ import (
 )
 
 // TestLaunchOptions_CarriesNoSecretMaterial codifies the no-secrets-in-snapshot
-// invariant (ADR-0052) at its source: a pre-warm pool entry is the VM that
+// invariant (docs/design/threat-model.md) at its source: a pre-warm pool entry is the VM that
 // gets snapshotted and then shared across every warm-pool claim. Per-lease
 // secrets MUST therefore never enter the pool launch path; they are injected
 // per-Sandbox POST-claim via the Pod env, never baked into the snapshotted
@@ -30,7 +30,7 @@ func TestLaunchOptions_CarriesNoSecretMaterial(t *testing.T) {
 			if strings.Contains(name, bad) {
 				t.Fatalf("LaunchOptions.%s looks like secret material; pool entries are snapshotted and "+
 					"shared across warm-pool claims, so secrets must be injected per-lease post-restore, "+
-					"never carried into the pool launch path (ADR-0052)", field.Name)
+					"never carried into the pool launch path (docs/design/threat-model.md)", field.Name)
 			}
 		}
 	}

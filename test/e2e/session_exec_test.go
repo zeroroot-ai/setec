@@ -8,7 +8,7 @@
 // containerExecutor seam; these scenarios drive the real pods/exec path.
 //
 // They run on any backend, kata-fc on metal or runc on kind: Exec rides
-// the CRI exec path (ADR-0148), which is backend-agnostic, and the
+// the CRI exec path (docs/design/lifecycles.md), which is backend-agnostic, and the
 // properties asserted here belong to the session lifecycle and the exit
 // contract, not to the isolation backend.
 package e2e

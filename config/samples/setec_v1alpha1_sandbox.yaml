@@ -1,4 +1,4 @@
-# An ephemeral Sandbox (ADR-0146): it runs one command to the end, and the
+# An ephemeral Sandbox (docs/design/lifecycles.md): it runs one command to the end, and the
 # operator deletes it after the command exits or the timeout passes. It has
 # no network access.
 apiVersion: setec.zeroroot.ai/v1alpha1
