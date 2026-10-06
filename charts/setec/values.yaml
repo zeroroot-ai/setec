@@ -229,6 +229,32 @@ observability:
 # -- netpol defines the egress posture every generated NetworkPolicy is
 # built from. Both lists are validated at operator startup and at render
 # time; neither may be empty.
+# systemPolicy is the network policy of the setec namespace itself
+# (templates/system-namespace-policy.yaml). Cilium enforces it: one
+# CiliumClusterwideNetworkPolicy denies all traffic of every Pod in the
+# namespace, with DNS to kube-dns, and one CiliumNetworkPolicy for each
+# component allows only the traffic setec uses:
+#   operator       the API server (watch, write, webhook calls in), the
+#                  node agent gRPC when snapshots are on, metrics in
+#   frontend       the gRPC callers below in, the API server out, metrics in
+#   device-plugin  nothing: it talks to the kubelet over a unix socket
+#   node-agent     the operator in, metrics in, the snapshot store out
+# The launcher Pods run in the Sandbox namespaces, under the policy of
+# sandbox-namespace-baseline-netpol.yaml.
+systemPolicy:
+  # frontendCallers are the Pods that may call the frontend gRPC port, each
+  # as a namespace and the labels of its Pods. Required when the frontend is
+  # on: an empty list leaves the frontend reachable by nobody. A Gibson
+  # install names its daemon here.
+  frontendCallers: []
+  #  - namespace: gibson
+  #    podLabels:
+  #      app.kubernetes.io/component: daemon
+  # metricsScrapers are the labels of the Pods that may scrape the metrics
+  # ports, in any namespace.
+  metricsScrapers:
+    - app.kubernetes.io/name: prometheus
+
 netpol:
   # reservedCIDRs are the address ranges no Sandbox may reach. They are
   # subtracted from every permissive egress rule via ipBlock.except.

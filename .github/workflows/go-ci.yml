@@ -366,6 +366,8 @@ jobs:
             --set frontend.tlsClientCASecretName=frontend-ca \
             --set 'frontend.clients[0].name=saas' \
             --set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
+            --set 'systemPolicy.frontendCallers[0].namespace=gibson' \
+            --set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon' \
             --set webhook.certManager.enabled=true \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
 

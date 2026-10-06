@@ -259,6 +259,17 @@ verify the expected new manifests appear via `helm template`.
 
 ### Sandbox egress posture
 
+### The network policy of the setec namespace
+
+On a cluster that serves `cilium.io/v2`, the chart denies all traffic of each Pod in its own namespace by default, with DNS to kube-dns allowed (`templates/system-namespace-policy.yaml`). One policy for each component then allows only the traffic setec uses:
+
+- The operator reaches the API server, takes webhook calls on 9443, and reaches the node agent gRPC port when snapshots are on.
+- The frontend takes gRPC only from `systemPolicy.frontendCallers` and reaches the API server. The list is required when the frontend is on.
+- The node agent takes gRPC from the operator and reaches the snapshot store.
+- Each metrics port admits the Pods of `systemPolicy.metricsScrapers`.
+
+The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. On a cluster with no Cilium the chart renders none of this.
+
 `netpol.reservedCIDRs` is the address space no Sandbox may reach. It is
 subtracted from every permissive egress rule the operator generates, and
 neither the chart nor the operator will start with it empty.
