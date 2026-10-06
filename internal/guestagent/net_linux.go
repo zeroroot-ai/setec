@@ -85,13 +85,11 @@ func (l LinkConfigurer) Configure(req Request) error {
 	return nil
 }
 
-// setHostname gives the machine the name of the Pod: the kernel name, when
-// the configurer runs in the machine, and /etc/hostname.
+// setHostname gives the machine the name of the Pod: the kernel name and
+// /etc/hostname under Root.
 func (l LinkConfigurer) setHostname(name string) error {
-	if l.Root == "" || l.Root == "/" {
-		if err := unix.Sethostname([]byte(name)); err != nil {
-			return fmt.Errorf("set the hostname: %w", err)
-		}
+	if err := unix.Sethostname([]byte(name)); err != nil {
+		return fmt.Errorf("set the hostname: %w", err)
 	}
 	etc := filepath.Join(l.Root, "etc")
 	if err := os.MkdirAll(etc, 0o755); err != nil {

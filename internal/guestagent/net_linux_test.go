@@ -13,12 +13,12 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// TestLinkConfigurer_TakesThePodIdentity runs in a private network
-// namespace: unshare -rn, with SETEC_NETNS_TEST=1. It applies one identity,
+// TestLinkConfigurer_TakesThePodIdentity runs in a private network and UTS
+// namespace: unshare -rnu, with SETEC_NETNS_TEST=1. It applies one identity,
 // then a second one, as after a snapshot load in a new Pod.
 func TestLinkConfigurer_TakesThePodIdentity(t *testing.T) {
 	if os.Getenv("SETEC_NETNS_TEST") != "1" {
-		t.Skip("needs a private network namespace; set SETEC_NETNS_TEST=1 under unshare -rn")
+		t.Skip("needs a private network and UTS namespace; set SETEC_NETNS_TEST=1 under unshare -rnu")
 	}
 	if err := netlink.LinkAdd(&netlink.Dummy{Name: "eth0"}); err != nil {
 		t.Fatal(err)
@@ -54,6 +54,9 @@ func TestLinkConfigurer_TakesThePodIdentity(t *testing.T) {
 	}
 	if host, _ := os.ReadFile(filepath.Join(root, "etc/hostname")); string(host) != "work-vm\n" {
 		t.Fatalf("/etc/hostname = %q", host)
+	}
+	if host, _ := os.Hostname(); host != "work-vm" {
+		t.Fatalf("the kernel hostname = %q", host)
 	}
 	raw, err := os.ReadFile(filepath.Join(root, "etc/resolv.conf"))
 	if err != nil || string(raw) != "nameserver 10.43.0.10\n" {

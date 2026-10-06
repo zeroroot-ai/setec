@@ -134,7 +134,7 @@ func main() {
 	}
 	go func() {
 		errCh <- runUniquify(ctx, uln,
-			uniquify.NewLinuxIdentity(), uniquify.NewLinuxNetwork(), uniquify.VsockCID{}, log.Printf)
+			workloadIdentity(pid1), uniquify.NewLinuxNetwork(), uniquify.VsockCID{}, log.Printf)
 	}()
 
 	pool := newKernelPool(opts.RandomDevice)
