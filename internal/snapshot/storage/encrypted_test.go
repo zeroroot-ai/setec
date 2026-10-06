@@ -28,15 +28,15 @@ func fullDiskStatfs(_ string, stat *syscall.Statfs_t) error {
 // newEncryptedBackend assembles the production composition: the
 // encrypted wrapper over a local-disk inner backend, with the KEK and
 // sealed-DEK dir OUTSIDE the artifact root.
-func newEncryptedBackend(t *testing.T) (*EncryptedBackend, string, string) {
+func newEncryptedBackend(t *testing.T) (b *EncryptedBackend, root, keys string) {
 	t.Helper()
 	base := t.TempDir()
-	root := filepath.Join(base, "snapshots")
-	keys := filepath.Join(base, "keys")
+	root = filepath.Join(base, "snapshots")
+	keys = filepath.Join(base, "keys")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b := &EncryptedBackend{
+	b = &EncryptedBackend{
 		Inner: &LocalDiskBackend{Root: root},
 		KEK:   &FileKEKSource{Path: filepath.Join(keys, "node.key")},
 		DEKs:  &DirDEKStore{Dir: filepath.Join(keys, "dek")},

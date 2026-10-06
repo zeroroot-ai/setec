@@ -11,6 +11,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,7 +41,28 @@ func poolClass() *setecv1alpha1.SandboxClass {
 	cls.Spec.PreWarmPoolSize = 2
 	cls.Spec.PreWarmImage = poolImage
 	cls.Spec.DefaultResources = &setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("1Gi")}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{
+		Issuer: "https://token.actions.githubusercontent.com", Identity: "https://github.com/org/tools/.github/workflows/release.yml@refs/tags/v1",
+	}
 	return cls
+}
+
+// finishVerifyJob ends the image check Job of the pool class, with success
+// or with failure.
+func finishVerifyJob(t *testing.T, r *WarmPoolReconciler, ok bool) {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "setec-system", Name: verifyJobName(poolClass())}, job); err != nil {
+		t.Fatalf("the image check Job: %v", err)
+	}
+	cond := batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}
+	if !ok {
+		cond = batchv1.JobCondition{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "no signature"}
+	}
+	job.Status.Conditions = []batchv1.JobCondition{cond}
+	if err := r.Status().Update(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func poolReconciler(t *testing.T, na *fakeNodeAgentClient, objs ...client.Object) *WarmPoolReconciler {
@@ -95,6 +117,8 @@ func TestWarmPool_BuildsABaseFromAReadyBasePod(t *testing.T) {
 	r := poolReconciler(t, na, poolClass())
 
 	reconcileClass(t, r)
+	finishVerifyJob(t, r, true)
+	reconcileClass(t, r)
 	if len(basePods(t, r)) != 0 {
 		t.Fatal("a base Pod started before the disk of the image")
 	}
@@ -110,15 +134,7 @@ func TestWarmPool_BuildsABaseFromAReadyBasePod(t *testing.T) {
 		t.Fatalf("base Pod = %v %v", p.Labels, p.Annotations)
 	}
 
-	p.Spec.NodeName = "node-a"
-	if err := r.Update(ctx, &p); err != nil {
-		t.Fatal(err)
-	}
-	p.Status.Phase = corev1.PodRunning
-	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	if err := r.Status().Update(ctx, &p); err != nil {
-		t.Fatal(err)
-	}
+	markBasePodReady(t, r, &p, "node-a")
 	reconcileClass(t, r)
 	snap := &setecv1alpha1.Snapshot{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: poolNS, Name: p.Name}, snap); err != nil {
@@ -131,20 +147,41 @@ func TestWarmPool_BuildsABaseFromAReadyBasePod(t *testing.T) {
 	if na.LastCreate == nil || !na.LastCreate.GetScanForSecrets() {
 		t.Fatal("the base was taken with no secret scan")
 	}
-	for _, q := range basePods(t, r) {
-		if q.Name == p.Name {
-			t.Fatal("the base Pod stays after its snapshot")
-		}
-		// The next base goes to another node.
-		mf := q.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchFields
-		if len(mf) == 0 || mf[len(mf)-1].Operator != corev1.NodeSelectorOpNotIn || mf[len(mf)-1].Values[0] != "node-a" {
-			t.Fatalf("the second base Pod may land on node-a: %+v", mf)
-		}
-	}
+	assertNextBasePods(t, r, p.Name, "node-a")
 	cls := &setecv1alpha1.SandboxClass{}
 	_ = r.Get(ctx, types.NamespacedName{Name: "tools"}, cls)
 	if cls.Status.WarmPool == nil || cls.Status.WarmPool.Ready != 1 || cls.Status.WarmPool.Key != key {
 		t.Fatalf("pool status = %+v", cls.Status.WarmPool)
+	}
+}
+
+// markBasePodReady puts the base Pod p on node, running and Ready.
+func markBasePodReady(t *testing.T, r *WarmPoolReconciler, p *corev1.Pod, node string) {
+	t.Helper()
+	ctx := context.Background()
+	p.Spec.NodeName = node
+	if err := r.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	p.Status.Phase = corev1.PodRunning
+	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if err := r.Status().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertNextBasePods checks that the base Pod done is gone, and that each
+// next base Pod avoids node.
+func assertNextBasePods(t *testing.T, r *WarmPoolReconciler, done, node string) {
+	t.Helper()
+	for _, q := range basePods(t, r) {
+		if q.Name == done {
+			t.Fatal("the base Pod stays after its snapshot")
+		}
+		mf := q.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchFields
+		if len(mf) == 0 || mf[len(mf)-1].Operator != corev1.NodeSelectorOpNotIn || mf[len(mf)-1].Values[0] != node {
+			t.Fatalf("the next base Pod may land on %s: %+v", node, mf)
+		}
 	}
 }
 
@@ -164,6 +201,8 @@ func TestWarmPool_DropsStaleAndIdleBases(t *testing.T) {
 		return s
 	}
 	r := poolReconciler(t, &fakeNodeAgentClient{}, poolClass(), base("old", "stale-key"), base("cur", key))
+	reconcileClass(t, r)
+	finishVerifyJob(t, r, true)
 	reconcileClass(t, r)
 	if err := r.Get(ctx, types.NamespacedName{Namespace: poolNS, Name: "old"}, &setecv1alpha1.Snapshot{}); err == nil {
 		t.Fatal("a stale base stays")
@@ -185,6 +224,40 @@ func TestWarmPool_DropsStaleAndIdleBases(t *testing.T) {
 	}
 	if len(basePods(t, r)) != 0 {
 		t.Fatal("an idle pool starts a base")
+	}
+}
+
+// TestWarmPool_AnImageThatDoesNotVerifyGetsNoBase checks the signature
+// gate: no base starts while the check runs, and an image whose check
+// fails loses its bases and gets the condition ImageNotVerified.
+func TestWarmPool_AnImageThatDoesNotVerifyGetsNoBase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	key := baseKeyOf(poolClass(), poolLaunch)
+	b := &setecv1alpha1.Snapshot{Name: "cur", Namespace: poolNS,
+		Labels:      map[string]string{snapshotpkg.BaseLabel: "true", snapshotpkg.BaseClassLabel: "tools"},
+		Annotations: map[string]string{snapshotpkg.BaseKeyAnnotation: key, snapshotpkg.CleanBaseAnnotation: "true"}}
+	b.Status.Phase = setecv1alpha1.SnapshotPhaseReady
+	r := poolReconciler(t, &fakeNodeAgentClient{}, poolClass(), b)
+
+	reconcileClass(t, r)
+	name, _ := diskJobName(poolImage)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, &batchv1.Job{}); err == nil {
+		t.Fatal("the disk of the image builds before its signature is checked")
+	}
+	finishVerifyJob(t, r, false)
+	reconcileClass(t, r)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: poolNS, Name: "cur"}, &setecv1alpha1.Snapshot{}); err == nil {
+		t.Fatal("an image that does not verify keeps its base")
+	}
+	if len(basePods(t, r)) != 0 {
+		t.Fatal("an image that does not verify starts a base")
+	}
+	cls := &setecv1alpha1.SandboxClass{}
+	_ = r.Get(ctx, types.NamespacedName{Name: "tools"}, cls)
+	c := meta.FindStatusCondition(cls.Status.Conditions, setecv1alpha1.ConditionImageNotVerified)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != reasonImageNotVerified {
+		t.Fatalf("condition = %+v, want ImageNotVerified True", c)
 	}
 }
 

@@ -26,7 +26,6 @@ func TestValidate(t *testing.T) {
 		return &setecv1alpha1.SandboxClass{
 			Name: "standard",
 			Spec: setecv1alpha1.SandboxClassSpec{
-				VMM: setecv1alpha1.VMMFirecracker,
 				MaxResources: &setecv1alpha1.Resources{
 					VCPU:   4,
 					Memory: qty("8Gi"),

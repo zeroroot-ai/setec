@@ -270,14 +270,15 @@ jobs:
         run: helm lint charts/setec --strict
 
       - name: Helm template (render check, default values)
-        # Ensures every template renders without error given the two
+        # Ensures every template renders without error given the
         # settings the chart deliberately ships unset so a genuinely
         # unconfigured install fails loudly rather than rendering an
         # insecure default (README "Sandbox egress posture"): a webhook
-        # CA source, and the Sandbox namespace list. Every other value
+        # CA source, the Sandbox namespace list, and the three launcher
+        # values (hack/chart-launcher-values.yaml). Every other value
         # here is the chart default.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set sandboxNamespaces={sandbox-workloads} \
             --set webhook.certManager.enabled=true >/dev/null
 
@@ -287,8 +288,8 @@ jobs:
         # actually there and still say what they are supposed to say --
         # the regression it catches is a chart that installs cleanly and
         # enforces nothing.
-        # Invoked directly rather than via `make helm-verify`: this job has
-        # no Go toolchain, and the Makefile shells out to `go env` while it
+        # Invoked directly, not through make: this job has no Go
+        # toolchain, and the Makefile shells out to `go env` while it
         # parses.
         run: ./hack/verify-chart-security.sh charts/setec
 
@@ -311,9 +312,8 @@ jobs:
 
       - name: x86-substrate assertions (docs/design/runtime.md)
         # The sandbox substrate is x86 only (setec#186): image publishing
-        # must stay single-arch linux/amd64 and the node-facing DaemonSets
-        # and Karpenter NodePool must keep their kubernetes.io/arch=amd64
-        # gating. This fails the build if either is reintroduced.
+        # must stay single-arch linux/amd64, and the node-facing DaemonSets
+        # must keep their kubernetes.io/arch=amd64 gating. This fails the build if either is reintroduced.
         run: ./hack/verify-x86-substrate.sh charts/setec
 
       - name: x86-substrate build-file rule fixture
@@ -328,7 +328,7 @@ jobs:
         # Secret names are supplied explicitly; sandboxNamespaces and a
         # webhook CA source are required the same way as above.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set snapshots.enabled=true \
             --set nodeAgent.enabled=true \
             --set webhook.enabled=true \
@@ -344,7 +344,7 @@ jobs:
           # Secret. Assert that refusal too, so the guard itself cannot rot
           # into a no-op. The cert-manager path (setec#14) is asserted in
           # hack/verify-chart-security.sh.
-          if helm template setec charts/setec \
+          if helm template setec charts/setec -f hack/chart-launcher-values.yaml \
                --set snapshots.enabled=true \
                --set nodeAgent.enabled=true \
                --set webhook.enabled=true \
@@ -360,7 +360,7 @@ jobs:
         # sandboxNamespaces and a webhook CA source are required the
         # same way as the default-values render check above.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set frontend.enabled=true \
             --set frontend.tlsCertSecretName=frontend-tls \
             --set frontend.tlsClientCASecretName=frontend-ca \
@@ -460,8 +460,8 @@ jobs:
             exit 1
           fi
 
-  kata-pin:
-    name: kata.env is the only kata pin
+  runtime-pin:
+    name: one pin for each runtime release
     # Runs on both lanes: it is a content guard with no build, so the
     # merge_group lane costs seconds and a queued PR cannot slip a literal in.
     runs-on: ubuntu-latest
@@ -497,6 +497,13 @@ jobs:
 
       - name: No trust domain literal in the tree
         run: bash scripts/check-no-trust-domain-literal.sh
+
+      # setec#198: the launcher is the one isolation backend (D46).
+      - name: Mutation-test the one backend guard
+        run: bash scripts/check-one-backend.sh --selftest
+
+      - name: No second isolation backend in the tree
+        run: bash scripts/check-one-backend.sh
 
   crd-field-consumers:
     name: Every served CRD field has a consumer
@@ -865,7 +872,7 @@ jobs:
       - docker-build
       - flag-smoke-test
       - no-marker-in-source
-      - kata-pin
+      - runtime-pin
       - no-silent-revert
       - direct-require-advisories
       - no-insecure-flag-in-chart

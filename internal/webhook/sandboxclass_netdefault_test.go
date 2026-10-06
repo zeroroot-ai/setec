@@ -16,10 +16,10 @@ import (
 // defaultNetworkMode, when set alongside a restricted allowedNetworkModes
 // list, must itself be an allowed mode.
 func TestSandboxClassWebhook_DefaultNetworkModeConsistency(t *testing.T) {
-	w := webhookWith(fakeClientWithNS(t), baseConfig())
+	w := classWebhook(t)
 
 	t.Run("default outside allowed set is rejected", func(t *testing.T) {
-		cls := mkSandboxClass("bad", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("bad", mkRuntime("launcher"))
 		cls.Spec.AllowedNetworkModes = []setecv1alpha1.NetworkMode{setecv1alpha1.NetworkModeNone}
 		cls.Spec.DefaultNetworkMode = setecv1alpha1.NetworkModeEgressAllowList
 		_, err := w.ValidateCreate(context.Background(), cls)
@@ -29,7 +29,7 @@ func TestSandboxClassWebhook_DefaultNetworkModeConsistency(t *testing.T) {
 	})
 
 	t.Run("default within allowed set passes", func(t *testing.T) {
-		cls := mkSandboxClass("good", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("good", mkRuntime("launcher"))
 		cls.Spec.AllowedNetworkModes = []setecv1alpha1.NetworkMode{
 			setecv1alpha1.NetworkModeNone, setecv1alpha1.NetworkModeEgressAllowList,
 		}
@@ -40,7 +40,7 @@ func TestSandboxClassWebhook_DefaultNetworkModeConsistency(t *testing.T) {
 	})
 
 	t.Run("default-deny with no allowed-list restriction passes", func(t *testing.T) {
-		cls := mkSandboxClass("open", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("open", mkRuntime("launcher"))
 		cls.Spec.DefaultNetworkMode = setecv1alpha1.NetworkModeNone
 		if _, err := w.ValidateCreate(context.Background(), cls); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -48,7 +48,7 @@ func TestSandboxClassWebhook_DefaultNetworkModeConsistency(t *testing.T) {
 	})
 
 	t.Run("consistency holds even when Runtime is nil", func(t *testing.T) {
-		cls := mkSandboxClass("noruntime", setecv1alpha1.VMMFirecracker, nil)
+		cls := mkSandboxClass("noruntime", nil)
 		cls.Spec.AllowedNetworkModes = []setecv1alpha1.NetworkMode{setecv1alpha1.NetworkModeNone}
 		cls.Spec.DefaultNetworkMode = setecv1alpha1.NetworkModeEgressAllowList
 		_, err := w.ValidateCreate(context.Background(), cls)

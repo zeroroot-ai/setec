@@ -1,0 +1,9 @@
+# The three launcher values that the chart requires and has no default for.
+# A render check passes this file with -f, so it can test the rest of the
+# chart. The values are placeholders: nothing pulls or verifies them.
+launcher:
+  diskRepo: registry.example.com/setec-disks
+  diskBuilder:
+    signingSecret: setec-disk-signing
+    publicKeys:
+      - fXleDoHDAcpJhUjK9Hl64f2bMSOdJBeHHbuP6td75vs=

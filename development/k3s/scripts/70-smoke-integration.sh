@@ -4,12 +4,12 @@
 # framed base64 protojson on stdout out) — the same ABI the daemon's
 # SandboxedToolExecutor (core/gibson/internal/harness/sandboxed) speaks.
 #
-# Passing here confirms every hop in Kind → Setec → kata-fc microVM → back is
+# Passing here confirms every hop in Kind → Setec → launcher microVM → back is
 # wired: cross-cluster mTLS, CRD admission, image pull from the local k3s
 # containerd, tool-runner startup, stdout capture, and proto round-trip.
 #
 # Prerequisites:
-#   - `make up` completed (k3s + kata + devmapper + Setec running)
+#   - `make up` completed (k3s + disk registry + Setec running)
 #   - Kind cluster 'gibson' is up with LAN access to the host (default for Kind)
 #   - Dev mTLS PKI produced by `make pki` (scripts/30-gen-dev-pki.sh)
 #

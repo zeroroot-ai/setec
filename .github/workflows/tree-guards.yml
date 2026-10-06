@@ -39,43 +39,6 @@ jobs:
   link-check:
     uses: zeroroot-ai/.github/.github/workflows/link-check.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
 
-  # The installer's payload gate, proven to fail (setec#17). The gate is a
-  # stage of Dockerfile.installer that asserts the pruned kata tree holds
-  # exactly the binaries the kata-fc handler runs, and that the payload holds
-  # no gVisor tree (owner decision D70). This job builds that stage plain,
-  # which must pass, then once per PAYLOAD_MUTATION, each of which must fail.
-  # A guard that cannot fail is the recurring defect class in this org; this
-  # is the proof that this one can. The pins come from
-  # scripts/runtime-build-args.sh, as everywhere else.
-  installer-payload-guard:
-    name: installer payload gate can fail
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Plain gate stage builds
-        run: |
-          set -euo pipefail
-          args="$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"
-          # shellcheck disable=SC2086
-          docker build -f Dockerfile.installer --target payload-gate $args -t payload-gate:plain .
-      # One case per gate half. A single mutation that damages both at once
-      # would pass while either half was dead.
-      - name: Each mutated gate stage is refused
-        run: |
-          set -euo pipefail
-          args="$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"
-          for mutation in kata-junk-binary gvisor-planted; do
-            # shellcheck disable=SC2086
-            if docker build -f Dockerfile.installer --target payload-gate $args \
-                 --build-arg "PAYLOAD_MUTATION=$mutation" . ; then
-              echo "::error::the payload gate cannot fail: the $mutation payload passed the inventory check"
-              exit 1
-            fi
-            echo "mutation $mutation was refused"
-          done
-          echo "every mutated build was refused: the inventory guard can fail"
-
   # Every workflow file is a valid workflow. A reference to a step or a matrix
   # key that does not exist is not an error to GitHub: it is an empty string
   # (zeroroot-ai/.github#185).

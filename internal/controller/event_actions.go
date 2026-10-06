@@ -22,7 +22,6 @@ const (
 	actionPauseSandbox         = "PauseSandbox"
 	actionResumeSandbox        = "ResumeSandbox"
 	actionRequestSnapshot      = "RequestSnapshot"
-	actionRunRuntimeFallback   = "RunRuntimeFallback"
 	actionEnforceTimeout       = "EnforceTimeout"
 	actionEnforceIdleTimeout   = "EnforceIdleTimeout"
 	actionEnforcePauseTimeout  = "EnforcePauseTimeout"

@@ -242,8 +242,6 @@ func newOrphanReconciler(
 		Client:             c,
 		Scheme:             scheme,
 		Recorder:           events.NewFakeRecorder(16),
-		Runtimes:           testRuntimeRegistry,
-		RuntimeCfg:         testRuntimeCfg,
 		ClassResolver:      class.NewResolver(c),
 		NetPol:             testNetPolConfig,
 		ClassNotFoundGrace: grace,

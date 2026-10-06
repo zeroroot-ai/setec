@@ -6,7 +6,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
+
+	"github.com/go-logr/logr"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 )
 
@@ -88,9 +92,10 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("compute reference count: %w", err)
 	}
-	if snap.Status.ReferenceCount != int32(count) {
+	refs := int32(min(count, math.MaxInt32)) //nolint:gosec // min bounds count to MaxInt32
+	if snap.Status.ReferenceCount != refs {
 		original := snap.DeepCopy()
-		snap.Status.ReferenceCount = int32(count)
+		snap.Status.ReferenceCount = refs
 		now := metav1.NewTime(time.Now())
 		snap.Status.LastTransitionTime = &now
 		if err := r.Status().Patch(ctx, snap, client.MergeFrom(original)); err != nil {
@@ -100,39 +105,7 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Step 2: deletion handling.
 	if !snap.DeletionTimestamp.IsZero() {
-		// Report Terminating for as long as the in-use finalizer is
-		// held. Nothing wrote this phase before (setec#129), so a
-		// snapshot blocked on a reference, or on a backend erase that
-		// keeps failing, still read as Ready — indistinguishable from one
-		// nobody had asked to delete. The write happens before the
-		// reference check, because "deletion requested and blocked" is
-		// exactly the state an operator needs to see.
-		if snap.Status.Phase != setecv1alpha1.SnapshotPhaseTerminating {
-			if err := r.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseTerminating, "DeletionInProgress"); err != nil {
-				return ctrl.Result{}, fmt.Errorf("mark Snapshot Terminating: %w", err)
-			}
-		}
-		if count > 0 {
-			logger.V(1).Info("deletion blocked by referenceCount > 0",
-				"referenceCount", count)
-			return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
-		}
-		if r.Coordinator != nil {
-			if err := r.Coordinator.DeleteSnapshot(ctx, snap); err != nil {
-				// Retry on next reconcile. Finalizer remains so the
-				// CR doesn't vanish with storage still present.
-				if r.Recorder != nil {
-					r.Recorder.Eventf(snap, nil, corev1.EventTypeWarning, eventReasonSnapshotDel, actionDeleteSnapshot, "%s", err.Error())
-				}
-				return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
-			}
-		}
-		if controllerutil.RemoveFinalizer(snap, setecv1alpha1.SnapshotInUseFinalizer) {
-			if err := r.Update(ctx, snap); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil
+		return r.finalizeSnapshot(ctx, logger, snap, count)
 	}
 
 	// Step 3: ensure finalizer present.
@@ -162,6 +135,46 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return ctrl.Result{RequeueAfter: snapshotTTLRequeue}, nil
 }
 
+// finalizeSnapshot erases a deleted Snapshot that nothing references, and
+// then removes its finalizer. It reports Terminating while it waits.
+func (r *SnapshotReconciler) finalizeSnapshot(
+	ctx context.Context, logger logr.Logger, snap *setecv1alpha1.Snapshot, count int,
+) (ctrl.Result, error) {
+	// Report Terminating for as long as the in-use finalizer is
+	// held. Nothing wrote this phase before (setec#129), so a
+	// snapshot blocked on a reference, or on a backend erase that
+	// keeps failing, still read as Ready — indistinguishable from one
+	// nobody had asked to delete. The write happens before the
+	// reference check, because "deletion requested and blocked" is
+	// exactly the state an operator needs to see.
+	if snap.Status.Phase != setecv1alpha1.SnapshotPhaseTerminating {
+		if err := r.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseTerminating, "DeletionInProgress"); err != nil {
+			return ctrl.Result{}, fmt.Errorf("mark Snapshot Terminating: %w", err)
+		}
+	}
+	if count > 0 {
+		logger.V(1).Info("deletion blocked by referenceCount > 0",
+			"referenceCount", count)
+		return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
+	}
+	if r.Coordinator != nil {
+		if err := r.Coordinator.DeleteSnapshot(ctx, snap); err != nil {
+			// Retry on next reconcile. Finalizer remains so the
+			// CR doesn't vanish with storage still present.
+			if r.Recorder != nil {
+				r.Recorder.Eventf(snap, nil, corev1.EventTypeWarning, eventReasonSnapshotDel, actionDeleteSnapshot, "%s", err.Error())
+			}
+			return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
+		}
+	}
+	if controllerutil.RemoveFinalizer(snap, setecv1alpha1.SnapshotInUseFinalizer) {
+		if err := r.Update(ctx, snap); err != nil {
+			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
 // markPhase writes one phase/reason pair to the Snapshot status
 // subresource and stamps the transition time. The status subresource is
 // still writable while DeletionTimestamp is set, which is what makes
@@ -188,7 +201,7 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 		client.InNamespace(snap.Namespace),
 		client.MatchingFields{SnapshotSandboxRefIndex: snap.Name},
 	); err != nil {
-		return 0, err
+		return 0, errwrap.Wrap(err, "client.Reader.List")
 	}
 	// A launcher Sandbox that has loaded the Snapshot no longer needs it,
 	// so the TTL of a fork snapshot can end it (setec#195).
@@ -203,7 +216,7 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 		client.InNamespace(snap.Namespace),
 		client.MatchingFields{SnapshotParentIndex: snap.Name},
 	); err != nil {
-		return 0, err
+		return 0, errwrap.Wrap(err, "client.Reader.List")
 	}
 	return inUse + len(diffs.Items), nil
 }
@@ -247,7 +260,7 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// requeue-after. The mapping function reads spec.snapshotRef to
 	// decide which Snapshot to notify; a Sandbox without a ref is a
 	// no-op.
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		For(&setecv1alpha1.Snapshot{}, builder.WithPredicates()).
 		WatchesRawSource(source.Kind(
 			mgr.GetCache(),
@@ -261,5 +274,5 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      sb.Spec.SnapshotRef.Name}}
 			}),
 		)).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }

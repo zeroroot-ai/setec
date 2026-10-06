@@ -26,9 +26,9 @@ type Reseeder interface {
 
 // VsockReseeder reseeds a restored guest over the Firecracker
 // hybrid-vsock Unix socket: it dials udsPath, performs the
-// "CONNECT <port>\n" / "OK <n>\n" handshake Firecracker (and Kata's
-// hybrid vsock) use for host-initiated connections, sends
-// PayloadBytes of fresh entropy, and verifies the guest's ack digest.
+// "CONNECT <port>\n" / "OK <n>\n" handshake that Firecracker uses for
+// host-initiated connections, sends PayloadBytes of fresh entropy, and
+// verifies the guest's ack digest.
 type VsockReseeder struct {
 	// Port is the guest AF_VSOCK port setec-guest-agent listens on.
 	Port uint32
@@ -123,23 +123,4 @@ func (r *VsockReseeder) Reseed(ctx context.Context, udsPath string) error {
 		return errors.New("entropy: ack digest does not match the payload sent; refusing to trust the reseed")
 	}
 	return nil
-}
-
-// ReseedFirst tries each candidate vsock UDS path in order and returns
-// nil on the first verified reseed. It fails when the candidate list
-// is empty or every candidate fails — callers treat that as a
-// fail-closed restore.
-func ReseedFirst(ctx context.Context, r Reseeder, candidates []string) error {
-	if len(candidates) == 0 {
-		return errors.New("entropy: no vsock UDS candidates to reseed through")
-	}
-	var errs []error
-	for _, path := range candidates {
-		err := r.Reseed(ctx, path)
-		if err == nil {
-			return nil
-		}
-		errs = append(errs, fmt.Errorf("%s: %w", path, err))
-	}
-	return fmt.Errorf("entropy: reseed failed on every candidate: %w", errors.Join(errs...))
 }

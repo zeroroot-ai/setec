@@ -59,7 +59,7 @@ func (c *Coordinator) CheckpointSession(
 	sessionKEK []byte,
 	leavePaused bool,
 	parentRef string,
-) (string, int64, error) {
+) (storageRef string, size int64, err error) {
 	ctx, span := c.startSpan(ctx, "snapshot.CheckpointSession")
 	defer span.End()
 	span.SetAttributes(
@@ -249,9 +249,10 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 }
 
 // DeleteSessionCheckpoint asks a node-agent to remove a checkpoint's
-// objects from the portable store. Any node can perform the delete —
-// the store is cluster-scoped — so the routing prefers the session
-// Pod's node and falls back to any node advertising a setec runtime.
+// objects from the portable store. Any node can perform the delete,
+// because the store is cluster-scoped. So the routing prefers the
+// session Pod's node and falls back to any Ready node that runs a
+// node-agent.
 // Note the ciphertext delete is belt-and-braces: the checkpoint is
 // already cryptographically erased the moment the per-session KEK
 // Secret is deleted.
@@ -286,8 +287,8 @@ func (c *Coordinator) DeleteSessionCheckpoint(
 
 // dialSessionAgent resolves a node-agent that can reach the portable
 // checkpoint store: the session Pod's node when the Pod exists and is
-// scheduled, otherwise any node advertising a setec runtime label
-// (every such node runs the node-agent DaemonSet).
+// scheduled, otherwise any Ready node whose node-agent Pod the Dialer
+// resolves. A node with no node-agent fails its dial and is skipped.
 func (c *Coordinator) dialSessionAgent(ctx context.Context, sb *setecv1alpha1.Sandbox) (NodeAgentClient, error) {
 	if pod, err := c.getPod(ctx, sb); err == nil && pod.Spec.NodeName != "" {
 		if na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName); dialErr == nil {
@@ -301,7 +302,7 @@ func (c *Coordinator) dialSessionAgent(ctx context.Context, sb *setecv1alpha1.Sa
 	var errs []error
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
-		if !nodeAdvertisesSetecRuntime(node) || !nodeIsReady(node) {
+		if !nodeIsReady(node) {
 			continue
 		}
 		na, dialErr := c.Dialer.Dial(ctx, node.Name)
@@ -313,21 +314,7 @@ func (c *Coordinator) dialSessionAgent(ctx context.Context, sb *setecv1alpha1.Sa
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("coordinator: no reachable node-agent for checkpoint routing: %w", errors.Join(errs...))
 	}
-	return nil, errors.New("coordinator: no setec-runtime node available for checkpoint routing")
-}
-
-// nodeAdvertisesSetecRuntime reports whether the node carries any
-// setec.zeroroot.ai/runtime.<backend>=true capability label — the
-// marker the runtime-agent stamps on every node the node-agent
-// DaemonSet targets.
-func nodeAdvertisesSetecRuntime(node *corev1.Node) bool {
-	for k, v := range node.Labels {
-		if v == "true" && len(k) > len("setec.zeroroot.ai/runtime.") &&
-			k[:len("setec.zeroroot.ai/runtime.")] == "setec.zeroroot.ai/runtime." {
-			return true
-		}
-	}
-	return false
+	return nil, errors.New("coordinator: no Ready node available for checkpoint routing")
 }
 
 // nodeIsReady reports the node's Ready condition.

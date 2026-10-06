@@ -107,13 +107,12 @@ func TestRestoreSessionCheckpointFailurePropagates(t *testing.T) {
 }
 
 // TestDeleteSessionCheckpointFallsBackToAnyNode: with the Pod gone,
-// the delete routes through any Ready node advertising a setec
-// runtime label.
+// the delete routes through any Ready node. The node needs no label:
+// after the cutover (setec#198) no agent writes a runtime label.
 func TestDeleteSessionCheckpointFallsBackToAnyNode(t *testing.T) {
 	sb := sessionSandbox()
 	node := &corev1.Node{
-		Name:   "node-c",
-		Labels: map[string]string{"setec.zeroroot.ai/runtime.kata-fc": "true"},
+		Name: "node-c",
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 		},

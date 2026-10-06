@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/vishvananda/netlink"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"golang.org/x/sys/unix"
 )
 
@@ -55,7 +56,7 @@ func (l LinkConfigurer) Configure(req Request) error {
 		_ = netlink.AddrDel(link, &old[i])
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
-		return err
+		return errwrap.Wrap(err, "netlink.LinkSetUp")
 	}
 	if err := netlink.AddrAdd(link, addr); err != nil {
 		return fmt.Errorf("add the address: %w", err)
@@ -75,11 +76,11 @@ func (l LinkConfigurer) Configure(req Request) error {
 	}
 	if len(req.DNS) > 0 {
 		etc := filepath.Join(l.Root, "etc")
-		if err := os.MkdirAll(etc, 0o755); err != nil {
-			return err
+		if err := os.MkdirAll(etc, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 		if err := os.WriteFile(filepath.Join(etc, "resolv.conf"), req.DNS, 0o644); err != nil { //nolint:gosec // world-readable, as resolv.conf is
-			return err
+			return errwrap.Wrap(err, "os.WriteFile")
 		}
 	}
 	return nil
@@ -92,8 +93,8 @@ func (l LinkConfigurer) setHostname(name string) error {
 		return fmt.Errorf("set the hostname: %w", err)
 	}
 	etc := filepath.Join(l.Root, "etc")
-	if err := os.MkdirAll(etc, 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(etc, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+		return errwrap.Wrap(err, "os.MkdirAll")
 	}
-	return os.WriteFile(filepath.Join(etc, "hostname"), []byte(name+"\n"), 0o644) //nolint:gosec // world-readable, as /etc/hostname is
+	return errwrap.Wrap(os.WriteFile(filepath.Join(etc, "hostname"), []byte(name+"\n"), 0o644), "os.WriteFile") //nolint:gosec // world-readable, as /etc/hostname is
 }

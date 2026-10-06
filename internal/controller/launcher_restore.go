@@ -177,6 +177,14 @@ func classCPUTemplate(cls *setecv1alpha1.SandboxClass) string {
 	return cls.Spec.CPUTemplate
 }
 
+// classRequests is the scheduler reservation of the class, or nil.
+func classRequests(cls *setecv1alpha1.SandboxClass) *setecv1alpha1.ResourceRequests {
+	if cls == nil {
+		return nil
+	}
+	return cls.Spec.Requests
+}
+
 // restoreInstanceType returns the instance type that a restore Pod needs:
 // the one of the source node of its snapshot, when the class has no CPU
 // template. A template shows every node the same CPU, so it needs none.
@@ -197,11 +205,11 @@ func (r *SandboxReconciler) restoreInstanceType(
 // base. Its machine already holds the state of the base, so a cold boot
 // is not a safe fallback, and the Sandbox fails.
 func (r *SandboxReconciler) failWarm(
-	_ context.Context, sb *setecv1alpha1.Sandbox, src types.NamespacedName,
+	ctx context.Context, sb *setecv1alpha1.Sandbox, src types.NamespacedName,
 	fail func(string, error) setecv1alpha1.SandboxStatus,
 ) func(string, error) setecv1alpha1.SandboxStatus {
 	return func(reason string, err error) setecv1alpha1.SandboxStatus {
-		r.countWarmStart(r.classOrNil(context.Background(), sb), "error")
+		r.countWarmStart(r.classOrNil(ctx, sb), "error")
 		desired := fail(reason, err)
 		desired.WarmStart = &setecv1alpha1.SandboxWarmStartStatus{
 			Outcome: setecv1alpha1.SandboxWarmStartRejected, EntryID: src.String(), Reason: reason,

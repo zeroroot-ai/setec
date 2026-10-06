@@ -12,15 +12,37 @@ package launchersandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 )
+
+// ErrNotFound means that this node has no launcher machine for the Pod.
+var ErrNotFound = errors.New("launchersandbox: no launcher machine for this pod on this node")
+
+// Paths are the Firecracker files of the machine of a launcher Pod.
+type Paths struct {
+	// APISocket is the Firecracker API socket on the host.
+	APISocket string
+	// FCRoot is the work volume of the Pod on the host. FCMount is where
+	// the launcher, and so Firecracker, sees it.
+	FCRoot  string
+	FCMount string
+}
+
+// FCPath maps a host path under FCRoot to the path that Firecracker sees.
+func (p Paths) FCPath(hostPath string) (string, error) {
+	rel, err := filepath.Rel(p.FCRoot, hostPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("launchersandbox: %s is outside the work volume %s", hostPath, p.FCRoot)
+	}
+	return filepath.Join(p.FCMount, rel), nil
+}
 
 // DefaultPodsDir is the Pod directory of the kubelet on the host.
 const DefaultPodsDir = "/var/lib/kubelet/pods"
@@ -47,32 +69,30 @@ func (r Resolver) WorkDir(podUID string) (string, error) {
 }
 
 // Resolve returns the Paths of the launcher machine of the Pod, or
-// katasandbox.ErrNotFound when the Pod has no launcher machine on this
+// ErrNotFound when the Pod has no launcher machine on this
 // node.
-func (r Resolver) Resolve(_ context.Context, podUID string) (katasandbox.Paths, error) {
+func (r Resolver) Resolve(_ context.Context, podUID string) (Paths, error) {
 	work, err := r.WorkDir(podUID)
 	if err != nil {
-		return katasandbox.Paths{}, err
+		return Paths{}, err
 	}
 	vm := filepath.Join(work, filepath.Base(podspec.LauncherVMDir))
 	if _, err := os.Stat(vm); err != nil {
 		if os.IsNotExist(err) {
-			return katasandbox.Paths{}, katasandbox.ErrNotFound
+			return Paths{}, ErrNotFound
 		}
-		return katasandbox.Paths{}, fmt.Errorf("launchersandbox: %w", err)
+		return Paths{}, fmt.Errorf("launchersandbox: %w", err)
 	}
-	return katasandbox.Paths{
-		APISocket:   filepath.Join(vm, podspec.LauncherAPISocket),
-		HybridVsock: filepath.Join(vm, podspec.LauncherVsockSocket),
-		FCRoot:      work,
-		FCMount:     podspec.LauncherWorkMountPath,
-		Launcher:    true,
+	return Paths{
+		APISocket: filepath.Join(vm, podspec.LauncherAPISocket),
+		FCRoot:    work,
+		FCMount:   podspec.LauncherWorkMountPath,
 	}, nil
 }
 
 // HostPath returns the host path of podPath, a path in the work volume as
 // the launcher Pod sees it.
-func HostPath(p katasandbox.Paths, podPath string) string {
+func HostPath(p Paths, podPath string) string {
 	rel := strings.TrimPrefix(podPath, podspec.LauncherWorkMountPath)
 	return filepath.Join(p.FCRoot, rel)
 }

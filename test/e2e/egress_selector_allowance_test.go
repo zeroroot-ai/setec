@@ -107,7 +107,6 @@ func TestEgress_SelectorAllowance(t *testing.T) {
 	defer cancel()
 
 	serviceIP := createSelectorTarget(ctx, t)
-	backend := chain6Backend()
 
 	kubeDNS := setecv1alpha1.EgressAllowSelector{
 		NamespaceSelector: &metav1.LabelSelector{
@@ -136,8 +135,7 @@ func TestEgress_SelectorAllowance(t *testing.T) {
 
 	classSpec := func(allowances ...setecv1alpha1.EgressAllowSelector) setecv1alpha1.SandboxClassSpec {
 		return setecv1alpha1.SandboxClassSpec{
-			VMM:                  setecv1alpha1.VMMFirecracker,
-			Runtime:              &setecv1alpha1.SandboxClassRuntime{Backend: backend},
+			Runtime:              &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
 			DefaultNetworkMode:   setecv1alpha1.NetworkModeExternalOnly,
 			EgressAllowSelectors: allowances,
 		}
@@ -171,8 +169,8 @@ func TestEgress_SelectorAllowance(t *testing.T) {
 	requireMarker(t, plainLogs, "RESERVED", "BLOCKED",
 		"a reserved-range address is reachable from the plain class")
 
-	t.Logf("setec#76 e2e passed (backend=%s, kube-dns=%s, service=%s:%d)",
-		backend, clusterDNSIP, serviceIP, selectorServicePort)
+	t.Logf("setec#76 e2e passed (kube-dns=%s, service=%s:%d)",
+		clusterDNSIP, serviceIP, selectorServicePort)
 }
 
 // createSelectorTarget creates the target namespace, a busybox httpd Pod

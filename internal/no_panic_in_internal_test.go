@@ -28,7 +28,7 @@ func (panicMatcher) Rule() string {
 	return "no panic() in operator internal packages — use error returns"
 }
 
-func (panicMatcher) Match(fset *token.FileSet, node ast.Node, src []byte) (bool, string) {
+func (panicMatcher) Match(fset *token.FileSet, node ast.Node, src []byte) (matched bool, msg string) {
 	call, ok := node.(*ast.CallExpr)
 	if !ok {
 		return false, ""

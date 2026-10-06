@@ -4,7 +4,7 @@
 // Package controller wires the Sandbox custom resource to a backing Pod via
 // the controller-runtime reconciler pattern. This file is the only place in
 // the operator that performs Kubernetes I/O — all transformation logic lives
-// in the pure packages (internal/podspec, internal/status, internal/prereq)
+// in the pure packages (internal/podspec, internal/status, internal/runtime)
 // that the reconciler composes.
 package controller
 
@@ -40,11 +40,11 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/podspec"
-	"github.com/zeroroot-ai/setec/internal/prereq"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/status"
@@ -53,11 +53,11 @@ import (
 )
 
 const (
-	// runtimeUnavailableRequeue is how long the reconciler waits before
-	// re-checking for the Kata RuntimeClass when it is missing. The user
-	// installs kata-deploy out of band; polling once a minute strikes a
-	// balance between responsiveness and API-server load.
-	runtimeUnavailableRequeue = 60 * time.Second
+	// pendingRequeue is how long the reconciler waits before it checks a
+	// pending Sandbox again: a missing tenant label, a class violation, or
+	// a Snapshot that is not Ready. Once a minute keeps the API-server
+	// load low.
+	pendingRequeue = 60 * time.Second
 
 	// networkPolicyReadBackRequeue is how long the reconciler waits
 	// before retrying when a freshly-created NetworkPolicy is not yet
@@ -83,7 +83,7 @@ const (
 	classNotFoundGrace = 5 * time.Minute
 
 	// classNotFoundRequeue is the poll interval while inside the grace
-	// window. Shorter than runtimeUnavailableRequeue so the terminal
+	// window. Shorter than pendingRequeue so the terminal
 	// transition lands promptly after the deadline rather than up to a
 	// minute late.
 	classNotFoundRequeue = 30 * time.Second
@@ -142,7 +142,6 @@ const (
 
 	// Event reasons. Kept as constants so tests and docs can reference them
 	// by name rather than string-matching fragments of the message.
-	eventReasonRuntimeUnavailable    = "RuntimeUnavailable"
 	eventReasonPodCreateFailed       = "PodCreateFailed"
 	eventReasonPodCreated            = "PodCreated"
 	eventReasonTimeout               = "TimeoutExceeded"
@@ -166,20 +165,10 @@ const (
 	eventReasonWorkspaceCreated      = "WorkspaceCreated"
 	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
 	eventReasonSessionVMRestart      = "SessionVMRestart"
-	// The two reasons a Sandbox has not placed yet. They look alike from the
-	// outside and are not alike at all (setec#300).
-	//
-	// eventReasonAwaitingCapableNode: the backend is enabled but no node
-	// advertises its capability label yet. The Pod is created anyway and is
-	// deliberately unschedulable — that is the only signal a cluster
-	// autoscaler acts on, so withholding it is what deadlocks a
-	// scale-to-zero pool.
-	eventReasonAwaitingCapableNode = "AwaitingCapableNode"
-	// eventReasonRuntimeNotEnabled: no backend in the Sandbox's chain is
-	// enabled on this operator, so no Pod spec can be built at all. Unlike
-	// AwaitingCapableNode, no node provisioning can resolve it — only a
-	// change to the operator's runtime config.
-	eventReasonRuntimeNotEnabled = "RuntimeNotEnabled"
+	// eventReasonUnsupportedBackend: the class names a removed backend
+	// (setec#198). The Sandbox fails with the reason; it never runs on
+	// another isolation.
+	eventReasonUnsupportedBackend = "UnsupportedBackend"
 
 	// eventReasonInvariantGateViolation mirrors the coordinator's
 	// typed reason (snapshot.EventReasonInvariantGateViolation): the
@@ -205,12 +194,6 @@ const (
 	// defaultWorkspaceSize is the workspace PVC capacity used when a
 	// session Sandbox does not declare spec.lifecycle.workspace.size.
 	defaultWorkspaceSize = "10Gi"
-
-	// runtimeUnavailableMessage is the vendor-neutral remediation guidance
-	// emitted when the configured RuntimeClass is missing. It links to the
-	// project's own documentation rather than to any specific cloud or
-	// distribution guide, per Requirement 5.4.
-	runtimeUnavailableMessage = "Kata RuntimeClass %q is not installed in this cluster; install Kata Containers via kata-deploy and see project documentation for remediation"
 )
 
 // SandboxReconciler reconciles a Sandbox object. All fields are set at
@@ -227,32 +210,10 @@ type SandboxReconciler struct {
 	// from before the step. Nil reads through Client.
 	APIReader client.Reader
 
-	// Runtimes is the registry of enabled RuntimeDispatcher implementations.
-	// It is used by selectRuntime to pick the appropriate backend for each Sandbox.
-	// Set at construction time; replaces the old RuntimeClassName string field.
-	Runtimes *runtimepkg.Registry
-
-	// RuntimeCfg is the operator-wide runtime configuration loaded from
-	// --runtimes-config, which main.go requires. selectRuntime reads cluster
-	// defaults and fallback chains from this value.
-	RuntimeCfg *runtimepkg.RuntimeConfig
-
-	// NodeSelectorLabel is the label key Nodes must carry to be considered
-	// Kata-capable (default "katacontainers.io/kata-runtime"). Used by
-	// prereq.CheckMulti only; the reconciler itself does not select Nodes directly.
-	NodeSelectorLabel string
-
-	// KeepaliveImage is the image the pod builder pulls the static
-	// setec-keepalive binary from for a session Sandbox that declares no
-	// spec.command (setec#7), and which every kata-fc session boots
-	// first, regardless of spec.command, to format and mount its
-	// workspace (setec#91). Set from --session-keepalive-image.
-	KeepaliveImage string
-
-	// LauncherImage and DiskRepo serve the launcher backend
-	// (docs/design/runtime.md). A Sandbox whose class selects the launcher
-	// gets a launcher Pod from this image, and its machine boots the signed
-	// disk of its image digest from DiskRepo.
+	// LauncherImage and DiskRepo serve the one backend
+	// (docs/design/runtime.md). Each Sandbox gets a launcher Pod from this
+	// image, and its machine boots the signed disk of its image digest from
+	// DiskRepo.
 	LauncherImage string
 	DiskRepo      string
 	DiskKeys      []string
@@ -369,11 +330,37 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// The manager's cache establishes a WATCH for every typed object it reads,
-// so list without watch is not a smaller grant — it is a broken one: the
-// RuntimeClass informer retries forever and logs
-// `Failed to watch *v1.RuntimeClass ... forbidden` on a loop (setec#230).
-// +kubebuilder:rbac:groups=node.k8s.io,resources=runtimeclasses,verbs=get;list;watch
+
+// handleWorkspaceFinalizer releases a deleted session after the teardown
+// of its workspace, and adds the finalizer to a new session. handled is
+// true when the reconcile ends here.
+func (r *SandboxReconciler) handleWorkspaceFinalizer(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox,
+) (res ctrl.Result, handled bool, err error) {
+	// (1a) Session teardown. A Sandbox being deleted that still carries
+	// the workspace finalizer must have its workspace PVC deleted before
+	// the object is released (docs/design/isolation.md invariant 3). Ephemeral Sandboxes
+	// never carry the finalizer and fall straight through to owner-ref GC.
+	if !sb.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+			res, err := r.teardownWorkspace(ctx, logger, sb)
+			return res, true, err
+		}
+		return ctrl.Result{}, true, nil
+	}
+
+	// (1b) Session Sandboxes acquire the workspace finalizer before any
+	// other work so no window exists in which the PVC could outlive its
+	// Sandbox unattended.
+	if sb.Spec.IsSession() && !controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+		original := sb.DeepCopy()
+		controllerutil.AddFinalizer(sb, workspaceFinalizer)
+		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, true, fmt.Errorf("add workspace finalizer: %w", err)
+		}
+	}
+	return ctrl.Result{}, false, nil
+}
 
 // Reconcile drives a single Sandbox toward its desired state. The function is
 // intentionally thin: the three pure packages own every non-trivial decision
@@ -403,26 +390,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("get Sandbox: %w", err)
 	}
 
-	// (1a) Session teardown. A Sandbox being deleted that still carries
-	// the workspace finalizer must have its workspace PVC deleted before
-	// the object is released (docs/design/isolation.md invariant 3). Ephemeral Sandboxes
-	// never carry the finalizer and fall straight through to owner-ref GC.
-	if !sb.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
-			return r.teardownWorkspace(ctx, logger, sb)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// (1b) Session Sandboxes acquire the workspace finalizer before any
-	// other work so no window exists in which the PVC could outlive its
-	// Sandbox unattended.
-	if sb.Spec.IsSession() && !controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
-		original := sb.DeepCopy()
-		controllerutil.AddFinalizer(sb, workspaceFinalizer)
-		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("add workspace finalizer: %w", err)
-		}
+	// (1a), (1b) The workspace finalizer of a session.
+	if res, handled, err := r.handleWorkspaceFinalizer(ctx, logger, sb); handled || err != nil {
+		return res, err
 	}
 
 	// (1c) docs/design/lifecycles.md "auto-destroy on exit": a terminal ephemeral Sandbox is
@@ -458,7 +428,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, fmt.Errorf("patch TenantMissing status: %w", err)
 		}
 		setSpanError(span, "tenant label missing")
-		return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+		return ctrl.Result{RequeueAfter: pendingRequeue}, nil
 	}
 
 	// (4) Phase 2: resolve the effective SandboxClass. A missing named
@@ -482,7 +452,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, fmt.Errorf("patch ConstraintViolated status: %w", err)
 			}
 			setSpanError(span, "constraint violated: "+v.String())
-			return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+			return ctrl.Result{RequeueAfter: pendingRequeue}, nil
 		}
 	}
 
@@ -496,13 +466,6 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// (6) Compute the deterministic Pod name.
 	podName := sb.Name + podspec.PodNameSuffix
-
-	// (7) Verify cluster prerequisites. Missing RuntimeClasses are not errors —
-	// they are cluster-configuration issues the operator surfaces via Events
-	// so `kubectl describe sandbox` shows remediation guidance.
-	if res, err := r.checkPrereqs(ctx, sb); err != nil || res.RequeueAfter > 0 {
-		return res, err
-	}
 
 	// (8) Fetch the owned Pod and reconcile it. If the Pod does not exist,
 	// createOrSkip handles creation (or skips for terminal Sandboxes).
@@ -645,12 +608,8 @@ func (r *SandboxReconciler) handleMissingPod(
 			}
 		}
 	}
-	sel, selErr := r.selectRuntime(ctx, sb, cls)
-	if selErr != nil {
-		if errors.Is(selErr, runtimepkg.ErrNoEligibleRuntime) {
-			return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
-		}
-		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("select runtime: %w", selErr))
+	if done, err := r.checkBackend(ctx, sb, cls); done {
+		return ctrl.Result{}, err
 	}
 	// Namespace baseline first, then the per-Sandbox policy, then the
 	// Pod. The baseline is ordered ahead of both because it is the only
@@ -675,27 +634,22 @@ func (r *SandboxReconciler) handleMissingPod(
 	// Pod that mounts it. Like the NetworkPolicy, a failure here defers
 	// Pod creation rather than producing a Pod without its workspace.
 	if sb.Spec.IsSession() {
-		if err := r.ensureWorkspacePVC(ctx, logger, sb, sel.Backend); err != nil {
+		if err := r.ensureWorkspacePVC(ctx, logger, sb); err != nil {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("ensure workspace PVC: %w", err))
 		}
 	}
-	return r.createPod(ctx, sb, cls, pinnedNode, sel)
+	return r.createPod(ctx, sb, cls, pinnedNode)
 }
 
 // newWorkspacePVC builds the session Sandbox's durable workspace claim
 // object (docs/design/storage.md: a portable RWO CSI volume; any CSI driver works).
-// It is a pure function — no API calls — so the PVC shape can be
-// asserted per backend without a fake or live apiserver.
+// It is a pure function with no API calls, so the PVC shape can be
+// asserted without a fake or live apiserver.
 //
-// backend is the runtime.Selection.Backend the controller resolved for
-// this Sandbox. On kata-fc the claim is provisioned with
-// volumeMode: Block (setec#91): Kata Containers + Firecracker has no
-// virtio-fs, so a filesystem-mode volume's writes never reach the PVC
-// back on the host, and a raw block device is the one volume type
-// Firecracker can attach to the guest. Every other backend keeps the
-// existing filesystem-mode claim (volumeMode left nil, which the API
-// defaults to Filesystem).
-func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.PersistentVolumeClaim {
+// The claim has volumeMode: Block (setec#91). Firecracker has no
+// virtio-fs, and a raw block device is the one volume type that
+// Firecracker can attach to the guest.
+func newWorkspacePVC(sb *setecv1alpha1.Sandbox) *corev1.PersistentVolumeClaim {
 	name := podspec.WorkspacePVCName(sb.Name)
 
 	size := resource.MustParse(defaultWorkspaceSize)
@@ -708,13 +662,10 @@ func newWorkspacePVC(sb *setecv1alpha1.Sandbox, backend string) *corev1.Persiste
 		storageClassName = ws.StorageClassName
 	}
 
-	var volumeMode *corev1.PersistentVolumeMode
 	// Firecracker has no virtio-fs: the workspace reaches the machine as a
-	// block device, for kata-fc and for the launcher.
-	if backend == runtimepkg.BackendKataFC || backend == runtimepkg.BackendLauncher {
-		block := corev1.PersistentVolumeBlock
-		volumeMode = &block
-	}
+	// block device.
+	block := corev1.PersistentVolumeBlock
+	volumeMode := &block
 
 	return &corev1.PersistentVolumeClaim{
 		Name:      name,
@@ -745,7 +696,6 @@ func (r *SandboxReconciler) ensureWorkspacePVC(
 	ctx context.Context,
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
-	backend string,
 ) error {
 	name := podspec.WorkspacePVCName(sb.Name)
 	existing := &corev1.PersistentVolumeClaim{}
@@ -760,7 +710,7 @@ func (r *SandboxReconciler) ensureWorkspacePVC(
 		return fmt.Errorf("get workspace PVC %q: %w", name, err)
 	}
 
-	pvc := newWorkspacePVC(sb, backend)
+	pvc := newWorkspacePVC(sb)
 	if err := controllerutil.SetControllerReference(sb, pvc, r.Scheme); err != nil {
 		return fmt.Errorf("set owner on workspace PVC: %w", err)
 	}
@@ -853,10 +803,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// re-asserted on every pass as well, so a policy deleted or widened
 	// out of band is restored on the next reconcile rather than staying
 	// gone until the next Sandbox is created.
-	if err := r.ensureNamespaceBaseline(ctx, log.FromContext(ctx), sb); err != nil {
-		return ctrl.Result{}, err
-	}
-	if _, err := r.applyNetworkPolicy(ctx, sb, cls); err != nil {
+	if err := r.ensurePolicies(ctx, sb, cls); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -868,47 +815,14 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// carries the suspend mark: deriving from it then flipped the phase to
 	// Running, the next reconcile made a new Pod, and a session asked to
 	// stay suspended came back at once (found in setec#193).
-	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
-		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "") {
+	if holdingSuspend(sb, pod) {
 		return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
 	}
 
 	// (10) Derive status and patch when changed.
-	now := time.Now()
-	desired := status.Derive(sb, pod, now)
-
-	// (10a) docs/design/lifecycles.md declarative warm start: on the Sandbox's first
-	// transition into Running, attempt exactly once to claim a
-	// pre-warmed pool entry on the Pod's node and restore it into the
-	// Pod's Firecracker socket. Every failure mode resolves to a
-	// recorded ColdBoot — a restore failure never fails the Sandbox.
-	desired = r.maybeWarmStart(ctx, sb, cls, desired, prevPhase)
-
-	// (10a') A launcher Sandbox with a snapshotRef loads the snapshot
-	// before it is Running (setec#105).
-	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
-
-	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
-	// status: a Running session past its per-SandboxClass idle
-	// deadline — no Attach and no client-stream heartbeat within
-	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
-	// sessions keep their last-activity annotation fresh, so they are
-	// never idle-reaped.
-	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
-
-	// (10c) Pause-duration cap (setec#202), same layering: a Paused
-	// Sandbox past the class maxPauseDuration fails with reason
-	// PauseTimeoutExceeded — a paused microVM holds its full memory
-	// reservation, and the class cap bounds that residency. When the
-	// class enables sessionCheckpoint the suspend machinery (11c) owns
-	// the deadline for sessions instead, so the policy passes through.
-	desired = status.ApplyPausePolicy(sb, cls, desired, now)
-	if !statusEqual(sb.Status, desired) {
-		original := sb.DeepCopy()
-		sb.Status = desired
-		if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("patch Sandbox status: %w", err))
-		}
+	desired, stop, err := r.deriveStatus(ctx, sb, cls, pod)
+	if stop != nil || err != nil {
+		return ctrlResult(stop), err
 	}
 
 	// (11) Record phase transition metrics and span status.
@@ -936,35 +850,8 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// terminal (Timeout still wins and stays terminal), delete the Pod;
 	// the next reconcile recreates it and the fresh VM re-mounts the
 	// durable workspace PVC, so session data survives the restart.
-	if sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
-		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
-		pod.DeletionTimestamp.IsZero() {
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
-			"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
-		// Degraded-recovery visibility (setec#194): a checkpoint-enabled
-		// session losing its VM with NO live checkpoint can only restart
-		// from the durable workspace — surface that as the distinct
-		// condition before the replacement VM comes up. (With a live
-		// checkpoint the replacement restores from it instead, marked
-		// PendingRestore by handleMissingPod.)
-		if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
-			if ck := sb.Status.Checkpoint; ck == nil || ck.Ref == "" {
-				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
-					"Session VM lost with no checkpoint; restarting from durable workspace — no data lost, process state gone")
-				original := sb.DeepCopy()
-				if sb.Status.Checkpoint == nil {
-					sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
-				}
-				sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryRestartedFromWorkspace, metav1.Now(), nil)
-				if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
-					return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
-				}
-			}
-		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
-		}
-		return ctrl.Result{}, nil
+	if sessionPodEnded(sb, desired, pod) {
+		return r.restartExitedSession(ctx, sb, cls, pod)
 	}
 
 	// (11a) Phase 3: pause/resume lifecycle.
@@ -979,31 +866,8 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// repeated deletes). The terminal Failed phase is already persisted,
 	// so the session-restart branch (11b) cannot resurrect the VM.
 	if desired.Phase == setecv1alpha1.SandboxPhaseFailed && pod.DeletionTimestamp.IsZero() {
-		switch desired.Reason {
-		case status.ReasonTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTimeout, actionEnforceTimeout,
-				"Sandbox exceeded lifecycle.timeout; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after timeout: %w", err))
-			}
-		case status.ReasonIdleTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonIdleTimeout, actionEnforceIdleTimeout,
-				"Session idle beyond the class sessionIdleTimeout; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after idle eviction: %w", err))
-			}
-		case status.ReasonPauseTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonPauseTimeout, actionEnforcePauseTimeout,
-				"Sandbox paused beyond the class maxPauseDuration; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after pause timeout: %w", err))
-			}
-		case status.ReasonInvariantGateViolation:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
-				"docs/design/isolation.md invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after invariant-gate refusal: %w", err))
-			}
+		if res, err := r.deleteFailedPod(ctx, sb, pod, desired.Reason); err != nil {
+			return res, err
 		}
 	}
 
@@ -1023,6 +887,150 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// Only this path requeues. The creation path also applies the policy,
 	// but there RequeueAfter means "do not create the Pod yet", so
 	// reusing it for a refresh would defer the launch instead.
+	return r.requeueAfter(sb, cls, desired, checkpointRequeue), nil
+}
+
+// ensurePolicies applies the namespace baseline and the NetworkPolicy of
+// sb.
+func (r *SandboxReconciler) ensurePolicies(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) error {
+	if err := r.ensureNamespaceBaseline(ctx, log.FromContext(ctx), sb); err != nil {
+		return err
+	}
+	_, err := r.applyNetworkPolicy(ctx, sb, cls)
+	return err
+}
+
+// holdingSuspend reports whether the Pod of a suspended session still
+// ends (step 9a).
+func holdingSuspend(sb *setecv1alpha1.Sandbox, pod *corev1.Pod) bool {
+	return sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
+		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "")
+}
+
+// sessionPodEnded reports whether the Pod of a live session ended and is
+// not yet deleted (step 11b).
+func sessionPodEnded(sb *setecv1alpha1.Sandbox, desired setecv1alpha1.SandboxStatus, pod *corev1.Pod) bool {
+	return sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
+		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
+		pod.DeletionTimestamp.IsZero()
+}
+
+// deriveStatus derives the status of the Sandbox from its Pod and its
+// policies, and patches it when it changed (steps 10 to 10c). A non-nil
+// result ends the reconcile.
+func (r *SandboxReconciler) deriveStatus(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, pod *corev1.Pod,
+) (setecv1alpha1.SandboxStatus, *ctrl.Result, error) {
+	now := time.Now()
+	desired := status.Derive(sb, pod, now)
+
+	// (10a) A launcher Sandbox with a snapshotRef loads the snapshot
+	// before it is Running (setec#105).
+	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
+
+	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
+	// status: a Running session past its per-SandboxClass idle
+	// deadline — no Attach and no client-stream heartbeat within
+	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
+	// sessions keep their last-activity annotation fresh, so they are
+	// never idle-reaped.
+	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
+
+	// (10c) Pause-duration cap (setec#202), same layering: a Paused
+	// Sandbox past the class maxPauseDuration fails with reason
+	// PauseTimeoutExceeded — a paused microVM holds its full memory
+	// reservation, and the class cap bounds that residency. When the
+	// class enables sessionCheckpoint the suspend machinery (11c) owns
+	// the deadline for sessions instead, so the policy passes through.
+	desired = status.ApplyPausePolicy(sb, cls, desired, now)
+	if !statusEqual(sb.Status, desired) {
+		original := sb.DeepCopy()
+		sb.Status = desired
+		if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			res, rerr := r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("patch Sandbox status: %w", err))
+			return desired, &res, rerr
+		}
+	}
+	return desired, nil, nil
+}
+
+// restartExitedSession deletes the exited Pod of a session, so the next
+// reconcile makes a new VM against the durable workspace (step 11b). A
+// session with checkpoints and no live checkpoint records the degraded
+// recovery first.
+func (r *SandboxReconciler) restartExitedSession(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
+		"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
+	// Degraded-recovery visibility (setec#194): a checkpoint-enabled
+	// session losing its VM with NO live checkpoint can only restart
+	// from the durable workspace — surface that as the distinct
+	// condition before the replacement VM comes up. (With a live
+	// checkpoint the replacement restores from it instead, marked
+	// PendingRestore by handleMissingPod.)
+	if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
+		if ck := sb.Status.Checkpoint; ck == nil || ck.Ref == "" {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
+				"Session VM lost with no checkpoint; restarting from durable workspace — no data lost, process state gone")
+			original := sb.DeepCopy()
+			if sb.Status.Checkpoint == nil {
+				sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
+			}
+			sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryRestartedFromWorkspace, metav1.Now(), nil)
+			if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
+				return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
+			}
+		}
+	}
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
+	}
+	return ctrl.Result{}, nil
+}
+
+// failedPodDelete is the event and the error text of the Pod deletion
+// after a policy failed a Sandbox (step 12).
+type failedPodDelete struct {
+	reason, action, note, errText string
+}
+
+// failedPodDeletes maps the reason of a failure to its Pod deletion.
+var failedPodDeletes = map[string]failedPodDelete{
+	status.ReasonTimeout: {eventReasonTimeout, actionEnforceTimeout,
+		"Sandbox exceeded lifecycle.timeout; deleting Pod %q", "delete Pod after timeout"},
+	status.ReasonIdleTimeout: {eventReasonIdleTimeout, actionEnforceIdleTimeout,
+		"Session idle beyond the class sessionIdleTimeout; deleting Pod %q", "delete Pod after idle eviction"},
+	status.ReasonPauseTimeout: {eventReasonPauseTimeout, actionEnforcePauseTimeout,
+		"Sandbox paused beyond the class maxPauseDuration; deleting Pod %q", "delete Pod after pause timeout"},
+	status.ReasonInvariantGateViolation: {eventReasonInvariantGateViolation, actionEnforceInvariantGate,
+		"docs/design/isolation.md invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)",
+		"delete Pod after invariant-gate refusal"},
+}
+
+// deleteFailedPod deletes the Pod of a Sandbox that a wall-clock policy or
+// the invariant gate just failed (step 12). Another reason keeps the Pod.
+func (r *SandboxReconciler) deleteFailedPod(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, pod *corev1.Pod, reason string,
+) (ctrl.Result, error) {
+	d, ok := failedPodDeletes[reason]
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, d.reason, d.action, d.note, pod.Name)
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("%s: %w", d.errText, err))
+	}
+	return ctrl.Result{}, nil
+}
+
+// requeueAfter is the result of a reconcile of an existing Pod: the
+// earliest of the DNS refresh, the next checkpoint and the next lifecycle
+// deadline (steps 13 and 14).
+func (r *SandboxReconciler) requeueAfter(
+	sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+	desired setecv1alpha1.SandboxStatus, checkpointRequeue time.Duration,
+) ctrl.Result {
 	result := ctrl.Result{}
 	if netpol.DependsOnDNS(sb, cls) {
 		result.RequeueAfter = r.NetPol.EffectiveRefreshInterval()
@@ -1042,7 +1050,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 		(result.RequeueAfter == 0 || after < result.RequeueAfter) {
 		result.RequeueAfter = after
 	}
-	return result, nil
+	return result
 }
 
 // nextLifecycleDeadline returns how long until the earliest wall-clock
@@ -1077,98 +1085,16 @@ func nextLifecycleDeadline(
 		if d, ok := status.PauseDeadline(st, cls); ok {
 			earliest = d
 		}
+	case setecv1alpha1.SandboxPhasePending, setecv1alpha1.SandboxPhaseCompleted,
+		setecv1alpha1.SandboxPhaseFailed, setecv1alpha1.SandboxPhaseSnapshotting,
+		setecv1alpha1.SandboxPhaseRestoring, setecv1alpha1.SandboxPhaseSuspended:
+		// No lifecycle deadline runs in these phases.
 	}
 	if earliest.IsZero() {
 		return 0, false
 	}
 	after := max(earliest.Sub(now), time.Second)
 	return after, true
-}
-
-// checkPrereqs verifies that the required RuntimeClass(es) exist in the cluster
-// for every enabled backend. Returns a non-zero RequeueAfter result when
-// prerequisites are not yet met.
-//
-// Runtimes and RuntimeCfg are always set: main.go requires --runtimes-config and
-// wires both. The old single-class fallback behind a nil check was unreachable in
-// production and survived only because the test suite constructed a reconciler
-// without them (setec#115).
-func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
-	{
-		backends, classNames := r.RuntimeCfg.RuntimeClassBackends()
-		prereqResult, err := prereq.CheckMulti(ctx, r.Client, backends, classNames, r.NodeSelectorLabel)
-		if err != nil {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("prereq check: %w", err))
-		}
-		if !prereqResult.RuntimeClassPresent {
-			msg := runtimeUnavailableMessage
-			if len(prereqResult.Warnings) > 0 {
-				msg = prereqResult.Warnings[0]
-			}
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeUnavailable, actionResolveRuntime, "%s", msg)
-			if err := r.patchPendingStatus(ctx, sb, eventReasonRuntimeUnavailable); err != nil {
-				return ctrl.Result{}, fmt.Errorf("patch RuntimeUnavailable status: %w", err)
-			}
-			return ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
-		}
-		return ctrl.Result{}, nil
-	}
-}
-
-// maybeWarmStart performs the one-shot pool warm-start attempt for a
-// Sandbox that is transitioning into Running for the first time, and
-// stamps the outcome into the returned status. The stamped
-// status.warmStart doubles as the idempotency marker — once set, no
-// further attempt is ever made for this Sandbox.
-//
-// Eligibility (all must hold):
-//   - the Phase 3 Coordinator is wired,
-//   - the resolved class maintains a pool (PreWarmPoolSize > 0 with a
-//     PreWarmImage),
-//   - the Sandbox runs exactly the class's pre-warm image (a different
-//     image cannot match any pool entry),
-//   - no explicit spec.snapshotRef (the E10 named-snapshot path wins),
-//   - this reconcile observes the first Pending/other → Running edge.
-func (r *SandboxReconciler) maybeWarmStart(
-	ctx context.Context,
-	sb *setecv1alpha1.Sandbox,
-	cls *setecv1alpha1.SandboxClass,
-	desired setecv1alpha1.SandboxStatus,
-	prevPhase setecv1alpha1.SandboxPhase,
-) setecv1alpha1.SandboxStatus {
-	// A launcher class warm starts at Pod creation (selectBase), not here.
-	if r.Coordinator == nil || cls == nil || poolActive(cls) ||
-		cls.Spec.PreWarmPoolSize <= 0 || cls.Spec.PreWarmImage == "" ||
-		sb.Spec.Image != cls.Spec.PreWarmImage ||
-		(sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") ||
-		desired.WarmStart != nil ||
-		desired.Phase != setecv1alpha1.SandboxPhaseRunning ||
-		prevPhase == setecv1alpha1.SandboxPhaseRunning {
-		return desired
-	}
-
-	outcome, entryID := r.Coordinator.WarmStartFromPool(ctx, sb, cls)
-	ws := &setecv1alpha1.SandboxWarmStartStatus{}
-	switch outcome {
-	case snapshot.WarmStartRestored:
-		ws.Outcome = setecv1alpha1.SandboxWarmStartPoolRestored
-		ws.EntryID = entryID
-	case snapshot.WarmStartRejected:
-		// docs/design/isolation.md invariant gate refusal: the Pod's VM already holds
-		// the unverified restored state, so cold boot is NOT a safe
-		// fallback. The Sandbox fails terminally and step (12) of the
-		// reconcile destroys the Pod.
-		ws.Outcome = setecv1alpha1.SandboxWarmStartRejected
-		ws.EntryID = entryID
-		ws.Reason = string(outcome)
-		desired.Phase = setecv1alpha1.SandboxPhaseFailed
-		desired.Reason = status.ReasonInvariantGateViolation
-	default:
-		ws.Outcome = setecv1alpha1.SandboxWarmStartColdBoot
-		ws.Reason = string(outcome)
-	}
-	desired.WarmStart = ws
-	return desired
 }
 
 // resolveSnapshotRef resolves and validates the Snapshot referenced by
@@ -1193,7 +1119,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 		if perr := r.patchPendingStatus(ctx, sb, eventReasonSnapshotUnavailable); perr != nil {
 			return "", ctrl.Result{}, fmt.Errorf("patch SnapshotUnavailable status: %w", perr)
 		}
-		return "", ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+		return "", ctrl.Result{RequeueAfter: pendingRequeue}, nil
 	case getErr != nil:
 		res, rerr := r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("get Snapshot: %w", getErr))
 		return "", res, rerr
@@ -1202,7 +1128,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 		if perr := r.patchPendingStatus(ctx, sb, eventReasonSnapshotUnavailable); perr != nil {
 			return "", ctrl.Result{}, fmt.Errorf("patch Pending(SnapshotUnavailable): %w", perr)
 		}
-		return "", ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+		return "", ctrl.Result{RequeueAfter: pendingRequeue}, nil
 	}
 	if snapViolations := snapshot.Validate(sb, snap, cls); len(snapViolations) > 0 {
 		sv := snapViolations[0]
@@ -1210,7 +1136,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 		if perr := r.patchPendingStatus(ctx, sb, eventReasonSnapshotIncompatible); perr != nil {
 			return "", ctrl.Result{}, fmt.Errorf("patch SnapshotIncompatible status: %w", perr)
 		}
-		return "", ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+		return "", ctrl.Result{RequeueAfter: pendingRequeue}, nil
 	}
 	if !isLocalSnapshot(snap) {
 		// The store serves the snapshot on any node of the class.
@@ -1219,153 +1145,43 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 	return snap.Spec.Node, ctrl.Result{}, nil
 }
 
-// selectRuntime picks the isolation backend for this Sandbox by gathering a
-// cluster-wide view of node capabilities (via Node labels) and delegating to
-// r.Runtimes.Select. It writes status.runtime.chosen on success and emits a
-// fallback metric when the chosen backend differs from the originally
-// requested one.
-//
-// # Two conditions, not one
-//
-// "No node advertises this capability" and "this operator has no dispatcher
-// for that backend" used to collapse into the same answer here, and that
-// conflation is what deadlocked scale-from-zero.
-//
-// The first is a statement about the cluster right now, not about the
-// Sandbox. On a scale-to-zero node pool it is the normal starting state: no
-// node carries setec.zeroroot.ai/runtime.kata-fc until one is provisioned,
-// and Karpenter — like every other autoscaler — provisions in response to an
-// unschedulable POD. setec#230 stopped this from failing the Sandbox, which
-// let it survive the wait, but the reconcile still returned before createPod,
-// so nothing was ever unschedulable and nothing ever asked for a node. The
-// Sandbox waited a minute at a time for a node that could not arrive
-// (setec#300). Select now returns a Provisional Selection instead, and this
-// function carries on to build and create the Pod: the Pod is the request for
-// capacity, and it is the only thing an autoscaler will act on.
-//
-// The second is terminal in a way node provisioning cannot touch — there is
-// no Dispatcher, so there is no Pod spec to build. That, and only that, is
-// ErrNoEligibleRuntime. It stays Pending rather than Failed because an
-// administrator enabling the backend is a live fix the next reconcile picks
-// up, but it is not waiting on a node and does not claim to be.
-//
-// Runtimes and RuntimeCfg are always set, because main.go requires
-// --runtimes-config and wires both.
-func (r *SandboxReconciler) selectRuntime(
-	ctx context.Context,
-	sb *setecv1alpha1.Sandbox,
-	cls *setecv1alpha1.SandboxClass,
-) (*runtimepkg.Selection, error) {
-	logger := log.FromContext(ctx)
-
-	// Apply local defaulting: when the SandboxClass has no Runtime struct
-	// (legacy class applied before the webhook defaulter runs), treat the
-	// class as requesting the cluster-default backend. This mirrors what the
-	// defaulting webhook will eventually do.
-	effectiveCls := cls
-	if cls != nil && cls.Spec.Runtime == nil {
-		clsCopy := *cls
-		clsCopy.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{
-			Backend: r.RuntimeCfg.Defaults.Runtime.Backend,
-		}
-		effectiveCls = &clsCopy
-	}
-
-	// Gather capabilities: list all Nodes and collect the union of backends
-	// they advertise via setec.zeroroot.ai/runtime.<backend>=true labels.
-	// We take a cluster-wide union because we cannot pre-pick a node (the
-	// scheduler does that); we only need to know whether any capable node
-	// exists for each candidate backend.
-	nodeList := &corev1.NodeList{}
-	if err := r.List(ctx, nodeList); err != nil {
-		return nil, fmt.Errorf("list nodes for capability detection: %w", err)
-	}
-	capSet := make(map[string]bool)
-	for _, node := range nodeList.Items {
-		for _, backend := range runtimepkg.AllKnownBackends {
-			label := "setec.zeroroot.ai/runtime." + backend
-			if val, ok := node.Labels[label]; ok && val == "true" {
-				capSet[backend] = true
+// checkBackend holds the Sandbox to the one backend (setec#198). A class
+// that names a removed backend fails the Sandbox with the reason, so a
+// tenant never runs on an isolation that the class did not ask for. A
+// Sandbox that passes records the launcher in status.runtime.chosen.
+// done is true when the reconcile ends here.
+func (r *SandboxReconciler) checkBackend(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+) (done bool, err error) {
+	if cls != nil && cls.Spec.Runtime != nil {
+		if verr := runtimepkg.ValidateBackend(cls.Spec.Runtime.Backend); verr != nil {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonUnsupportedBackend, actionResolveRuntime,
+				"SandboxClass %q: %v", cls.Name, verr)
+			original := sb.DeepCopy()
+			sb.Status.Phase = setecv1alpha1.SandboxPhaseFailed
+			sb.Status.Reason = eventReasonUnsupportedBackend
+			if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
+				return true, fmt.Errorf("patch Failed(UnsupportedBackend) status: %w", perr)
 			}
+			return true, nil
 		}
 	}
-	nodeCapabilities := make([]string, 0, len(capSet))
-	for backend := range capSet {
-		nodeCapabilities = append(nodeCapabilities, backend)
-	}
-
-	sel, err := r.Runtimes.Select(effectiveCls, r.RuntimeCfg, nodeCapabilities)
-	if err != nil {
-		if errors.Is(err, runtimepkg.ErrNoEligibleRuntime) {
-			logger.Info("No dispatcher registered for any backend in the Sandbox's chain",
-				"sandbox", sb.Name,
-				"namespace", sb.Namespace,
-				"error", err.Error(),
-			)
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRuntimeNotEnabled, actionResolveRuntime,
-				"No backend in this Sandbox's chain is enabled on this operator (enabled: %v); enable one to proceed",
-				r.Runtimes.EnabledBackends())
-			// Pending, not Failed: enabling the backend in the operator's
-			// runtime config is a live fix the next reconcile picks up. The
-			// caller requeues on ErrNoEligibleRuntime.
-			if perr := r.patchPendingStatus(ctx, sb, eventReasonRuntimeNotEnabled); perr != nil {
-				return nil, fmt.Errorf("patch Pending(RuntimeNotEnabled) status: %w", perr)
-			}
-			return nil, runtimepkg.ErrNoEligibleRuntime
-		}
-		return nil, err
-	}
-
-	// Provisional: a Dispatcher exists but nothing advertises it yet. Say so,
-	// then carry on and create the Pod. The Pod is what an autoscaler
-	// provisions for; see runtime.Selection.Provisional.
-	if sel.Provisional {
-		logger.Info("No node advertises the selected backend yet; creating the Pod so a cluster autoscaler can provision one",
-			"sandbox", sb.Name,
-			"namespace", sb.Namespace,
-			"backend", sel.Backend,
-			"nodeCapabilities", nodeCapabilities,
-		)
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonAwaitingCapableNode, actionResolveRuntime,
-			"No node advertises backend %q yet (node capabilities: %v); creating the Pod unscheduled so a cluster autoscaler can provision a capable node",
-			sel.Backend, nodeCapabilities)
-		if perr := r.patchPendingStatus(ctx, sb, eventReasonAwaitingCapableNode); perr != nil {
-			return nil, fmt.Errorf("patch Pending(AwaitingCapableNode) status: %w", perr)
+	if sb.Status.Runtime == nil || sb.Status.Runtime.Chosen != runtimepkg.BackendLauncher {
+		original := sb.DeepCopy()
+		sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher}
+		if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
+			// Not fatal: the status records the backend on a later reconcile.
+			log.FromContext(ctx).Info("record status.runtime.chosen", "error", perr.Error())
 		}
 	}
-
-	// Record fallback metric when the chosen backend differs from requested.
-	if sel.FellBack {
-		logger.Info("runtime fallback applied",
-			"sandbox", sb.Name,
-			"from", sel.FromBackend,
-			"to", sel.Backend,
-		)
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, "RuntimeFallback", actionRunRuntimeFallback,
-			"runtime fallback: requested %q, using %q", sel.FromBackend, sel.Backend)
-		if r.MetricsCollector != nil {
-			r.MetricsCollector.IncFallback(sel.FromBackend, sel.Backend)
-		}
-	}
-
-	// Persist chosen backend into status.runtime.chosen.
-	original := sb.DeepCopy()
-	sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: sel.Backend}
-	if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
-		// Non-fatal: status write failure should not block pod creation.
-		logger.Info("warning: failed to write status.runtime.chosen; continuing",
-			"error", err.Error(),
-		)
-	}
-
-	return sel, nil
+	return false, nil
 }
 
 // resolveTenant returns the tenant ID of the Sandbox's namespace (when
 // multi-tenancy is enabled). ok is false when the namespace has no tenant
 // label; err is non-nil only for unexpected API errors. The Phase 1 path
 // (multi-tenancy disabled) returns ("", true, nil) unconditionally.
-func (r *SandboxReconciler) resolveTenant(ctx context.Context, sb *setecv1alpha1.Sandbox) (string, bool, error) {
+func (r *SandboxReconciler) resolveTenant(ctx context.Context, sb *setecv1alpha1.Sandbox) (tenant string, ok bool, err error) {
 	if !r.MultiTenancyEnabled || r.TenantLabelKey == "" {
 		return "", true, nil
 	}
@@ -1583,28 +1399,18 @@ func (r *SandboxReconciler) recordTransition(
 		return
 	}
 	className := ""
-	vmm := ""
 	if cls != nil {
 		className = cls.Name
-		vmm = string(cls.Spec.VMM) //nolint:staticcheck // back-compat: VMM retained until v2
 	}
-	// Determine the runtime label: prefer status.runtime.chosen (written by
-	// selectRuntime), fall back to the legacy VMM field for backward compat.
-	runtimeLabel := vmm
-	if curr.Runtime != nil && curr.Runtime.Chosen != "" {
-		runtimeLabel = curr.Runtime.Chosen
-	} else if sb.Status.Runtime != nil && sb.Status.Runtime.Chosen != "" {
-		runtimeLabel = sb.Status.Runtime.Chosen
-	}
+	runtimeLabel := runtimepkg.BackendLauncher
 
 	if prev != curr.Phase {
 		r.MetricsCollector.RecordPhaseTransition(tenantID, className, curr.Phase)
 
-		// Cold-start: Sandbox creation to the moment the Pod runs. Emits
-		// with both new runtime label and legacy vmm label during the
-		// dual-write transition period.
+		// Cold-start: Sandbox creation to the moment the Pod runs, with
+		// the runtime label of the one backend.
 		//
-		// The Running moment is the workload container's running start.
+		// The Running moment is the running start of the launcher container.
 		// status.startedAt is pod.Status.StartTime, when the kubelet
 		// accepted the Pod: before the image pull and the VM boot, and in
 		// the same second as the Sandbox's creation on any quick cluster.
@@ -1640,37 +1446,20 @@ func setSpanError(span trace.Span, msg string) {
 	span.SetStatus(codes.Error, msg)
 }
 
-// createPod builds the Pod spec via the pure podspec.BuildWithOptions helper, reconciles
-// the OwnerReference to the live Sandbox UID/APIVersion via controllerutil
-// (podspec.BuildWithOptions sets the basic OwnerReference fields but has no access to
-// the Scheme needed to stamp the correct APIVersion; we re-apply it here so
-// the authoritative source of truth is controller-runtime), and creates the
-// Pod. The next reconcile will observe the new Pod via the Owns watch.
+// createPod builds the launcher Pod of the Sandbox with the pure
+// podspec.BuildLauncher, reconciles the OwnerReference to the live Sandbox
+// UID/APIVersion via controllerutil, and creates the Pod. The next
+// reconcile observes the new Pod via the Owns watch.
 //
-// cls is optional: when non-nil the Pod uses the class's RuntimeClassName
-// override (if set) and inherits the class's NodeSelector and Tolerations.
-// nodeName, when non-empty, pins the Pod to a specific node — used by the
-// Phase 3 snapshot-restore flow to land on the node holding the snapshot
-// state.
-// sel carries the dispatcher-selected backend and is applied via
-// podspec.WithRuntimeSelection as the last option in the build pipeline.
+// cls is optional: when non-nil the Pod inherits the class's NodeSelector
+// and Tolerations. nodeName, when non-empty, pins the Pod to a node: the
+// node of a local snapshot or of a warm pool base.
 func (r *SandboxReconciler) createPod(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
 	cls *setecv1alpha1.SandboxClass,
 	nodeName string,
-	sel *runtimepkg.Selection,
 ) (ctrl.Result, error) {
-	// Determine the runtimeClassName: prefer the dispatcher's value (from sel),
-	// then the class override, then the legacy operator default.
-	rcName := ""
-	if sel != nil {
-		rcName = sel.Dispatcher.RuntimeClassName()
-	}
-	if rcName == "" && cls != nil && cls.Spec.RuntimeClassName != "" { //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
-		rcName = cls.Spec.RuntimeClassName //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
-	}
-
 	// The Pod's resolvers come from the same config the NetworkPolicy's
 	// DNS rule is built from, filtered to the ones this class's policy
 	// can reach (netpol.Config.ResolversFor, setec#76), so the addresses
@@ -1680,68 +1469,79 @@ func (r *SandboxReconciler) createPod(
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select Sandbox resolvers: %w", err))
 	}
-	opts := podspec.BuildOptions{NodeName: nodeName, ResolverIPs: resolvers}
-	if sel != nil {
-		opts.RuntimeSelection = sel
+	if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
+		return res, derr
 	}
-	// The class's scheduler reservation rides into the Pod here so an
-	// idle long-lived Sandbox reserves less than its burst ceiling.
-	if cls != nil {
-		opts.Requests = cls.Spec.Requests
+	if err := r.markPoolUsed(ctx, sb, cls); err != nil {
+		log.FromContext(ctx).Error(err, "stamp the use of the warm pool", "class", cls.Name)
 	}
-	// The scratch size limit resolves with the class: the Sandbox's own
-	// value, else the class default, else 10 GiB (ADR-0146). The class
-	// validator already refused a value above the class ceiling.
-	opts.Scratch = limits.EffectiveScratch(sb, cls)
-	// A session with no command boots the keepalive from this image
-	// (setec#7). The builder refuses such a Sandbox when it is empty.
-	opts.KeepaliveImage = r.KeepaliveImage
-	var pod *corev1.Pod
-	if sel != nil && sel.Backend == runtimepkg.BackendLauncher {
-		if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
-			return res, derr
-		}
-		if err := r.markPoolUsed(ctx, sb, cls); err != nil {
-			log.FromContext(ctx).Error(err, "stamp the use of the warm pool", "class", cls.Name)
-		}
-		// A warm start loads a base of the pool instead of a boot
-		// (setec#103). The choice is recorded before the Pod exists, so
-		// the restore step knows the base.
-		base, berr := r.selectBase(ctx, sb, cls)
-		if berr != nil {
-			return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select a warm pool base: %w", berr))
-		}
-		if err := r.markWarmBase(ctx, sb, base); err != nil {
-			return ctrl.Result{}, err
-		}
-		if base != nil {
-			nodeName = base.Spec.Node
-		} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
-			r.countWarmStart(cls, "miss")
-		}
-		// The identity of the Sandbox (setec#235): its own key, outside
-		// the machine, and the generation that the next token carries.
-		identity, ierr := r.ensureIdentity(ctx, sb)
-		if ierr != nil {
-			return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the identity of the Sandbox: %w", ierr))
-		}
-		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
-			Identity: identity,
-			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
-			// Scratch here once both are on main; until then the default holds.
-			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
-			Restore:     (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") || pendingCheckpoint(sb),
-			NodeName:    nodeName,
-			FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
-			CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
-		})
-	} else {
-		pod, err = podspec.BuildWithOptions(sb, rcName, opts)
+	// A warm start loads a base of the pool instead of a boot
+	// (setec#103). The choice is recorded before the Pod exists, so
+	// the restore step knows the base.
+	base, berr := r.selectBase(ctx, sb, cls)
+	if berr != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select a warm pool base: %w", berr))
 	}
+	if err := r.markWarmBase(ctx, sb, base); err != nil {
+		return ctrl.Result{}, err
+	}
+	if base != nil {
+		nodeName = base.Spec.Node
+	} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
+		r.countWarmStart(cls, "miss")
+		r.recordColdBoot(ctx, sb)
+	}
+	// The identity of the Sandbox (setec#235): its own key, outside
+	// the machine, and the generation that the next token carries.
+	identity, ierr := r.ensureIdentity(ctx, sb)
+	if ierr != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the identity of the Sandbox: %w", ierr))
+	}
+	pod, err := podspec.BuildLauncher(sb, podspec.LauncherOptions{
+		Identity: identity,
+		// The scratch size resolves with the class: the Sandbox's own
+		// value, else the class default, else 10 GiB (setec#172).
+		Scratch:  limits.EffectiveScratch(sb, cls),
+		Requests: classRequests(cls),
+		Image:    r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
+		Restore:     (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") || pendingCheckpoint(sb),
+		NodeName:    nodeName,
+		FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
+		CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
+	})
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))
 	}
 
+	applyClassScheduling(pod, cls)
+
+	// podspec.BuildLauncher already populates a basic OwnerReference, but UID and
+	// APIVersion are authoritative only once the Scheme is consulted.
+	// SetControllerReference overwrites the reference in place, which keeps
+	// responsibility for the canonical form in the controller.
+	pod.OwnerReferences = nil
+	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("set owner reference: %w", err))
+	}
+
+	if err := r.Create(ctx, pod); err != nil {
+		// A conflicting Create means another reconcile already produced
+		// the Pod. Treat it as success so the next reconcile can observe
+		// the live Pod via the Owns watch.
+		if apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, nil
+		}
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("create Pod: %w", err))
+	}
+
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
+		"Created Pod %q for Sandbox", pod.Name)
+	return ctrl.Result{}, nil
+}
+
+// applyClassScheduling adds the NodeSelector and the Tolerations of cls to
+// pod.
+func applyClassScheduling(pod *corev1.Pod, cls *setecv1alpha1.SandboxClass) {
 	// Merge class-level NodeSelector into the Pod. The map is additive —
 	// the class cannot override an existing Pod-selector key.
 	if cls != nil && len(cls.Spec.NodeSelector) > 0 {
@@ -1766,29 +1566,6 @@ func (r *SandboxReconciler) createPod(
 	if cls != nil && len(cls.Spec.Tolerations) > 0 {
 		pod.Spec.Tolerations = append(pod.Spec.Tolerations, cls.Spec.Tolerations...)
 	}
-
-	// podspec.BuildWithOptions already populates a basic OwnerReference, but UID and
-	// APIVersion are authoritative only once the Scheme is consulted.
-	// SetControllerReference overwrites the reference in place, which keeps
-	// responsibility for the canonical form in the controller.
-	pod.OwnerReferences = nil
-	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
-		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("set owner reference: %w", err))
-	}
-
-	if err := r.Create(ctx, pod); err != nil {
-		// A conflicting Create means another reconcile already produced
-		// the Pod. Treat it as success so the next reconcile can observe
-		// the live Pod via the Owns watch.
-		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, nil
-		}
-		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("create Pod: %w", err))
-	}
-
-	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
-		"Created Pod %q for Sandbox", pod.Name)
-	return ctrl.Result{}, nil
 }
 
 // classNotFoundExpired reports whether a Sandbox has been waiting on an
@@ -1894,7 +1671,7 @@ func (r *SandboxReconciler) reapExpiredEphemeral(
 	ctx context.Context,
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, reaped bool, err error) {
 	if !sb.Spec.IsEphemeral() || !isTerminalPhase(sb.Status.Phase) {
 		return ctrl.Result{}, false, nil
 	}
@@ -1935,7 +1712,7 @@ func (r *SandboxReconciler) patchFailedStatus(
 	sb.Status.Reason = reason
 	now := metav1.NewTime(time.Now())
 	sb.Status.LastTransitionTime = &now
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // patchPendingStatus writes a minimal Pending/<reason> status using the
@@ -1954,7 +1731,7 @@ func (r *SandboxReconciler) patchPendingStatus(
 	sb.Status.Reason = reason
 	now := metav1.NewTime(time.Now())
 	sb.Status.LastTransitionTime = &now
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // reconcilePhase3Lifecycle handles desiredState pause/resume and the
@@ -2001,77 +1778,86 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 	if sb.Spec.Snapshot != nil && sb.Spec.Snapshot.Create && sb.Spec.Snapshot.Name != "" &&
 		(desired.Phase == setecv1alpha1.SandboxPhaseRunning ||
 			desired.Phase == setecv1alpha1.SandboxPhasePaused) {
-		existing := &setecv1alpha1.Snapshot{}
-		err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
-		if err == nil {
-			// A Snapshot with the target name exists. Which phase it is
-			// in decides what happens next, and it has to be read.
-			//
-			// The Coordinator now creates the CR before the storage write
-			// so that Creating and Failed are reportable (setec#129).
-			// That means "the object exists" no longer implies "the state
-			// is on disk". Treating existence as success would run the
-			// AfterCreate intent on a failed snapshot, and with
-			// afterCreate=Terminated that deletes the Sandbox whose state
-			// was never saved.
-			switch existing.Status.Phase {
-			case setecv1alpha1.SnapshotPhaseCreating:
-				// Another reconcile is mid-write, or one died mid-write.
-				// Wait rather than racing a second RPC at the same name.
-				return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
-			case setecv1alpha1.SnapshotPhaseFailed:
-				// Terminal by design: a Failed snapshot never becomes
-				// Ready, so re-snapshotting under the same name is not an
-				// option and the AfterCreate intent must not run. The
-				// user deletes the Snapshot and asks again.
-				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
-					"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
-					existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
-				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
-			default:
-				// Ready, Terminating, or a phase this version does not
-				// know. Honor the AfterCreate intent without
-				// re-snapshotting, as before.
-				return ctrl.Result{}, nil
-			}
-		}
-		if !apierrors.IsNotFound(err) {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("check Snapshot: %w", err))
-		}
-
-		// Mark Snapshotting before the RPC so status observers see the
-		// transient phase.
-		if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseSnapshotting, "SnapshotInProgress", true); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch Snapshotting: %w", err)
-		}
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
-			"creating Snapshot %q", sb.Spec.Snapshot.Name)
-		if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
-			// Roll back to Running if the Coordinator could not complete
-			// (e.g. InsufficientStorage before VM pause).
-			_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create snapshot: %w", err))
-		}
-
-		// After-create transition.
-		after := sb.Spec.Snapshot.AfterCreate
-		if after == "" {
-			after = setecv1alpha1.SandboxSnapshotAfterCreateRunning
-		}
-		switch after {
-		case setecv1alpha1.SandboxSnapshotAfterCreatePaused:
-			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhasePaused, "UserPaused", true)
-		case setecv1alpha1.SandboxSnapshotAfterCreateTerminated:
-			if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
-			}
-			return ctrl.Result{}, nil
-		default: // Running
-			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
-		}
+		return r.requestSnapshot(ctx, sb)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// requestSnapshot creates the Snapshot that sb asks for, unless one with
+// its name exists, and then applies the afterCreate intent.
+func (r *SandboxReconciler) requestSnapshot(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
+	existing := &setecv1alpha1.Snapshot{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
+	if err == nil {
+		// A Snapshot with the target name exists. Which phase it is
+		// in decides what happens next, and it has to be read.
+		//
+		// The Coordinator now creates the CR before the storage write
+		// so that Creating and Failed are reportable (setec#129).
+		// That means "the object exists" no longer implies "the state
+		// is on disk". Treating existence as success would run the
+		// AfterCreate intent on a failed snapshot, and with
+		// afterCreate=Terminated that deletes the Sandbox whose state
+		// was never saved.
+		switch existing.Status.Phase {
+		case setecv1alpha1.SnapshotPhaseCreating:
+			// Another reconcile is mid-write, or one died mid-write.
+			// Wait rather than racing a second RPC at the same name.
+			return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+		case setecv1alpha1.SnapshotPhaseFailed:
+			// Terminal by design: a Failed snapshot never becomes
+			// Ready, so re-snapshotting under the same name is not an
+			// option and the AfterCreate intent must not run. The
+			// user deletes the Snapshot and asks again.
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
+				"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
+				existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
+			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+		default:
+			// Ready, Terminating, or a phase this version does not
+			// know. Honor the AfterCreate intent without
+			// re-snapshotting, as before.
+			return ctrl.Result{}, nil
+		}
+	}
+	if !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("check Snapshot: %w", err))
+	}
+
+	// Mark Snapshotting before the RPC so status observers see the
+	// transient phase.
+	if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseSnapshotting, "SnapshotInProgress", true); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch Snapshotting: %w", err)
+	}
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
+		"creating Snapshot %q", sb.Spec.Snapshot.Name)
+	if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
+		// Roll back to Running if the Coordinator could not complete
+		// (e.g. InsufficientStorage before VM pause).
+		_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create snapshot: %w", err))
+	}
+	return r.applyAfterCreate(ctx, sb)
+}
+
+// applyAfterCreate moves sb to the state that its afterCreate intent names.
+func (r *SandboxReconciler) applyAfterCreate(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
+	after := sb.Spec.Snapshot.AfterCreate
+	if after == "" {
+		after = setecv1alpha1.SandboxSnapshotAfterCreateRunning
+	}
+	switch after {
+	case setecv1alpha1.SandboxSnapshotAfterCreatePaused:
+		return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhasePaused, "UserPaused", true)
+	case setecv1alpha1.SandboxSnapshotAfterCreateTerminated:
+		if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
+		}
+		return ctrl.Result{}, nil
+	default:
+		return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
+	}
 }
 
 // patchPhase mutates the Sandbox status to the given phase/reason
@@ -2094,7 +1880,7 @@ func (r *SandboxReconciler) patchPhase(
 	} else {
 		sb.Status.PausedAt = nil
 	}
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // recordAndReturnErr emits a Warning Event for an unexpected error and
@@ -2134,7 +1920,7 @@ func statusEqual(a, b setecv1alpha1.SandboxStatus) bool {
 // Owns(&networkingv1.NetworkPolicy{}) so NetworkPolicy edits surface
 // back to the parent Sandbox for reconcile.
 func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		For(&setecv1alpha1.Sandbox{}).
 		Owns(&corev1.Pod{}).
 		Owns(&networkingv1.NetworkPolicy{}).
@@ -2142,7 +1928,7 @@ func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(r.sandboxesOnCordonedNode),
 			builder.WithPredicates(nodeCordonPredicate())).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }
 
 // nodeCordonPredicate admits only Node events where the node is (or
@@ -2189,4 +1975,13 @@ func (r *SandboxReconciler) sandboxesOnCordonedNode(ctx context.Context, obj cli
 		}
 	}
 	return reqs
+}
+
+// ctrlResult dereferences a result that ends a reconcile, or returns the
+// zero result.
+func ctrlResult(res *ctrl.Result) ctrl.Result {
+	if res == nil {
+		return ctrl.Result{}
+	}
+	return *res
 }

@@ -194,11 +194,13 @@ func (s *spiffeSource) start(ctx context.Context) error {
 	}
 	// The client outlives the startup context: that context bounds how
 	// long boot waits, not how long the watch runs.
-	client, err := workloadapi.New(context.Background(), workloadapi.WithAddr(s.addr))
+	client, err := workloadapi.New(context.WithoutCancel(ctx), workloadapi.WithAddr(s.addr))
 	if err != nil {
 		return fmt.Errorf("SPIFFE credential source: Workload API client for %s: %w", s.addr, err)
 	}
-	go func() { _ = client.WatchX509Context(context.Background(), s) }()
+	// The watch runs until the client closes, not until the startup
+	// context ends.
+	go func() { _ = client.WatchX509Context(context.WithoutCancel(ctx), s) }()
 
 	select {
 	case <-s.firstSVID:
@@ -226,7 +228,7 @@ func (s *spiffeSource) lastErrSuffix() string {
 // delivered. It implements workloadapi.X509ContextWatcher.
 func (s *spiffeSource) OnX509ContextUpdate(x509Context *workloadapi.X509Context) {
 	if len(x509Context.SVIDs) == 0 {
-		s.reportError(errors.New("Workload API delivered no X509-SVID"))
+		s.reportError(errors.New("the Workload API delivered no X509-SVID"))
 		return
 	}
 	s.mu.Lock()

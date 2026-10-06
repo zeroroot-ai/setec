@@ -10,10 +10,6 @@
 !go.mod
 !go.sum
 
-# Re-include go:embed assets (the installer's boot-time thin-pool
-# provisioner script — internal/installer/thinpool.go embeds it).
-!internal/installer/payload/*.sh
-
 # Re-include the module-download retry wrapper. Both Dockerfiles run
 # `go mod download` through it, before `COPY . .`, so it has to be in the
 # context on its own. See scripts/go-retry.sh.

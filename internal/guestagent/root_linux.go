@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // The disks of a launcher machine, in the order the launcher attaches them.
@@ -46,8 +48,8 @@ func PrepareRoot(lowerFS string) error {
 		lowerFS = "squashfs"
 	}
 	for _, d := range []string{dirProc, dirSys, dirDev, "/lower", "/rw", NewRoot} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
+		if err := os.MkdirAll(d, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 	}
 	mounts := []struct {
@@ -67,8 +69,8 @@ func PrepareRoot(lowerFS string) error {
 		}
 	}
 	for _, d := range []string{"/rw/upper", "/rw/work"} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
+		if err := os.MkdirAll(d, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 	}
 	if err := syscall.Mount("overlay", NewRoot, "overlay", 0,
@@ -86,8 +88,8 @@ func PrepareRoot(lowerFS string) error {
 	}
 	for _, m := range inner {
 		dst := filepath.Join(NewRoot, m.dst)
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			return err
+		if err := os.MkdirAll(dst, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 		if err := syscall.Mount(m.src, dst, m.fs, 0, m.data); err != nil {
 			return fmt.Errorf("mount %s in the root: %w", m.dst, err)
@@ -95,8 +97,8 @@ func PrepareRoot(lowerFS string) error {
 	}
 	if _, err := os.Stat(WorkspaceDevice); err == nil {
 		dst := filepath.Join(NewRoot, "workspace")
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			return err
+		if err := os.MkdirAll(dst, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
+			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 		if err := syscall.Mount(WorkspaceDevice, dst, "ext4", 0, ""); err != nil {
 			return fmt.Errorf("mount the workspace: %w", err)

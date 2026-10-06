@@ -5,6 +5,7 @@ package podspec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,8 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
+	setecLimits "github.com/zeroroot-ai/setec/internal/limits"
 )
 
 // The launcher Pod (docs/design/runtime.md). One setec container starts a
@@ -43,11 +46,10 @@ const (
 )
 
 // The files of a launcher Pod that the node agent and the launcher share,
-// as the Pod sees them. internal/launcher holds the same socket names, and
-// a test keeps the two equal.
+// as the Pod sees them. internal/launcher holds the same API socket name,
+// and a test keeps the two equal.
 const (
-	LauncherAPISocket   = "api.sock"
-	LauncherVsockSocket = "v.sock"
+	LauncherAPISocket = "api.sock"
 	// LauncherWritableDisk is the writable layer of the machine. A
 	// snapshot holds it with the memory.
 	LauncherWritableDisk = LauncherWorkMountPath + "/writable.ext4"
@@ -85,6 +87,13 @@ const (
 	launcherIdentityMountPath = "/etc/setec/identity"
 )
 
+// LauncherMemoryOverhead is the memory of a launcher Pod above the memory
+// of its machine. It holds the Firecracker process, the launcher, and the
+// page cache of a snapshot write: the kernel charges the memory file that
+// Firecracker writes to the Pod. With no overhead, a snapshot of a small
+// machine fills the limit and the kernel kills the Pod.
+var LauncherMemoryOverhead = resource.MustParse("256Mi")
+
 // IdentitySecretName is the name of the identity Secret of a Sandbox.
 func IdentitySecretName(sandbox string) string { return sandbox + "-identity" }
 
@@ -116,6 +125,11 @@ type LauncherOptions struct {
 	// Scratch is the size limit of the writable layer of the machine.
 	// Zero takes the default scratch size of the Sandbox.
 	Scratch resource.Quantity
+	// Requests is the scheduler reservation of the class
+	// (SandboxClassSpec.Requests). Each set field lowers the request of
+	// its resource, bounded by the limit. Nil keeps requests equal to
+	// limits (Guaranteed QoS).
+	Requests *setecv1alpha1.ResourceRequests
 	// DiskRepo is the repository of the signed image disks
 	// (setec-disk-builder). Required.
 	DiskRepo string
@@ -168,8 +182,6 @@ const (
 	launcherBootArgs = "console=ttyS0 reboot=k panic=1 pci=off setec.lowerfs=squashfs"
 )
 
-// launcherSpec is the JSON of internal/launcher.Spec. It is written here
-// rather than imported, so the operator does not link the launcher.
 // LauncherIdentity is the identity of a Sandbox, as the launcher signs it.
 type LauncherIdentity struct {
 	// SandboxID is the <namespace>/<name>/<uid> of the Sandbox.
@@ -189,6 +201,8 @@ type launcherIdentitySpec struct {
 	GenerationFile string `json:"generationFile"`
 }
 
+// launcherSpec is the JSON of internal/launcher.Spec. It is written here
+// rather than imported, so the operator does not link the launcher.
 type launcherSpec struct {
 	Identity        *launcherIdentitySpec `json:"identity,omitempty"`
 	VCPU            int                   `json:"vcpu"`
@@ -236,36 +250,17 @@ type launcherProcess struct {
 // capability is effective only for root without ambient capabilities, and
 // root holds no other capability here.
 func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod, error) {
-	if sb == nil {
-		return nil, ErrNilSandbox
-	}
-	if sb.Name == "" {
-		return nil, ErrMissingName
-	}
-	if opts.Image == "" {
-		return nil, fmt.Errorf("podspec: the launcher image is empty")
-	}
-	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
-		return nil, fmt.Errorf("podspec: the disk repository or the disk keys are empty")
-	}
-	if !strings.Contains(sb.Spec.Image, "@sha256:") {
-		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
-	}
-	diskRef, err := diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	diskRef, err := checkLauncherInputs(sb, opts)
 	if err != nil {
-		return nil, fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
-	}
-	if sb.Spec.Resources.VCPU < 1 {
-		return nil, fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
-	}
-	if sb.Spec.Resources.Memory.Sign() <= 0 {
-		return nil, fmt.Errorf("%w: got %q", ErrInvalidMemory, sb.Spec.Resources.Memory.String())
+		return nil, err
 	}
 
 	one := resource.MustParse("1")
+	podMemory := sb.Spec.Resources.Memory.DeepCopy()
+	podMemory.Add(LauncherMemoryOverhead)
 	limits := corev1.ResourceList{
 		corev1.ResourceCPU:    *resource.NewQuantity(int64(sb.Spec.Resources.VCPU), resource.DecimalSI),
-		corev1.ResourceMemory: sb.Spec.Resources.Memory.DeepCopy(),
+		corev1.ResourceMemory: podMemory,
 		KVMResource:           one.DeepCopy(),
 		TunResource:           one.DeepCopy(),
 	}
@@ -277,57 +272,14 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	// the machine files, so it gets 2 GiB more.
 	workDir := work.DeepCopy()
 	workDir.Add(resource.MustParse("2Gi"))
-	spec := launcherSpec{
-		VCPU:          int(sb.Spec.Resources.VCPU),
-		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
-		ImageRef:      sb.Spec.Image,
-		DiskKeys:      opts.DiskKeys,
-		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
-		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
-		WritableDisk:  LauncherWritableDisk,
-		WritableBytes: work.Value(),
-		WorkDir:       LauncherVMDir,
-	}
-	if opts.CPUTemplate != "" {
-		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
-	}
-	// A session keeps its workspace on its PVC, a raw block device that
-	// the machine mounts at /workspace (setec#193).
-	if sb.Spec.IsSession() {
-		spec.WorkspaceDevice = LauncherWorkspaceDevice
-	}
-	if opts.Restore || opts.FromBase {
-		spec.Source.Snapshot = &launcherSnapshot{
-			State:    LauncherRestoreState,
-			Memory:   LauncherRestoreMemory,
-			Staged:   LauncherRestoreStaged,
-			Evidence: LauncherRestoreEvidence,
-			TakenAt:  LauncherRestoreTakenAt,
-		}
-	} else {
-		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
-	}
-	// A loaded Sandbox snapshot already runs its workload, and a base runs
-	// none. A boot and the load of a base start the workload of the Sandbox.
-	if !opts.Restore && !opts.Base {
-		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
-		for _, e := range sb.Spec.Env {
-			if e.ValueFrom == nil {
-				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
-			}
-		}
-	}
-	spec.Base = opts.Base
-	if opts.Identity != nil && !opts.Base {
-		spec.Identity = &launcherIdentitySpec{
-			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,
-			KeyFile: LauncherIdentityKey, Generation: opts.Identity.Generation,
-			GenerationFile: LauncherIdentityGeneration,
-		}
-	}
+	// The ephemeral-storage limit covers the work volume plus the headroom
+	// for logs (setec#172), so a full work volume cannot fill the disk of
+	// the node.
+	limits[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralLimit(workDir)
+	spec := buildLauncherSpec(sb, opts, work)
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "json.Marshal")
 	}
 
 	pod := &corev1.Pod{
@@ -355,7 +307,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 				Env:   []corev1.EnvVar{{Name: LauncherSpecEnv, Value: string(specJSON)}},
 				Resources: corev1.ResourceRequirements{
 					Limits:   limits,
-					Requests: limits.DeepCopy(),
+					Requests: launcherRequests(limits, opts.Requests),
 				},
 				SecurityContext: &corev1.SecurityContext{
 					RunAsUser:                new(int64(0)),
@@ -443,6 +395,116 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	return pod, nil
 }
 
+// checkLauncherInputs checks sb and opts, and returns the reference of the
+// image disk.
+func checkLauncherInputs(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (diskRef string, err error) {
+	if sb == nil {
+		return "", ErrNilSandbox
+	}
+	if sb.Name == "" {
+		return "", ErrMissingName
+	}
+	if opts.Image == "" {
+		return "", errors.New("podspec: the launcher image is empty")
+	}
+	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
+		return "", errors.New("podspec: the disk repository or the disk keys are empty")
+	}
+	if !strings.Contains(sb.Spec.Image, "@sha256:") {
+		return "", fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
+	}
+	diskRef, err = diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	if err != nil {
+		return "", fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
+	}
+	if sb.Spec.Resources.VCPU < 1 {
+		return "", fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
+	}
+	if sb.Spec.Resources.Memory.Sign() <= 0 {
+		return "", fmt.Errorf("%w: got %q", ErrInvalidMemory, sb.Spec.Resources.Memory.String())
+	}
+	return diskRef, nil
+}
+
+// buildLauncherSpec is the spec that the launcher reads from its
+// environment. work is the size of the writable layer.
+func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work resource.Quantity) launcherSpec {
+	spec := launcherSpec{
+		VCPU:          int(sb.Spec.Resources.VCPU),
+		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
+		ImageRef:      sb.Spec.Image,
+		DiskKeys:      opts.DiskKeys,
+		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
+		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
+		WritableDisk:  LauncherWritableDisk,
+		WritableBytes: work.Value(),
+		WorkDir:       LauncherVMDir,
+	}
+	if opts.CPUTemplate != "" {
+		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
+	}
+	// A session keeps its workspace on its PVC, a raw block device that
+	// the machine mounts at /workspace (setec#193).
+	if sb.Spec.IsSession() {
+		spec.WorkspaceDevice = LauncherWorkspaceDevice
+	}
+	if opts.Restore || opts.FromBase {
+		spec.Source.Snapshot = &launcherSnapshot{
+			State:    LauncherRestoreState,
+			Memory:   LauncherRestoreMemory,
+			Staged:   LauncherRestoreStaged,
+			Evidence: LauncherRestoreEvidence,
+			TakenAt:  LauncherRestoreTakenAt,
+		}
+	} else {
+		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
+	}
+	// A loaded Sandbox snapshot already runs its workload, and a base runs
+	// none. A boot and the load of a base start the workload of the Sandbox.
+	if !opts.Restore && !opts.Base {
+		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
+		for _, e := range sb.Spec.Env {
+			if e.ValueFrom == nil {
+				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
+			}
+		}
+	}
+	spec.Base = opts.Base
+	if opts.Identity != nil && !opts.Base {
+		spec.Identity = &launcherIdentitySpec{
+			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,
+			KeyFile: LauncherIdentityKey, Generation: opts.Identity.Generation,
+			GenerationFile: LauncherIdentityGeneration,
+		}
+	}
+	return spec
+}
+
+// launcherRequests is the request of the launcher container: its limits,
+// with the CPU and memory of the class reservation where the class sets
+// one. A request above its limit makes the Pod invalid, so a reservation
+// only lowers a request. The KVM and tun devices keep a request equal to
+// the limit, as an extended resource needs.
+func launcherRequests(limits corev1.ResourceList, req *setecv1alpha1.ResourceRequests) corev1.ResourceList {
+	requests := limits.DeepCopy()
+	// The scheduler sets aside the headroom that every Pod uses. The limit
+	// stops the Pod that grows.
+	if _, ok := limits[corev1.ResourceEphemeralStorage]; ok {
+		requests[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralHeadroom.DeepCopy()
+	}
+	if req == nil {
+		return requests
+	}
+	lower := func(name corev1.ResourceName, q *resource.Quantity) {
+		if limit, ok := limits[name]; ok && q != nil && q.Cmp(limit) < 0 {
+			requests[name] = q.DeepCopy()
+		}
+	}
+	lower(corev1.ResourceCPU, req.CPU)
+	lower(corev1.ResourceMemory, req.Memory)
+	return requests
+}
+
 // RestoreEvidence is what the launcher writes to LauncherRestoreEvidence
 // after a snapshot load. Each field is true only when the guest agent
 // confirmed the step.
@@ -464,6 +526,7 @@ func BuildLauncherBase(name, namespace, image string, res setecv1alpha1.Resource
 	sb.Spec.Image = image
 	sb.Spec.Resources = res
 	opts.Base, opts.Restore, opts.FromBase = true, false, false
+	opts.Requests = nil
 	pod, err := BuildLauncher(sb, opts)
 	if err != nil {
 		return nil, err

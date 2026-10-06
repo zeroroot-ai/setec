@@ -11,7 +11,9 @@ set -eo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KUBECONFIG_OUT="${ROOT}/kubeconfig"
 
-K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
+# 1.35 or later: each launcher Pod mounts the signed disk of its image as an
+# image volume.
+K3S_VERSION="${K3S_VERSION:-v1.35.9+k3s1}"
 
 # The k3s installer is fetched from the pinned release commit and verified
 # against a recorded digest, never piped straight from the mutable
@@ -21,8 +23,8 @@ K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
 # bring-ups of the same K3S_VERSION. To bump: change K3S_INSTALLER_COMMIT to
 # the commit the new K3S_VERSION tag points at, re-download, and record the
 # new sha256 below.
-K3S_INSTALLER_COMMIT="${K3S_INSTALLER_COMMIT:-a562d090b05cf8d55b6a8b57556787c24c8ce21a}"
-K3S_INSTALLER_SHA256="${K3S_INSTALLER_SHA256:-f60c3d8940dfc896f7d83aaf57726c91cf21afc4bca40036472df108d9700b4b}"
+K3S_INSTALLER_COMMIT="${K3S_INSTALLER_COMMIT:-58877f27435fe86ee292859db3d0df2ca5423991}"
+K3S_INSTALLER_SHA256="${K3S_INSTALLER_SHA256:-8598e002e61d658fed7b7542fc6d2c66d8da6eae69e088830105d2ee1ffb6d91}"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[0;33m%s\033[0m\n' "$*"; }
@@ -55,8 +57,8 @@ else
 fi
 
 # Wait for node Ready. If k3s is already active but the node is stuck
-# NotReady — e.g. a prior bring-up's kata step left containerd's config
-# half-written and CNI never initialised ("cni plugin not initialized") —
+# NotReady — e.g. a prior bring-up left containerd's config half-written
+# and CNI never initialised ("cni plugin not initialized") —
 # restart k3s once to recover: with no custom config.toml.tmpl present k3s
 # regenerates a complete default containerd config (CNI included) and the node
 # comes back. This makes the bring-up self-healing instead of wedging.

@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // The identity socket (setec#235). A process in the machine gets an
@@ -74,7 +76,7 @@ func (p *IdentityProxy) token(audience string) (TokenResponse, error) {
 		Audience string `json:"audience"`
 	}{audience})
 	if err != nil {
-		return TokenResponse{}, err
+		return TokenResponse{}, errwrap.Wrap(err, "json.Marshal")
 	}
 	if _, err := c.Write(append(req, '\n')); err != nil {
 		return TokenResponse{}, fmt.Errorf("ask the launcher: %w", err)
@@ -118,7 +120,7 @@ func ServeIdentity(ctx context.Context, root string, proxy *IdentityProxy) error
 		_ = srv.Close()
 	}()
 	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		return errwrap.Wrap(err, "http.Server.Serve")
 	}
 	return nil
 }

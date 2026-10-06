@@ -20,7 +20,7 @@ limitations under the License.
 */
 
 // Phase 2 E2E scenarios. These run only with the `e2e` build tag on a
-// bare-metal host that has Kata Containers installed. Each test is
+// cluster whose nodes expose /dev/kvm. Each test is
 // self-sufficient: it assumes the Phase 2 chart has been rendered with
 // the relevant value overrides, and skips gracefully if the cluster
 // does not meet the prerequisites (e.g. missing NetworkPolicy CNI).
@@ -181,7 +181,6 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 
 	// Seed a tight SandboxClass.
 	cls := newSandboxClass("e2e-tight", setecv1alpha1.SandboxClassSpec{
-		VMM: setecv1alpha1.VMMFirecracker,
 		MaxResources: &setecv1alpha1.Resources{
 			VCPU:   1,
 			Memory: resource.MustParse("256Mi"),
@@ -214,11 +213,10 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 	}
 }
 
-// Frontend roundtrip coverage lives in the manual smoke-test walkthrough
-// at docs/dev-smoke-test.md — it requires a full chart install plus
-// client certs, neither of which the go-test harness provisions. The
-// previous placeholder Go test that unconditionally skipped here has
-// been removed to avoid the silent-skip anti-pattern.
+// Frontend roundtrip coverage needs a full chart install plus client
+// certs, which this harness does not provision. The placeholder Go test
+// that unconditionally skipped here was removed to avoid the silent-skip
+// anti-pattern.
 
 // TestPhase2_UpgradeFromPhase1 verifies a Phase 1-shape Sandbox keeps
 // running after the Phase 2 operator takes over.

@@ -127,6 +127,12 @@ func Derive(
 		return setPhase(out, setecv1alpha1.SandboxPhasePending, ReasonSessionVMRestarting, now)
 	}
 
+	return fromPodPhase(out, pod, now, sb)
+}
+
+// fromPodPhase maps the phase of a Pod to the status of a Sandbox that is
+// not a session with an ended Pod.
+func fromPodPhase(out setecv1alpha1.SandboxStatus, pod *corev1.Pod, now time.Time, sb *setecv1alpha1.Sandbox) setecv1alpha1.SandboxStatus {
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
 		out = setPhase(out, setecv1alpha1.SandboxPhaseCompleted, "", now)
@@ -155,33 +161,7 @@ func Derive(
 		return out
 
 	case corev1.PodRunning:
-		// A container that declares a readiness probe is not usable until
-		// the probe passes. A kata-fc session's wrapper mounts the durable
-		// workspace after the container starts, and a turn that runs
-		// before the mount writes into an emptyDir the mount then hides
-		// (setec#91). Such a Pod stays Pending until it is Ready. A Pod
-		// with no probe is unchanged.
-		if declaresReadiness(pod) && !podReady(pod) {
-			out = setPhase(out, setecv1alpha1.SandboxPhasePending, "", now)
-			return out
-		}
-		// Populate startedAt the first time we see the Pod Running.
-		if out.StartedAt == nil {
-			if pod.Status.StartTime != nil {
-				t := *pod.Status.StartTime
-				out.StartedAt = &t
-			} else {
-				t := metav1.NewTime(now)
-				out.StartedAt = &t
-			}
-		}
-		// Evaluate lifecycle timeout.
-		if timedOut(sb, out.StartedAt, now) {
-			out = setPhase(out, setecv1alpha1.SandboxPhaseFailed, ReasonTimeout, now)
-			return out
-		}
-		out = setPhase(out, setecv1alpha1.SandboxPhaseRunning, "", now)
-		return out
+		return derivedRunning(sb, out, pod, now)
 
 	default:
 		// PodPending, PodUnknown, or an empty Phase. Check for a stuck
@@ -193,6 +173,36 @@ func Derive(
 		out = setPhase(out, setecv1alpha1.SandboxPhasePending, "", now)
 		return out
 	}
+}
+
+// derivedRunning is the status of a Sandbox whose Pod runs.
+func derivedRunning(sb *setecv1alpha1.Sandbox, out setecv1alpha1.SandboxStatus, pod *corev1.Pod, now time.Time) setecv1alpha1.SandboxStatus {
+	// A container that declares a readiness probe is not usable until
+	// the probe passes. The launcher container is Ready once the
+	// guest agent in the machine answers, and a turn that runs
+	// earlier has no machine to run in. Such a Pod stays Pending
+	// until it is Ready. A Pod with no probe is unchanged.
+	if declaresReadiness(pod) && !podReady(pod) {
+		out = setPhase(out, setecv1alpha1.SandboxPhasePending, "", now)
+		return out
+	}
+	// Populate startedAt the first time we see the Pod Running.
+	if out.StartedAt == nil {
+		if pod.Status.StartTime != nil {
+			t := *pod.Status.StartTime
+			out.StartedAt = &t
+		} else {
+			t := metav1.NewTime(now)
+			out.StartedAt = &t
+		}
+	}
+	// Evaluate lifecycle timeout.
+	if timedOut(sb, out.StartedAt, now) {
+		out = setPhase(out, setecv1alpha1.SandboxPhaseFailed, ReasonTimeout, now)
+		return out
+	}
+	out = setPhase(out, setecv1alpha1.SandboxPhaseRunning, "", now)
+	return out
 }
 
 // isTerminal returns true for phases the controller must not roll back from.
@@ -211,6 +221,10 @@ func isCoordinatorPhase(p setecv1alpha1.SandboxPhase) bool {
 		setecv1alpha1.SandboxPhaseSnapshotting,
 		setecv1alpha1.SandboxPhaseRestoring:
 		return true
+	case setecv1alpha1.SandboxPhasePending, setecv1alpha1.SandboxPhaseRunning,
+		setecv1alpha1.SandboxPhaseCompleted, setecv1alpha1.SandboxPhaseFailed,
+		setecv1alpha1.SandboxPhaseSuspended:
+		return false
 	}
 	return false
 }
@@ -236,7 +250,7 @@ func setPhase(
 // terminatedExitAndReason walks the Pod's container statuses looking for a
 // terminated state. It returns the first terminated exit code and reason it
 // finds, or (0, "") if no terminated state is available.
-func terminatedExitAndReason(pod *corev1.Pod) (int32, string) {
+func terminatedExitAndReason(pod *corev1.Pod) (exitCode int32, reason string) {
 	if pod == nil {
 		return 0, ""
 	}

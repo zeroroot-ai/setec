@@ -16,8 +16,7 @@
 // never evidence of absence), and answers exactly one question: may
 // this restore be handed to a caller?
 //
-// Dev-mode opt-out mirrors the existing dev-only-runtime gate (the
-// runc admission gate): the cluster operator labels the well-known
+// Dev-mode opt-out: the cluster operator labels the well-known
 // gate namespace with setec.zeroroot.ai/allow-dev-runtimes=true AND
 // annotates the specific SandboxClass with
 // setec.zeroroot.ai/allow-unverified-restores="true". Both signals are
@@ -90,14 +89,12 @@ const (
 const AllowUnverifiedRestoresAnnotation = "setec.zeroroot.ai/allow-unverified-restores"
 
 // DefaultAllowDevLabel is the namespace label key that carries the
-// cluster operator's dev-mode consent — the SAME label the dev-only
-// runtime (runc) admission gate consults, so one cluster-level switch
-// governs every dev-only relaxation.
+// cluster operator's dev-mode consent. One cluster-level switch governs
+// every dev-only relaxation.
 const DefaultAllowDevLabel = "setec.zeroroot.ai/allow-dev-runtimes"
 
 // DefaultGateNamespace is the well-known namespace whose labels carry
-// cluster-level dev-mode consent, mirroring the admission webhook's
-// devGateNamespace.
+// cluster-level dev-mode consent.
 const DefaultGateNamespace = "default"
 
 // Evidence carries the per-restore verification signals for one

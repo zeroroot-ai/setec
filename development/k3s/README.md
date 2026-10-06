@@ -1,6 +1,6 @@
-# Local k3s + Kata + Setec dev environment
+# Local k3s + Setec dev environment
 
-Single-host bring-up of Setec (with real Firecracker microVMs via Kata Containers) on bare-metal Debian, suitable for local integration testing. Detailed walk-through is in [README full doc](#detailed-walk-through) below.
+Single-host bring-up of Setec (each Sandbox a real Firecracker microVM in a launcher Pod) on bare-metal Debian, suitable for local integration testing. Detailed walk-through is in [README full doc](#detailed-walk-through) below.
 
 > **Production this is not.** PKI is a self-signed dev CA, the cluster is single-node, and operator + sandbox workloads co-locate. For production / multi-tenant / scheduled-uptime patterns see `setec-eks-dev-env`.
 
@@ -11,7 +11,6 @@ Single-host bring-up of Setec (with real Firecracker microVMs via Kata Container
 make up
 
 # Verify each phase:
-make smoke-kata             # microVM boots
 make smoke-setec            # Setec works end-to-end
 make smoke-cross-cluster    # Pod-in-Kind can reach Setec-on-k3s over mTLS
 make smoke-integration      # Gibson dispatches a tool through Setec (requires Phase D wiring)
@@ -39,13 +38,13 @@ make down
 ./scripts/00-preflight.sh
 ```
 
-### Phase 1 — k3s + Kata
+### Phase 1 — k3s and the disk registry
 
 `scripts/10-install-k3s.sh` installs k3s as a single-node systemd unit with Traefik disabled (we ship our own ingress nothing for this dev cluster) and exports a kubeconfig at `kubeconfig/`, with the API server URL rewritten to your host's primary LAN IP so the kubeconfig works from the Kind cluster's container network too.
 
-`scripts/20-install-kata.sh` installs `kata-deploy` (Helm) into `kube-system`, waits for the DaemonSet, and verifies the `kata-fc` RuntimeClass appears. The kata release it installs comes from `kata.env` at the repo root, the one place the pin is edited (setec#26).
+`scripts/20-install-disk-registry.sh` starts a local OCI registry on the host LAN IP, port 5000, and writes a k3s `registries.yaml` entry so containerd pulls from it over HTTP. The disk builder pushes each signed image disk there, and each launcher Pod mounts its disk as an image volume. k3s is 1.35 or later, because image volumes need it.
 
-`make smoke-kata` runs a one-shot Pod with `runtimeClassName: kata-fc` and asserts the kernel string differs from the host kernel — proving real microVM boot, not silent runc fallback.
+`scripts/40-install-setec.sh` makes a dev ed25519 disk signing key under `pki/`, stores its seed in the Secret `setec-disk-signing`, and passes the public key to the chart. The KVM device plugin of the chart offers `/dev/kvm` and `/dev/net/tun` to the launcher Pods.
 
 ### Phase 2 — Setec install
 
@@ -106,10 +105,9 @@ development/k3s/
 └── scripts/                         # numbered for ordering
     ├── 00-preflight.sh
     ├── 10-install-k3s.sh
-    ├── 20-install-kata.sh
+    ├── 20-install-disk-registry.sh
     ├── 30-generate-pki.sh
     ├── 40-install-setec.sh
-    ├── 50-smoke-kata.sh
     ├── 60-smoke-setec.sh
     ├── 65-smoke-cross-cluster.sh
     ├── 70-smoke-integration.sh
@@ -119,9 +117,10 @@ development/k3s/
 ## Cleanup
 
 `make down` runs `scripts/99-uninstall.sh` which:
-1. `helm uninstall setec` and `helm uninstall kata-deploy` (best-effort)
+1. `helm uninstall setec` (best-effort)
 2. Runs `/usr/local/bin/k3s-uninstall.sh` (the official k3s uninstaller)
-3. Removes `pki/` and `kubeconfig` from the working tree
+3. Stops the disk registry container
+4. Removes `pki/`, `kubeconfig` and `disk-repo` from the working tree
 
 After `make down` the host is in its pre-install state and the Gibson Kind cluster is unaffected.
 

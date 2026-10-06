@@ -79,6 +79,7 @@ func TestPauseSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPatch, path: "/vm", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]string
 			if err := json.Unmarshal(raw, &m); err != nil {
 				t.Fatalf("unmarshal: %v", err)
@@ -98,6 +99,7 @@ func TestResumeSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPatch, path: "/vm", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]string
 			_ = json.Unmarshal(raw, &m)
 			if m["state"] != "Resumed" {
@@ -115,6 +117,7 @@ func TestCreateSnapshotSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPut, path: "/snapshot/create", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)
 			if m["snapshot_type"] != "Full" {
@@ -132,34 +135,6 @@ func TestCreateSnapshotSuccess(t *testing.T) {
 	c := NewClientFromSocket(sock)
 	if err := c.CreateSnapshot(context.Background(), "/tmp/s.bin", "/tmp/m.bin"); err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
-	}
-}
-
-func TestLoadSnapshotSuccess(t *testing.T) {
-	sock := startUnixServer(t, []handler{{
-		method: http.MethodPut, path: "/snapshot/load", status: http.StatusNoContent,
-		assertBody: func(t *testing.T, raw []byte) {
-			var m map[string]any
-			_ = json.Unmarshal(raw, &m)
-			if m["enable_diff_snapshots"] != false {
-				t.Fatalf("enable_diff_snapshots = %v", m["enable_diff_snapshots"])
-			}
-			if m["resume_vm"] != true {
-				t.Fatalf("resume_vm = %v", m["resume_vm"])
-			}
-			mb, _ := m["mem_backend"].(map[string]any)
-			if mb["backend_type"] != "File" || mb["backend_path"] != "/tmp/m.bin" {
-				t.Fatalf("mem_backend = %v, want a File backend at /tmp/m.bin", m["mem_backend"])
-			}
-			if _, deprecated := m["mem_file_path"]; deprecated {
-				t.Fatal("load body carries the deprecated mem_file_path")
-			}
-			assertOnlyFields(t, m, snapshotLoadFields)
-		},
-	}})
-	c := NewClientFromSocket(sock)
-	if err := c.LoadSnapshot(context.Background(), "/tmp/s.bin", "/tmp/m.bin"); err != nil {
-		t.Fatalf("LoadSnapshot: %v", err)
 	}
 }
 
@@ -218,8 +193,8 @@ func TestDialFailureSurfaced(t *testing.T) {
 }
 
 // TestClientLeavesNoConnectionOpen asserts that each API call closes
-// its connection. Firecracker caps open API connections, and the kata
-// shim holds one; kept-alive idle connections from repeated RPCs made
+// its connection. Firecracker caps open API connections, and the
+// launcher holds one. Kept-alive idle connections from repeated RPCs made
 // Firecracker answer 503 "Too many open connections" (setec#19).
 func TestClientLeavesNoConnectionOpen(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "fc.sock")
@@ -245,6 +220,7 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 				open++
 			case http.StateClosed, http.StateHijacked:
 				open--
+			case http.StateActive, http.StateIdle:
 			}
 		},
 	}
@@ -272,17 +248,11 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 	}
 }
 
-// The request fields Firecracker v1.12.1 accepts (the version kata
-// 4.2.0 ships), from its swagger definitions SnapshotCreateParams and
-// SnapshotLoadParams. Firecracker rejects any other field with 400 Bad
-// Request, so the client must never send one (setec#19).
-var (
-	snapshotCreateFields = []string{"mem_file_path", "snapshot_path", "snapshot_type"}
-	snapshotLoadFields   = []string{
-		"enable_diff_snapshots", "mem_file_path", "mem_backend",
-		"snapshot_path", "resume_vm", "network_overrides",
-	}
-)
+// snapshotCreateFields are the request fields of SnapshotCreateParams in
+// the swagger definitions of Firecracker. Firecracker rejects any other
+// field with 400 Bad Request, so the client must never send one
+// (setec#19).
+var snapshotCreateFields = []string{"mem_file_path", "snapshot_path", "snapshot_type"}
 
 // assertOnlyFields fails the test if body has a field outside allowed.
 func assertOnlyFields(t *testing.T, body map[string]any, allowed []string) {
@@ -303,6 +273,7 @@ func TestCreateDiffSnapshotAndTrackedLoad(t *testing.T) {
 		{
 			method: http.MethodPut, path: "/snapshot/create", status: http.StatusNoContent,
 			assertBody: func(t *testing.T, raw []byte) {
+				t.Helper()
 				var m map[string]any
 				_ = json.Unmarshal(raw, &m)
 				if m["snapshot_type"] != "Diff" || m["mem_file_path"] != "/tmp/d.mem" {
@@ -314,6 +285,7 @@ func TestCreateDiffSnapshotAndTrackedLoad(t *testing.T) {
 		{
 			method: http.MethodPut, path: "/snapshot/load", status: http.StatusNoContent,
 			assertBody: func(t *testing.T, raw []byte) {
+				t.Helper()
 				var m map[string]any
 				_ = json.Unmarshal(raw, &m)
 				if m["track_dirty_pages"] != true || m["resume_vm"] != true {

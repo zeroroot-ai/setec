@@ -25,8 +25,6 @@ package secretscan
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"regexp"
@@ -79,7 +77,7 @@ type rule struct {
 var builtinRules = []rule{
 	{
 		name:      "pem-private-key",
-		re:        regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----`),
+		re:        regexp.MustCompile(`-{5}BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-{5}`),
 		maskGroup: 0,
 	},
 	{
@@ -146,22 +144,6 @@ func New() *Scanner {
 	return &Scanner{rules: builtinRules, maxExcerpt: 80}
 }
 
-// Version identifies the exact builtin detector set. It is derived from
-// the rule names and patterns rather than hand-bumped, so any change to
-// the detectors changes the version automatically — a recorded verdict
-// therefore names precisely which rules cleared the artifact. Recorded
-// in pool-entry scan verdicts (docs/design/isolation.md invariant 1).
-func Version() string {
-	h := sha256.New()
-	for _, rl := range builtinRules {
-		h.Write([]byte(rl.name))
-		h.Write([]byte{0})
-		h.Write([]byte(rl.re.String()))
-		h.Write([]byte{0})
-	}
-	return "v1-" + hex.EncodeToString(h.Sum(nil))[:12]
-}
-
 // maxLineBytes bounds the per-line buffer the scanner is willing to hold.
 // Snapshot memory images are mostly binary with no newlines, so a single
 // "line" could otherwise be gigabytes. We cap the scan window and advance in
@@ -212,7 +194,8 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	for {
 		n, err := io.ReadFull(br, buf)
 		if n > 0 {
-			window := append(carry[:0:0], carry...)
+			window := make([]byte, 0, len(carry)+n)
+			window = append(window, carry...)
 			window = append(window, buf[:n]...)
 			// base is the stream offset of window[0].
 			base := offset - int64(len(carry))

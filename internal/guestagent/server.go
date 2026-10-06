@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // NetConfigurer applies the identity of the Pod to the machine.
@@ -49,9 +51,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		if err != nil {
 			// A closed listener after the end of ctx is a clean stop.
 			if ctx.Err() != nil && errors.Is(err, net.ErrClosed) {
-				return ctx.Err()
+				return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 			}
-			return err
+			return errwrap.Wrap(err, "net.Listener.Accept")
 		}
 		go s.serveConn(c)
 	}
@@ -238,7 +240,7 @@ func (s *Server) copyIn(r *bufio.Reader, req Request) error {
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // a path the launcher names
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.OpenFile")
 	}
 	n, err := io.CopyN(f, r, req.Size)
 	if cerr := f.Close(); err == nil {

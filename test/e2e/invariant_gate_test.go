@@ -125,17 +125,13 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 	restore := setNodeAgentFlag(t, "--entropy-reseed", "require", "off")
 	t.Cleanup(restore)
 
-	poolImage := testImage("docker.io/library/alpine:3.19")
+	poolImage, signer := signedPoolImage(ctx, t, testImage("docker.io/library/alpine:3.19"))
 	clsName := fmt.Sprintf("e2e-gate-%d", time.Now().Unix())
-	backend := "kata-fc"
-	if onLauncher() {
-		backend = backendLauncher
-	}
 	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
-		Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: backend},
-		PreWarmPoolSize: 1,
-		PreWarmImage:    poolImage,
-		PreWarmTTL:      &metav1.Duration{Duration: time.Hour},
+		Runtime:               &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
+		PreWarmPoolSize:       1,
+		PreWarmImage:          poolImage,
+		PreWarmImageSignature: signer,
 		DefaultResources: &setecv1alpha1.Resources{
 			VCPU:   1,
 			Memory: resource.MustParse("256Mi"),
@@ -150,26 +146,8 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 		})
 	})
 
-	// Step 1: wait for the pool to build (same observable as the
-	// warm-start lifecycle e2e).
-	if onLauncher() {
-		waitForWarmPoolReady(ctx, t, clsName, 10*time.Minute)
-	}
-	buildDeadline := time.Now().Add(6 * time.Minute)
-	for !onLauncher() {
-		scrapeCtx, scrapeCancel := context.WithTimeout(ctx, 30*time.Second)
-		families, err := scrapeNodeAgentMetrics(scrapeCtx)
-		scrapeCancel()
-		if err == nil {
-			if n, ok := poolEntriesGauge(families, clsName); ok && n >= 1 {
-				break
-			}
-		}
-		if time.Now().After(buildDeadline) {
-			t.Fatalf("pool for class %q did not reach 1 entry within 6m (last scrape err: %v)", clsName, err)
-		}
-		time.Sleep(5 * time.Second)
-	}
+	// Step 1: wait for the warm pool to hold a Ready base.
+	waitForWarmPoolReady(ctx, t, clsName, 10*time.Minute)
 
 	// Step 2: a pool-eligible Sandbox in a non-dev namespace. The node
 	// restores the entry but cannot verify the reseed, so the gate
@@ -229,9 +207,8 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 		t.Fatalf("no InvariantGateViolation event recorded, got: %s", evOut)
 	}
 
-	// Step 3: cold-boot fallback still works with the gate active. The
-	// single pool entry was consumed by the rejected claim, so this
-	// Sandbox misses the pool and must cold-boot to Running — the gate
+	// Step 3: cold-boot fallback still works with the gate active. This
+	// Sandbox misses the pool and must cold-boot to Running: the gate
 	// only refuses unverified RESTORES, never a cold boot.
 	cold := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "coldboot"},
@@ -248,9 +225,7 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 	// A launcher base is not consumed: it stays in the pool, and the
 	// refusal comes from the node, not from the base. So the cold boot
 	// asks for another size, which no base serves.
-	if onLauncher() {
-		cold.Spec.Resources.Memory = resource.MustParse("384Mi")
-	}
+	cold.Spec.Resources.Memory = resource.MustParse("384Mi")
 	if err := k8sClient.Create(ctx, cold); err != nil {
 		t.Fatalf("create cold-boot sandbox: %v", err)
 	}

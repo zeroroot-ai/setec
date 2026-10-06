@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,9 +23,9 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
-	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
-	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -33,12 +34,10 @@ type fakeFirecracker struct {
 	mu         sync.Mutex
 	pauseCalls int
 	resumeOK   bool
-	loadCalls  []string
 	createOK   bool
 
 	pauseErr  error
 	createErr error
-	loadErr   error
 	// root is the directory the fake runs "chrooted" in: it resolves
 	// the paths it is handed under root, as a jailed Firecracker does.
 	root            string
@@ -65,32 +64,52 @@ func (f *fakeFirecracker) CreateSnapshot(_ context.Context, state, mem string) e
 	}
 	// Write plausible files so Storage.Save can read them.
 	f.lastCreateState = state
-	_ = os.WriteFile(filepath.Join(f.root, state), []byte("STATE"), 0o600)
-	_ = os.WriteFile(filepath.Join(f.root, mem), []byte("MEMORY-PAYLOAD"), 0o600)
+	_ = os.WriteFile(f.host(state), []byte("STATE"), 0o600)
+	_ = os.WriteFile(f.host(mem), []byte("MEMORY-PAYLOAD"), 0o600)
 	f.createOK = true
 	return nil
 }
-func (f *fakeFirecracker) LoadSnapshot(_ context.Context, state, mem string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.loadErr != nil {
-		return f.loadErr
+
+// host maps a path that Firecracker sees in the launcher Pod to the host.
+func (f *fakeFirecracker) host(p string) string {
+	return filepath.Join(f.root, strings.TrimPrefix(p, podspec.LauncherWorkMountPath))
+}
+
+// testPodUID is the Pod UID every test request names.
+const testPodUID = "05c716c8-eae5-4540-9daf-5c0bb659810a"
+
+// fakeMachine resolves testPodUID to a launcher work volume at root, with
+// a writable layer, and any other UID to launchersandbox.ErrNotFound.
+type fakeMachine struct{ root string }
+
+func (m fakeMachine) Resolve(_ context.Context, podUID string) (launchersandbox.Paths, error) {
+	if podUID != testPodUID {
+		return launchersandbox.Paths{}, launchersandbox.ErrNotFound
 	}
-	f.loadCalls = append(f.loadCalls, state+"|"+mem)
-	return nil
+	if err := os.MkdirAll(filepath.Join(m.root, "vm"), 0o700); err != nil {
+		return launchersandbox.Paths{}, err
+	}
+	disk := filepath.Join(m.root, "writable.ext4")
+	if _, err := os.Stat(disk); os.IsNotExist(err) {
+		_ = os.WriteFile(disk, []byte("DISK"), 0o600)
+	}
+	return launchersandbox.Paths{
+		APISocket: filepath.Join(m.root, "vm", podspec.LauncherAPISocket),
+		FCRoot:    m.root,
+		FCMount:   podspec.LauncherWorkMountPath,
+	}, nil
 }
 
 // newServer wires a Server with a LocalDiskBackend rooted in a
 // tempdir and the provided fakeFirecracker.
-func newServer(t *testing.T, fc *fakeFirecracker, p *pool.Manager) *Server {
+func newServer(t *testing.T, fc *fakeFirecracker) *Server {
 	t.Helper()
 	backend := &storage.LocalDiskBackend{Root: t.TempDir()}
 	fc.root = t.TempDir()
 	return &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
-		KataSandboxes:      fakeKata{root: fc.root},
-		Pool:               p,
+		Machines:           fakeMachine{root: fc.root},
 	}
 }
 
@@ -121,7 +140,7 @@ func newBufconnClient(t *testing.T, srv *Server) setecgrpcv1.NodeAgentServiceCli
 
 func TestCreateSnapshot_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
+	srv := newServer(t, fc)
 	cli := newBufconnClient(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -138,30 +157,35 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if resp.StorageRef != "snap-1" {
 		t.Fatalf("storage_ref = %q", resp.StorageRef)
 	}
-	if resp.SizeBytes != int64(frameHeaderSize+len("STATE")+len("MEMORY-PAYLOAD")) {
+	if resp.SizeBytes <= 0 {
 		t.Fatalf("size = %d", resp.SizeBytes)
 	}
 	if fc.pauseCalls == 0 || !fc.createOK || !fc.resumeOK {
 		t.Fatalf("firecracker state: pause=%d create=%v resume=%v", fc.pauseCalls, fc.createOK, fc.resumeOK)
 	}
 
-	// Verify round-trip: Open the ref and confirm the framed stream
-	// decodes back to STATE + MEMORY-PAYLOAD.
+	// The stored stream is a launcher frame: it unpacks to the state,
+	// the memory and the writable layer.
 	rc, err := srv.Storage.Open(ctx, "snap-1")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	all, _ := io.ReadAll(rc)
-	_ = rc.Close()
-	// The first 16 bytes are the framing header.
-	if string(all[frameHeaderSize:frameHeaderSize+5]) != "STATE" {
-		t.Fatalf("state bytes wrong: %q", all[frameHeaderSize:frameHeaderSize+5])
+	defer func() { _ = rc.Close() }()
+	out := t.TempDir()
+	st, mem, disk := filepath.Join(out, "s"), filepath.Join(out, "m"), filepath.Join(out, "d")
+	if err := writeLauncherFramedStream(rc, st, mem, disk, nil); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	for path, want := range map[string]string{st: "STATE", mem: "MEMORY-PAYLOAD", disk: "DISK"} {
+		if got, _ := os.ReadFile(path); !bytes.HasPrefix(got, []byte(want)) {
+			t.Fatalf("%s = %q, want %q", path, got, want)
+		}
 	}
 }
 
 func TestCreateSnapshot_MissingSnapshotID(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SourcePodUid: testPodUID,
 	})
@@ -172,7 +196,7 @@ func TestCreateSnapshot_MissingSnapshotID(t *testing.T) {
 
 func TestCreateSnapshot_MissingSocket(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SnapshotId: "s",
 	})
@@ -183,7 +207,7 @@ func TestCreateSnapshot_MissingSocket(t *testing.T) {
 
 func TestCreateSnapshot_PauseErrorPropagates(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("already paused")}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
 		SnapshotId: "s", SourcePodUid: testPodUID,
 	})
@@ -194,7 +218,7 @@ func TestCreateSnapshot_PauseErrorPropagates(t *testing.T) {
 
 func TestCreateSnapshot_InsufficientStorage(t *testing.T) {
 	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
+	srv := newServer(t, fc)
 	// Swap backend for one that always returns ErrInsufficientStorage.
 	srv.Storage = &stubBackend{saveErr: storage.ErrInsufficientStorage}
 	cli := newBufconnClient(t, srv)
@@ -206,77 +230,9 @@ func TestCreateSnapshot_InsufficientStorage(t *testing.T) {
 	}
 }
 
-func TestRestoreSandbox_Happy(t *testing.T) {
-	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-
-	// Save a framed payload in storage so Restore can open it.
-	framed := makeFramedPayload(t, []byte("STATE-BYTES"), []byte("MEM-BYTES"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-r", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:     "snap-r",
-		StorageRef:     "snap-r",
-		StorageBackend: "local-disk",
-		TargetPodUid:   testPodUID,
-	})
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if !resp.Success {
-		t.Fatalf("success = false: %q", resp.Error)
-	}
-	if len(fc.loadCalls) != 1 {
-		t.Fatalf("LoadSnapshot calls = %d", len(fc.loadCalls))
-	}
-	// The bare LocalDiskBackend does not attest encryption at rest, so
-	// the signal for the operator-side invariant gate must be false —
-	// never inferred (docs/design/isolation.md invariant 5).
-	if resp.GetEncryptedAtRest() {
-		t.Fatal("encrypted_at_rest must be false for an unencrypted backend")
-	}
-}
-
-// TestRestoreSandbox_ReportsEncryptedAtRest pins that the response
-// signal tracks the storage backend's AtRestReporter capability: with
-// the EncryptedBackend wrapper (the only production write path) the
-// node attests encryption at rest per restore.
-func TestRestoreSandbox_ReportsEncryptedAtRest(t *testing.T) {
-	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
-	keys := t.TempDir()
-	srv.Storage = &storage.EncryptedBackend{
-		Inner: &storage.LocalDiskBackend{Root: t.TempDir()},
-		KEK:   &storage.FileKEKSource{Path: filepath.Join(keys, "node.key")},
-		DEKs:  &storage.DirDEKStore{Dir: filepath.Join(keys, "deks")},
-	}
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-
-	framed := makeFramedPayload(t, []byte("STATE-BYTES"), []byte("MEM-BYTES"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-enc", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:     "snap-enc",
-		StorageRef:     "snap-enc",
-		StorageBackend: "local-disk",
-		TargetPodUid:   testPodUID,
-	})
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if !resp.GetEncryptedAtRest() {
-		t.Fatal("encrypted_at_rest must be true when serving through the EncryptedBackend")
-	}
-}
-
 func TestRestoreSandbox_MissingArgs(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
@@ -289,7 +245,7 @@ func TestRestoreSandbox_MissingArgs(t *testing.T) {
 
 func TestRestoreSandbox_NotFound(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId: "ghost", StorageRef: "ghost", TargetPodUid: testPodUID,
 	})
@@ -300,7 +256,7 @@ func TestRestoreSandbox_NotFound(t *testing.T) {
 
 func TestRestoreSandbox_Corrupted(t *testing.T) {
 	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
+	srv := newServer(t, fc)
 	srv.Storage = &stubBackend{openErr: storage.ErrCorrupted}
 	cli := newBufconnClient(t, srv)
 	_, err := cli.RestoreSandbox(context.Background(), &setecgrpcv1.RestoreSandboxRequest{
@@ -311,26 +267,9 @@ func TestRestoreSandbox_Corrupted(t *testing.T) {
 	}
 }
 
-func TestRestoreSandbox_LoadSnapshotError(t *testing.T) {
-	fc := &fakeFirecracker{loadErr: errors.New("fc load failed")}
-	srv := newServer(t, fc, nil)
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-b", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId: "snap-b", StorageRef: "snap-b", TargetPodUid: testPodUID,
-	})
-	if s, _ := status.FromError(err); s.Code() != codes.Internal {
-		t.Fatalf("code = %v", s.Code())
-	}
-}
-
 func TestPauseSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	resp, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
 		SandboxId: "ns/s", TargetPodUid: testPodUID,
 	})
@@ -346,7 +285,7 @@ func TestPauseSandbox_Happy(t *testing.T) {
 }
 
 func TestPauseSandbox_MissingSocket(t *testing.T) {
-	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
+	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}))
 	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
@@ -355,7 +294,7 @@ func TestPauseSandbox_MissingSocket(t *testing.T) {
 
 func TestPauseSandbox_FirecrackerError(t *testing.T) {
 	fc := &fakeFirecracker{pauseErr: errors.New("nope")}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	_, err := cli.PauseSandbox(context.Background(), &setecgrpcv1.PauseSandboxRequest{
 		TargetPodUid: testPodUID,
 	})
@@ -366,7 +305,7 @@ func TestPauseSandbox_FirecrackerError(t *testing.T) {
 
 func TestResumeSandbox_Happy(t *testing.T) {
 	fc := &fakeFirecracker{}
-	cli := newBufconnClient(t, newServer(t, fc, nil))
+	cli := newBufconnClient(t, newServer(t, fc))
 	resp, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1.ResumeSandboxRequest{
 		TargetPodUid: testPodUID,
 	})
@@ -376,79 +315,12 @@ func TestResumeSandbox_Happy(t *testing.T) {
 }
 
 func TestResumeSandbox_MissingSocket(t *testing.T) {
-	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
+	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}))
 	_, err := cli.ResumeSandbox(context.Background(), &setecgrpcv1.ResumeSandboxRequest{})
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v", s.Code())
 	}
 }
-
-func TestQueryPool_Empty(t *testing.T) {
-	// No pool wired — returns empty response.
-	cli := newBufconnClient(t, newServer(t, &fakeFirecracker{}, nil))
-	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1.QueryPoolRequest{SandboxClass: "x"})
-	if err != nil {
-		t.Fatalf("QueryPool: %v", err)
-	}
-	if len(resp.Entries) != 0 {
-		t.Fatalf("entries = %d, want 0", len(resp.Entries))
-	}
-}
-
-func TestQueryPool_ReturnsEntries(t *testing.T) {
-	// Wire up a pool with one entry.
-	pm := pool.New(
-		&storage.LocalDiskBackend{Root: t.TempDir()},
-		noPrefetch{},
-		func(_ string) firecracker.Client { return &fakeFirecracker{} },
-		"node-x",
-	)
-	pm.MaxConcurrentBoots = 2
-	pm.PoolStorageRoot = t.TempDir()
-	// Keep socket paths under the test's temp dir — never the
-	// production /run/kata-containers default (#119).
-	pm.SocketPattern = filepath.Join(t.TempDir(), "pool-%s", "firecracker.socket")
-	pm.Launcher = noopLauncher{}
-	// Use ReconcilePools to seed the pool through the public API.
-	cls := setecv1alpha1.SandboxClass{
-		Name: "std",
-		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM: setecv1alpha1.VMMFirecracker, PreWarmPoolSize: 1, PreWarmImage: "img:v1",
-		},
-	}
-	if err := pm.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
-		t.Fatalf("seed pool: %v", err)
-	}
-
-	srv := newServer(t, &fakeFirecracker{}, pm)
-	cli := newBufconnClient(t, srv)
-	resp, err := cli.QueryPool(context.Background(), &setecgrpcv1.QueryPoolRequest{SandboxClass: "std"})
-	if err != nil {
-		t.Fatalf("QueryPool: %v", err)
-	}
-	if len(resp.Entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(resp.Entries))
-	}
-	e := resp.Entries[0]
-	if e.ImageRef != "img:v1" || !e.Available {
-		t.Fatalf("entry fields: %#v", e)
-	}
-}
-
-// --- helpers ------------------------------------------------------
-
-// noopLauncher satisfies pool.Launcher without doing any work. The
-// pool Manager needs a Launcher instance to reconcile; test entries
-// are purely in-memory and do not require a real Firecracker boot.
-type noopLauncher struct{}
-
-func (noopLauncher) Launch(_ context.Context, _ pool.LaunchOptions) error { return nil }
-
-// noPrefetch is a zero-behavior ImagePrefetcher used to seed tests
-// without making the pool call out to an imagecache.
-type noPrefetch struct{}
-
-func (noPrefetch) Prefetch(_ context.Context, _ []string) error { return nil }
 
 // stubBackend satisfies storage.StorageBackend for tests that want
 // Save or Open to surface a specific sentinel.
@@ -457,7 +329,7 @@ type stubBackend struct {
 	openErr error
 }
 
-func (s *stubBackend) Save(_ context.Context, id string, r io.Reader) (int64, string, error) {
+func (s *stubBackend) Save(_ context.Context, id string, r io.Reader) (size int64, storageRef string, err error) {
 	if s.saveErr != nil {
 		return 0, "", s.saveErr
 	}
@@ -470,182 +342,9 @@ func (s *stubBackend) Open(_ context.Context, _ string) (io.ReadCloser, error) {
 	}
 	return io.NopCloser(bytes.NewReader(nil)), nil
 }
-func (s *stubBackend) Delete(_ context.Context, _ string) error              { return nil }
-func (s *stubBackend) Stat(_ context.Context, _ string) (int64, bool, error) { return 0, false, nil }
-
-// makeFramedPayload constructs a 16-byte-framed state+memory payload
-// matching the server's on-disk format.
-func makeFramedPayload(t *testing.T, state, mem []byte) []byte {
-	t.Helper()
-	tmp := filepath.Join(t.TempDir(), "framed")
-	sp := tmp + ".state"
-	mp := tmp + ".mem"
-	if err := os.WriteFile(sp, state, 0o600); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-	if err := os.WriteFile(mp, mem, 0o600); err != nil {
-		t.Fatalf("write mem: %v", err)
-	}
-	rc, err := makeFramedReader(sp, mp)
-	if err != nil {
-		t.Fatalf("makeFramedReader: %v", err)
-	}
-	defer func() { _ = rc.Close() }()
-	raw, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatalf("readAll: %v", err)
-	}
-	return raw
-}
-
-// --- entropy reseed enforcement (setec#72) --------------------------
-
-// recordingReseeder implements entropy.Reseeder for tests.
-type recordingReseeder struct {
-	mu    sync.Mutex
-	paths []string
-	err   error
-}
-
-func (r *recordingReseeder) Reseed(_ context.Context, udsPath string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.paths = append(r.paths, udsPath)
-	return r.err
-}
-
-func (r *recordingReseeder) seen() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.paths...)
-}
-
-func TestRestoreSandbox_ReseedSuccessIsReported(t *testing.T) {
-	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
-	rs := &recordingReseeder{}
-	var outcomes []string
-	srv.Reseeder = rs
-	srv.ReseedObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-
-	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-e", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:   "snap-e",
-		StorageRef:   "snap-e",
-		TargetPodUid: testPodUID,
-	})
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if !resp.Success || !resp.EntropyReseeded {
-		t.Fatalf("expected success + entropy_reseeded, got %+v", resp)
-	}
-	if len(rs.seen()) == 0 {
-		t.Fatal("reseeder was never invoked")
-	}
-	if len(outcomes) != 1 || outcomes[0] != "success" {
-		t.Fatalf("observer outcomes = %v", outcomes)
-	}
-}
-
-// TestRestoreSandbox_ReseedFailureFailsClosed is the core fail-closed
-// contract of setec#72: when the guest cannot confirm the reseed, the
-// restore RPC must fail (so the sandbox is never reported Ready) and
-// the restored-but-unreseeded VM must be paused rather than left
-// running with cloned RNG state.
-func TestRestoreSandbox_ReseedFailureFailsClosed(t *testing.T) {
-	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
-	rs := &recordingReseeder{err: errors.New("guest never acked")}
-	var outcomes []string
-	srv.Reseeder = rs
-	srv.ReseedObserver = func(outcome string) { outcomes = append(outcomes, outcome) }
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-
-	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-f", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	_, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:   "snap-f",
-		StorageRef:   "snap-f",
-		TargetPodUid: testPodUID,
-	})
-	if err == nil {
-		t.Fatal("restore must FAIL when the reseed cannot be confirmed")
-	}
-	if s, _ := status.FromError(err); s.Code() != codes.Internal {
-		t.Fatalf("code = %v, want Internal", s.Code())
-	}
-	fc.mu.Lock()
-	pauses := fc.pauseCalls
-	fc.mu.Unlock()
-	if pauses == 0 {
-		t.Fatal("the unreseeded VM must be paused (not left running with cloned RNG state)")
-	}
-	if len(outcomes) != 1 || outcomes[0] != "failure" {
-		t.Fatalf("observer outcomes = %v", outcomes)
-	}
-}
-
-// TestRestoreSandbox_NilReseederSkipsActiveReseed pins the explicit
-// opt-out shape (--entropy-reseed=off): restore succeeds but
-// entropy_reseeded is reported false so callers can see the passive-
-// only posture.
-func TestRestoreSandbox_NilReseederSkipsActiveReseed(t *testing.T) {
-	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
-	cli := newBufconnClient(t, srv)
-	ctx := context.Background()
-
-	framed := makeFramedPayload(t, []byte("S"), []byte("M"))
-	if _, _, err := srv.Storage.Save(ctx, "snap-n", bytes.NewReader(framed)); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	resp, err := cli.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:   "snap-n",
-		StorageRef:   "snap-n",
-		TargetPodUid: testPodUID,
-	})
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if !resp.Success {
-		t.Fatalf("success = false: %q", resp.Error)
-	}
-	if resp.EntropyReseeded {
-		t.Fatal("entropy_reseeded must be false when no reseeder is configured")
-	}
-}
-
-func TestDefaultReseedVsockPaths(t *testing.T) {
-	kata := fakeKataPaths(testPodUID)
-	in := &setecgrpcv1.RestoreSandboxRequest{
-		StorageRef:   "/var/lib/setec/pool/entry-1",
-		TargetPodUid: testPodUID,
-	}
-	got := defaultReseedVsockPaths(in, kata)
-	want := []string{
-		"/var/lib/setec/pool/entry-1/vsock.sock",
-		kata.HybridVsock,
-	}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("candidates = %v, want %v", got, want)
-	}
-
-	// A non-absolute storage ref (opaque backend id) contributes no
-	// filesystem candidate.
-	in.StorageRef = "ns-snap"
-	got = defaultReseedVsockPaths(in, kata)
-	if len(got) != 1 || got[0] != want[1] {
-		t.Fatalf("candidates = %v, want only the kata hybrid vsock", got)
-	}
+func (s *stubBackend) Delete(_ context.Context, _ string) error { return nil }
+func (s *stubBackend) Stat(_ context.Context, _ string) (size int64, exists bool, err error) {
+	return 0, false, nil
 }
 
 // traversalFCRoot points srv and fc at a Firecracker root nested four
@@ -659,7 +358,7 @@ func traversalFCRoot(t *testing.T, srv *Server, fc *fakeFirecracker) (root, work
 	root = t.TempDir()
 	fcRoot := filepath.Join(root, "a", "b", "c", "d", "fcroot")
 	fc.root = fcRoot
-	srv.KataSandboxes = fakeKata{root: fcRoot}
+	srv.Machines = fakeMachine{root: fcRoot}
 	return root, filepath.Join(fcRoot, snapshotWorkDir)
 }
 
@@ -677,7 +376,7 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 	for _, id := range []string{"../../../../var/lib/kubelet", "..\\..\\etc", "a/b", "..", ""} {
 		t.Run(id, func(t *testing.T) {
 			fc := &fakeFirecracker{}
-			srv := newServer(t, fc, nil)
+			srv := newServer(t, fc)
 			root, workDir := traversalFCRoot(t, srv, fc)
 			cli := newBufconnClient(t, srv)
 
@@ -700,11 +399,11 @@ func TestCreateSnapshot_TraversalSnapshotIDRejected(t *testing.T) {
 
 func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
+	srv := newServer(t, fc)
 	root, workDir := traversalFCRoot(t, srv, fc)
 	// A real saved snapshot, so the only thing wrong with the request
 	// is the snapshot_id.
-	if _, _, err := srv.Storage.Save(context.Background(), "snap-1", bytes.NewReader(makeFramedPayload(t, []byte("STATE"), []byte("MEM")))); err != nil {
+	if _, _, err := srv.Storage.Save(context.Background(), "snap-1", framed(t, "STATE", "MEM")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	cli := newBufconnClient(t, srv)
@@ -718,9 +417,6 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	if s, _ := status.FromError(err); s.Code() != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument (err=%v)", s.Code(), err)
 	}
-	if len(fc.loadCalls) != 0 {
-		t.Fatalf("LoadSnapshot called %d times for a rejected snapshot_id", len(fc.loadCalls))
-	}
 	assertNoDirCreated(t, root, workDir)
 }
 
@@ -733,7 +429,7 @@ func (f *fakeFirecracker) CreateDiffSnapshot(ctx context.Context, state, mem str
 // suspend checkpoint does not resume the machine (setec#193).
 func TestCreateSnapshot_LeavePausedKeepsTheMachinePaused(t *testing.T) {
 	fc := &fakeFirecracker{}
-	srv := newServer(t, fc, nil)
+	srv := newServer(t, fc)
 	cli := newBufconnClient(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -744,5 +440,37 @@ func TestCreateSnapshot_LeavePausedKeepsTheMachinePaused(t *testing.T) {
 	}
 	if fc.pauseCalls == 0 || fc.resumeOK {
 		t.Fatalf("pause=%d resume=%v; want a paused machine", fc.pauseCalls, fc.resumeOK)
+	}
+}
+
+// TestRestoreSandbox_StagesForTheLauncher proves the RPC path of a
+// restore: the node agent stages the snapshot for the launcher of the
+// target Pod and reports its evidence and the encryption of the store.
+func TestRestoreSandbox_StagesForTheLauncher(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc)
+	keys := t.TempDir()
+	srv.Storage = &storage.EncryptedBackend{
+		Inner: &storage.LocalDiskBackend{Root: t.TempDir()},
+		KEK:   &storage.FileKEKSource{Path: filepath.Join(keys, "node.key")},
+		DEKs:  &storage.DirDEKStore{Dir: filepath.Join(keys, "deks")},
+	}
+	ctx := context.Background()
+	if _, _, err := srv.Storage.Save(ctx, "snap-r", framed(t, "STATE", "MEMORY")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	p, err := srv.Machines.Resolve(ctx, testPodUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saw := fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true})
+	resp, err := newBufconnClient(t, srv).RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
+		SnapshotId: "snap-r", StorageRef: "snap-r", StorageBackend: "local-disk", TargetPodUid: testPodUID,
+	})
+	if err != nil || !resp.GetSuccess() || !resp.GetEncryptedAtRest() || !resp.GetEntropyReseeded() {
+		t.Fatalf("Restore = %+v, %v", resp, err)
+	}
+	if got := <-saw; got != "STATE" {
+		t.Fatalf("the launcher read the state %q", got)
 	}
 }

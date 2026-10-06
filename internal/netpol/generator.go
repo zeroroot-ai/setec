@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -377,6 +378,9 @@ func (c Config) generate(
 		return externalOnly(sb, reserved, head)
 	case setecv1alpha1.NetworkModeEgressAllowList:
 		return c.egressAllowList(ctx, sb, allow, reserved, head)
+	case setecv1alpha1.NetworkModeNone:
+		// Handled before the switch: a deny-all policy.
+		return nil, fmt.Errorf("%w: %q reached the rule builder", ErrUnknownMode, mode)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownMode, mode)
 	}
@@ -769,7 +773,7 @@ type allowPort struct {
 // "1-65535" for a TCP range, and a "udp/" prefix for UDP. One TCP port
 // keeps the form it had before an entry could state a range.
 func (p allowPort) String() string {
-	s := fmt.Sprintf("%d", p.port)
+	s := strconv.Itoa(int(p.port))
 	if p.endPort != 0 {
 		s = fmt.Sprintf("%d-%d", p.port, p.endPort)
 	}

@@ -146,6 +146,8 @@ func TestServer_ExecStreamsAndReturnsTheExitCode(t *testing.T) {
 			errOut.Write(data)
 		case FrameExit:
 			code = ExitCode(data)
+		case FrameStdin, FrameStdinEOF:
+			t.Fatalf("the agent sent a stdin frame %d", ft)
 		}
 	}
 	if code != 3 || out.String() != "got hello\n" || errOut.String() != "to-stderr\n" {
@@ -222,11 +224,11 @@ func zombies(t *testing.T) int {
 	ents, _ := os.ReadDir("/proc")
 	n := 0
 	for _, e := range ents {
-		raw, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		raw, err := os.ReadFile("/proc/" + e.Name() + "/stat")
 		if err != nil {
 			continue
 		}
-		f := strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))
+		f := strings.Fields(string(raw[bytes.LastIndexByte(raw, ')')+1:]))
 		if len(f) > 1 && f[0] == "Z" && f[1] == me {
 			n++
 		}
@@ -237,8 +239,8 @@ func zombies(t *testing.T) int {
 func TestLookupUser(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "etc"), 0o755)
-	_ = os.WriteFile(filepath.Join(root, "etc/passwd"), []byte("root:x:0:0::/root:/bin/sh\nrunner:x:999:998::/home/runner:/bin/sh\n"), 0o600)
-	_ = os.WriteFile(filepath.Join(root, "etc/group"), []byte("runner:x:998:\ntools:x:500:\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(root, "etc", "passwd"), []byte("root:x:0:0::/root:/bin/sh\nrunner:x:999:998::/home/runner:/bin/sh\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(root, "etc", "group"), []byte("runner:x:998:\ntools:x:500:\n"), 0o600)
 	for _, tc := range []struct {
 		user     string
 		uid, gid uint32

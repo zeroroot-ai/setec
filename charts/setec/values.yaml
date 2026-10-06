@@ -56,183 +56,50 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-# -- runtimeClassName is REMOVED (setec#115). Use
-# `runtimes.kata-fc.runtimeClassName` below. Setting this key fails the render
-# with a message naming its replacement, because Helm does not reject an unknown
-# value and the old key was already accepted-and-ignored: the chart has always
-# passed `--runtimes-config`, and the operator read `--runtime-class-name` only
-# when that was absent. The guard comes out one release after this one.
-runtimeClassName: ""
-
-# -- runtimes declares the isolation backends the operator knows about and
-# whether each is installed on this cluster. The admission webhook and
-# reconciler use this set to validate SandboxClass specs, select backends at
-# launch time, and render only the RuntimeClass manifests that match. Every
-# enabled=true entry MUST correspond to a RuntimeClass present in the cluster
-# (either managed by this chart with install=true, or installed out of band
-# with install=false).
-runtimes:
-  # -- kata-fc is kata-containers with the Firecracker VMM. Lowest attack
-  # surface and fastest cold start among the kata variants. Requires KVM
-  # exposed on the node, which rules out most managed-Kubernetes non-metal
-  # node pools (EKS/AKS/GKE default worker SKUs do NOT expose KVM).
-  kata-fc:
-    # -- enabled gates this backend cluster-wide. When false the webhook
-    # rejects SandboxClass specs that reference it and no RuntimeClass is
-    # rendered.
-    enabled: true
-    # -- runtimeClassName is the RuntimeClass name the operator attaches to
-    # Pods targeting this backend. Must match the name of the cluster's
-    # kata-fc RuntimeClass.
-    runtimeClassName: kata-fc
-    # -- install controls whether this chart renders the RuntimeClass object.
-    # Set to false when an external process (e.g. kata-deploy, the cloud
-    # provider, a separate Helm chart) already manages the RuntimeClass.
-    install: true
-    # -- defaultOverhead is the resource overhead applied to Sandbox Pods
-    # when the SandboxClass does not set its own. Accounts for the
-    # Firecracker VMM process memory and a small vCPU reservation.
-    defaultOverhead:
-      memory: 128Mi
-      cpu: 250m
-    # -- scheduling.tolerations are published on the rendered RuntimeClass and
-    # injected by the RuntimeClass admission controller into every Pod naming
-    # it — including per-run SandboxClasses an e2e harness creates, which no
-    # chart value can reach. SET THIS whenever the nodes hosting this runtime
-    # are tainted, which is the norm: KVM-capable metal is expensive, so it is
-    # normally reserved with a NoSchedule taint (see karpenter.taints, which
-    # defaults to kata=true:NoSchedule). Without a matching toleration the
-    # RuntimeClass nodeSelector steers the Pod at a node it is then forbidden
-    # to land on, and the Sandbox waits forever. Empty by default because the
-    # taint key is the cluster operator's choice, not this chart's.
-    scheduling:
-      tolerations: []
-  # -- kata-qemu is kata-containers with the QEMU VMM. Slower and heavier
-  # than kata-fc but works on nodes without KVM (falls back to TCG
-  # emulation — orders of magnitude slower, use only when you must). Useful
-  # as a compatibility tier on managed-K8s nodes that block KVM.
-  kata-qemu:
-    # -- enabled disabled by default. Opt in explicitly; the performance
-    # characteristics are very different from kata-fc.
-    enabled: false
-    # -- runtimeClassName must match the cluster's kata-qemu RuntimeClass.
-    runtimeClassName: kata-qemu
-    # -- install toggles chart-managed RuntimeClass. See kata-fc.install.
-    install: true
-    # -- defaultOverhead mirrors kata-fc — QEMU's footprint is larger but
-    # the Kubernetes-level overhead accounting remains the same ballpark.
-    defaultOverhead:
-      memory: 128Mi
-      cpu: 250m
-  # -- gvisor is a userspace syscall-filter kernel (runsc). Lower overhead
-  # than a microVM (no VMM, no separate kernel image) but weaker isolation:
-  # a kernel bug in runsc is a sandbox escape. Good middle-ground when
-  # nested virt is unavailable and runc is too permissive.
-  gvisor:
-    # -- enabled disabled by default. Requires runsc binary + containerd
-    # runtime handler on every node where you schedule gvisor workloads.
-    enabled: false
-    # -- runtimeClassName must match the cluster's gvisor RuntimeClass.
-    runtimeClassName: gvisor
-    # -- install toggles chart-managed RuntimeClass.
-    install: true
-    # -- defaultOverhead is the gvisor sentry process footprint — much
-    # smaller than a full VMM.
-    defaultOverhead:
-      memory: 40Mi
-      cpu: 50m
-  # -- runc is plain Linux container namespaces — the default Kubernetes
-  # runtime. NO isolation beyond namespaces and seccomp. DEV/DEBUG ONLY;
-  # gated behind the namespace label setec.zeroroot.ai/allow-dev-runtimes
-  # by the admission webhook. Never use in production tenancy scenarios.
-  # -- launcher is the launcher runtime (docs/design/runtime.md): one
-  # Firecracker machine in a launcher Pod that is not privileged. It needs
-  # no RuntimeClass and no node label: the Pod asks for the device resources
-  # of devicePlugin, so the scheduler places it on a node with /dev/kvm. A
-  # class names it with backend: launcher. Its image needs a digest.
-  launcher:
-    # -- enabled disabled by default until the cutover (setec#198).
-    enabled: false
-    # -- install stays false: the launcher has no RuntimeClass.
-    install: false
-    # -- image of setec-launcher, with Firecracker, the guest kernel and the
-    # guest agent.
+# -- launcher is the one runtime (docs/design/runtime.md): each Sandbox is a
+# Firecracker machine in a launcher Pod that is not privileged. The Pod asks
+# for the device resources of devicePlugin, so the scheduler places it on a
+# node with /dev/kvm. Each fleet node needs KVM. A Sandbox image needs a
+# digest: its disk belongs to one digest.
+launcher:
+  # -- image of setec-launcher, with Firecracker, the guest kernel and the
+  # guest agent.
+  image:
+    repository: ghcr.io/zeroroot-ai/setec-launcher
+    tag: ""
+  # -- diskRepo is the repository of the signed image disks that
+  # setec-disk-builder makes. Required. Each launcher Pod mounts its disk as
+  # an image volume (Kubernetes 1.35 or later), so the kubelet pulls it with
+  # the image credentials of the node.
+  diskRepo: ""
+  # -- diskBuilder runs as a Job in the operator namespace before the first
+  # launcher Pod of an image digest.
+  diskBuilder:
     image:
-      repository: ghcr.io/zeroroot-ai/setec-launcher
+      repository: ghcr.io/zeroroot-ai/setec-disk-builder
       tag: ""
-    # -- diskRepo is the repository of the signed image disks that
-    # setec-disk-builder makes. Required when enabled. Each launcher Pod
-    # mounts its disk as an image volume (Kubernetes 1.35 or later), so the
-    # kubelet pulls it with the image credentials of the node.
-    diskRepo: ""
-    # -- diskBuilder runs as a Job in the operator namespace before the
-    # first launcher Pod of an image digest.
-    diskBuilder:
-      image:
-        repository: ghcr.io/zeroroot-ai/setec-disk-builder
-        tag: ""
-      # -- signingSecret holds the base64 ed25519 seed (key "seed") that
-      # signs each disk. Required when enabled. The install makes it.
-      signingSecret: ""
-      # -- registrySecret is an optional kubernetes.io/dockerconfigjson
-      # Secret with the push credentials of diskRepo.
-      registrySecret: ""
-      # -- publicKeys are the base64 ed25519 public keys of signingSecret.
-      # Each launcher refuses a disk that none of them signed. List two
-      # while the signing key rotates. Required when enabled.
-      publicKeys: []
-    # -- warmPool keeps the bases of each launcher class with a pool
-    # (preWarmPoolSize, preWarmImage with a digest, defaultResources). A
-    # base is a snapshot of a machine that booted the image and ran no
-    # workload. A Sandbox of the class with that image and size loads a
-    # base instead of a boot (setec#103). Needs snapshots.enabled.
-    warmPool:
-      # -- namespace holds the base Pods and the base Snapshots. It must
-      # be one of sandboxNamespaces, and no tenant may use it. Empty
-      # turns the launcher warm pool off.
-      namespace: ""
-  runc:
-    # -- enabled disabled by default. Intended to simplify local dev and
-    # CI where you want to exercise the Setec control plane without a
-    # real isolation layer.
-    enabled: false
-    # -- runtimeClassName must match the cluster's runc RuntimeClass.
-    runtimeClassName: runc
-    # -- install toggles chart-managed RuntimeClass.
-    install: true
-    # -- devOnly is the admission-webhook gate. The webhook will reject
-    # SandboxClass specs referencing runc unless the target namespace
-    # carries setec.zeroroot.ai/allow-dev-runtimes=true. Do not set to
-    # false without understanding the tenancy implications.
-    devOnly: true
-
-# -- defaults captures cluster-wide runtime selection defaults consumed by the
-# operator, the admission webhook, and the node-agent DaemonSet. These are
-# read at startup from /etc/setec/runtimes.yaml (rendered from values into a
-# ConfigMap). Changes require a controller restart to take effect.
-defaults:
-  runtime:
-    # -- backend is the cluster-default isolation backend applied when a
-    # Sandbox references no SandboxClass, or when a SandboxClass leaves
-    # runtime.backend unset. MUST name a backend with enabled=true in the
-    # runtimes block above, or the chart will fail to install.
-    backend: kata-fc
-    # -- fallback is the ordered list of backends the reconciler tries when
-    # the primary backend has no capable node (e.g. kata-fc on a KVM-less
-    # fleet). Each entry must be enabled. Empty list disables fallback and
-    # surfaces the unschedulable condition instead.
-    fallback: []
-    # -- probeInterval is how often the node-agent DaemonSet re-probes node
-    # capabilities and refreshes the setec.zeroroot.ai/runtime.<backend>
-    # labels. Shorter intervals detect KVM removal faster at the cost of
-    # extra node-agent wake-ups. Parsed as a Go duration.
-    probeInterval: 5m
-    # -- nodeCapabilitiesMode selects how the operator learns node runtime
-    # capabilities. Only "probe" (default) is supported: the node-agent
-    # DaemonSet probes each node and writes setec.zeroroot.ai/runtime.<backend>
-    # labels, which the operator reads for scheduling. (A never-implemented
-    # "static" mode was removed; the operator rejects it at config load.)
-    nodeCapabilitiesMode: probe
+    # -- signingSecret holds the base64 ed25519 seed (key "seed") that signs
+    # each disk. Required. The install makes it.
+    signingSecret: ""
+    # -- registrySecret is an optional kubernetes.io/dockerconfigjson Secret
+    # with the push credentials of diskRepo.
+    registrySecret: ""
+    # -- publicKeys are the base64 ed25519 public keys of signingSecret. Each
+    # launcher refuses a disk that none of them signed. List two while the
+    # signing key rotates. Required.
+    publicKeys: []
+  # -- warmPool keeps the bases of each class with a pool (preWarmPoolSize,
+  # preWarmImage with a digest, its signer preWarmImageSignature,
+  # defaultResources). The operator checks the cosign signature of the
+  # image before the first base. A base is a snapshot of a
+  # machine that booted the image and ran no workload. A Sandbox of the
+  # class with that image and size loads a base instead of a boot
+  # (setec#103). Needs snapshots.enabled.
+  warmPool:
+    # -- namespace holds the base Pods and the base Snapshots. It must be
+    # one of sandboxNamespaces, and no tenant may use it. Empty turns the
+    # warm pool off.
+    namespace: ""
 
 # -- devicePlugin offers /dev/kvm and /dev/net/tun of each fleet node to
 # launcher Pods as the resources setec.zeroroot.ai/kvm and
@@ -258,222 +125,6 @@ devicePlugin:
       memory: 16Mi
     limits:
       memory: 32Mi
-
-# -- runtimeAgent configures the per-node capabilities probing DaemonSet that
-# writes setec.zeroroot.ai/runtime.<backend>=true|false labels and the
-# SetecRuntimes Node status condition.
-runtimeAgent:
-  image:
-    # -- repository is the runtime-agent image. Override for private
-    # mirrors.
-    repository: ghcr.io/zeroroot-ai/setec-runtime-agent
-    # -- tag defaults to .Chart.AppVersion when left empty. Pin explicitly
-    # for reproducible deploys.
-    tag: ""
-    # -- pullPolicy one of Always, Never, IfNotPresent.
-    pullPolicy: IfNotPresent
-  # -- nodeSelector adds EXTRA scheduling constraints to the runtime-agent
-  # DaemonSet. The template always hardcodes {kubernetes.io/arch: amd64}: the
-  # sandbox substrate is x86 only (docs/design/runtime.md) and every published image is
-  # single-arch linux/amd64, so an arch key set here is ignored. Empty keeps
-  # the run-on-every-amd64-node default.
-  nodeSelector: {}
-  # -- tolerations placed on the runtime-agent DaemonSet. The default
-  # matches every taint, because a node the agent never probed looks
-  # uncapable to the operator and no Sandbox will be scheduled there.
-  # Narrow it when Sandboxes are deliberately kept off some nodes
-  # (control-plane, infrastructure pools): the capability view only has to
-  # cover nodes that can actually host a Sandbox, and not placing the agent
-  # somewhere is strictly less exposure than placing it there.
-  tolerations:
-    - operator: Exists
-  # -- nodeGuard installs the ValidatingAdmissionPolicy that constrains
-  # what the runtime-agent's ServiceAccount may write to a Node
-  # (GHSA-p8f8-3qpw-7h93).
-  #
-  # The agent needs `nodes: patch` to publish its capability labels, and
-  # RBAC cannot narrow that to specific label keys or to the agent's own
-  # node — neither is expressible in RBAC, and a DaemonSet has one
-  # ServiceAccount for the whole cluster, so there is no per-node
-  # credential to bind. Admission can express both, and does here.
-  #
-  # Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). With this
-  # off, any agent Pod can rewrite any node's labels and spec, including
-  # the runtime-capability labels the operator schedules Sandboxes from.
-  nodeGuard:
-    enabled: true
-    # -- requireNodeIdentity rejects an agent write that carries no
-    # verifiable node identity, rather than only rejecting one that names
-    # the wrong node.
-    #
-    # The identity comes from the `authentication.kubernetes.io/node-name`
-    # user-info entry the API server derives from a node-bound
-    # ServiceAccount token (Kubernetes 1.31+). Left false, the check
-    # applies when the cluster supplies the claim and is skipped when it
-    # does not, so the chart installs on older clusters without breaking
-    # the agent. Turn it on once every node is on 1.31+ with node-bound
-    # tokens — CONFIRM THAT FIRST: with it on and the claim absent, every
-    # probe write is rejected and the operator sees no capable nodes.
-    requireNodeIdentity: false
-  # -- resources sizes the runtime-agent container. It is near-idle between
-  # probe cycles (default 5m), so small requests are appropriate.
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 128Mi
-  # -- metricsPort is the TCP port the agent serves /metrics and /healthz
-  # on. Probes target this port.
-  metricsPort: 8080
-  # -- mountContainerdConfig toggles the read-only hostPath mount of
-  # /etc/containerd into the agent. The kata probes REQUIRE it: a node is
-  # only labelled kata-capable when containerd registers the matching CRI
-  # runtime handler, and without the mount the agent cannot see the
-  # registration (setec#243). Turning this off on a stock-containerd node
-  # therefore stops that node advertising kata-fc / kata-qemu at all —
-  # which is the intended fail-closed answer, because an unverifiable
-  # handler produced `no runtime for "kata-qemu" is configured` on every
-  # pod sandbox. The mount is read-only and carries no secrets.
-  mountContainerdConfig: true
-  # -- mountK3sContainerdConfig additionally mounts
-  # /var/lib/rancher/k3s/agent/etc/containerd read-only. k3s and RKE2 keep
-  # their containerd config there — /etc/containerd is not where the
-  # registrations live — so a k3s node needs this on for the kata probes to
-  # find its handlers. Off by default because the hostPath would otherwise
-  # be created on every stock-containerd node that has no k3s.
-  mountK3sContainerdConfig: false
-  # -- extraContainerdConfigDirs mounts further host directories read-only so
-  # the probes can follow containerd's `imports` into them (setec#281).
-  #
-  # WHY THIS EXISTS. containerd's config is a graph, not a directory: a
-  # config.toml may name any path in its `imports` array and containerd
-  # resolves it. The probe follows those entries, but it can only READ what
-  # the DaemonSet has mounted, so a config that imports an unmounted path
-  # leaves the probe unable to verify the handler. It says exactly that — it
-  # names the path and points here — rather than reporting a confidently
-  # wrong "handler absent", which is what shipped in v0.110.1 and made every
-  # kata-deploy node advertise no kata capability at all.
-  #
-  # WHY /opt/kata IS THE DEFAULT. kata-deploy 3.28+ writes
-  # /opt/kata/containerd/config.d/kata-deploy.toml and adds it to `imports`
-  # in /etc/containerd/config.toml. kata-deploy is how the Kata runtime gets
-  # onto a node that the Setec installer does not own (every AWS/EKS overlay
-  # here), so out of the box is where this has to work.
-  #
-  # It is a LIST rather than another boolean because the lesson of setec#281
-  # is that no fixed set of paths stays correct — the next installer picks
-  # its own. Add whatever the probe reports as unreadable; each entry is
-  # mounted read-only at /host/<path> with type DirectoryOrCreate, so an
-  # entry that does not exist on a given node is inert rather than fatal.
-  extraContainerdConfigDirs:
-    - /opt/kata/containerd
-
-# -- installer configures the portable node installer DaemonSet (docs/design/runtime.md,
-# issue #187): given any x86 KVM-capable node it lays down the stock
-# Kata+Firecracker release bundled in its image, provisions the containerd
-# devmapper thin-pool with boot ordering (containerd never starts before
-# the pool exists), and registers the kata-fc handler with containerd
-# (stock containerd drop-in, or the k3s config template). The kata-fc
-# RuntimeClass itself is rendered by this chart (runtimes.kata-fc), and
-# node capability labels stay owned by the runtime-agent — the installer
-# has NO Kubernetes API access (automountServiceAccountToken: false, no
-# ServiceAccount, no RBAC).
-#
-# This is the DEFAULT node-prep path and references nothing
-# cloud-specific. The EKS baked-AMI + Karpenter profile (see the
-# karpenter block below and packer/eks-kata-fc-ami) is an optional
-# optimisation, never a requirement; on nodes booted from the baked AMI
-# the installer detects the existing registration and stands down.
-#
-# The installer is idempotent and ownership-aware. On a node where
-# kata-fc is already registered by something else (kata-deploy, a baked
-# image, an administrator) it never touches the handler or the kata
-# payload. kata-deploy points the fc handler at the devmapper snapshotter
-# and configures neither a thin-pool nor the snapshotter (its chart says
-# "requires pre-configuration on the user side"), so on such a node the
-# installer supplies exactly those two and reports converged-devmapper
-# (setec#9). When the foreign owner supplies its own devmapper table, as
-# the baked AMI does, the installer stands down without touching the
-# node. A re-run on a converged node performs zero writes and zero
-# containerd restarts.
-installer:
-  # -- enabled gates the DaemonSet. Leave it on beside kata-deploy: the
-  # installer owns only what kata-deploy leaves out. Disable it only where
-  # a baked image already supplies the handler and its snapshotter.
-  enabled: true
-  image:
-    # -- repository is the installer image (built from
-    # Dockerfile.installer; carries the pinned kata static release as
-    # payload). Override for private mirrors.
-    repository: ghcr.io/zeroroot-ai/setec-installer
-    # -- tag defaults to .Chart.AppVersion when left empty. Pin
-    # explicitly for reproducible deploys.
-    tag: ""
-    # -- pullPolicy one of Always, Never, IfNotPresent.
-    pullPolicy: IfNotPresent
-  # -- nodeSelector pins the DaemonSet to x86 Linux nodes: the bundled
-  # kata payload is amd64-only (docs/design/runtime.md x86 substrate). KVM capability
-  # cannot be expressed as a selector, so the installer probes /dev/kvm
-  # at runtime and idles (untouched node, Ready pod) when it is absent.
-  nodeSelector:
-    kubernetes.io/arch: amd64
-    kubernetes.io/os: linux
-  # -- tolerations default to matching every taint, mirroring the
-  # runtime-agent: any node that might host a kata-fc Sandbox must be
-  # convergeable. Narrow it alongside runtimeAgent.tolerations when
-  # Sandboxes are deliberately kept off some nodes.
-  tolerations:
-    - operator: Exists
-  # -- verifyInterval is how often the installer re-verifies convergence
-  # (Go duration). Drift (a wiped thin-pool, a deleted drop-in) is
-  # repaired on the next tick.
-  verifyInterval: 10m
-  # -- thinpool configures the devmapper thin-pool backing the containerd
-  # devmapper snapshotter (Firecracker requires a block device per
-  # container rootfs; overlayfs cannot provide one).
-  thinpool:
-    # -- mode is the pool backing. "loop" (default) carves the pool out
-    # of sparse files on the node's root filesystem — works anywhere,
-    # with loop-device indirection overhead. "device" builds it from two
-    # dedicated block devices (below) for production I/O.
-    mode: loop
-    # -- poolName is the devicemapper pool device name registered with
-    # containerd.
-    poolName: setec-thinpool
-    # -- loopDir is the host directory for the sparse backing files
-    # (loop mode).
-    loopDir: /var/lib/setec/thinpool
-    # -- loopDataSizeGB / loopMetaSizeGB size the sparse data and
-    # metadata files in GiB (loop mode). Sparse: disk is consumed as
-    # sandboxes write, not at creation.
-    loopDataSizeGB: 50
-    loopMetaSizeGB: 2
-    # -- dataDevice / metadataDevice are the dedicated block devices
-    # (device mode). Both REQUIRED when mode=device. The metadata
-    # device's superblock is zeroed on first use — the devices belong to
-    # setec once listed here.
-    dataDevice: ""
-    metadataDevice: ""
-  # -- resources sizes the installer container. It is near-idle after
-  # convergence (a periodic verification pass).
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-  # -- healthPort is the TCP port the installer serves /healthz on
-  # (readiness only; no liveness probe, so a node that cannot converge
-  # shows NotReady instead of restart-looping).
-  healthPort: 8090
-
-# -- nodeSelectorLabel is the Node label key the startup prerequisite check
-# uses to determine whether any Kata-capable Nodes exist. Informational only;
-# actual scheduling uses the RuntimeClass.
-nodeSelectorLabel: katacontainers.io/kata-runtime
 
 # -- leaderElect enables controller-runtime leader election. Required at
 # the default two replicas so exactly one of them reconciles.
@@ -526,13 +177,13 @@ containerSecurityContext:
       - ALL
 
 # -- nodeSelector constrains the operator Pod to Nodes matching these labels.
-# The operator itself does not need Kata-capable Nodes, so leave empty unless
-# you need to pin it.
+# The operator itself does not need KVM Nodes, so leave empty unless you need
+# to pin it.
 nodeSelector: {}
 
 # -- tolerations allow the operator Pod to schedule onto tainted Nodes. The
 # operator is stateless and usually belongs on control-plane or general Nodes,
-# not on the Kata workload Nodes.
+# not on the KVM Nodes that run the Sandboxes.
 tolerations: []
 
 # -- affinity controls Pod affinity and anti-affinity. Use this to spread
@@ -669,8 +320,8 @@ rbac:
 # -- webhook installs the ValidatingWebhookConfiguration + Service that
 # route admission requests to the operator's built-in webhook server.
 #
-# Enabled by default: with it off, allowedNetworkModes, the runc dev-only
-# gate and the tenant-label check never run, so the constraints a
+# Enabled by default: with it off, allowedNetworkModes, the refusal of a
+# removed backend and the tenant-label check never run, so the constraints a
 # SandboxClass publishes are advisory. failurePolicy Fail means a
 # Sandbox is rejected rather than admitted unchecked when the operator is
 # unreachable, which is why replicaCount defaults to 2 and a
@@ -756,9 +407,9 @@ credentials:
       # Required when snapshots.enabled=true.
       nodeAgentServers: []
 
-# -- nodeAgent installs the DaemonSet that manages the devicemapper
-# thin-pool, samples fill state, and exposes node-level Prometheus
-# metrics.
+# -- nodeAgent installs the DaemonSet that snapshots, restores, pauses and
+# resumes the Firecracker machine of each launcher Pod on its node, and
+# exposes node-level Prometheus metrics (docs/node-agent.md).
 nodeAgent:
   enabled: false
   # serviceAccount carries extra metadata for the node-agent's own
@@ -777,32 +428,13 @@ nodeAgent:
     # for reproducible deploys.
     tag: ""
     pullPolicy: IfNotPresent
-  # Kata-runtime node selector. Must match the label the cluster admin
-  # applies to KVM-capable nodes.
-  nodeSelector:
-    katacontainers.io/kata-runtime: "true"
-  thinpoolDataDevice: ""
-  thinpoolMetadataDevice: ""
-  fillThreshold: 80
-  # containerdSocket is the containerd Unix socket the agent dials for image
-  # prefetch and for the orphan-sandbox reaper's CRI calls. k3s uses
-  # /run/k3s/containerd/containerd.sock; stock containerd uses the default.
-  containerdSocket: /run/containerd/containerd.sock
+  # -- nodeSelector of the node agent. Empty runs it on each node; the
+  # agent exits on a node with no /dev/kvm.
+  nodeSelector: {}
   # -- kubeletPodsDir is the Pod directory of the kubelet. The agent finds
   # the work volume of each launcher Pod under it to stage a restore and to
   # take a snapshot.
   kubeletPodsDir: /var/lib/kubelet/pods
-  # orphanReaper force-removes NotReady kata sandboxes whose microVM leaked on
-  # a failed teardown ("Agent did not stop sandbox") and still holds a
-  # containerd name reservation — otherwise the replacement Pod hangs in
-  # ContainerCreating ("failed to reserve sandbox name"). See setec#86.
-  orphanReaper:
-    enabled: true
-    # interval between reap sweeps (Go duration). 0 (or enabled:false) disables.
-    interval: 1m
-  # prefetchImages is a space-separated list of OCI references the
-  # agent pulls into the containerd content store on startup.
-  prefetchImages: ""
   # resources for the node-agent container. The agent is near-idle
   # between snapshots, but a snapshot encrypts the memory of a machine,
   # and the base of a warm pool is also scanned for secrets. With a limit
@@ -903,7 +535,7 @@ sandboxClasses:
     - name: tool
       spec:
         runtime:
-          backend: kata-fc
+          backend: launcher
         maxResources:
           vcpu: 8
           memory: 16Gi
@@ -963,7 +595,7 @@ sandboxClasses:
     - name: connector
       spec:
         runtime:
-          backend: kata-fc
+          backend: launcher
         maxResources:
           vcpu: 4
           memory: 8Gi
@@ -986,9 +618,6 @@ sandboxClasses:
 # Phase 2 semantics.
 snapshots:
   enabled: false
-  # backend selects the snapshot storage backend. Only "local-disk" ships
-  # in Phase 3.
-  backend: local-disk
   # localDisk holds the backend-specific configuration the node-agent
   # consumes.
   localDisk:
@@ -1028,14 +657,6 @@ snapshots:
   # restored clones then rely only on the passive virtio-rng mechanism
   # (see SECURITY.md "Entropy reseed on restore" for the residual risk).
   entropyReseed: require
-  # restoreUniquify controls the per-restore identity uniquification
-  # (docs/design/isolation.md invariant 2, setec#189). "require" (default, fail-closed):
-  # a restore only succeeds once the in-guest setec-guest-agent has
-  # confirmed a fresh machine-id/boot-id/hostname, the CNI-assigned Pod
-  # IP, and a node-unique vsock CID — guest images MUST bundle
-  # setec-guest-agent. "off" is an explicit, auditable opt-out; restored
-  # clones then keep the machine identity captured at snapshot time.
-  restoreUniquify: require
   # s3 configures the S3-compatible object store session memory
   # checkpoints are written to (setec#194, docs/design/storage.md): real S3 on EKS,
   # MinIO (or any S3-compatible endpoint) when self-hosted. Disabled by
@@ -1097,107 +718,3 @@ snapshots:
       issuerRef:
         kind: ClusterIssuer
         name: selfsigned
-
-# -- sessionKeepalive is the image the operator injects into a session
-# Sandbox that declares no spec.command (setec#7). An init container from
-# it installs the static setec-keepalive binary into a shared volume and
-# the workload boots that binary, so the session outlives every Exec
-# without a shell or a sleep binary in the user's image.
-#
-# The same binary also formats and mounts a kata-fc session's workspace
-# block device (setec#91): Kata Containers + Firecracker has no
-# virtio-fs, so every kata-fc session — regardless of spec.command —
-# boots this binary first, which prepares /workspace and then either
-# execs the Sandbox's own command or falls into the reap loop above.
-#
-# Built from this repo's Dockerfile with CMD=setec-keepalive. tag empty
-# means appVersion.
-sessionKeepalive:
-  image:
-    repository: ghcr.io/zeroroot-ai/setec-keepalive
-    tag: ""
-
-# -- preWarmPool controls the per-SandboxClass pre-warm pool feature.
-# When disabled at the chart level, all SandboxClasses behave as if
-# their preWarmPoolSize were 0 regardless of field values.
-preWarmPool:
-  enabled: false
-
-# -- karpenter optionally renders a Karpenter EC2NodeClass + NodePool that
-# provision x86 bare-metal nodes (docs/design/runtime.md) from the baked kata-fc AMI
-# (packer/eks-kata-fc-ami) ON DEMAND and scale to zero when no kata Sandbox
-# is running — the bare-metal floor is paid only during actual microVM
-# execution. Requires Karpenter >= 1.0 (karpenter.sh/v1 +
-# karpenter.k8s.aws/v1 CRDs) installed out of band; the chart does not
-# manage Karpenter itself. See docs/runtime-backends/eks.md for the cost
-# model and wiring.
-karpenter:
-  # -- enabled gates rendering of the EC2NodeClass and NodePool. When true,
-  # amiSelectorTerms, subnetSelectorTerms, securityGroupSelectorTerms, and
-  # exactly one of role/instanceProfile are REQUIRED (render fails
-  # otherwise).
-  enabled: false
-  # -- nodeClassName names the EC2NodeClass; the NodePool references it.
-  nodeClassName: setec-kata-fc
-  # -- nodePoolName names the NodePool.
-  nodePoolName: setec-kata-fc
-  # -- role is the node IAM role NAME (not ARN) Karpenter binds to
-  # provisioned instances. Set this OR instanceProfile, not both.
-  role: ""
-  # -- instanceProfile is an instance profile name, for setups that manage
-  # profiles themselves instead of letting Karpenter derive one from role.
-  instanceProfile: ""
-  # -- amiSelectorTerms selects the baked kata-fc AMI produced by
-  # packer/eks-kata-fc-ami (default matches its ami_name_prefix). Karpenter
-  # picks the newest matching AMI; pin by id for stricter immutability.
-  amiSelectorTerms:
-    - name: "setec-kata-fc-*"
-  # -- subnetSelectorTerms selects the subnets nodes launch into, e.g.
-  # [{tags: {"karpenter.sh/discovery": "<cluster-name>"}}]. REQUIRED when
-  # enabled.
-  subnetSelectorTerms: []
-  # -- securityGroupSelectorTerms selects the node security groups, e.g.
-  # [{tags: {"karpenter.sh/discovery": "<cluster-name>"}}]. REQUIRED when
-  # enabled.
-  securityGroupSelectorTerms: []
-  # -- tags are propagated to every EC2 instance the NodePool provisions.
-  tags: {}
-  # -- instanceTypes restricts provisioning to x86 bare metal with local
-  # NVMe (VT-x KVM for Firecracker + instance-store for the devmapper
-  # thin-pool). arm64/Graviton types are not eligible: the sandbox substrate
-  # is x86 only (docs/design/runtime.md) and the NodePool hardcodes
-  # kubernetes.io/arch=amd64. Karpenter automatically picks the cheapest
-  # eligible type — verify current pricing before pinning.
-  instanceTypes:
-    - c6id.metal
-    - m6id.metal
-  # -- capacityTypes defaults to on-demand ONLY: a spot interruption kills
-  # every running microVM on the node with two minutes' notice. Add "spot"
-  # only for interruption-tolerant workloads.
-  capacityTypes:
-    - on-demand
-  # -- taints keep everything except kata Sandbox pods (and tolerating
-  # DaemonSets) off the expensive metal. SandboxClasses targeting kata-fc
-  # must carry the matching toleration (spec.tolerations).
-  taints:
-    - key: kata
-      value: "true"
-      effect: NoSchedule
-  # -- nodeLabels are stamped on provisioned nodes. The kata-fc runtime
-  # label MUST be present: the kata-fc RuntimeClass schedules via this
-  # nodeSelector, and Karpenter only provisions for pending pods whose
-  # requirements its NodePool template can satisfy. The runtime-agent
-  # probe re-verifies (and maintains) the label once the node is up.
-  nodeLabels:
-    setec.zeroroot.ai/runtime.kata-fc: "true"
-  # -- consolidateAfter is the idle period after the last kata Sandbox pod
-  # leaves before Karpenter deprovisions the metal node (idle cost -> ~$0).
-  # Longer values bridge cold-starts between bursts at the price of idle
-  # metal-hours.
-  consolidateAfter: 5m
-  # -- expireAfter force-recycles nodes for AMI/patch hygiene. 720h = 30d.
-  expireAfter: 720h
-  # -- limits caps the pool's total resources as a runaway-cost guard.
-  # c6id.metal/m6id.metal are 128 vCPU each; cpu: "256" = at most 2 nodes.
-  limits:
-    cpu: "256"

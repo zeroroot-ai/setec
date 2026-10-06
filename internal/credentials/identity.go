@@ -5,6 +5,7 @@ package credentials
 
 import (
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -26,7 +27,7 @@ func ParseSPIFFEID(raw string) (string, error) {
 // certificate, in canonical form.
 func PeerSPIFFEID(cert *x509.Certificate) (string, error) {
 	if cert == nil {
-		return "", fmt.Errorf("credentials: no peer certificate")
+		return "", errors.New("credentials: no peer certificate")
 	}
 	id, err := x509svid.IDFromCert(cert)
 	if err != nil {

@@ -2,12 +2,9 @@
 // Copyright 2026 Zero Root AI
 
 // Command manager is the Setec operator entrypoint. It wires the
-// controller-runtime Manager, registers the SandboxReconciler, runs the
-// cluster-prerequisite checker once at startup (logging warnings rather than
-// failing), and exposes /healthz and /readyz endpoints. The /readyz body is a
-// JSON document whose `kata_runtime_available` field reflects the prereq
-// result so operators can observe cluster misconfiguration without parsing
-// events.
+// controller-runtime Manager, registers the reconcilers and webhooks, and
+// exposes /healthz and /readyz endpoints. Each Sandbox is a Firecracker
+// machine in a launcher Pod (docs/design/runtime.md).
 //
 // No cloud-vendor SDKs are linked into this binary by design: Setec is a
 // single-tenant, vendor-neutral operator and its distroless image is expected
@@ -16,24 +13,20 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"net/http"
 	"os"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/spf13/pflag"
 	grpccreds "google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -45,10 +38,9 @@ import (
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
 	"github.com/zeroroot-ai/setec/internal/credentials"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
-	"github.com/zeroroot-ai/setec/internal/prereq"
-	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 	"github.com/zeroroot-ai/setec/internal/tracing"
@@ -61,38 +53,10 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
-// prereqCheckTimeout bounds the one-shot startup prerequisite check. The
-// check runs in a goroutine and its outcome feeds /readyz; a hung API server
-// must not leave /readyz reporting a stale unknown state forever.
-const prereqCheckTimeout = 30 * time.Second
-
 func init() {
-	// clientgoscheme already registers node/v1, but we register it
-	// explicitly so the intent of this binary's scheme is obvious and
-	// survives any future change in client-go's default registrations.
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(nodev1.AddToScheme(scheme))
 	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
-}
-
-// readyzState holds the most recent prereq result. The startup goroutine
-// writes it exactly once; the /readyz handler reads it on every request. An
-// atomic pointer avoids locks in the hot path and lets the handler
-// distinguish "check still running" (nil) from "check complete" (non-nil).
-type readyzState struct {
-	result atomic.Pointer[prereq.CheckResult]
-}
-
-// readyzBody is the JSON shape written to /readyz. Field names match
-// Requirement 5.3 (`kata_runtime_available`) and are snake_case to align
-// with Kubernetes and Prometheus conventions. Consumers MUST tolerate
-// unknown fields because this schema may grow.
-type readyzBody struct {
-	KataRuntimeAvailable bool     `json:"kata_runtime_available"`
-	KataCapableNodes     bool     `json:"kata_capable_nodes"`
-	PrereqCheckComplete  bool     `json:"prereq_check_complete"`
-	Warnings             []string `json:"warnings,omitempty"`
 }
 
 // defaultReservedCIDRs is the address space Sandboxes are denied out of
@@ -120,33 +84,37 @@ func defaultReservedCIDRs() []string {
 	}
 }
 
-// nolint:gocyclo
 func main() {
+	os.Exit(runMain())
+}
+
+// runMain is the body of main. It returns the exit code, so that each
+// deferred call runs before the process exits.
+//
+//nolint:gocyclo // the setup of the operator is one flat sequence of flags and steps
+func runMain() int {
 	var (
-		metricsBindAddr       string
-		probeBindAddr         string
-		enableLeaderElect     bool
-		runtimesConfig        string
-		nodeSelectorLabel     string
-		multiTenancyEnabled   bool
-		tenantLabelKey        string
-		sessionKeepaliveImage string
-		launcherImage         string
-		diskRepo              string
-		diskBuilderImage      string
-		diskSigningSecret     string
-		diskRegistrySecret    string
-		operatorNamespace     string
-		warmPoolNamespace     string
-		keptPinnedLimit       string
-		diskPublicKeys        []string
-		otlpEndpoint          string
-		otlpInsecure          bool
-		otlpCAFile            string
-		otlpSPIFFESocket      string
-		otlpSPIFFEServerIDs   []string
-		webhookEnabled        bool
-		webhookCertDir        string
+		metricsBindAddr     string
+		probeBindAddr       string
+		enableLeaderElect   bool
+		multiTenancyEnabled bool
+		tenantLabelKey      string
+		launcherImage       string
+		diskRepo            string
+		diskBuilderImage    string
+		diskSigningSecret   string
+		diskRegistrySecret  string
+		operatorNamespace   string
+		warmPoolNamespace   string
+		keptPinnedLimit     string
+		diskPublicKeys      []string
+		otlpEndpoint        string
+		otlpInsecure        bool
+		otlpCAFile          string
+		otlpSPIFFESocket    string
+		otlpSPIFFEServerIDs []string
+		webhookEnabled      bool
+		webhookCertDir      string
 
 		// Sandbox egress posture. Both lists are validated at startup;
 		// there is no runtime path that degrades to unrestricted egress.
@@ -170,22 +138,11 @@ func main() {
 	pflag.BoolVar(&enableLeaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	pflag.StringVar(&runtimesConfig, "runtimes-config", "",
-		"Path to a YAML file describing enabled runtime backends (runtimes block). "+
-			"When set, --runtime-class-name is ignored. See charts/setec/templates/configmap-runtimes.yaml for the schema.")
-	pflag.StringVar(&nodeSelectorLabel, "node-selector-label", "katacontainers.io/kata-runtime",
-		"Label key Nodes must carry to be considered Kata-capable. "+
-			"Used by the startup prerequisite check only; scheduling uses the RuntimeClass.")
-	// Phase 2 flags. Zero values reproduce Phase 1 behavior exactly.
-	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
-		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
-			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
 	pflag.StringVar(&launcherImage, "launcher-image", "",
 		"Image of setec-launcher, with Firecracker, the guest kernel and the guest agent. "+
-			"Required when the launcher backend is enabled (docs/design/runtime.md).")
+			"Required (docs/design/runtime.md).")
 	pflag.StringVar(&diskRepo, "disk-repo", "",
-		"Repository of the signed image disks that setec-disk-builder makes. "+
-			"Required when the launcher backend is enabled.")
+		"Repository of the signed image disks that setec-disk-builder makes. Required.")
 	pflag.StringVar(&diskBuilderImage, "disk-builder-image", "",
 		"Image of setec-disk-builder. The operator runs it as a Job before the first launcher Pod of an image digest.")
 	pflag.StringVar(&diskSigningSecret, "disk-signing-secret", "",
@@ -297,28 +254,16 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 
-	// --- Runtime backend configuration ---
+	// --- The one backend (docs/design/runtime.md) ---
 	//
-	// --runtimes-config is required. The chart has always passed it
-	// unconditionally, so the old "synthesize a kata-fc-only config from
-	// --runtime-class-name" fallback was unreachable for every chart install
-	// — and because `runtimeClassName` was read nowhere else, a customer's
-	// `--set runtimeClassName=…` was already silently inert: the chart passed
-	// the flag and the binary never looked at it (setec#115).
-	//
-	// Starting without the config is a startup failure rather than a
-	// synthesized default, because a silently assumed single-backend posture
-	// is the condition this configuration exists to make explicit.
-	var runtimeRegistry *runtimepkg.Registry
-	if runtimesConfig == "" {
-		setupLog.Error(nil, "--runtimes-config is required; "+
-			"it declares which isolation backends this operator may use and which are installed on the cluster")
-		os.Exit(1)
-	}
-	runtimeCfg, err := runtimepkg.LoadFromFile(runtimesConfig)
-	if err != nil {
-		setupLog.Error(err, "unable to load runtimes config", "path", runtimesConfig)
-		os.Exit(1)
+	// Each Sandbox is a Firecracker machine in a launcher Pod, so the
+	// launcher settings are required. Starting without them is a startup
+	// failure rather than a reconcile error on each Sandbox.
+	if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") ||
+		len(diskPublicKeys) == 0 {
+		setupLog.Error(nil, "--launcher-image, --disk-repo, --disk-builder-image, --disk-signing-secret, "+
+			"--disk-public-key and --operator-namespace are required")
+		return 1
 	}
 
 	// --- Sandbox egress posture ---
@@ -344,7 +289,7 @@ func main() {
 	if err := netpolCfg.Validate(); err != nil {
 		setupLog.Error(err, "invalid sandbox egress configuration; "+
 			"check --reserved-cidrs and --sandbox-resolvers")
-		os.Exit(1)
+		return 1
 	}
 	setupLog.Info("sandbox egress posture configured",
 		"reservedCIDRs", netpolCfg.ReservedCIDRs,
@@ -371,33 +316,6 @@ func main() {
 			"a class reaches them only through an egressAllowSelectors entry on port 53",
 			"clusterSideResolvers", clusterSide, "publicResolvers", public)
 	}
-
-	// Build the dispatcher Registry and register one Dispatcher per enabled backend.
-	runtimeRegistry = runtimepkg.NewRegistry()
-	for _, backend := range runtimeCfg.EnabledBackends() {
-		bc := runtimeCfg.Runtimes[backend]
-		switch backend {
-		case runtimepkg.BackendKataFC:
-			runtimeRegistry.Register(runtimepkg.NewKataFCDispatcher(bc))
-		case runtimepkg.BackendKataQEMU:
-			runtimeRegistry.Register(runtimepkg.NewKataQEMUDispatcher(bc))
-		case runtimepkg.BackendGVisor:
-			runtimeRegistry.Register(runtimepkg.NewGVisorDispatcher(bc))
-		case runtimepkg.BackendRunc:
-			runtimeRegistry.Register(runtimepkg.NewRuncDispatcher(bc))
-		case runtimepkg.BackendLauncher:
-			if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") ||
-				len(diskPublicKeys) == 0 {
-				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image, --disk-repo, "+
-					"--disk-builder-image, --disk-signing-secret, --disk-public-key and --operator-namespace are required")
-				os.Exit(1)
-			}
-			runtimeRegistry.Register(runtimepkg.NewLauncherDispatcher())
-		default:
-			setupLog.Info("unknown backend in runtimes config; skipping", "backend", backend)
-		}
-	}
-	setupLog.Info("runtime registry built", "enabled", runtimeRegistry.EnabledBackends())
 
 	restCfg := ctrl.GetConfigOrDie()
 
@@ -434,7 +352,7 @@ func main() {
 	mgr, err := ctrl.NewManager(restCfg, mgrOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return 1
 	}
 
 	// Phase 2: init tracing (no-op when otlpEndpoint is empty).
@@ -447,7 +365,7 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to initialize tracing")
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -470,7 +388,7 @@ func main() {
 		creds, credMode, err := nodeAgentClientCredentials(context.Background(), nodeAgentCreds)
 		if err != nil {
 			setupLog.Error(err, "unable to load node-agent client credentials", "mode", credMode)
-			os.Exit(1)
+			return 1
 		}
 		setupLog.Info("Resolved node-agent client credentials", "mode", credMode)
 		nodeAgentPodResolver := &snapshot.PodResolver{
@@ -504,9 +422,6 @@ func main() {
 		APIReader:             mgr.GetAPIReader(),
 		Scheme:                mgr.GetScheme(),
 		Recorder:              sandboxRecorder,
-		NodeSelectorLabel:     nodeSelectorLabel,
-		Runtimes:              runtimeRegistry,
-		RuntimeCfg:            runtimeCfg,
 		ClassResolver:         resolver,
 		MetricsCollector:      collectors,
 		Tracer:                tracer,
@@ -515,7 +430,6 @@ func main() {
 		Coordinator:           coordinator,
 		NetPol:                netpolCfg,
 		NamespaceBaselineDeny: nsBaselineDeny,
-		KeepaliveImage:        sessionKeepaliveImage,
 		LauncherImage:         launcherImage,
 		DiskRepo:              diskRepo,
 		DiskKeys:              diskPublicKeys,
@@ -523,7 +437,7 @@ func main() {
 		WarmPoolNamespace:     warmPoolNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
-		os.Exit(1)
+		return 1
 	}
 
 	// The warm pool of launcher classes (setec#103): bases in the pool
@@ -540,7 +454,7 @@ func main() {
 			Metrics:       collectors,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up WarmPoolReconciler")
-			os.Exit(1)
+			return 1
 		}
 	}
 
@@ -554,7 +468,7 @@ func main() {
 			Coordinator: coordinator,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up SnapshotReconciler")
-			os.Exit(1)
+			return 1
 		}
 	}
 
@@ -566,7 +480,7 @@ func main() {
 		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxClassReconciler")
-		os.Exit(1)
+		return 1
 	}
 
 	// Phase 2: register the validating webhook when enabled.
@@ -580,62 +494,47 @@ func main() {
 		}
 		if err := validator.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up webhook")
-			os.Exit(1)
+			return 1
 		}
 		if snapshotsEnabled {
 			pinLimit, err := resource.ParseQuantity(keptPinnedLimit)
 			if err != nil {
 				setupLog.Error(err, "invalid --kept-pinned-limit")
-				os.Exit(1)
+				return 1
 			}
 			snapVal := &webhook.SnapshotValidator{Client: mgr.GetClient(), PinnedLimitBytes: pinLimit.Value()}
 			if err := snapVal.SetupWebhookWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to set up snapshot webhook")
-				os.Exit(1)
+				return 1
 			}
 		}
-		// Runtime backends: SandboxClass defaulting + validating webhook.
-		// RuntimeCfg is guaranteed non-nil here — the operator would have
-		// exited above if LoadFromFile or the synthetic config failed.
-		scWebhook := &webhook.SandboxClassWebhook{
-			Client:     mgr.GetClient(),
-			RuntimeCfg: runtimeCfg,
-		}
+		// SandboxClass defaulting + validating webhook: one backend.
+		scWebhook := &webhook.SandboxClassWebhook{}
 		if err := scWebhook.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up SandboxClass webhook")
-			os.Exit(1)
+			return 1
 		}
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Run the prerequisite check once at startup in a goroutine so a slow
-	// API server never delays manager startup (and therefore /healthz
-	// readiness). The check logs warnings for each missing prerequisite
-	// and never errors; missing prerequisites are cluster-configuration
-	// issues, not operator failures.
-	state := &readyzState{}
-	go runStartupPrereqCheck(restCfg, runtimeCfg, nodeSelectorLabel, state)
-
 	// Serve /healthz and /readyz on the probe bind address as a
 	// manager-managed Runnable so the listener shares the manager's
 	// context and gets a graceful shutdown on SIGTERM.
-	if err := mgr.Add(newProbeServer(probeBindAddr, state)); err != nil {
+	if err := mgr.Add(newProbeServer(probeBindAddr)); err != nil {
 		setupLog.Error(err, "unable to register health probe server")
-		os.Exit(1)
+		return 1
 	}
 
 	setupLog.Info("starting manager",
 		"metrics-bind-address", metricsBindAddr,
 		"health-probe-bind-address", probeBindAddr,
 		"leader-elect", enableLeaderElect,
-		"runtimes-config", runtimesConfig,
-		"enabled-backends", runtimeRegistry.EnabledBackends(),
-		"node-selector-label", nodeSelectorLabel,
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "manager exited with error")
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // Credential mode names, used only in log and error output so an
@@ -668,11 +567,8 @@ type nodeAgentCredentialFlags struct {
 // by any of its flags being set, not by all of them; whether the
 // selection is coherent is credentials.New's decision, so every setec
 // component gives the same answer and the same message.
-func (f nodeAgentCredentialFlags) config() (credentials.Config, string) {
-	var (
-		cfg  credentials.Config
-		mode = unsetMode
-	)
+func (f nodeAgentCredentialFlags) config() (cfg credentials.Config, mode string) {
+	mode = unsetMode
 	if f.certPath != "" || f.keyPath != "" || f.caPath != "" {
 		cfg.Files = &credentials.FileSource{
 			CertFile: f.certPath,
@@ -720,61 +616,6 @@ func nodeAgentClientCredentials(
 	return creds, mode, nil
 }
 
-// runStartupPrereqCheck performs the one-shot cluster prerequisite check and
-// stores the result in state for /readyz to report. It logs a warning for
-// each missing prerequisite and never propagates errors — a missing
-// RuntimeClass or an unreachable API server must not prevent Setec from
-// starting, because the operator's role at that point is to surface the
-// problem to the cluster administrator via Events, not to crash-loop.
-func runStartupPrereqCheck(
-	cfg *rest.Config,
-	runtimeCfg *runtimepkg.RuntimeConfig,
-	nodeSelectorLabel string,
-	state *readyzState,
-) {
-	ctx, cancel := context.WithTimeout(context.Background(), prereqCheckTimeout)
-	defer cancel()
-
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Info("startup prerequisite check skipped: unable to build API client",
-			"error", err.Error(),
-		)
-		// Store an empty result so /readyz transitions out of the
-		// "check pending" state — the operator is healthy; the check
-		// simply could not run.
-		state.result.Store(&prereq.CheckResult{})
-		return
-	}
-
-	// The prereq check covers each enabled backend that uses a RuntimeClass.
-	backends, classNames := runtimeCfg.RuntimeClassBackends()
-
-	result, err := prereq.CheckMulti(ctx, c, backends, classNames, nodeSelectorLabel)
-	if err != nil {
-		setupLog.Info("startup prerequisite check encountered an API error",
-			"error", err.Error(),
-		)
-		// Still store a result so /readyz reports `prereq_check_complete:true`
-		// and consumers see kata_runtime_available:false.
-		state.result.Store(&result)
-		return
-	}
-
-	for _, w := range result.Warnings {
-		setupLog.Info("prerequisite warning", "warning", w)
-	}
-
-	state.result.Store(&result)
-}
-
-// newProbeServer returns a manager.Runnable that serves /healthz and /readyz
-// on addr. /healthz is an unconditional 200 (the process is up). /readyz is a
-// 200 carrying the JSON-encoded readyzBody so operators and probes can see
-// the prereq-check outcome without parsing Events. Separating the probe
-// server from controller-runtime's built-in handler is what allows the
-// structured body; the built-in handler supports only plain-text verbose
-// output.
 // probeServer serves /healthz and /readyz on EVERY replica, leader or not.
 //
 // It exists as a named type purely to implement
@@ -801,23 +642,17 @@ func (p probeServer) Start(ctx context.Context) error { return p.run(ctx) }
 // immediately rather than after acquiring the lease.
 func (probeServer) NeedLeaderElection() bool { return false }
 
-func newProbeServer(addr string, state *readyzState) manager.Runnable {
+// newProbeServer returns a manager.Runnable that serves /healthz and /readyz
+// on addr. Each is an unconditional 200: the process is up.
+func newProbeServer(addr string) manager.Runnable {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		body := readyzBody{}
-		if r := state.result.Load(); r != nil {
-			body.KataRuntimeAvailable = r.RuntimeClassPresent
-			body.KataCapableNodes = r.KataCapableNodes
-			body.PrereqCheckComplete = true
-			body.Warnings = r.Warnings
-		}
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(body)
+		_, _ = w.Write([]byte("ok\n"))
 	})
 
 	return probeServer{run: func(ctx context.Context) error {
@@ -833,7 +668,9 @@ func newProbeServer(addr string, state *readyzState) manager.Runnable {
 		shutdownDone := make(chan struct{})
 		go func() {
 			<-ctx.Done()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// The manager context is done here, so the shutdown keeps its
+			// values and drops its cancellation.
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			_ = srv.Shutdown(shutdownCtx)
 			close(shutdownDone)
@@ -841,7 +678,7 @@ func newProbeServer(addr string, state *readyzState) manager.Runnable {
 
 		setupLog.Info("starting health probe server", "address", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			return errwrap.Wrap(err, "http.Server.ListenAndServe")
 		}
 		<-shutdownDone
 		return nil

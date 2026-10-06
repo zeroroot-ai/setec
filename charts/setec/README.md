@@ -1,65 +1,40 @@
 # Setec Helm Chart
 
-Setec is a Kubernetes-native operator that orchestrates Firecracker microVMs
-via Kata Containers, exposing a high-level `Sandbox` custom resource for
-ephemeral, isolated workload execution.
+Setec is a Kubernetes-native operator that runs each `Sandbox` in its own
+Firecracker microVM. One machine runs in each launcher Pod.
 
-This chart installs a single controller-manager Deployment, the `Sandbox`
-CustomResourceDefinition, and the minimum ClusterRole needed for the operator
-to reconcile `Sandbox` resources into Kata-runtime Pods.
+This chart installs the controller-manager Deployment, the CustomResourceDefinitions,
+the KVM device plugin, and the minimum RBAC that the operator needs to
+reconcile each `Sandbox` into a launcher Pod.
 
 ## Prerequisites
 
-- Kubernetes 1.30 or later. The Sandbox-namespace host guard is a
-  `ValidatingAdmissionPolicy`, which reached
-  `admissionregistration.k8s.io/v1` in 1.30. It is not an optional extra:
-  without it a `hostNetwork` Pod steps around the namespace default-deny
-  NetworkPolicy, so the chart states 1.30 as its floor rather than
-  rendering containment conditionally.
+- Kubernetes 1.35 or later. Each launcher Pod mounts the signed disk of its
+  image as an image volume, which needs 1.35. The Sandbox-namespace host
+  guard is a `ValidatingAdmissionPolicy`, which needs 1.30.
 - At least one **x86-64 (amd64)** Node with KVM access (bare-metal Linux or
-  a VM with nested virtualization enabled). Setec runs Firecracker
-  microVMs, which require `/dev/kvm`. arm64 is unsupported for the
-  untrusted-execution plane
-  (docs/design/runtime.md): every published setec
-  image is single-arch `linux/amd64`, the node-agent and runtime-agent
-  DaemonSets hardcode a `kubernetes.io/arch: amd64` nodeSelector, and every
-  Sandbox Pod carries a matching required node affinity, so mixed-arch
-  clusters converge cleanly with the sandbox plane confined to x86 nodes.
+  a VM with nested virtualization enabled). Each Sandbox is a Firecracker
+  microVM, which needs `/dev/kvm`. The KVM device plugin offers `/dev/kvm`
+  and `/dev/net/tun` of each Node as the resources `setec.zeroroot.ai/kvm`
+  and `setec.zeroroot.ai/tun`. A Node without `/dev/kvm` gets no launcher
+  Pod. arm64 is not supported (docs/design/runtime.md): each published
+  setec image is single-arch `linux/amd64`, the DaemonSets hardcode a
+  `kubernetes.io/arch: amd64` nodeSelector, and each launcher Pod carries
+  a matching required node affinity.
+- An OCI registry for the signed image disks (`launcher.diskRepo`), a
+  Secret with the disk signing seed (`launcher.diskBuilder.signingSecret`),
+  and its public keys (`launcher.diskBuilder.publicKeys`). The chart refuses
+  to render without them.
 - `helm` 3.8 or later.
 
-Kata Containers itself is NOT a prerequisite for `kata-fc`: the chart
-ships a portable installer DaemonSet (docs/design/runtime.md, `installer.enabled=true`
-by default) that converges every x86 KVM-capable Node — it lays down the
-stock Kata + Firecracker release bundled in its image, provisions the
-containerd devmapper thin-pool with boot ordering (containerd never
-starts before the pool exists), and registers the `kata-fc` handler with
-containerd (stock containerd and k3s are supported). The chart renders
-the `kata-fc` RuntimeClass (`runtimes.kata-fc.install=true`), and the
-runtime-agent labels capable Nodes. On a node where `kata-fc` is already
-registered by something else —
-[`kata-deploy`](https://github.com/kata-containers/kata-containers/tree/main/tools/packaging/kata-deploy),
-a baked node image, an administrator — the installer leaves the handler
-and the Kata binaries to that owner. `kata-deploy` points the `fc` handler
-at the devmapper snapshotter and configures neither a thin-pool nor the
-snapshotter, so beside it the installer supplies exactly those two
-(`converged-devmapper`). Beside a baked image that supplies both, it stands
-down without touching the node. Set `installer.enabled=false` to keep it
-out entirely. The `kata-qemu` backend is not covered by the installer and
-still needs an out-of-band Kata install.
-
-The installer's thin-pool defaults to sparse loop-backed files
-(`installer.thinpool.mode=loop`, portable, works anywhere). For
-production I/O, dedicate two block devices per node and set
-`installer.thinpool.mode=device` with
-`installer.thinpool.dataDevice` / `installer.thinpool.metadataDevice`.
-The EKS baked-AMI + Karpenter profile (`karpenter.enabled=true`,
-`packer/eks-kata-fc-ami/`) remains an optional optimization that pre-bakes
-the same components for faster node-ready — never a requirement, and the
-default installer path references nothing AWS-specific.
+The launcher is the only runtime. The Kata, gVisor and runc backends and
+the node installer were removed (setec#198). A `SandboxClass` that names
+one of them is refused at admission, and a `Sandbox` of such a class fails
+with the reason `UnsupportedBackend`.
 
 Setec is cloud-agnostic and makes no assumptions about the underlying
 infrastructure. Any conformant Kubernetes distribution whose worker Nodes
-expose `/dev/kvm` will work.
+expose `/dev/kvm` works.
 
 ## CRD handling
 
@@ -82,7 +57,11 @@ user-authored resources.
 ```bash
 helm install setec ./charts/setec \
   --namespace setec-system \
-  --create-namespace
+  --create-namespace \
+  --set launcher.diskRepo=registry.example.com/setec-disks \
+  --set launcher.diskBuilder.signingSecret=setec-disk-signing \
+  --set 'launcher.diskBuilder.publicKeys={<base64 public key>}' \
+  --set 'sandboxNamespaces={sandbox-workloads}'
 ```
 
 Or, if you prefer the chart to manage the namespace itself:
@@ -99,9 +78,6 @@ Verify the operator is running:
 kubectl -n setec-system get deployment setec
 kubectl -n setec-system logs deployment/setec
 ```
-
-The operator's `/readyz` body includes a `kata_runtime_available` field; if
-`false`, install `kata-deploy` and wait for the DaemonSet to label Nodes.
 
 ## Upgrading
 
@@ -144,8 +120,6 @@ kubectl delete namespace setec-system
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/zeroroot-ai/setec` | Container image repository. |
-| `sessionKeepalive.image.repository` | `ghcr.io/zeroroot-ai/setec-keepalive` | Image with the static keepalive a session Sandbox boots when it declares no `spec.command`. |
-| `sessionKeepalive.image.tag` | `""` (appVersion) | Tag of that image. |
 | `image.tag` | `"0.1.0"` | Image tag; falls back to `.Chart.AppVersion` when empty. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Pull secrets for private registries. |
@@ -158,8 +132,11 @@ kubectl delete namespace setec-system
 | `resources.requests.memory` | `128Mi` | Memory request. |
 | `resources.limits.cpu` | `500m` | CPU limit. |
 | `resources.limits.memory` | `512Mi` | Memory limit. |
-| `runtimeClassName` | `kata-fc` | Kata RuntimeClass the operator attaches to Sandbox Pods. |
-| `nodeSelectorLabel` | `katacontainers.io/kata-runtime` | Node label key for the startup prerequisite check. |
+| `launcher.image.repository` | `ghcr.io/zeroroot-ai/setec-launcher` | Launcher image, with Firecracker, the guest kernel and the guest agent. |
+| `launcher.diskRepo` | `""` | Repository of the signed image disks. Required. |
+| `launcher.diskBuilder.signingSecret` | `""` | Secret with the ed25519 seed that signs each disk. Required. |
+| `launcher.diskBuilder.publicKeys` | `[]` | Public keys that each launcher accepts for a disk. Required. |
+| `launcher.warmPool.namespace` | `""` | Namespace of the warm-pool bases. Empty turns the warm pool off. |
 | `leaderElect` | `false` | Enable controller-runtime leader election. Required for replicas > 1. |
 | `metricsPort` | `8080` | TCP port for the Prometheus metrics endpoint. |
 | `healthPort` | `8081` | TCP port for `/healthz` and `/readyz`. |
@@ -208,51 +185,22 @@ kubectl logs hello-vm
   Linux capability.
 - The ClusterRole grants only the verbs the operator actually calls: CRUD on
   `sandboxes` and `pods`, status/finalizer writes on `sandboxes`, `events`
-  create/patch, and read-only access to `nodes` and `runtimeclasses`.
-
-### runtime-agent node writes
-
-The runtime-agent DaemonSet probes each node and publishes what it found so
-the operator can schedule Sandboxes onto capable nodes. That publication is
-a Node write, and Node writes are cluster-wide primitives, so the grant is
-narrowed on three axes:
-
-- **No `nodes/status`.** The probe detail used to be a `SetecRuntimes` node
-  condition, which needed `nodes/status: patch` on every node — a verb whose
-  holder can rewrite any node's allocatable capacity and readiness. Nothing
-  read the condition, so the detail is now the
-  `setec.zeroroot.ai/runtime-probe` **annotation** and the grant is gone.
-  `kubectl get node -o yaml` shows the same JSON.
-- **Non-root, verified.** The agent image has always been distroless-nonroot,
-  but the DaemonSet asserted `runAsNonRoot: false`, so nothing checked. It
-  now runs with `runAsNonRoot: true`, an explicit UID/GID of 65532 and
-  `seccompProfile: RuntimeDefault`. Every probe is an `os.Stat` against a
-  read-only mount, so nothing about this needs privilege.
-- **`nodes: patch` narrowed by admission.** The agent still needs to write
-  its capability labels, and RBAC cannot scope `patch` to particular label
-  keys or to the agent's own node. `runtimeAgent.nodeGuard` installs a
-  `ValidatingAdmissionPolicy` that holds the agent's ServiceAccount to the
-  `setec.zeroroot.ai/runtime.` label prefix plus the one probe annotation,
-  rejects any other change to the object including all of `spec`, and — on
-  clusters that bind node identity into ServiceAccount tokens (1.31+) —
-  rejects a write aimed at any node but its own.
-
-  Node-identity enforcement is opportunistic by default so the chart still
-  installs on clusters without node-bound tokens. Set
-  `runtimeAgent.nodeGuard.requireNodeIdentity: true` to make it mandatory
-  once every node is on 1.31+; with it on and the claim absent, every probe
-  write is rejected and the operator sees no capable nodes.
+  create/patch, and read-only access to `nodes`.
+- A launcher Pod is not privileged. It mounts nothing from the host, gets
+  `/dev/kvm` and `/dev/net/tun` from the device plugin, and has one
+  capability, `NET_ADMIN`.
+- The node agent calls no Kubernetes API, so it has no ServiceAccount token
+  and no RBAC.
 
 ## Troubleshooting
 
-- `kubectl describe sandbox <name>` shows the most recent events, including
-  `RuntimeUnavailable` warnings when the `kata-fc` RuntimeClass is missing.
-- The operator's `/readyz` endpoint returns a JSON body with
-  `kata_runtime_available` and `kata_capable_nodes` booleans. Port-forward
-  the health port (default `8081`) and curl `/readyz` to inspect.
-- If Pods stay `Pending`, check the Node labels Kata-capable Nodes are
-  labeled with (default: `katacontainers.io/kata-runtime`) and confirm
-  `kata-deploy` has completed rolling out.
+- `kubectl describe sandbox <name>` shows the most recent events.
+- If a launcher Pod stays `Pending`, check that the device plugin reports
+  `setec.zeroroot.ai/kvm` on the Node:
+  `kubectl get node <name> -o jsonpath='{.status.allocatable}'`.
+- A `Sandbox` that fails with the reason `UnsupportedBackend` has a class
+  that names a removed backend. Set `spec.runtime.backend` of the class to
+  `launcher`, or leave it empty.
 
 ## Phase 2: Multi-tenancy, Observability, Webhook, Node-Agent, Frontend
 
@@ -278,11 +226,12 @@ verify the expected new manifests appear via `helm template`.
   or enable `webhook.certManager.enabled=true` and supply a cert-manager
   `IssuerRef`.
 - `nodeAgent.enabled=true` installs the DaemonSet targeting the
-  `nodeAgent.nodeSelector` (default `katacontainers.io/kata-runtime=true`)
-  plus a hardcoded `kubernetes.io/arch=amd64` selector (docs/design/runtime.md).
-  Provide `thinpoolDataDevice` and `thinpoolMetadataDevice` block devices per
-  node. The agent exposes Prometheus metrics on port 9090. It runs privileged
-  (SYS_ADMIN only) because device-mapper control requires it.
+  `nodeAgent.nodeSelector` plus a hardcoded `kubernetes.io/arch=amd64`
+  selector (docs/design/runtime.md). The agent takes and stages the
+  snapshots of the launcher machines in the work volumes of the launcher
+  Pods, under `nodeAgent.kubeletPodsDir`. It exposes Prometheus metrics on
+  port 9090. It runs as root and privileged, because it reads and writes
+  those volumes on the host.
 - `frontend.enabled=true` installs the `setec-frontend` Deployment + ClusterIP
   Service. In the default file credential mode, **both `tlsCertSecretName`
   and `tlsClientCASecretName` are required** — mTLS is mandatory for the
@@ -474,21 +423,5 @@ feature incrementally:
    one class, then opt in to `webhook.enabled=true`.
 3. Enable multi-tenancy only after labelling each tenant namespace with
    `setec.zeroroot.ai/tenant=<tenant>`.
-4. Turn on `nodeAgent.enabled=true` after provisioning `thinpool`-ready
-   block devices on worker nodes.
+4. Turn on `nodeAgent.enabled=true` together with `snapshots.enabled=true`.
 5. Enable `frontend.enabled=true` last; it is the thinnest layer.
-
-## Karpenter scale-to-zero metal pool (EKS)
-
-`karpenter.enabled=true` renders a Karpenter `EC2NodeClass` + `NodePool`
-(Karpenter >= 1.0 CRDs required, installed out of band) that provision
-x86 bare-metal nodes (`c6id.metal` / `m6id.metal`, cheapest first) from
-the baked kata-fc AMI (`packer/eks-kata-fc-ami`) on demand and scale to
-zero when no kata Sandbox is running. Nodes carry the
-`setec.zeroroot.ai/runtime.kata-fc=true` label and a `kata=true:NoSchedule`
-taint; SandboxClasses targeting the pool must set the matching
-`spec.tolerations`. When enabled, `karpenter.amiSelectorTerms`,
-`karpenter.subnetSelectorTerms`, `karpenter.securityGroupSelectorTerms`,
-and exactly one of `karpenter.role` / `karpenter.instanceProfile` are
-required. Full wiring, cost model, and the spot-metal caveat:
-[`docs/runtime-backends/eks.md`](../../docs/runtime-backends/eks.md).

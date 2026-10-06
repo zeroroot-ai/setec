@@ -55,6 +55,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // symbolPolicy says how references to a watched package are judged.
@@ -308,7 +310,7 @@ func Scan(root string, exemptions []Exemption) (*Report, error) {
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
-			return err
+			return errwrap.Wrap(err, "filepath.Rel")
 		}
 		rel = filepath.ToSlash(rel)
 		report.GoFiles++

@@ -166,6 +166,7 @@ func (p *Provider) ServerCredentials(ctx context.Context) (grpccreds.TransportCr
 		// function, so the guarantees it sets hold on every handshake
 		// and not only the first; it carries no GetConfigForClient of
 		// its own, so this does not recurse.
+		//nolint:contextcheck // each handshake has its own context, not the context of setup
 		cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 			return p.serverConfig(hello.Context())
 		}
@@ -183,18 +184,19 @@ func (p *Provider) serverConfig(ctx context.Context) (*tls.Config, error) {
 		return nil, err
 	}
 	return &tls.Config{
-		Certificates:          []tls.Certificate{cert},
-		MinVersion:            minTLSVersion,
-		ClientCAs:             pool,
-		ClientAuth:            tls.RequireAndVerifyClientCert,
-		VerifyPeerCertificate: p.authorizePeer,
+		Certificates:     []tls.Certificate{cert},
+		MinVersion:       minTLSVersion,
+		ClientCAs:        pool,
+		ClientAuth:       tls.RequireAndVerifyClientCert,
+		VerifyConnection: p.authorizeConnection,
 	}, nil
 }
 
-// authorizePeer runs after the standard chain verification and asks the
-// source whether the authenticated peer is one this component accepts.
-func (p *Provider) authorizePeer(_ [][]byte, verified [][]*x509.Certificate) error {
-	return p.source.authorizePeer(verified)
+// authorizeConnection runs after the standard chain verification, on each
+// handshake and each resumed session, and asks the source whether the
+// authenticated peer is one this component accepts.
+func (p *Provider) authorizeConnection(cs tls.ConnectionState) error {
+	return p.source.authorizePeer(cs.VerifiedChains)
 }
 
 // ClientCredentials returns the credentials for dialing a peer,
@@ -242,10 +244,10 @@ func (p *Provider) clientConfig(ctx context.Context) (*tls.Config, error) {
 		return nil, err
 	}
 	cfg := &tls.Config{
-		Certificates:          []tls.Certificate{cert},
-		MinVersion:            minTLSVersion,
-		RootCAs:               pool,
-		VerifyPeerCertificate: p.authorizePeer,
+		Certificates:     []tls.Certificate{cert},
+		MinVersion:       minTLSVersion,
+		RootCAs:          pool,
+		VerifyConnection: p.authorizeConnection,
 	}
 	if !p.source.namesPeer() {
 		// The peer's certificate carries no name to check, so Go's
@@ -256,7 +258,15 @@ func (p *Provider) clientConfig(ctx context.Context) (*tls.Config, error) {
 		// talks to. Skipping verification here without that
 		// replacement would accept any certificate at all.
 		cfg.InsecureSkipVerify = true //nolint:gosec // replaced by authorizeUnnamedPeer, not dropped
-		cfg.VerifyPeerCertificate = p.authorizeUnnamedPeer(ctx)
+		// VerifyConnection runs on each handshake, a resumed one included.
+		unnamed := p.authorizeUnnamedPeer(ctx)
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			raw := make([][]byte, 0, len(cs.PeerCertificates))
+			for _, c := range cs.PeerCertificates {
+				raw = append(raw, c.Raw)
+			}
+			return unnamed(raw, nil)
+		}
 	}
 	return cfg, nil
 }

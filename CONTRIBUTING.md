@@ -23,9 +23,9 @@ rather than guessing.
 - Docker or Podman (for building container images)
 - `git` with DCO sign-off configured (see below)
 
-For full end-to-end testing you also need a bare-metal Linux host with
-KVM enabled and Kata Containers installed. The unit and envtest suites
-run fine on any workstation.
+For full end-to-end testing you also need a Kubernetes cluster whose
+nodes expose `/dev/kvm`. The unit and envtest suites run fine on any
+workstation.
 
 ### Clone and build
 
@@ -48,8 +48,8 @@ make helm-template   # render Helm templates with default values
 ```
 
 End-to-end tests are gated behind the `e2e` build tag because they
-require a real Kata + Firecracker environment. Run them on a prepared
-bare-metal host with:
+require real Firecracker machines. Run them against a cluster whose nodes
+expose `/dev/kvm` with:
 
 ```bash
 make e2e

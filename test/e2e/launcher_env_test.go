@@ -38,13 +38,6 @@ const launcherContainer = "launcher"
 // launcherKVMResource is the device resource of a launcher Pod.
 const launcherKVMResource corev1.ResourceName = "setec.zeroroot.ai/kvm"
 
-// sandboxBackend is the backend of every Sandbox of the suite:
-// SETEC_E2E_BACKEND, kata-fc by default.
-var sandboxBackend string
-
-// onLauncher reports whether the suite runs on the launcher backend.
-func onLauncher() bool { return sandboxBackend == backendLauncher }
-
 // launcherConfig is the launcher part of the install.
 type launcherConfig struct {
 	// imageRepo, diskBuilderImageRepo and devicePluginImageRepo name the
@@ -68,7 +61,7 @@ var launcherCfg launcherConfig
 const diskSigningSecret = "setec-e2e-disk-seed"
 
 // loadLauncherConfig reads the SETEC_E2E_LAUNCHER_* environment. Each value
-// is required on the launcher backend.
+// is required.
 func loadLauncherConfig() (launcherConfig, error) {
 	c := launcherConfig{
 		imageRepo:             os.Getenv("SETEC_E2E_LAUNCHER_IMAGE_REPO"),
@@ -84,7 +77,7 @@ func loadLauncherConfig() (launcherConfig, error) {
 		"SETEC_E2E_DISK_REPO":                c.diskRepo,
 	} {
 		if v == "" {
-			return c, fmt.Errorf("%s is required with SETEC_E2E_BACKEND=%s", name, backendLauncher)
+			return c, fmt.Errorf("%s is required", name)
 		}
 	}
 	return c, nil
@@ -106,20 +99,18 @@ func createDiskSigningSecret(ctx context.Context) (string, error) {
 	return base64.StdEncoding.EncodeToString(pub), nil
 }
 
-// launcherHelmArgs turns the launcher on as the one backend.
+// launcherHelmArgs sets the images, the disk repository and the disk keys
+// of the launcher runtime.
 func launcherHelmArgs(publicKey string) []string {
 	return []string{
-		"--set", "runtimes.kata-fc.enabled=false",
-		"--set", "runtimes.launcher.enabled=true",
-		"--set", "defaults.runtime.backend=" + backendLauncher,
-		"--set-string", "runtimes.launcher.image.repository=" + launcherCfg.imageRepo,
-		"--set-string", "runtimes.launcher.image.tag=" + imageTag,
-		"--set-string", "runtimes.launcher.diskRepo=" + launcherCfg.diskRepo,
-		"--set-string", "runtimes.launcher.diskBuilder.image.repository=" + launcherCfg.diskBuilderImageRepo,
-		"--set-string", "runtimes.launcher.diskBuilder.image.tag=" + imageTag,
-		"--set-string", "runtimes.launcher.diskBuilder.signingSecret=" + diskSigningSecret,
-		"--set-string", "runtimes.launcher.diskBuilder.publicKeys[0]=" + publicKey,
-		"--set-string", "runtimes.launcher.warmPool.namespace=" + launcherCfg.warmPoolNamespace,
+		"--set-string", "launcher.image.repository=" + launcherCfg.imageRepo,
+		"--set-string", "launcher.image.tag=" + imageTag,
+		"--set-string", "launcher.diskRepo=" + launcherCfg.diskRepo,
+		"--set-string", "launcher.diskBuilder.image.repository=" + launcherCfg.diskBuilderImageRepo,
+		"--set-string", "launcher.diskBuilder.image.tag=" + imageTag,
+		"--set-string", "launcher.diskBuilder.signingSecret=" + diskSigningSecret,
+		"--set-string", "launcher.diskBuilder.publicKeys[0]=" + publicKey,
+		"--set-string", "launcher.warmPool.namespace=" + launcherCfg.warmPoolNamespace,
 		"--set-string", "devicePlugin.image.repository=" + launcherCfg.devicePluginImageRepo,
 		"--set-string", "devicePlugin.image.tag=" + imageTag,
 		"--set", "devicePlugin.image.pullPolicy=" + imagePullPolicy,
@@ -140,31 +131,18 @@ var launcherImageDigests = map[string]string{
 		"@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d",
 }
 
-// testImage returns the image reference a scenario uses: the reference
-// itself, or its digest form on the launcher backend.
+// testImage returns the digest form of the image reference a scenario
+// uses.
 func testImage(ref string) string {
-	if !onLauncher() {
-		return ref
-	}
 	if pinned, ok := launcherImageDigests[ref]; ok {
 		return pinned
 	}
 	return ref
 }
 
-// workloadContainer is the container whose log holds the output of the
-// workload.
-func workloadContainer() string {
-	if onLauncher() {
-		return launcherContainer
-	}
-	return "workload"
-}
-
-// sandboxCapableNodes returns the schedulable nodes that can run a Sandbox
-// of backend. A launcher node offers the KVM device. A node of another
-// backend carries the runtime label of the runtime agent.
-func sandboxCapableNodes(t *testing.T, backend string) []string {
+// sandboxCapableNodes returns the schedulable nodes that can run a
+// Sandbox: the nodes that offer the KVM device.
+func sandboxCapableNodes(t *testing.T) []string {
 	t.Helper()
 	nodes := &corev1.NodeList{}
 	if err := k8sClient.List(context.Background(), nodes); err != nil {
@@ -175,11 +153,7 @@ func sandboxCapableNodes(t *testing.T, backend string) []string {
 		if n.Spec.Unschedulable || hasUntoleratedTaint(n) {
 			continue
 		}
-		if backend == backendLauncher {
-			if q, ok := n.Status.Allocatable[launcherKVMResource]; !ok || q.Cmp(resource.MustParse("1")) < 0 {
-				continue
-			}
-		} else if n.Labels["setec.zeroroot.ai/runtime."+backend] != "true" {
+		if q, ok := n.Status.Allocatable[launcherKVMResource]; !ok || q.Cmp(resource.MustParse("1")) < 0 {
 			continue
 		}
 		capable = append(capable, n.Name)

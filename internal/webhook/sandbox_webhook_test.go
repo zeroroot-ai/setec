@@ -53,7 +53,6 @@ func mkClass(name string, isDefault bool, maxMem string, modes ...setecv1alpha1.
 	return &setecv1alpha1.SandboxClass{
 		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM:     setecv1alpha1.VMMFirecracker, //nolint:staticcheck // back-compat: VMM retained until v2
 			Default: isDefault,
 			MaxResources: &setecv1alpha1.Resources{
 				VCPU:   4,
@@ -271,11 +270,11 @@ func mkSandboxWithSnapshotRef(refName string) *setecv1alpha1.Sandbox {
 }
 
 // mkSnapshot returns a ready Snapshot CR for admission tests.
-func mkSnapshot(ns, name, classObj, image string, vmm setecv1alpha1.VMM) *setecv1alpha1.Snapshot {
+func mkSnapshot(ns, name, classObj, image string) *setecv1alpha1.Snapshot {
 	return &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: name,
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: classObj, ImageRef: image, VMM: vmm,
+			SandboxClass: classObj, ImageRef: image,
 			StorageBackend: "local-disk", StorageRef: name,
 			Node: "node-a",
 		},
@@ -300,7 +299,7 @@ func TestValidateCreate_Phase3_SnapshotRef(t *testing.T) {
 	t.Run("cross-namespace rejected via Validator", func(t *testing.T) {
 		t.Parallel()
 		cls := mkClass("standard", false, "8Gi")
-		snap := mkSnapshot("team-b", "snap-1", "standard", "img:v1", setecv1alpha1.VMMFirecracker)
+		snap := mkSnapshot("team-b", "snap-1", "standard", "img:v1")
 		c := newFakeClient(t, cls, snap)
 		v := &SandboxValidator{Resolver: class.NewResolver(c), Client: c}
 		sb := mkSandboxWithSnapshotRef("snap-1")
@@ -316,7 +315,7 @@ func TestValidateCreate_Phase3_SnapshotRef(t *testing.T) {
 	t.Run("incompatible class rejected", func(t *testing.T) {
 		t.Parallel()
 		cls := mkClass("standard", false, "8Gi")
-		snap := mkSnapshot("team-a", "snap-1", "fast", "img:v1", setecv1alpha1.VMMFirecracker)
+		snap := mkSnapshot("team-a", "snap-1", "fast", "img:v1")
 		c := newFakeClient(t, cls, snap)
 		v := &SandboxValidator{Resolver: class.NewResolver(c), Client: c}
 		sb := mkSandboxWithSnapshotRef("snap-1")
@@ -329,7 +328,7 @@ func TestValidateCreate_Phase3_SnapshotRef(t *testing.T) {
 	t.Run("compatible snapshot accepted", func(t *testing.T) {
 		t.Parallel()
 		cls := mkClass("standard", false, "8Gi")
-		snap := mkSnapshot("team-a", "snap-1", "standard", "img:v1", setecv1alpha1.VMMFirecracker)
+		snap := mkSnapshot("team-a", "snap-1", "standard", "img:v1")
 		c := newFakeClient(t, cls, snap)
 		v := &SandboxValidator{Resolver: class.NewResolver(c), Client: c}
 		sb := mkSandboxWithSnapshotRef("snap-1")

@@ -71,7 +71,6 @@ func idOf(t *testing.T, name string) string {
 // a fork cannot present the token of its source that it finds in its copy
 // of the source.
 func TestLauncher_SandboxIdentity(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("id-src", "sleep 3600")
 	src.Spec.Image = testImage("docker.io/library/python:3.12-slim")
 	createAndCleanup(t, src)

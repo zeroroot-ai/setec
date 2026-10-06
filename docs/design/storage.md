@@ -13,7 +13,7 @@ A session Sandbox gets a ReadWriteOnce PersistentVolumeClaim at `/workspace`. Th
 
 - `spec.lifecycle.workspace.size` sets the size. The default is 10 GiB.
 - `spec.lifecycle.workspace.storageClassName` selects the StorageClass. Unset takes the cluster default.
-- On `kata-fc` the workspace reaches the microVM as a raw block device, and the keepalive binary formats and mounts it (`cmd/setec-keepalive/formatworkspace.go`, `internal/workspace/format.go`).
+- The workspace reaches the microVM as a raw block device. The launcher formats a new workspace as ext4, and the guest agent mounts it at `/workspace` (`internal/launcher/disks.go`, `internal/guestagent/root_linux.go`).
 
 **Encryption.** `setec` adds no encryption to the workspace volume. Encryption at rest belongs to the StorageClass. Select a StorageClass whose CSI driver encrypts its volumes, for example an encrypted EBS, Ceph or LUKS class. `setec` does not check this setting (`api/v1alpha1/sandbox_types.go`, `WorkspaceSpec.StorageClassName`).
 

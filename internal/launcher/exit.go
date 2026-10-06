@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ExitReport is what the guest agent sends on ExitPort when the workload
@@ -68,7 +70,7 @@ func waitExit(ctx context.Context, l net.Listener) (ExitReport, error) {
 	select {
 	case <-ctx.Done():
 		_ = l.Close()
-		return ExitReport{}, ctx.Err()
+		return ExitReport{}, errwrap.Wrap(ctx.Err(), "context.Context.Err")
 	case res := <-out:
 		if res.err != nil && !errors.Is(res.err, net.ErrClosed) {
 			return ExitReport{}, res.err

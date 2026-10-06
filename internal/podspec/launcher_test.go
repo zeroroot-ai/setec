@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/launcher"
@@ -40,7 +41,16 @@ func TestBuildLauncher_IsNotPrivileged(t *testing.T) {
 	if len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 {
 		t.Fatalf("containers=%d init=%d, want one container", len(pod.Spec.Containers), len(pod.Spec.InitContainers))
 	}
-	c := pod.Spec.Containers[0]
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("the launcher Pod mounts a ServiceAccount token")
+	}
+	checkLauncherContainer(t, &pod.Spec.Containers[0])
+}
+
+// checkLauncherContainer checks that c has no privilege, no host port,
+// one of each device, and a readiness probe on the guest agent.
+func checkLauncherContainer(t *testing.T, c *corev1.Container) {
+	t.Helper()
 	sc := c.SecurityContext
 	if sc == nil || sc.Privileged != nil && *sc.Privileged {
 		t.Fatal("the launcher container is privileged")
@@ -57,9 +67,6 @@ func TestBuildLauncher_IsNotPrivileged(t *testing.T) {
 		if q := c.Resources.Limits[r]; q.Value() != 1 {
 			t.Fatalf("limit %s = %s, want 1", r, q.String())
 		}
-	}
-	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
-		t.Fatal("the launcher Pod mounts a ServiceAccount token")
 	}
 	if rp := c.ReadinessProbe; rp == nil || rp.Exec == nil || rp.Exec.Command[len(rp.Exec.Command)-1] != "ready" {
 		t.Fatal("the launcher container has no readiness probe on the guest agent")
@@ -159,6 +166,26 @@ func TestBuildLauncher_CarriesTheSpec(t *testing.T) {
 	}
 }
 
+// TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM pins the memory of the
+// Pod above the memory of the machine. A Pod limit equal to the machine
+// memory was killed by the kernel during each snapshot of a small machine.
+func TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM(t *testing.T) {
+	t.Parallel()
+	pod := launcherOrFatal(t)
+	res := pod.Spec.Containers[0].Resources
+	want := resource.MustParse("2Gi")
+	want.Add(LauncherMemoryOverhead)
+	for name, list := range map[string]corev1.ResourceList{"limit": res.Limits, "request": res.Requests} {
+		got := list[corev1.ResourceMemory]
+		if got.Cmp(want) != 0 {
+			t.Errorf("memory %s = %s, want %s (the machine and the overhead)", name, got.String(), want.String())
+		}
+	}
+	if LauncherMemoryOverhead.Sign() <= 0 {
+		t.Fatal("the launcher Pod has no memory for the VMM")
+	}
+}
+
 // TestBuildLauncher_SpecIsTheLauncherSpec ties the two sides together: the
 // launcher reads the JSON that the operator writes, and the checks of the
 // launcher accept it. The operator does not link the launcher, so this test
@@ -184,9 +211,8 @@ func TestBuildLauncher_SpecIsTheLauncherSpec(t *testing.T) {
 // equal on the wire.
 func TestLauncherFileNamesMatchTheLauncher(t *testing.T) {
 	t.Parallel()
-	if LauncherAPISocket != launcher.APISocket || LauncherVsockSocket != launcher.VsockSocket {
-		t.Fatalf("socket names differ: %s %s and %s %s",
-			LauncherAPISocket, LauncherVsockSocket, launcher.APISocket, launcher.VsockSocket)
+	if LauncherAPISocket != launcher.APISocket {
+		t.Fatalf("socket names differ: %s and %s", LauncherAPISocket, launcher.APISocket)
 	}
 	if LauncherStagedNoReseed != launcher.StagedNoReseed {
 		t.Fatalf("staged markers differ: %s and %s", LauncherStagedNoReseed, launcher.StagedNoReseed)
@@ -382,5 +408,65 @@ func TestBuildLauncher_IdentityKeyStaysWithTheLauncher(t *testing.T) {
 		if v.Secret != nil {
 			t.Fatal("a base mounts an identity Secret")
 		}
+	}
+}
+
+// TestBuildLauncher_ClassRequestsLowerTheReservation pins the scheduler
+// reservation of a class on the launcher Pod: a request below its limit
+// replaces the request, a request above its limit keeps the limit, and the
+// device resources keep a request equal to the limit.
+func TestBuildLauncher_ClassRequestsLowerTheReservation(t *testing.T) {
+	t.Parallel()
+	cpu := resource.MustParse("250m")
+	tooMuch := resource.MustParse("1Ti")
+	opts := launcherOpts()
+	opts.Requests = &setecv1alpha1.ResourceRequests{CPU: &cpu, Memory: &tooMuch}
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatalf("BuildLauncher: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got := res.Requests[corev1.ResourceCPU]; got.Cmp(cpu) != 0 {
+		t.Fatalf("cpu request = %s, want %s", got.String(), cpu.String())
+	}
+	if got, limit := res.Requests[corev1.ResourceMemory], res.Limits[corev1.ResourceMemory]; got.Cmp(limit) != 0 {
+		t.Fatalf("memory request = %s, want the limit %s", got.String(), limit.String())
+	}
+	for _, r := range []corev1.ResourceName{KVMResource, TunResource} {
+		if got, limit := res.Requests[r], res.Limits[r]; got.Cmp(limit) != 0 {
+			t.Fatalf("%s request = %s, want the limit %s", r, got.String(), limit.String())
+		}
+	}
+
+	// No class reservation: requests equal limits, except the ephemeral
+	// storage, which requests the headroom only.
+	plain := launcherOrFatal(t).Spec.Containers[0].Resources
+	for name, limit := range plain.Limits {
+		if name == corev1.ResourceEphemeralStorage {
+			continue
+		}
+		if got := plain.Requests[name]; got.Cmp(limit) != 0 {
+			t.Fatalf("%s request = %s, want the limit %s", name, got.String(), limit.String())
+		}
+	}
+}
+
+// TestBuildLauncher_EphemeralStorageLimit pins the ephemeral-storage limit
+// of the launcher Pod (setec#172): the work volume, the scratch size plus
+// 2Gi, plus the headroom for logs. The request is the headroom.
+func TestBuildLauncher_EphemeralStorageLimit(t *testing.T) {
+	t.Parallel()
+	opts := launcherOpts()
+	opts.Scratch = resource.MustParse("4Gi")
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatalf("BuildLauncher: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got, want := res.Limits[corev1.ResourceEphemeralStorage], resource.MustParse("7Gi"); got.Cmp(want) != 0 {
+		t.Fatalf("ephemeral-storage limit = %s, want %s", got.String(), want.String())
+	}
+	if got, want := res.Requests[corev1.ResourceEphemeralStorage], resource.MustParse("1Gi"); got.Cmp(want) != 0 {
+		t.Fatalf("ephemeral-storage request = %s, want %s", got.String(), want.String())
 	}
 }

@@ -28,7 +28,6 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
-	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // asSession marks a Sandbox as session-lifecycle with an optional
@@ -185,57 +184,22 @@ func TestSessionLifecycle_TeardownDeletesPVC(t *testing.T) {
 	}, convergeTimeout, convergeInterval).Should(BeTrue(), "Sandbox should be fully deleted after workspace teardown")
 }
 
-// TestNewWorkspacePVC_VolumeModePerBackend is the unit-level fixture for
-// setec#91: newWorkspacePVC is a pure function, so the per-backend
-// volumeMode decision is asserted here without a live or fake
-// apiserver. kata-fc gets volumeMode: Block (Firecracker has no
-// virtio-fs, so the workspace PVC must reach the guest as a raw block
-// device); every other backend keeps volumeMode unset, which the API
-// defaults to Filesystem — today's behavior, unchanged.
-func TestNewWorkspacePVC_VolumeModePerBackend(t *testing.T) {
+// TestNewWorkspacePVC_IsABlockVolume is the unit-level fixture for
+// setec#91: Firecracker has no virtio-fs, so the workspace of each session
+// reaches the machine as a raw block device. newWorkspacePVC is a pure
+// function, so the claim is asserted with no API server. Two calls share
+// no volumeMode pointer.
+func TestNewWorkspacePVC_IsABlockVolume(t *testing.T) {
 	g := NewWithT(t)
 	sb := newSandbox("default", "sess", asSession("2Gi"))
 
-	for _, tc := range []struct {
-		backend       string
-		wantVolBlock  bool
-		wantVolNilFor string
-	}{
-		{backend: runtimepkg.BackendKataFC, wantVolBlock: true},
-		{backend: runtimepkg.BackendKataQEMU, wantVolBlock: false},
-		{backend: runtimepkg.BackendGVisor, wantVolBlock: false},
-		{backend: runtimepkg.BackendRunc, wantVolBlock: false},
-	} {
-		pvc := newWorkspacePVC(sb, tc.backend)
+	pvc := newWorkspacePVC(sb)
+	g.Expect(pvc.Name).To(Equal(podspec.WorkspacePVCName(sb.Name)))
+	g.Expect(pvc.Spec.AccessModes).To(ConsistOf(corev1.ReadWriteOnce))
+	g.Expect(pvc.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("2Gi")))
+	g.Expect(pvc.Spec.VolumeMode).NotTo(BeNil())
+	g.Expect(*pvc.Spec.VolumeMode).To(Equal(corev1.PersistentVolumeBlock))
 
-		g.Expect(pvc.Name).To(Equal(podspec.WorkspacePVCName(sb.Name)))
-		g.Expect(pvc.Spec.AccessModes).To(ConsistOf(corev1.ReadWriteOnce))
-		g.Expect(pvc.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("2Gi")))
-
-		if tc.wantVolBlock {
-			g.Expect(pvc.Spec.VolumeMode).NotTo(BeNil(), "backend %q should get an explicit volumeMode", tc.backend)
-			g.Expect(*pvc.Spec.VolumeMode).To(Equal(corev1.PersistentVolumeBlock),
-				"backend %q should provision a Block-mode workspace PVC", tc.backend)
-		} else {
-			g.Expect(pvc.Spec.VolumeMode).To(BeNil(),
-				"backend %q must keep a filesystem-mode workspace PVC (nil volumeMode)", tc.backend)
-		}
-	}
-}
-
-// TestNewWorkspacePVC_NeverMutatesFilesystemBackendsAcrossCalls is the
-// failing fixture for the "one code path per backend decision point"
-// contract (one cutover, no parallel path): calling newWorkspacePVC for kata-fc must not
-// leave any shared state that leaks into a later call for a
-// filesystem-mode backend. Sharing a *corev1.PersistentVolumeMode
-// pointer across calls, for example, would make this fail.
-func TestNewWorkspacePVC_NeverMutatesFilesystemBackendsAcrossCalls(t *testing.T) {
-	g := NewWithT(t)
-	sb := newSandbox("default", "sess", asSession("2Gi"))
-
-	_ = newWorkspacePVC(sb, runtimepkg.BackendKataFC)
-	after := newWorkspacePVC(sb, runtimepkg.BackendRunc)
-
-	g.Expect(after.Spec.VolumeMode).To(BeNil(),
-		"a prior kata-fc call must not leave runc with a Block volumeMode")
+	other := newWorkspacePVC(sb)
+	g.Expect(other.Spec.VolumeMode).NotTo(BeIdenticalTo(pvc.Spec.VolumeMode))
 }

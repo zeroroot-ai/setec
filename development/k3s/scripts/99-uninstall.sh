@@ -18,8 +18,6 @@ if [[ -f "${KUBECONFIG_PATH}" ]] && \
    kubectl get nodes --no-headers 2>/dev/null | grep -qE '\sReady\s'; then
     yellow "helm uninstall setec (best-effort, 30s timeout)"
     timeout 30 helm uninstall setec -n setec-system --no-hooks --wait=false 2>/dev/null || true
-    yellow "helm uninstall kata-deploy (best-effort, 30s timeout)"
-    timeout 30 helm uninstall kata-deploy -n kube-system --no-hooks --wait=false 2>/dev/null || true
 else
     yellow "Skipping helm uninstalls — no Ready node in cluster (or kubeconfig absent)"
     yellow "k3s-uninstall.sh below will wipe cluster state regardless"
@@ -31,7 +29,10 @@ if [[ -x /usr/local/bin/k3s-uninstall.sh ]]; then
     sudo /usr/local/bin/k3s-uninstall.sh
 fi
 
+# The disk registry of 20-install-disk-registry.sh
+docker rm -f setec-dev-disks >/dev/null 2>&1 || true
+
 # Working-tree cleanup
-rm -rf "${PKI}" "${KUBECONFIG_PATH}"
+rm -rf "${PKI}" "${KUBECONFIG_PATH}" "${ROOT}/disk-repo"
 rm -f "${ROOT}"/manifests/gibson-kind/*.generated.yaml 2>/dev/null || true
-yellow "Removed pki/, kubeconfig, generated manifests."
+yellow "Removed pki/, kubeconfig, disk-repo, generated manifests, the disk registry."

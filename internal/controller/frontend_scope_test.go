@@ -35,6 +35,7 @@ func TestFrontendScope_OnlyPairNamespacesAndTheirGrants(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred(), "this test renders the chart and needs helm on PATH")
 	var out bytes.Buffer
 	cmd := exec.Command(helm, "template", "setec", filepath.Join("..", "..", "charts", "setec"), //nolint:gosec // fixed arguments
+		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "frontend.enabled=true",
 		"--set", "frontend.tlsCertSecretName=x", "--set", "frontend.tlsClientCASecretName=y",

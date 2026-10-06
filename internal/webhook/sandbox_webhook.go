@@ -22,6 +22,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -101,11 +102,11 @@ type ClientNamespaceGetter struct {
 // "namespace not found" remediation message.
 func (g *ClientNamespaceGetter) GetNamespaceLabels(ctx context.Context, name string) (map[string]string, error) {
 	if g == nil || g.Client == nil {
-		return nil, fmt.Errorf("ClientNamespaceGetter: client is nil")
+		return nil, errors.New("ClientNamespaceGetter: client is nil")
 	}
 	ns := &corev1.Namespace{}
 	if err := g.Client.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "client.Reader.Get")
 	}
 	return ns.Labels, nil
 }
@@ -147,6 +148,42 @@ func (v *SandboxValidator) ValidateDelete(_ context.Context, _ *setecv1alpha1.Sa
 // error and returns a single aggregate so users see the whole list at
 // once rather than playing whack-a-mole against one error per apply.
 func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandbox) (admission.Warnings, error) {
+	errs := structuralErrors(sb)
+
+	// (1) Tenant-label enforcement when multi-tenancy is enabled.
+	// Fail closed: a nil NamespaceGetter means mis-wired production
+	// and the webhook refuses the Sandbox rather than silently
+	// skipping the check.
+	if v.MultiTenancyEnabled && v.TenantLabelKey != "" {
+		if v.NamespaceGetter == nil {
+			return nil, errors.New("webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
+		}
+		if err := v.checkTenantLabel(ctx, sb); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	cls, classErrs, err := v.classErrors(ctx, sb)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, classErrs...)
+
+	snapErrs, err := v.snapshotErrors(ctx, sb, cls)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, snapErrs...)
+
+	if len(errs) == 0 {
+		return nil, nil
+	}
+	return nil, utilerrors.NewAggregate(errs)
+}
+
+// structuralErrors are the problems of the lifecycle, the command and the
+// desired state of sb, which need no lookup.
+func structuralErrors(sb *setecv1alpha1.Sandbox) []error {
 	var errs []error
 
 	// (0) Lifecycle structural checks. A workspace block is a
@@ -166,8 +203,8 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 
 	// (0b) An ephemeral Sandbox's one command is its whole life
 	// (docs/design/lifecycles.md), so it must have one. A session may leave it empty:
-	// the operator boots the setec keepalive and work arrives through
-	// Exec (setec#7). The CRD no longer requires the field, so this is
+	// the machine then runs the entry point of the image, and work
+	// arrives through Exec (setec#7). The CRD no longer requires the field, so this is
 	// where the ephemeral rule is enforced at admission.
 	if len(sb.Spec.Command) == 0 && !sb.Spec.IsSession() {
 		errs = append(errs, fmt.Errorf(
@@ -184,23 +221,17 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 			"spec.desiredState=Suspended requires spec.lifecycle.mode=session (effective mode is %q)",
 			sb.Spec.EffectiveLifecycleMode()))
 	}
+	return errs
+}
 
-	// (1) Tenant-label enforcement when multi-tenancy is enabled.
-	// Fail closed: a nil NamespaceGetter means mis-wired production
-	// and the webhook refuses the Sandbox rather than silently
-	// skipping the check.
-	if v.MultiTenancyEnabled && v.TenantLabelKey != "" {
-		if v.NamespaceGetter == nil {
-			return nil, fmt.Errorf(
-				"webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
-		}
-		if err := v.checkTenantLabel(ctx, sb); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
+// classErrors resolves the SandboxClass of sb and checks sb against it
+// (step 2). err is an unexpected failure that the admission controller
+// handles with its failurePolicy.
+func (v *SandboxValidator) classErrors(
+	ctx context.Context, sb *setecv1alpha1.Sandbox,
+) (cls *setecv1alpha1.SandboxClass, errs []error, err error) {
 	// (2) SandboxClass resolution + constraint validation.
-	cls, err := v.Resolver.Resolve(ctx, sb)
+	cls, err = v.Resolver.Resolve(ctx, sb)
 	switch {
 	case errors.Is(err, class.ErrClassNotFound):
 		errs = append(errs, fmt.Errorf(
@@ -212,16 +243,14 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 		// single-tenant cluster without any SandboxClass must still
 		// be admitted.
 		if v.MultiTenancyEnabled || sb.Spec.SandboxClassName != "" {
-			errs = append(errs, fmt.Errorf(
-				"no default SandboxClass configured and Sandbox did not specify sandboxClassName"))
+			errs = append(errs, errors.New("no default SandboxClass configured and Sandbox did not specify sandboxClassName"))
 		}
 	case errors.Is(err, class.ErrAmbiguousDefault):
-		errs = append(errs, fmt.Errorf(
-			"multiple SandboxClasses marked default:true; administrator must resolve ambiguity"))
+		errs = append(errs, errors.New("multiple SandboxClasses marked default:true; administrator must resolve ambiguity"))
 	case err != nil:
 		// Unexpected error (e.g., API server down). Return directly
 		// so the admission controller can apply failurePolicy.
-		return nil, fmt.Errorf("webhook: resolve SandboxClass: %w", err)
+		return nil, nil, fmt.Errorf("webhook: resolve SandboxClass: %w", err)
 	default:
 		// Class resolved cleanly: run the pure validator.
 		for _, vio := range class.Validate(sb, cls) {
@@ -234,7 +263,14 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 				"spec.desiredState=Suspended requires SandboxClass %q to enable spec.sessionCheckpoint", cls.Name))
 		}
 	}
+	return cls, errs, nil
+}
 
+// snapshotErrors checks the snapshotRef of sb (step 3).
+func (v *SandboxValidator) snapshotErrors(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+) ([]error, error) {
+	var errs []error
 	// (3) Phase 3: snapshotRef admission. Reject Sandboxes whose
 	// snapshot reference resolves to a different namespace, does not
 	// exist, or is incompatible with the resolved class.
@@ -257,11 +293,7 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 			}
 		}
 	}
-
-	if len(errs) == 0 {
-		return nil, nil
-	}
-	return nil, utilerrors.NewAggregate(errs)
+	return errs, nil
 }
 
 // checkTenantLabel reads the Sandbox's namespace and confirms the
@@ -290,9 +322,9 @@ func (v *SandboxValidator) checkTenantLabel(ctx context.Context, sb *setecv1alph
 // SetupWebhookWithManager registers the Sandbox validating webhook with
 // the controller-runtime manager. Callers invoke it from cmd/main.go.
 func (v *SandboxValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Sandbox{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Sandbox{}).
 		WithValidator(v).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // assert the webhook type exists as referenced by docs and tests.

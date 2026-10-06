@@ -27,20 +27,9 @@ limitations under the License.
 // SECOND command lands in the SAME live sandbox and can read what the FIRST
 // one wrote to /workspace. Only a real sandbox can demonstrate that.
 //
-// RUNS WITHOUT STAGING OR PROD. The estate is torn down, so this is written to
-// pass on a kind cluster with the `runc` backend as well as on metal with
-// kata-fc. That is sound rather than a shortcut: Exec is implemented over the
-// Kubernetes pods/exec subresource (internal/frontend/exec.go), which is
-// backend-agnostic — for kata-fc the kubelet routes through the Kata shim, for
-// runc it is an ordinary container exec. The workspace-affinity property being
-// asserted is a property of session lifecycle and the PVC, not of the
-// isolation backend.
-//
-// What a runc run does NOT prove is isolation. It is not meant to: that is
-// covered by TestRuntimeBackends_* and the invariant gates. Chain 6 asks
-// whether a session keeps its worktree, and this answers exactly that.
-//
-// Select the backend with SETEC_E2E_BACKEND (default kata-fc).
+// RUNS WITHOUT STAGING OR PROD. The launcher job of the e2e workflow runs
+// it on a kind cluster on a GitHub-hosted runner with KVM, then runs it again
+// with the property broken on purpose and requires that run to fail.
 package e2e
 
 import (
@@ -59,15 +48,6 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
-
-// chain6Backend selects the isolation backend. kata-fc on metal; the kind
-// exit-test workflow sets runc, which needs no KVM.
-func chain6Backend() string {
-	if b := strings.TrimSpace(os.Getenv("SETEC_E2E_BACKEND")); b != "" {
-		return b
-	}
-	return "kata-fc"
-}
 
 const (
 	chain6ClassName   = "chain6-session-cls"
@@ -95,16 +75,12 @@ const (
 // expectation a coding agent has of its own session, so both are asserted.
 func TestChain6_SessionAffinity(t *testing.T) {
 	ctx := context.Background()
-	backend := chain6Backend()
 
 	cls := newSandboxClass(chain6ClassName, setecv1alpha1.SandboxClassSpec{
-		// VMM satisfies the +required marker on the field; the webhook reads
-		// Runtime.Backend and uses that instead.
-		VMM:     setecv1alpha1.VMMFirecracker,
-		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: backend},
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
 	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
-		t.Fatalf("create SandboxClass %q (backend %q): %v", chain6ClassName, backend, err)
+		t.Fatalf("create SandboxClass %q: %v", chain6ClassName, err)
 	}
 	t.Cleanup(func() {
 		_ = k8sClient.Delete(context.Background(), &setecv1alpha1.SandboxClass{
@@ -173,8 +149,7 @@ func TestChain6_SessionAffinity(t *testing.T) {
 			"session did not.", podBefore.UID, podAfter.UID)
 	}
 
-	t.Logf("CHAIN 6 EXIT TEST PASSED (backend=%s): two commands, one microVM (pod %s), shared /workspace",
-		backend, podAfter.Name)
+	t.Logf("CHAIN 6 EXIT TEST PASSED: two commands, one microVM (pod %s), shared /workspace", podAfter.Name)
 }
 
 // breakSessionAffinity destroys the property under test, so the assertions

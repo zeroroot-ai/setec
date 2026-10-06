@@ -5,3 +5,4 @@ kubeconfig
 *.pem
 manifests/gibson-kind/*.generated.yaml
 .cache/
+disk-repo

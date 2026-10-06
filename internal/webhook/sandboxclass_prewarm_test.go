@@ -7,120 +7,53 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	setecruntime "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
-// TestSandboxClassWebhook_ValidatePreWarm covers the docs/design/lifecycles.md
-// declarative pre-warm pool surface: pool size, image, and TTL are one
-// coherent knob, and an active pool requires the kata-fc backend
-// (pool restore drives the Kata VM's Firecracker socket).
+// TestSandboxClassWebhook_ValidatePreWarm covers the warm pool of a class
+// (setec#103): an active pool needs an image with a digest, the default
+// resources of the class, and the signer of the image.
 func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 	t.Parallel()
-
-	mk := func(size int32, image string, ttl *metav1.Duration, backend string) *setecv1alpha1.SandboxClass {
-		cls := mkSandboxClass("pw", "", mkRuntime(backend))
+	digest := "ghcr.io/org/tools@sha256:" + strings.Repeat("a", 64)
+	mk := func(size int32, image string) *setecv1alpha1.SandboxClass {
+		cls := mkSandboxClass("pw", mkRuntime(setecruntime.BackendLauncher))
 		cls.Spec.PreWarmPoolSize = size
 		cls.Spec.PreWarmImage = image
-		cls.Spec.PreWarmTTL = ttl
+		cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{
+			Issuer: "https://token.actions.githubusercontent.com", Identity: "https://github.com/org/tools/.github/workflows/release.yml@refs/tags/v1",
+		}
 		return cls
 	}
-
+	unsigned := withDefaultResources(mk(2, digest))
+	unsigned.Spec.PreWarmImageSignature = nil
+	both := withDefaultResources(mk(2, digest))
+	both.Spec.PreWarmImageSignature.PublicKey = "-----BEGIN PUBLIC KEY-----"
 	tests := []struct {
 		name    string
 		class   *setecv1alpha1.SandboxClass
 		wantErr bool
 		wantMsg string
 	}{
-		{
-			name:  "pool disabled → accept",
-			class: mk(0, "", nil, setecruntime.BackendKataFC),
-		},
-		{
-			name:  "full trio on kata-fc → accept",
-			class: mk(3, "ghcr.io/org/tools:v1", &metav1.Duration{Duration: time.Hour}, setecruntime.BackendKataFC),
-		},
-		{
-			name:  "pool without TTL → accept (node-agent defaults 24h)",
-			class: mk(1, "ghcr.io/org/tools:v1", nil, setecruntime.BackendKataFC),
-		},
-		{
-			name:    "pool size without image → reject",
-			class:   mk(2, "", nil, setecruntime.BackendKataFC),
-			wantErr: true,
-			wantMsg: "requires preWarmImage",
-		},
-		{
-			name:    "zero TTL → reject",
-			class:   mk(1, "ghcr.io/org/tools:v1", &metav1.Duration{}, setecruntime.BackendKataFC),
-			wantErr: true,
-			wantMsg: "positive duration",
-		},
-		{
-			name:    "negative TTL → reject",
-			class:   mk(1, "ghcr.io/org/tools:v1", &metav1.Duration{Duration: -time.Minute}, setecruntime.BackendKataFC),
-			wantErr: true,
-			wantMsg: "positive duration",
-		},
-		{
-			name:    "TTL invalid even when pool disabled → reject",
-			class:   mk(0, "", &metav1.Duration{Duration: -time.Second}, setecruntime.BackendKataFC),
-			wantErr: true,
-			wantMsg: "positive duration",
-		},
-		{
-			name:  "image without pool size → accept (lease pool template only)",
-			class: mk(0, "ghcr.io/org/tools:v1", nil, setecruntime.BackendKataFC),
-		},
-		{
-			name:    "pool on gvisor → reject",
-			class:   mk(1, "ghcr.io/org/tools:v1", nil, setecruntime.BackendGVisor),
-			wantErr: true,
-			wantMsg: "require the \"kata-fc\" or the \"launcher\" backend",
-		},
-		{
-			name:    "pool on kata-qemu → reject",
-			class:   mk(1, "ghcr.io/org/tools:v1", nil, setecruntime.BackendKataQEMU),
-			wantErr: true,
-			wantMsg: "require the \"kata-fc\" or the \"launcher\" backend",
-		},
-		{
-			name: "launcher pool with a digest and a default size → accept",
-			class: withDefaultResources(mk(2, "ghcr.io/org/tools@sha256:"+strings.Repeat("a", 64), nil,
-				setecruntime.BackendLauncher)),
-		},
-		{
-			name:    "launcher pool with a tag → reject",
-			class:   withDefaultResources(mk(2, "ghcr.io/org/tools:v1", nil, setecruntime.BackendLauncher)),
-			wantErr: true,
-			wantMsg: "needs an image with a digest",
-		},
-		{
-			name:    "launcher pool with no default size → reject",
-			class:   mk(2, "ghcr.io/org/tools@sha256:"+strings.Repeat("a", 64), nil, setecruntime.BackendLauncher),
-			wantErr: true,
-			wantMsg: "default resources",
-		},
+		{name: "no pool", class: mk(0, "")},
+		{name: "a pool with a digest and a size", class: withDefaultResources(mk(2, digest))},
+		{name: "a pool with no image", class: withDefaultResources(mk(2, "")), wantErr: true, wantMsg: "requires preWarmImage"},
+		{name: "a pool with a tag", class: withDefaultResources(mk(2, "ghcr.io/org/tools:v1")), wantErr: true, wantMsg: "digest"},
+		{name: "a pool with no size", class: mk(2, digest), wantErr: true, wantMsg: "defaultResources"},
+		{name: "a pool with no signer", class: unsigned, wantErr: true, wantMsg: "preWarmImageSignature"},
+		{name: "a pool with a keyless signer and a key", class: both, wantErr: true, wantMsg: "not both"},
 	}
-
-	cfg := baseConfig()
-	cfg.Runtimes[setecruntime.BackendLauncher] = setecruntime.BackendConfig{Enabled: true}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), cfg)
-			_, err := w.ValidateCreate(context.Background(), tc.class)
+			_, err := classWebhook(t).ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected a validation error, got nil")
-				}
-				if !strings.Contains(err.Error(), tc.wantMsg) {
-					t.Fatalf("error %q does not contain %q", err.Error(), tc.wantMsg)
+				if err == nil || !strings.Contains(err.Error(), tc.wantMsg) {
+					t.Fatalf("error = %v, want %q", err, tc.wantMsg)
 				}
 				return
 			}
@@ -137,10 +70,10 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 // without a backend to check.
 func TestSandboxClassWebhook_ValidatePreWarm_NilRuntime(t *testing.T) {
 	t.Parallel()
-	cls := mkSandboxClass("pw-nil", "", nil)
+	cls := mkSandboxClass("pw-nil", nil)
 	cls.Spec.PreWarmPoolSize = 2 // no image
 
-	w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
+	w := classWebhook(t)
 	_, err := w.ValidateCreate(context.Background(), cls)
 	if err == nil || !strings.Contains(err.Error(), "requires preWarmImage") {
 		t.Fatalf("expected preWarmImage pairing error with nil Runtime, got: %v", err)

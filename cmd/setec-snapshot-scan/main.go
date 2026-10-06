@@ -65,7 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if leaked {
 		printf(stderr, "FAIL: no-secrets-in-snapshot gate found %d secret-shaped finding(s):\n", len(allFindings))
 		for _, f := range allFindings {
-			printf(stderr, "  %s: %s\n", f.Path, f.Finding.String())
+			printf(stderr, "  %s: %s\n", f.Path, f.String())
 		}
 		printf(stderr, "\n"+
 			"A Snapshot is shared across every warm-pool claim. Secrets MUST be injected\n"+

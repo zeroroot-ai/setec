@@ -288,7 +288,7 @@ func TestSaveCleansUpOnWriteFailure(t *testing.T) {
 	// Root that becomes read-only after Save's state file is created.
 	_ = dir
 	// Alternative: point Root at a path where MkdirAll fails.
-	b.Root = filepath.Join(b.Root, "not", "\x00bad") // nul byte makes os calls reject
+	b.Root = filepath.Join(b.Root, "not", string(rune(0))+"bad") // nul byte makes os calls reject
 	_, _, err := b.Save(context.Background(), "nope", bytes.NewReader([]byte("x")))
 	if err == nil {
 		t.Fatalf("Save into invalid Root: expected error")

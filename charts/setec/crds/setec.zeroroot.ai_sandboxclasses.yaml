@@ -17,9 +17,6 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.vmm
-      name: VMM
-      type: string
     - jsonPath: .spec.default
       name: Default
       type: boolean
@@ -446,23 +443,6 @@ spec:
                 items:
                   type: string
                 type: array
-              kernelImage:
-                description: |-
-                  KernelImage is NOT HONORED and the validating webhook refuses a class
-                  that sets it (setec#126).
-
-                  It read "an optional OCI reference to a custom guest kernel image the node
-                  agent pre-pulls and hands to Kata". No node agent pre-pulls it and no
-                  controller reads it, so a class naming a hardened or digest-pinned kernel
-                  was admitted and the sandbox booted the operator-wide default, reporting
-                  nothing. The microVM is the isolation boundary, so that substitution
-                  silently changed the boundary.
-
-                  Honoring it needs a Kata hypervisor path annotation, which Kata gates
-                  behind an operator-configured allowlist that is empty by default for the
-                  same reason. Pin the guest kernel on the node instead. The field stays
-                  served so an existing object still validates.
-                type: string
               maxPauseDuration:
                 description: |-
                   MaxPauseDuration bounds how long a Sandbox may remain in
@@ -530,8 +510,7 @@ spec:
                   type: string
                 description: |-
                   NodeSelector is injected into every Sandbox Pod produced under this
-                  class. It is additive to any Pod-level selectors the controller sets
-                  for RuntimeClass affinity.
+                  class. It is additive to the node affinity that the controller sets.
                 type: object
               preWarmImage:
                 description: |-
@@ -541,22 +520,38 @@ spec:
                   grammar; validation beyond non-empty is a webhook concern so the
                   CRD schema remains minimal.
                 type: string
+              preWarmImageSignature:
+                description: |-
+                  PreWarmImageSignature names who must have signed PreWarmImage. The
+                  operator checks the cosign signature of the image before it builds a
+                  base. An image that does not verify gets the condition
+                  ImageNotVerified on the class, and no base. A pool needs it; the
+                  webhook enforces that.
+                properties:
+                  identity:
+                    description: |-
+                      Identity is the certificate identity of a keyless signature, for
+                      example the URI of the release workflow of the image owner.
+                    type: string
+                  issuer:
+                    description: |-
+                      Issuer is the OIDC issuer of a keyless signature, for example
+                      https://token.actions.githubusercontent.com.
+                    type: string
+                  publicKey:
+                    description: PublicKey is a PEM public key, for an image signed
+                      with a key.
+                    type: string
+                type: object
               preWarmPoolSize:
                 description: |-
-                  PreWarmPoolSize declares how many paused microVMs the node-agent
-                  maintains per eligible node for this class. Zero disables the
-                  pool (Phase 1/2 behavior). When non-zero PreWarmImage MUST be
-                  set — the webhook enforces the pairing.
+                  PreWarmPoolSize is the number of warm pool bases that the operator
+                  keeps for this class (setec#103). Zero disables the pool. When
+                  non-zero, PreWarmImage with a digest and DefaultResources must be
+                  set; the webhook enforces both.
                 format: int32
                 minimum: 0
                 type: integer
-              preWarmTTL:
-                description: |-
-                  PreWarmTTL bounds the age of pool entries. Entries older than
-                  this are recycled (torn down and reprovisioned) to avoid stale
-                  kernel state accumulating in paused VMs. When unset the
-                  node-agent defaults to 24h at runtime.
-                type: string
               requests:
                 description: |-
                   Requests is the scheduler reservation for every Sandbox Pod in
@@ -591,63 +586,18 @@ spec:
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                 type: object
-              rootfsImage:
-                description: |-
-                  RootfsImage is NOT HONORED and the validating webhook refuses a class
-                  that sets it. Same cause and same remedy as KernelImage (setec#126).
-                type: string
               runtime:
                 description: |-
-                  Runtime selects the isolation backend and optional fallback chain for
-                  Sandboxes in this class. When nil the operator infers the backend from
-                  the legacy VMM field for backwards compatibility.
+                  Runtime names the isolation backend of the class. Nil means the one
+                  backend, the launcher.
                 properties:
                   backend:
                     description: |-
-                      Backend is the isolation runtime to use for Sandboxes in this class.
-                      Must be one of the five supported backends. When unset the operator
-                      falls back to the cluster default declared in Helm values.
-                    enum:
-                    - kata-fc
-                    - kata-qemu
-                    - gvisor
-                    - runc
-                    - launcher
+                      Backend is "launcher" or empty. The webhook and the operator refuse
+                      each other name, and name the reason for a backend that left in
+                      setec#198.
                     type: string
-                  fallback:
-                    description: |-
-                      Fallback is an ordered list of backend names to attempt when no node
-                      advertises the requested Backend. Each entry must be one of the five
-                      supported backends. The operator tries each in order; the first backend
-                      with a capable node wins. status.runtime.chosen records the final
-                      selection.
-
-                      When NO candidate has a capable node the operator keeps the requested
-                      Backend, creates the Pod anyway, and holds the Sandbox Pending with
-                      reason AwaitingCapableNode. The unschedulable Pod is what makes a
-                      scale-to-zero node pool provision a node; falling back would not help,
-                      because a fallback with no capable node is exactly as unschedulable as
-                      the primary with no capable node.
-                    items:
-                      type: string
-                    type: array
-                  params:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      Params is a map of backend-specific tuning parameters forwarded to the
-                      RuntimeDispatcher. Keys and semantics vary per backend (e.g.
-                      params.vcpus, params.memory for kata-qemu). Unknown keys are ignored
-                      by backends that do not understand them.
-                    type: object
                 type: object
-              runtimeClassName:
-                description: |-
-                  Deprecated: use Runtime.Backend instead.
-                  RuntimeClassName optionally overrides the operator-wide default
-                  RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
-                  controller falls back to its --runtime-class-name flag.
-                type: string
               sessionCheckpoint:
                 description: |-
                   SessionCheckpoint enables L2 memory checkpoints for session
@@ -760,24 +710,6 @@ spec:
                       type: string
                   type: object
                 type: array
-              vmm:
-                description: |-
-                  Deprecated: use Runtime.Backend instead.
-                  VMM selects the virtual machine monitor targeted by this class.
-
-                  Optional. It was previously required, which made every class that
-                  states its isolation the current way — through Runtime.Backend —
-                  unadmittable: the API server rejected it with "spec.vmm: Required
-                  value", so the chart's own SandboxClasses could not be applied, no
-                  class resolved, and every Sandbox fell back to deny-all. A field
-                  that is deprecated cannot also be mandatory. When it is empty the
-                  operator reads Runtime.Backend; when both are empty the operator's
-                  configured default backend applies.
-                enum:
-                - firecracker
-                - qemu
-                - cloud-hypervisor
-                type: string
             type: object
           status:
             description: status reflects the observed state of the class.
@@ -850,12 +782,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              observedGeneration:
-                description: |-
-                  ObservedGeneration is the .metadata.generation the operator last
-                  reconciled. Optional; left empty in Phase 2.
-                format: int64
-                type: integer
               warmPool:
                 description: WarmPool reports the warm pool of a launcher class (setec#103).
                 properties:

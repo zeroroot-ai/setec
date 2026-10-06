@@ -244,8 +244,10 @@ func TestExec_Success(t *testing.T) {
 	if ex.gotContainer != workloadContainerName {
 		t.Errorf("container = %q, want %q", ex.gotContainer, workloadContainerName)
 	}
-	if strings.Join(ex.gotCommand, " ") != "make build" {
-		t.Errorf("command = %v, want [make build]", ex.gotCommand)
+	// The relay of the launcher container carries the command into the
+	// machine.
+	if want := strings.Join(append(append([]string{}, LauncherExecCommand...), "make", "build"), " "); strings.Join(ex.gotCommand, " ") != want {
+		t.Errorf("command = %v, want %s", ex.gotCommand, want)
 	}
 }
 

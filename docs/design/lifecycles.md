@@ -12,7 +12,7 @@ The default. The Sandbox runs one command to completion and keeps no state. `spe
 A session lives across many calls.
 
 - It has a workspace volume at `/workspace` that outlives its Pod ([storage](storage.md)).
-- A session that names no command boots the keepalive binary, and work arrives through `Exec` (`cmd/setec-keepalive/`, `internal/podspec/builder.go`).
+- A session that names no command runs the entry point of its image, and work arrives through `Exec` (`internal/podspec/launcher.go`).
 - A client attaches again with the sandbox id (`Attach`). `internal/frontend/attach.go`.
 - `Exec` runs a command in the running session and returns a typed exit. `internal/frontend/exec.go`.
 - `Attach` and an open log stream record activity on the Sandbox (`setec.zeroroot.ai/last-activity`), so a session in use is never idle-evicted. `internal/frontend/attach.go`, `internal/frontend/service.go`.
@@ -31,6 +31,6 @@ The class sets the policy (`api/v1alpha1/sandboxclass_types.go`):
 - A class lowers the ceilings with `maxResources`, and `internal/class/validator.go` refuses a Sandbox above them.
 - A `ResourceQuota` of the tenant namespace is the second control ([multi-tenancy](../multitenancy.md)).
 
-## The warm pool and leases
+## The warm pool
 
-The lease service keeps a pool of started Sandboxes for each tenant namespace and class (`internal/leasepool/pool.go`). `Lease` claims one, `Exec` runs one command in a new Sandbox of the same class, and `Release` destroys the leased Sandbox and fills the pool again. A used Sandbox is never handed to a second caller (`internal/frontend/leaseservice.go`).
+A class keeps warm bases: full snapshots of a machine that booted the pool image and ran no workload (`internal/controller/warm_pool.go`). A Sandbox of the class loads a base instead of a boot, and each loaded base gets a new identity and new randomness.

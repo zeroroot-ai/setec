@@ -15,6 +15,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -115,7 +116,7 @@ func attachFailure(
 	}); err == nil {
 		st = detailed
 	}
-	return st.Err()
+	return errwrap.Wrap(st.Err(), "status.Status.Err")
 }
 
 // touchSessionActivity stamps the Sandbox's last-activity annotation
@@ -135,7 +136,7 @@ func (s *Service) touchSessionActivity(ctx context.Context, ns, name string, t t
 	sb := &setecv1alpha1.Sandbox{
 		Namespace: ns, Name: name,
 	}
-	return s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body))
+	return errwrap.Wrap(s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body)), "client.Writer.Patch")
 }
 
 // keepSessionActive marks the session active for the duration of a

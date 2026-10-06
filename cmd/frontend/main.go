@@ -114,12 +114,6 @@ func main() {
 		Enrollment: enrollment,
 		Resolver:   resolver,
 	}
-	leaseSrv := &frontend.LeaseService{
-		Client:     k8sClient,
-		Clientset:  clientset,
-		Enrollment: enrollment,
-		Resolver:   resolver,
-	}
 
 	// mTLS is mandatory and the credential mode is explicit. Half a
 	// mode, both modes, or neither is a misconfiguration the Deployment
@@ -144,7 +138,6 @@ func main() {
 
 	grpcServer := grpc.NewServer(grpcOpts...)
 	setecv1grpc.RegisterSandboxServiceServer(grpcServer, srv)
-	setecv1grpc.RegisterLeaseServiceServer(grpcServer, leaseSrv)
 
 	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -158,10 +151,6 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	// Bind the lease-pool background replenish loops to the process
-	// lifetime; they stop when ctx is canceled on shutdown.
-	leaseSrv.Start(ctx)
 
 	go func() {
 		<-ctx.Done()
@@ -212,11 +201,8 @@ type credentialFlags struct {
 // same answer and the same message. Selecting on "any flag set" is what
 // makes a typo in one flag name a startup error naming the missing
 // piece rather than a silent switch to the other mode.
-func (f credentialFlags) config(enrolledIDs []string) (credentials.Config, string) {
-	var (
-		cfg  credentials.Config
-		mode = unsetMode
-	)
+func (f credentialFlags) config(enrolledIDs []string) (cfg credentials.Config, mode string) {
+	mode = unsetMode
 	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
 		cfg.Files = &credentials.FileSource{
 			CertFile: f.tlsCert,

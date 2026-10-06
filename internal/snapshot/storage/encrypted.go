@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 )
 
@@ -200,9 +201,9 @@ func dekAAD(snapshotID string) string {
 // streams the encrypted payload into the inner backend. On any inner
 // failure the sealed DEK is destroyed so no orphan key material
 // remains.
-func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, "", err
+		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
@@ -237,7 +238,7 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 		_ = pr.CloseWithError(saveErr)
 		// The ciphertext never landed; destroy the orphan key.
 		if shredErr := b.DEKs.Destroy(ctx, snapshotID); shredErr != nil && !errors.Is(shredErr, os.ErrNotExist) {
-			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %v", saveErr, shredErr)
+			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %w", saveErr, shredErr)
 		}
 		return 0, "", saveErr
 	}
@@ -251,7 +252,7 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 // or payload that fails authentication returns ErrCorrupted.
 func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
@@ -269,7 +270,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 	}
 	dek, err := atrest.OpenDEK(kek, sealed, dekAAD(storageRef))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupted, err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
 	}
 
 	rc, err := b.Inner.Open(ctx, storageRef)
@@ -280,7 +281,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 	if err != nil {
 		_ = rc.Close()
 		if errors.Is(err, atrest.ErrDecrypt) {
-			return nil, fmt.Errorf("%w: %v", ErrCorrupted, err)
+			return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
 		}
 		return nil, err
 	}
@@ -293,7 +294,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 // caller's idempotency contract is preserved.
 func (b *EncryptedBackend) Delete(ctx context.Context, storageRef string) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
@@ -313,7 +314,7 @@ func (b *EncryptedBackend) Delete(ctx context.Context, storageRef string) error 
 
 // Stat delegates to the inner backend; the reported size is the
 // stored (ciphertext) size, consistent with what Save returned.
-func (b *EncryptedBackend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *EncryptedBackend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	return b.Inner.Stat(ctx, storageRef)
 }
 
@@ -324,12 +325,12 @@ type decryptReadCloser struct {
 	closer io.Closer
 }
 
-func (d *decryptReadCloser) Close() error { return d.closer.Close() }
+func (d *decryptReadCloser) Close() error { return d.closer.Close() } //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
 
 // Compile-time interface assertions.
 var (
 	_ StorageBackend = (*EncryptedBackend)(nil)
 	_ KEKSource      = (*FileKEKSource)(nil)
-	_ KEKSource      = (StaticKEKSource)(nil)
+	_ KEKSource      = StaticKEKSource(nil)
 	_ SealedDEKStore = (*DirDEKStore)(nil)
 )

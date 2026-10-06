@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 )
 
@@ -29,8 +30,7 @@ import (
 //	memSize(8) extentCount(8) { offset(8) length(8) data }...
 //	diskSize(8) extentCount(8) { offset(8) length(8) data }...
 //
-// A kata snapshot has another form (makeFramedReader), and the magic keeps
-// one from loading as the other.
+// The magic keeps a file of another form from loading as a snapshot.
 var launcherFrameMagic = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '1', '\n'}
 
 // maxParentChain bounds the parents that one restore follows, and
@@ -78,16 +78,16 @@ func dataExtents(f *os.File, size int64) ([]extent, error) {
 func copySparse(src, dst string) (err error) {
 	in, err := os.Open(src) //nolint:gosec // a path in the work volume of the Pod
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Open")
 	}
 	defer func() { _ = in.Close() }()
 	st, err := in.Stat()
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.File.Stat")
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // a path of the node agent
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.OpenFile")
 	}
 	defer func() {
 		if cerr := out.Close(); err == nil {
@@ -100,10 +100,10 @@ func copySparse(src, dst string) (err error) {
 	}
 	for _, e := range exts {
 		if _, err := io.Copy(io.NewOffsetWriter(out, e.off), io.NewSectionReader(in, e.off, e.n)); err != nil {
-			return err
+			return errwrap.Wrap(err, "io.Copy")
 		}
 	}
-	return out.Truncate(st.Size())
+	return errwrap.Wrap(out.Truncate(st.Size()), "os.File.Truncate")
 }
 
 // makeLauncherFramedReader frames the state, the memory and the writable
@@ -118,12 +118,12 @@ func makeLauncherFramedReader(parentRef, statePath, memPath, diskPath string) (i
 	open := func(p string) (*os.File, int64, error) {
 		f, err := os.Open(p) //nolint:gosec // a path of the node agent
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, errwrap.Wrap(err, "os.Open")
 		}
 		files = append(files, f)
 		st, err := f.Stat()
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, errwrap.Wrap(err, "os.File.Stat")
 		}
 		return f, st.Size(), nil
 	}
@@ -246,7 +246,7 @@ func writeExtents(r io.Reader, path string, fresh bool) error {
 	}
 	f, err := os.OpenFile(path, flags, 0o600) //nolint:gosec // a path of the node agent
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.OpenFile")
 	}
 	for range count {
 		var e [2]uint64
@@ -265,9 +265,9 @@ func writeExtents(r io.Reader, path string, fresh bool) error {
 	}
 	if err := f.Truncate(int64(size)); err != nil { //nolint:gosec // a size of the stored stream
 		_ = f.Close()
-		return err
+		return errwrap.Wrap(err, "os.File.Truncate")
 	}
-	return f.Close()
+	return errwrap.Wrap(f.Close(), "os.File.Close")
 }
 
 // scanSparseFiles scans the data extents of each file for secret-shaped
@@ -277,12 +277,12 @@ func scanSparseFiles(paths []string) error {
 	for _, p := range paths {
 		f, err := os.Open(p) //nolint:gosec // a path of the node agent
 		if err != nil {
-			return err
+			return errwrap.Wrap(err, "os.Open")
 		}
 		st, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
-			return err
+			return errwrap.Wrap(err, "os.File.Stat")
 		}
 		exts, err := dataExtents(f, st.Size())
 		if err != nil {
@@ -303,4 +303,33 @@ func scanSparseFiles(paths []string) error {
 		}
 	}
 	return nil
+}
+
+// writeN copies n bytes of r to a new file at path.
+func writeN(r io.Reader, path string, n int64) error {
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return errwrap.Wrap(err, "os.OpenFile")
+	}
+	defer func() { _ = f.Close() }()
+	_, err = io.CopyN(f, r, n)
+	return errwrap.Wrap(err, "io.CopyN")
+}
+
+// multiReadCloser reads one reader and closes each file under it.
+type multiReadCloser struct {
+	reader  io.Reader
+	closers []io.Closer
+}
+
+func (m *multiReadCloser) Read(p []byte) (int, error) { return m.reader.Read(p) } //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
+
+func (m *multiReadCloser) Close() error {
+	var firstErr error
+	for _, c := range m.closers {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
