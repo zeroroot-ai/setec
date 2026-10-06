@@ -502,9 +502,7 @@ func (s *SandboxSpec) IsEphemeral() bool {
 // for this Sandbox after fallback resolution. Populated by the reconciler
 // once a backend is chosen; empty while the Sandbox is still Pending.
 type SandboxRuntimeStatus struct {
-	// Chosen is the name of the backend selected after evaluating the
-	// SandboxClass's primary backend and any fallback chain. One of
-	// kata-fc, kata-qemu, gvisor, or runc.
+	// Chosen is the backend of the Sandbox: launcher.
 	// +optional
 	Chosen string `json:"chosen,omitempty"`
 }
@@ -674,8 +672,8 @@ type SandboxCheckpointStatus struct {
 type SandboxWarmStartOutcome string
 
 const (
-	// SandboxWarmStartPoolRestored means a pre-warmed pool entry was
-	// claimed and restored into this Sandbox's kata-fc Pod.
+	// SandboxWarmStartPoolRestored means the Sandbox loaded a base of the
+	// warm pool of its class.
 	SandboxWarmStartPoolRestored SandboxWarmStartOutcome = "PoolRestored"
 	// SandboxWarmStartColdBoot means no pool entry was used (pool
 	// empty, node-agent unreachable, or restore failed) and the

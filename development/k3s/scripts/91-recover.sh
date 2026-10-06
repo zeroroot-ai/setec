@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Recovery helper: clean stuck helm state, restart k3s, verify kata-fc is
-# still functional, re-run setec install. Use when a prior `make up` left
+# Recovery helper: clean stuck helm state, restart k3s, verify the node
+# still offers the KVM device, re-run setec install. Use when a prior `make up` left
 # the node NotReady or helm in pending-install / pending-upgrade state.
 
 set -eo pipefail
@@ -30,9 +30,8 @@ for rel in setec; do
     esac
 done
 
-# 2. Restart k3s. Force kills the cluster — kata-deploy's containerd state
-#    gets re-read from the drop-in directory on restart, so a clean boot
-#    picks up the kata handler properly.
+# 2. Restart k3s. A clean boot re-reads registries.yaml and the containerd
+#    configuration.
 green "Restarting k3s (requires sudo)"
 sudo systemctl restart k3s
 
@@ -45,17 +44,16 @@ while ! kubectl get nodes --no-headers 2>/dev/null | grep -qE '\sReady\s'; do
 done
 green "Node Ready"
 
-# 4. Verify kata-fc RuntimeClass is still registered.
-if ! kubectl get runtimeclass kata-fc >/dev/null 2>&1; then
-    red "FAIL: RuntimeClass kata-fc missing after k3s restart — re-run scripts/20-install-kata.sh"
-    exit 1
-fi
-green "RuntimeClass kata-fc still registered"
+# 4. Wait for the device plugin to offer the KVM device again. A launcher
+#    Pod runs nowhere else.
+green "Waiting up to 3m for the node to offer setec.zeroroot.ai/kvm"
+deadline=$(( $(date +%s) + 180 ))
+until kubectl get nodes -o jsonpath='{.items[*].status.allocatable.setec\.zeroroot\.ai/kvm}' 2>/dev/null | grep -qE '[1-9]'; do
+    [[ $(date +%s) -gt $deadline ]] && { red "FAIL: no node offers setec.zeroroot.ai/kvm — check the device plugin and /dev/kvm"; exit 1; }
+    sleep 5
+done
+green "The node offers setec.zeroroot.ai/kvm"
 
-# 5. Let the kata-deploy DaemonSet re-stabilise if its pod was evicted.
-green "Waiting for kata-deploy DaemonSet to return to Ready (up to 3m)"
-kubectl -n kube-system rollout status ds/kata-deploy --timeout=3m 2>&1 | tail -2
-
-# 6. Re-run setec install.
+# 5. Re-run setec install.
 green "Re-running 40-install-setec.sh"
 "${ROOT}/scripts/40-install-setec.sh"

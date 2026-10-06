@@ -1,0 +1,6 @@
+{{- /*
+The render-time validation hook (templates/_validate.tpl). It renders no
+object. Helm renders this file before the component templates, so a
+values error names the setting rather than a later symptom.
+*/ -}}
+{{- include "setec.validate" . -}}

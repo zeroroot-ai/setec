@@ -12,7 +12,7 @@ The default. The Sandbox runs one command to completion and keeps no state. `spe
 A session lives across many calls.
 
 - It has a workspace volume at `/workspace` that outlives its Pod ([storage](storage.md)).
-- A session that names no command boots the keepalive binary, and work arrives through `Exec` (`cmd/setec-keepalive/`, `internal/podspec/builder.go`).
+- A session that names no command runs the entry point of its image, and work arrives through `Exec` (`internal/podspec/launcher.go`).
 - A client attaches again with the sandbox id (`Attach`). `internal/frontend/attach.go`.
 - `Exec` runs a command in the running session and returns a typed exit. `internal/frontend/exec.go`.
 - `Attach` and an open log stream record activity on the Sandbox (`setec.zeroroot.ai/last-activity`), so a session in use is never idle-evicted. `internal/frontend/attach.go`, `internal/frontend/service.go`.

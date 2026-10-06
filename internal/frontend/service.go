@@ -45,10 +45,9 @@ const streamLogsPodPollInterval = 1 * time.Second
 // become loggable. 30s matches the Requirement 2.5 budget.
 const streamLogsPodPollTimeout = 30 * time.Second
 
-// workloadContainerName is the name the podspec builder assigns to the
-// workload container. Duplicated here (rather than imported) to keep
-// the frontend free of a dependency on the podspec package.
-const workloadContainerName = "workload"
+// workloadContainerName is the container whose log is the Sandbox log:
+// the launcher container, which writes the console of the machine.
+const workloadContainerName = podspec.LauncherContainerName
 
 // maxLogLineBytes caps one log line. It matches the kubelet's own log
 // line limit and is what keeps a workload that emits something huge on
@@ -460,7 +459,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	// Serve the captured log instead.
 	follow := req.GetFollow() && !workloadContainerTerminated(pod)
 
-	window := logWindow{Follow: follow, Container: podContainer(pod)}
+	window := logWindow{Follow: follow, Container: workloadContainerName}
 	if tail > 0 {
 		window.TailLines = &tail
 	}
@@ -567,9 +566,8 @@ func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
 // logWindow selects which part of a container's log a read covers.
 // The zero value is the whole log the kubelet still holds, read to EOF.
 type logWindow struct {
-	// Container is the container to read. Empty reads the workload
-	// container of a RuntimeClass Pod; a launcher Pod sets "launcher",
-	// whose log is the console of the machine.
+	// Container is the container to read. The launcher Pod has one
+	// container, "launcher", whose log is the console of the machine.
 	Container string
 
 	// Follow keeps the read open for new lines after the existing ones.
@@ -632,19 +630,6 @@ func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string
 }
 
 // workloadContainerTerminated reports whether the Pod's workload
-// podContainer is the container whose log is the Sandbox log: the
-// launcher container of a launcher Pod (the console of the machine), else
-// the workload container.
-func podContainer(pod *corev1.Pod) string {
-	if pod != nil {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == podspec.LauncherContainerName {
-				return c.Name
-			}
-		}
-	}
-	return workloadContainerName
-}
 
 // container has already exited, so following it would attach to
 // nothing. A Pod can still report Running while its single workload
@@ -655,7 +640,7 @@ func workloadContainerTerminated(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	name := podContainer(pod)
+	name := workloadContainerName
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == name {
 			return cs.State.Terminated != nil

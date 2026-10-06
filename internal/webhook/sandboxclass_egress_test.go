@@ -37,10 +37,10 @@ func kubeDNSAllowance() setecv1alpha1.EgressAllowSelector {
 // at least one well-formed port.
 func TestSandboxClassWebhook_EgressAllowSelectors(t *testing.T) {
 	t.Parallel()
-	w := webhookWith(fakeClientWithNS(t), baseConfig())
+	w := classWebhook(t)
 
 	classWith := func(entries ...setecv1alpha1.EgressAllowSelector) *setecv1alpha1.SandboxClass {
-		cls := mkSandboxClass("agent", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("agent", mkRuntime("launcher"))
 		cls.Spec.EgressAllowSelectors = entries
 		return cls
 	}
@@ -155,7 +155,7 @@ func TestSandboxClassWebhook_EgressAllowSelectors(t *testing.T) {
 	})
 
 	t.Run("holds with Runtime nil", func(t *testing.T) {
-		cls := mkSandboxClass("noruntime", setecv1alpha1.VMMFirecracker, nil)
+		cls := mkSandboxClass("noruntime", nil)
 		cls.Spec.EgressAllowSelectors = []setecv1alpha1.EgressAllowSelector{
 			{Ports: []setecv1alpha1.EgressAllowPort{{Port: intstr.FromInt32(53)}}},
 		}
@@ -170,10 +170,10 @@ func TestSandboxClassWebhook_EgressAllowSelectors(t *testing.T) {
 // exemption is refused at admission rather than at reconcile.
 func TestSandboxClassWebhook_EgressExemptCIDRs(t *testing.T) {
 	t.Parallel()
-	w := webhookWith(fakeClientWithNS(t), baseConfig())
+	w := classWebhook(t)
 
 	t.Run("accepts prefixes", func(t *testing.T) {
-		cls := mkSandboxClass("ok", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("ok", mkRuntime("launcher"))
 		cls.Spec.EgressExemptCIDRs = []string{"10.96.0.0/12", "10.96.0.250/32"}
 		if _, err := w.ValidateCreate(context.Background(), cls); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -181,7 +181,7 @@ func TestSandboxClassWebhook_EgressExemptCIDRs(t *testing.T) {
 	})
 
 	t.Run("rejects a bare address and garbage", func(t *testing.T) {
-		cls := mkSandboxClass("bad", setecv1alpha1.VMMFirecracker, mkRuntime("kata-fc"))
+		cls := mkSandboxClass("bad", mkRuntime("launcher"))
 		cls.Spec.EgressExemptCIDRs = []string{"10.96.0.250", "not-a-cidr"}
 		_, err := w.ValidateCreate(context.Background(), cls)
 		if err == nil {

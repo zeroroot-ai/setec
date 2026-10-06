@@ -11,22 +11,17 @@ This page states what `setec` protects, from whom, and where the boundary is for
 
 The code in a Sandbox is untrusted. The image, the command and the network intent come from the caller and pass the class policy first ([isolation](isolation.md)).
 
-## The boundary for each backend
+## The boundary
 
-| Backend | Boundary | An escape needs |
-|---|---|---|
-| `kata-fc` | A Firecracker microVM with its own kernel, on KVM. | A break of the guest kernel, then of Firecracker, then of KVM or the host kernel. |
-| `kata-qemu` | A QEMU microVM with its own kernel. | A break of the guest kernel, then of QEMU, then of KVM or the host kernel. QEMU has a larger attack surface than Firecracker. |
-| `gvisor` | The gVisor kernel in user space, under a seccomp filter. | A break of the gVisor kernel and of the filter to reach the host kernel. |
-| `runc` | Linux namespaces and cgroups only. | One bug in the host kernel. Not a boundary for untrusted code. A dev cluster only. |
+Each Sandbox is a Firecracker microVM with its own kernel, on KVM. An escape needs a break of the guest kernel, then of Firecracker, then of KVM or the host kernel. The launcher is the only runtime: the Kata, gVisor and runc backends were removed (setec#198).
 
-On every backend the Pod controls of the [isolation](isolation.md) page apply: no privilege, no capabilities but `NET_RAW` and `NET_ADMIN`, a read-only root, no ServiceAccount token, and a NetworkPolicy that denies by default.
+The launcher Pod around the machine adds the Pod controls of the [isolation](isolation.md) page: no privilege, one capability (`NET_ADMIN`, to join the machine to the Pod network), a read-only root, no ServiceAccount token, nothing mounted from the host, and a NetworkPolicy that denies by default. The machine boots only a disk that the install key signed.
 
 ## Pods that touch the host
 
 Two Pods of the chart touch the host on purpose. Each one is a named exception in its template:
 
-- The installer is privileged, because it writes host files and restarts containerd. It holds no Kubernetes credential (`charts/setec/templates/installer-daemonset.yaml`).
+- The node agent is privileged and runs as root, because it reads and writes the work volumes of the launcher Pods under the kubelet directory. It calls no Kubernetes API, so it holds no token and no RBAC (`charts/setec/templates/daemonset.yaml`).
 - The device plugin runs as root with two host paths, the kubelet plugin directory and `/dev`. It is not privileged and holds no capability and no credential (`charts/setec/templates/device-plugin-daemonset.yaml`).
 
 ## Callers

@@ -16,7 +16,7 @@
 #      env, and the resulting DiscoveryResult lands in Neo4j.
 #
 # Prerequisites:
-#   - make up (k3s + kata + devmapper + Setec running)
+#   - make up (k3s + disk registry + Setec running)
 #   - Kind cluster 'gibson' up
 #   - Gibson Helm release deployed with tool_runner.enabled=true and
 #     tool_runner.images=[<runner tag>]

@@ -1,22 +1,13 @@
 name: images
 
 # Builds + pushes setec, setec-node-agent, setec-frontend,
-# setec-runtime-agent, setec-guest-agent, setec-keepalive, and
-# setec-installer to GHCR.
+# setec-device-plugin, setec-launcher and setec-disk-builder to GHCR.
 # Adopts the org reusable image-build workflow (slice 1.2, .github#47).
 #
-# All service images share a single Dockerfile; CMD build-arg selects the
-# binary. setec-installer builds from Dockerfile.installer instead: it
-# additionally bundles the pinned kata-containers static release as an
-# immutable payload (docs/design/runtime.md, setec#187) and is amd64-only — the kata
-# payload is x86 (docs/design/runtime.md) and the chart's installer DaemonSet pins
-# kubernetes.io/arch: amd64.
-# setec-guest-agent is not a runnable service image: it exists so microVM
-# rootfs builders can COPY the static binary out of it (the in-guest half
-# of the entropy reseed on snapshot restore, setec#72).
-# setec-keepalive is the boot command of a session Sandbox that declares
-# no spec.command (setec#7): the operator runs it as an init container that
-# installs the static binary into a shared volume.
+# The service images share a single Dockerfile; CMD build-arg selects the
+# binary. setec-launcher builds from Dockerfile.launcher: it carries
+# Firecracker, the guest kernel and the guest agent. setec-disk-builder
+# builds from Dockerfile.disk-builder.
 # The draft GitHub Release creation lives in release.yml.
 # Example Dockerfiles under examples/ are NOT published as releases (skipped).
 #
@@ -57,33 +48,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # kata.env at the repo root is the one place the kata release is pinned
-  # (setec#26). This job reads it once; setec-installer passes the two
-  # values as build args, because
-  # Dockerfile.installer's ARGs carry no default on purpose.
-  # scripts/check-runtime-pins.sh keeps it that way.
-  kata-pin:
+  # firecracker.env at the repo root is the one place the Firecracker
+  # release is pinned. This job reads it once; setec-launcher passes the two
+  # values as build args, because Dockerfile.launcher's ARGs carry no default
+  # on purpose. scripts/check-runtime-pins.sh keeps it that way.
+  runtime-pin:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
-      version: ${{ steps.read.outputs.version }}
-      sha256: ${{ steps.read.outputs.sha256 }}
       firecracker_version: ${{ steps.read.outputs.firecracker_version }}
       firecracker_sha256: ${{ steps.read.outputs.firecracker_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Guard the pins and read kata.env
+      - name: Guard the pins and read firecracker.env
         id: read
         run: |
           set -euo pipefail
           bash scripts/check-runtime-pins.sh
-          . ./kata.env
           . ./firecracker.env
           {
             echo "firecracker_version=${FIRECRACKER_VERSION}"
             echo "firecracker_sha256=${FIRECRACKER_SHA256}"
-            echo "version=${KATA_VERSION}"
-            echo "sha256=${KATA_SHA256}"
           } >> "$GITHUB_OUTPUT"
 
   setec:
@@ -158,78 +143,6 @@ jobs:
       build_args: |
         CMD=frontend
 
-  setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
-    permissions:
-      # the reusable build never writes repo contents (.github#323)
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
-      actions: read
-    with:
-      component_name: setec-runtime-agent
-      component_path: .
-      dockerfile_path: Dockerfile
-      image_name: ghcr.io/zeroroot-ai/setec-runtime-agent
-      tag_pattern: (v.*)
-      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
-      # go.mod names a Go the pinned base does not carry.
-      go_toolchain_local: true
-      platforms: linux/amd64
-      version_tag: ${{ inputs.version_tag || '' }}
-      build_args: |
-        CMD=runtime-agent
-
-  setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
-    permissions:
-      # the reusable build never writes repo contents (.github#323)
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
-      actions: read
-    with:
-      component_name: setec-guest-agent
-      component_path: .
-      dockerfile_path: Dockerfile
-      image_name: ghcr.io/zeroroot-ai/setec-guest-agent
-      tag_pattern: (v.*)
-      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
-      # go.mod names a Go the pinned base does not carry.
-      go_toolchain_local: true
-      platforms: linux/amd64
-      version_tag: ${{ inputs.version_tag || '' }}
-      build_args: |
-        CMD=setec-guest-agent
-
-  setec-keepalive:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
-    permissions:
-      # the reusable build never writes repo contents (.github#323)
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
-      actions: read
-    with:
-      component_name: setec-keepalive
-      component_path: .
-      dockerfile_path: Dockerfile
-      image_name: ghcr.io/zeroroot-ai/setec-keepalive
-      tag_pattern: (v.*)
-      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
-      # go.mod names a Go the pinned base does not carry.
-      go_toolchain_local: true
-      platforms: linux/amd64
-      version_tag: ${{ inputs.version_tag || '' }}
-      build_args: |
-        CMD=setec-keepalive
-
   setec-device-plugin:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
@@ -254,65 +167,8 @@ jobs:
       build_args: |
         CMD=setec-device-plugin
 
-  # Pinned AHEAD of the other six image jobs, which stay on v0.7.2, and that is
-  # deliberate rather than drift: this is the only job that passes
-  # vendored_binaries, so it is the only one that needs a reusable new enough to
-  # accept it. Moving the other six is a separate change with its own blast radius
-  # and no reason to ride along here.
-  setec-installer:
-    needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
-    permissions:
-      # the reusable build never writes repo contents (.github#323)
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
-      actions: read
-    with:
-      component_name: setec-installer
-      component_path: .
-      dockerfile_path: Dockerfile.installer
-      image_name: ghcr.io/zeroroot-ai/setec-installer
-      tag_pattern: (v.*)
-      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
-      # go.mod names a Go the pinned base does not carry.
-      go_toolchain_local: true
-      # amd64 only: the bundled kata static payload is x86 (docs/design/runtime.md).
-      platforms: linux/amd64
-      version_tag: ${{ inputs.version_tag || '' }}
-      # Binaries this repo does NOT compile, so the vulnerability gate asks
-      # REACHABILITY for them instead of staleness (.github#163, v0.8.3).
-      #
-      # Why this one. A Go stdlib finding from an image scanner is a version
-      # comparison: the binary's Go is behind a patch. For a binary we build that
-      # is the right question, because bumping Go is ours to do. For a vendored
-      # binary it has no remedy: upstream picks the Go. The gVisor binaries were
-      # the first case (11 HIGH stdlib findings, no installer image from
-      # v0.117.0). gVisor left this image by owner decision D70.
-      #
-      # This is NOT an allowlist. govulncheck -mode=binary reports a vulnerability
-      # only when the affected SYMBOL is in the binary; a reachable finding still
-      # blocks, and an analysis that does not run blocks. Checked before relying
-      # on it: the binary is not stripped (51,862 readable symbols in the kata
-      # 4.2.0 shim), so binary mode runs at full precision rather than
-      # degrading to a module-level guess.
-      #
-      # Paths are as trivy names its Target: no leading slash. A path that is not
-      # in the image fails loudly rather than quietly tolerating anything — the
-      # collector writes .failed when docker cp misses, and .failed blocks.
-      #
-      # firecracker and jailer are deliberately absent: they are Rust, so they
-      # carry no Go stdlib to compare.
-      vendored_binaries: |
-        opt/kata/bin/containerd-shim-kata-v2
-      build_args: |
-        KATA_VERSION=${{ needs.kata-pin.outputs.version }}
-        KATA_SHA256=${{ needs.kata-pin.outputs.sha256 }}
-
   setec-launcher:
-    needs: kata-pin
+    needs: runtime-pin
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
@@ -334,8 +190,8 @@ jobs:
       platforms: linux/amd64
       version_tag: ${{ inputs.version_tag || '' }}
       build_args: |
-        FIRECRACKER_VERSION=${{ needs.kata-pin.outputs.firecracker_version }}
-        FIRECRACKER_SHA256=${{ needs.kata-pin.outputs.firecracker_sha256 }}
+        FIRECRACKER_VERSION=${{ needs.runtime-pin.outputs.firecracker_version }}
+        FIRECRACKER_SHA256=${{ needs.runtime-pin.outputs.firecracker_sha256 }}
 
   setec-disk-builder:
     uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5

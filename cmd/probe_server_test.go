@@ -24,7 +24,7 @@ import (
 // was killed on a ~60s loop forever — the Deployment never reached 2/2 at the
 // chart's default replica count.
 func TestProbeServerDoesNotWaitForLeadership(t *testing.T) {
-	var r manager.Runnable = newProbeServer("127.0.0.1:0", &readyzState{})
+	var r manager.Runnable = newProbeServer("127.0.0.1:0")
 
 	ler, ok := r.(manager.LeaderElectionRunnable)
 	if !ok {
@@ -54,7 +54,7 @@ func TestProbeServerServesBeforeLeadershipIsAcquired(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv := newProbeServer(addr, &readyzState{})
+	srv := newProbeServer(addr)
 	errCh := make(chan error, 1)
 	// Started directly, with nothing standing in for leader election: this is
 	// the standby's situation.

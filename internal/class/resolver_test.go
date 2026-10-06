@@ -45,7 +45,6 @@ func mkClass(name string, isDefault bool) *setecv1alpha1.SandboxClass {
 	return &setecv1alpha1.SandboxClass{
 		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM:     setecv1alpha1.VMMFirecracker,
 			Default: isDefault,
 		},
 	}

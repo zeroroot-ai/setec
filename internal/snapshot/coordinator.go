@@ -40,8 +40,6 @@ type NodeAgentClient interface {
 	RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error)
 	PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error)
 	ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error)
-	QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error)
-	ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error)
 	DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error)
 }
 
@@ -402,20 +400,12 @@ func (c *Coordinator) diffParent(ctx context.Context, sb *setecv1alpha1.Sandbox,
 
 // newSnapshotCR builds the Snapshot CR for a sandbox snapshot request.
 // Everything it fills is knowable before the storage write: the node is
-// the Pod's node, and the VMM comes from the resolved class.
-//
-// VMM is populated from the resolved class when possible so the CRD enum
-// validation is satisfied. Callers using the bare sandbox (no class)
-// fall back to Firecracker, matching Phase 3's supported-VMM default.
+// the Pod's node, and the CPU template comes from the resolved class.
 func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandbox, nodeName string) *setecv1alpha1.Snapshot {
-	vmm := setecv1alpha1.VMMFirecracker
 	cpuTemplate := ""
 	if sb.Spec.SandboxClassName != "" {
 		cls := &setecv1alpha1.SandboxClass{}
 		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil {
-			if cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
-				vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
-			}
 			cpuTemplate = cls.Spec.CPUTemplate
 		}
 	}
@@ -433,7 +423,6 @@ func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandb
 			SourceSandbox:  sb.Name,
 			SandboxClass:   className,
 			ImageRef:       sb.Spec.Image,
-			VMM:            vmm,
 			TTL:            ttlFrom(sb.Spec.Snapshot.TTL),
 			StorageBackend: c.backendName(),
 			Node:           nodeName,
@@ -637,143 +626,6 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 	c.recordDuration("restore", sb, time.Since(start))
 	return nil
-}
-
-// WarmStartFromPool attempts the docs/design/lifecycles.md declarative warm start for
-// an ephemeral Sandbox whose class maintains a pre-warm pool: it dials
-// the node-agent on the Sandbox Pod's node and asks it to claim a pool
-// entry and restore the paused-VM state into the Pod's Firecracker
-// socket.
-//
-// The method NEVER returns an error — every failure mode (unscheduled
-// pod, unreachable node-agent, empty pool, failed restore) resolves to
-// a cold-boot fallback, which is the acceptance contract of setec#188:
-// a restore failure must not fail the Sandbox. The returned outcome +
-// entry id are for status/metrics; Events are emitted here.
-//
-// The ONE exception is the docs/design/isolation.md invariant gate: when the node
-// reports a successful restore whose per-restore invariant
-// verifications did not all pass, cold boot is no longer safe — the
-// Pod's VM already holds the unverified restored state — so the
-// outcome is WarmStartRejected and the caller MUST destroy the
-// Sandbox.
-func (c *Coordinator) WarmStartFromPool(
-	ctx context.Context,
-	sb *setecv1alpha1.Sandbox,
-	cls *setecv1alpha1.SandboxClass,
-) (WarmStartOutcome, string) {
-	ctx, span := c.startSpan(ctx, "snapshot.WarmStartFromPool")
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("setec.sandbox", sb.Namespace+"/"+sb.Name),
-		attribute.String("setec.class", cls.Name),
-	)
-	start := time.Now()
-
-	fallback := func(reason string) (WarmStartOutcome, string) {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
-			fmt.Sprintf("warm-start unavailable, continuing cold boot: %s", reason))
-		setSpanErr(span, reason)
-		c.recordWarmStart(WarmStartError, cls.Name)
-		return WarmStartError, ""
-	}
-
-	pod, err := c.getPod(ctx, sb)
-	if err != nil {
-		return fallback(err.Error())
-	}
-	if pod.Spec.NodeName == "" {
-		return fallback("pod not scheduled")
-	}
-	na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName)
-	if dialErr != nil {
-		return fallback(fmt.Sprintf("dial node-agent on %q: %v", pod.Spec.NodeName, dialErr))
-	}
-
-	resp, rpcErr := na.ClaimPoolEntry(ctx, &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass: cls.Name,
-		ImageRef:     cls.Spec.PreWarmImage,
-		TargetPodUid: string(pod.UID),
-		SandboxId:    sb.Namespace + "/" + sb.Name,
-		PodIp:        pod.Status.PodIP,
-		Hostname:     sb.Name,
-	})
-	switch {
-	case rpcErr != nil:
-		return fallback(fmt.Sprintf("ClaimPoolEntry RPC: %v", rpcErr))
-	case !resp.GetClaimed():
-		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
-			fmt.Sprintf("no pre-warmed pool entry for class %q on node %q; continuing cold boot",
-				cls.Name, pod.Spec.NodeName))
-		c.recordWarmStart(WarmStartMiss, cls.Name)
-		return WarmStartMiss, ""
-	case !resp.GetSuccess():
-		return fallback(fmt.Sprintf("pool entry %q restore failed: %s", resp.GetEntryId(), resp.GetError()))
-	}
-
-	// docs/design/isolation.md invariant gate — the single decision point between "the
-	// node restored state into this Pod" and "the Sandbox is served".
-	// Evidence: invariant 1 from the node's clean-base attestation
-	// (the entry's recorded secret-scan verdict, digest-matched
-	// against this restore's decrypted artifacts — independent of
-	// invariant 4's provenance evidence, setec#206); invariants 4/5
-	// from the provenance/encryption attestations; invariant 2 from
-	// the reseed + uniquification confirmations; invariant 3 holds
-	// structurally on this path (the entry was consumed by this one
-	// claim — a pool entry is never restored twice — and the
-	// controller attempts warm-start at most once per Sandbox,
-	// stamped in status.warmStart).
-	ev := gate.Evidence{
-		CleanBase:          resp.GetCleanBaseVerified(),
-		EntropyReseeded:    resp.GetEntropyReseeded(),
-		IdentityUniquified: resp.GetUniquified(),
-		SingleSession:      true,
-		ProvenanceVerified: resp.GetProvenanceVerified(),
-		EncryptedAtRest:    resp.GetEncryptedAtRest(),
-	}
-	decision, gateErr := c.Gate.Decide(ctx, cls, ev)
-	if !decision.Allowed {
-		msg := c.gateRefusalMsg(fmt.Sprintf("pool entry %q", resp.GetEntryId()), decision, gateErr)
-		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-			SandboxId:    sb.Namespace + "/" + sb.Name,
-			TargetPodUid: string(pod.UID),
-		}); pauseErr != nil {
-			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
-		}
-		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
-		setSpanErr(span, msg)
-		c.recordWarmStart(WarmStartRejected, cls.Name)
-		c.recordDuration("warmstart", sb, time.Since(start))
-		return WarmStartRejected, resp.GetEntryId()
-	}
-	if decision.DevOptOut {
-		c.emit(sb, corev1.EventTypeWarning, EventReasonUnverifiedRestoreAllowed,
-			fmt.Sprintf("DEV-MODE OPT-OUT: serving warm start from pool entry %q despite %s",
-				resp.GetEntryId(), decision.String()))
-	}
-
-	c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartRestored,
-		fmt.Sprintf("warm-started from pool entry %q on node %q", resp.GetEntryId(), pod.Spec.NodeName))
-	if resp.GetEntropyReseeded() {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
-			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (pool entry %q)", resp.GetEntryId()))
-	}
-	if resp.GetUniquified() {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
-			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (pool entry %q)", resp.GetEntryId()))
-	}
-	c.recordWarmStart(WarmStartRestored, cls.Name)
-	c.recordDuration("warmstart", sb, time.Since(start))
-	return WarmStartRestored, resp.GetEntryId()
-}
-
-// recordWarmStart increments the warm-start outcome counter when
-// metrics are enabled.
-func (c *Coordinator) recordWarmStart(outcome WarmStartOutcome, class string) {
-	if c.Metrics == nil {
-		return
-	}
-	c.Metrics.IncWarmStart(string(outcome), class)
 }
 
 // Pause invokes the node-agent Firecracker pause RPC.

@@ -45,15 +45,6 @@ func launcherResources() setecv1alpha1.Resources {
 	return setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("512Mi")}
 }
 
-// requireLauncher skips a scenario of the launcher on another backend. The
-// launcher pass never skips: it runs on the launcher backend only.
-func requireLauncher(t *testing.T) {
-	t.Helper()
-	if !onLauncher() {
-		t.Skipf("a launcher scenario; SETEC_E2E_BACKEND=%s", sandboxBackend)
-	}
-}
-
 // launcherSandbox returns a Sandbox of the suite class that runs cmd.
 func launcherSandbox(name string, cmd string) *setecv1alpha1.Sandbox {
 	spec := minimalSpec("/bin/sh", "-c", cmd)
@@ -216,7 +207,6 @@ func waitRunning(t *testing.T, sb *setecv1alpha1.Sandbox, timeout time.Duration)
 // the restore passes invariant 2 and 5. Invariant 3: another Sandbox of the
 // namespace and a Sandbox of another tenant cannot load the snapshot.
 func TestLauncher_SnapshotRestore(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("lr-src", "echo before-snapshot > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)
@@ -329,7 +319,6 @@ func poolBases(t *testing.T, class string) []setecv1alpha1.Snapshot {
 // on the base and invariant 2 on each warm start. It reports the time of a
 // warm start next to a cold start: a number never fails the test (D58).
 func TestLauncher_WarmPool(t *testing.T) {
-	requireLauncher(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	res := launcherResources()
@@ -420,7 +409,6 @@ func TestLauncher_WarmPool(t *testing.T) {
 // has the state of the source and its own identity, and the forks diverge.
 // The source ends with its snapshot.
 func TestLauncher_ForkIntoThree(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("fk-src", "echo source-state > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)
@@ -466,7 +454,6 @@ func TestLauncher_ForkIntoThree(t *testing.T) {
 // normal Sandbox cannot load it. A review Sandbox with no network can. A
 // pin stops the expiry, and after the unpin the snapshot expires.
 func TestLauncher_KeptSnapshot(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("kp-src", "echo kept-state > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)

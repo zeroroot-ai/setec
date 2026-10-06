@@ -270,14 +270,15 @@ jobs:
         run: helm lint charts/setec --strict
 
       - name: Helm template (render check, default values)
-        # Ensures every template renders without error given the two
+        # Ensures every template renders without error given the
         # settings the chart deliberately ships unset so a genuinely
         # unconfigured install fails loudly rather than rendering an
         # insecure default (README "Sandbox egress posture"): a webhook
-        # CA source, and the Sandbox namespace list. Every other value
+        # CA source, the Sandbox namespace list, and the three launcher
+        # values (hack/chart-launcher-values.yaml). Every other value
         # here is the chart default.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set sandboxNamespaces={sandbox-workloads} \
             --set webhook.certManager.enabled=true >/dev/null
 
@@ -328,7 +329,7 @@ jobs:
         # Secret names are supplied explicitly; sandboxNamespaces and a
         # webhook CA source are required the same way as above.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set snapshots.enabled=true \
             --set nodeAgent.enabled=true \
             --set webhook.enabled=true \
@@ -344,7 +345,7 @@ jobs:
           # Secret. Assert that refusal too, so the guard itself cannot rot
           # into a no-op. The cert-manager path (setec#14) is asserted in
           # hack/verify-chart-security.sh.
-          if helm template setec charts/setec \
+          if helm template setec charts/setec -f hack/chart-launcher-values.yaml \
                --set snapshots.enabled=true \
                --set nodeAgent.enabled=true \
                --set webhook.enabled=true \
@@ -360,7 +361,7 @@ jobs:
         # sandboxNamespaces and a webhook CA source are required the
         # same way as the default-values render check above.
         run: |
-          helm template setec charts/setec \
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set frontend.enabled=true \
             --set frontend.tlsCertSecretName=frontend-tls \
             --set frontend.tlsClientCASecretName=frontend-ca \
@@ -460,8 +461,8 @@ jobs:
             exit 1
           fi
 
-  kata-pin:
-    name: kata.env is the only kata pin
+  runtime-pin:
+    name: one pin for each runtime release
     # Runs on both lanes: it is a content guard with no build, so the
     # merge_group lane costs seconds and a queued PR cannot slip a literal in.
     runs-on: ubuntu-latest
@@ -865,7 +866,7 @@ jobs:
       - docker-build
       - flag-smoke-test
       - no-marker-in-source
-      - kata-pin
+      - runtime-pin
       - no-silent-revert
       - direct-require-advisories
       - no-insecure-flag-in-chart

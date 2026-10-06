@@ -736,10 +736,7 @@ spec:
                   Populated by the reconciler after backend selection; nil while Pending.
                 properties:
                   chosen:
-                    description: |-
-                      Chosen is the name of the backend selected after evaluating the
-                      SandboxClass's primary backend and any fallback chain. One of
-                      kata-fc, kata-qemu, gvisor, or runc.
+                    description: 'Chosen is the backend of the Sandbox: launcher.'
                     type: string
                 type: object
               startedAt:

@@ -75,14 +75,14 @@ func TestRecordTransitionObservesColdStartToContainerRunning(t *testing.T) {
 	curr := setecv1alpha1.SandboxStatus{
 		Phase:     setecv1alpha1.SandboxPhaseRunning,
 		StartedAt: &accepted,
-		Runtime:   &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-fc"},
+		Runtime:   &setecv1alpha1.SandboxRuntimeStatus{Chosen: "launcher"},
 	}
 
 	r.recordTransition(sb, cls, setecv1alpha1.SandboxPhasePending, curr, pod, "")
 
-	count, sum := coldStartSamples(t, reg, "kata-fc")
+	count, sum := coldStartSamples(t, reg, "launcher")
 	if count != 1 {
-		t.Fatalf("cold-start samples for kata-fc = %d, want 1", count)
+		t.Fatalf("cold-start samples for launcher = %d, want 1", count)
 	}
 	if sum != 2 {
 		t.Errorf("cold-start = %gs, want 2s (Sandbox creation to container running)", sum)

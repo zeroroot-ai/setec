@@ -18,25 +18,25 @@ present — an empty-string value means "no tenant / single-tenant mode".
 | --- | --- | --- | --- |
 | `setec_sandbox_total` | Counter | `phase`, `tenant`, `sandbox_class` | Increments once per observed phase transition. |
 | `setec_sandbox_duration_seconds` | Histogram | `phase`, `tenant`, `sandbox_class` | Phase durations. Default Prometheus buckets. |
-| `setec_sandbox_cold_start_seconds` | Histogram | `vmm`, `sandbox_class` | Time from Sandbox creation to Pod Running. Exponential buckets (0.1s–204.8s). |
+| `setec_sandbox_cold_start_seconds` | Histogram | `runtime`, `sandbox_class` | Time from Sandbox creation to Pod Running. Exponential buckets (0.1s–204.8s). `runtime` is always `launcher`. |
+| `setec_snapshot_duration_seconds` | Histogram | `operation`, `sandbox_class` | Snapshot operation durations. |
+| `setec_warmstart_total` | Counter | `outcome`, `sandbox_class` | Warm-start attempts: `restored`, `miss` or `error`. |
+| `setec_warm_pool_ready_bases` | Gauge | `sandbox_class` | Ready bases of the warm pool of each class. |
+| `setec_warm_pool_target_bases` | Gauge | `sandbox_class` | Bases the warm pool of each class wants. |
 | `setec_sandbox_active` | Gauge | `tenant`, `sandbox_class` | Current active Sandbox count. |
 
 Cardinality notes: the label set is bounded by (tenants × classes ×
-phases) plus the `vmm` axis on cold-start. A large deployment with
+phases) plus the `runtime` axis on cold-start. A large deployment with
 50 tenants and 10 classes yields roughly (50 × 10 × 4) = 2000 series
 per metric — well within Prometheus's comfort zone.
 
 ### Node-agent metrics
 
-Each node-agent instance exports:
-
-| Metric | Type | Notes |
-| --- | --- | --- |
-| `setec_node_thinpool_used_bytes` | Gauge | Allocated bytes in the devicemapper thin-pool. |
-| `setec_node_thinpool_total_bytes` | Gauge | Total bytes in the thin-pool. |
-| `setec_node_kata_runtime_ready` | Gauge | 1 if `/dev/kvm` is present, else 0. |
-
-The agent exposes `/metrics` and `/healthz` on port 9090.
+The node agent exposes `/metrics` and `/healthz` on port 9090. It
+exports no metric of its own yet. The KVM device plugin reports each
+node's devices as the extended resources `setec.zeroroot.ai/kvm` and
+`setec.zeroroot.ai/tun`, which `kube-state-metrics` exposes as
+`kube_node_status_allocatable`.
 
 ## OpenTelemetry traces
 
@@ -93,8 +93,8 @@ logs a loud warning. The chart disables it by default.
 The Setec team has published a reference Grafana dashboard on
 [grafana.com Community Dashboards]. Import by ID; the dashboard
 imports the Prometheus data source variable and renders tiles for
-cold-start P50/P95, active-sandbox gauge, per-tenant rate, and
-thin-pool fill across nodes.
+cold-start P50/P95, active-sandbox gauge, per-tenant rate, and the
+warm pool of each class.
 
 Community dashboards are OSS and vendor-neutral. Setec does not ship
 any cloud-specific dashboard.
@@ -118,7 +118,7 @@ filter so multi-install deployments can scope to a single operator.
 | Cold-start latency heatmap             | `setec_sandbox_cold_start_seconds` bucket distribution over time.       |
 | Cold-start P50 / P95 / P99             | Histogram quantiles over the same bucket series.                        |
 | Snapshot duration by operation         | P95 of `setec_snapshot_duration_seconds` split by create/restore/etc.   |
-| Pre-warm pool entries per node/class   | `setec_prewarm_pool_entries` gauge.                                     |
+| Warm pool bases per class              | `setec_warm_pool_ready_bases` against `setec_warm_pool_target_bases`.   |
 | Operator and node-agent up-ness        | `up` metric filtered to Setec pods.                                     |
 | gRPC frontend request rate             | `grpc_server_handled_total` rate split by method.                       |
 
@@ -155,7 +155,7 @@ kubectl apply -f charts/setec/prometheus/alerts.yaml
 | `SetecNodeAgentDown`           | A node-agent has been absent on any node for 10 minutes.               | warning   |
 | `SetecColdStartSLOBreach`      | Cold-start P95 above 1s for 10 minutes for any sandbox class.          | warning   |
 | `SetecSnapshotFailureHigh`     | Snapshot create or restore failure rate above 5% for 10 minutes.       | critical  |
-| `SetecPoolUnderfilled`         | Actual pool entry count below target for 10 minutes.                   | warning   |
+| `SetecPoolUnderfilled`         | Ready warm pool bases below the target for 15 minutes.                  | warning   |
 
 Each alert carries a `runbook_url` annotation pointing into this doc.
 Treat these as starting points; tune the thresholds to your cluster's

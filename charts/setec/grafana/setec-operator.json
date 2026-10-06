@@ -129,7 +129,7 @@
     },
     {
       "id": 6,
-      "title": "Pre-warm pool entries per node / class",
+      "title": "Warm pool bases per class (ready / target)",
       "type": "timeseries",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
@@ -137,8 +137,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (node, sandbox_class) (setec_prewarm_pool_entries{namespace=~\"$namespace\"})",
-          "legendFormat": "{{node}} / {{sandbox_class}}"
+          "expr": "max by (sandbox_class) (setec_warm_pool_ready_bases{namespace=~\"$namespace\"})",
+          "legendFormat": "{{sandbox_class}} ready"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (sandbox_class) (setec_warm_pool_target_bases{namespace=~\"$namespace\"})",
+          "legendFormat": "{{sandbox_class}} target"
         }
       ]
     },

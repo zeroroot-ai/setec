@@ -4,16 +4,15 @@
 
 ## What setec is
 
-A standalone, self-hostable Kubernetes operator that runs workloads inside
-isolated runtimes — Kata Containers with Firecracker or QEMU microVMs, gVisor,
-or `runc` (dev only). Declare a `Sandbox` CR and the operator materialises an
-isolated sandbox with lifecycle control, a gRPC frontend, snapshot/restore, and
-a pre-warm pool. Core CRDs: `Sandbox`, `SandboxClass` (selects the runtime
-backend + fallback chain), `Snapshot` (paused-VM capture; kata-fc/kata-qemu
-only). A `runtime-agent` DaemonSet probes each node and labels it
-`setec.zeroroot.ai/runtime.<backend>=true`. See `README.md` and
-`docs/runtime-backends/` for the full architecture; everything below is the
-generic kubebuilder operator workflow.
+A standalone, self-hostable Kubernetes operator that runs each workload in its
+own Firecracker microVM, one machine in each launcher Pod. Declare a `Sandbox`
+CR and the operator materialises an isolated sandbox with lifecycle control, a
+gRPC frontend, snapshot/restore, fork, and a warm pool. Core CRDs: `Sandbox`,
+`SandboxClass` (resource ceilings, network modes, the warm pool), `Snapshot`
+(the captured state of a machine). A KVM device plugin DaemonSet offers
+`/dev/kvm` and `/dev/net/tun` of each node to the launcher Pods. See
+`README.md` and `docs/design/runtime.md` for the full architecture; everything
+below is the generic kubebuilder operator workflow.
 
 ## Project Structure
 

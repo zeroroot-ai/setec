@@ -35,6 +35,8 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The launcher values that the chart requires (hack/chart-launcher-values.yaml).
+LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 
 fail_count=0
 
@@ -74,7 +76,7 @@ assert_render_fails() {
 	local desc="$1" want="$2"
 	shift 2
 	local err="$workdir/err.txt"
-	if "$HELM" template setec "$CHART_DIR" "$@" >/dev/null 2>"$err"; then
+	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "$@" >/dev/null 2>"$err"; then
 		fail "$desc — render unexpectedly succeeded"
 		return
 	fi
@@ -127,7 +129,7 @@ SPIFFE=(
 # File mode (default): today's posture, nothing SPIFFE leaks in.
 # ---------------------------------------------------------------------------
 note "file mode (default)"
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${FILE_CREDS[@]}" >"$workdir/file.yaml"
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${FILE_CREDS[@]}" >"$workdir/file.yaml"
 strip_comments "$workdir/file.yaml" "$workdir/file.stripped.yaml"
 
 assert_contains "$workdir/file.stripped.yaml" "frontend keeps the file-mode flags" \
@@ -153,18 +155,18 @@ assert_absent "$workdir/file.stripped.yaml" "no Workload API mount in file mode"
 # neither" — the operator's dialer is the third surface).
 # ---------------------------------------------------------------------------
 note "spiffe mode"
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" >"$workdir/spiffe.yaml"
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" >"$workdir/spiffe.yaml"
 strip_comments "$workdir/spiffe.yaml" "$workdir/spiffe.stripped.yaml"
 
 # --show-only isolates each component's document so an assertion cannot be
 # satisfied by the same flag on a different component.
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/frontend.yaml >"$workdir/spiffe-frontend.yaml"
 strip_comments "$workdir/spiffe-frontend.yaml" "$workdir/spiffe-frontend.stripped.yaml"
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/daemonset.yaml >"$workdir/spiffe-nodeagent.yaml"
 strip_comments "$workdir/spiffe-nodeagent.yaml" "$workdir/spiffe-nodeagent.stripped.yaml"
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/deployment.yaml >"$workdir/spiffe-operator.yaml"
 strip_comments "$workdir/spiffe-operator.yaml" "$workdir/spiffe-operator.stripped.yaml"
 
@@ -209,7 +211,7 @@ FOREIGN=(
 	--set 'frontend.clients[1].name=onprem'
 	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
 )
-"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
 	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443' \
 	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server' \
 	--show-only templates/federation.yaml >"$workdir/federation.yaml"

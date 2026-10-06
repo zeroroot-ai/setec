@@ -82,5 +82,8 @@ jobs:
           helm template setec "/tmp/pulled/setec-$ver.tgz" \
             --set webhook.certManager.enabled=true \
             --set webhook.certManager.issuerRef.name=probe \
-            --set 'sandboxNamespaces={probe}' >/dev/null
+            --set 'sandboxNamespaces={probe}' \
+            --set launcher.diskRepo=registry.example.com/probe \
+            --set launcher.diskBuilder.signingSecret=probe \
+            --set 'launcher.diskBuilder.publicKeys={probe}' >/dev/null
           echo "✓ setec:$ver @ $digest — pushed, signed, verified, pulls and renders clean"

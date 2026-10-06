@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Command node-agent is the Setec node-level infrastructure daemon. It
-// provisions and monitors the devicemapper thin-pool used by Kata
-// Containers, optionally prefetches SandboxClass-referenced OCI images
-// into the local containerd store, and exposes a /metrics HTTP endpoint
-// for Prometheus scraping.
-//
-// The binary is deliberately minimal: all business logic lives in
-// internal/nodeagent and is unit-tested without any real system calls.
-// main.go handles flag parsing, signal handling, and the periodic
-// sampler loop.
+// Command node-agent is the Setec daemon on each fleet node. It serves
+// the NodeAgentService that the operator calls to snapshot, restore,
+// pause and resume the Firecracker machine of a launcher Pod on the node
+// (internal/nodeagent/grpcserver), and a /metrics endpoint.
 package main
 
 import (
@@ -26,76 +20,38 @@ import (
 	"syscall"
 	"time"
 
-	containerdclient "github.com/containerd/containerd/v2/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	ctrl "sigs.k8s.io/controller-runtime"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
-	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/credentials"
-	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
-	"github.com/zeroroot-ai/setec/internal/nodeagent"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
-	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
-	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
-	"github.com/zeroroot-ai/setec/internal/nodeagent/reaper"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
-	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
-// requireMode is the strict value of the node-identity mode flag.
+// requireMode is the strict value of the entropy reseed mode flag.
 const requireMode = "require"
 
-// metricLabelOutcome is the one label every node-agent counter carries, so a
-// dashboard can group three different counters by the same dimension.
-const metricLabelOutcome = "outcome"
-
-const (
-	// sampleInterval controls how often the agent polls thin-pool
-	// status. 30s matches the cadence documented in the Helm chart
-	// README and is fast enough to catch ENOSPC races without
-	// flooding the event stream.
-	sampleInterval = 30 * time.Second
-
-	// kvmDevicePath is the Linux device node KVM-capable nodes expose.
-	// Absence of this file means the node cannot host Sandboxes.
-	kvmDevicePath = "/dev/kvm"
-)
+// kvmDevicePath is the Linux device node of KVM. A node without it cannot
+// host a launcher machine.
+const kvmDevicePath = "/dev/kvm"
 
 func main() {
 	var (
-		poolName            string
-		dataDev             string
-		metaDev             string
-		fillThreshold       int
-		metricsAddr         string
-		kubeletPodsDir      string
-		containerdSocket    string
-		containerdNamespace string
-		containerdAuthFile  string
-		nodeName            string
-		prefetchImages      string
+		metricsAddr    string
+		kubeletPodsDir string
+		nodeName       string
 
-		// Phase 3 flags.
 		grpcListenAddr       string
 		creds                credentialFlags
-		snapshotBackend      string
 		snapshotRoot         string
 		snapshotKeyFile      string
 		snapshotDEKDir       string
 		snapshotFillFraction float64
-		poolReconcileTick    time.Duration
-		orphanReapTick       time.Duration
 		entropyReseedMode    string
-		restoreUniquifyMode  string
 
 		// Session-checkpoint (S3-compatible) flags — setec#194.
 		s3Endpoint  string
@@ -106,40 +62,20 @@ func main() {
 
 		staleMultipartWindow time.Duration
 	)
-	flag.StringVar(&poolName, "thinpool-name", "setec-thinpool",
-		"Name of the devicemapper thin-pool to manage.")
-	flag.StringVar(&dataDev, "thinpool-data-device", "",
-		"Block device for the thin-pool data volume (e.g. /dev/vdb). Required for Ensure.")
-	flag.StringVar(&metaDev, "thinpool-metadata-device", "",
-		"Block device for the thin-pool metadata volume (e.g. /dev/vdc). Required for Ensure.")
-	flag.IntVar(&fillThreshold, "fill-threshold", 80,
-		"Percent fill (0..100) above which the thin-pool is reported degraded.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9090",
 		"Listen address for the Prometheus /metrics endpoint.")
 	flag.StringVar(&nodeName, "node-name", os.Getenv("NODE_NAME"),
 		"Name of the Kubernetes Node this agent runs on (defaults to $NODE_NAME).")
-	flag.StringVar(&prefetchImages, "prefetch-images", "",
-		"Space-separated OCI references to prefetch into the containerd content store.")
 	flag.StringVar(&kubeletPodsDir, "kubelet-pods-dir", launchersandbox.DefaultPodsDir,
 		"the Pod directory of the kubelet; the agent finds the work volume of a launcher Pod under it")
-	flag.StringVar(&containerdSocket, "containerd-socket", "/run/containerd/containerd.sock",
-		"Path to the containerd Unix socket used by the image puller.")
-	flag.StringVar(&containerdNamespace, "containerd-namespace", "k8s.io",
-		"Containerd namespace pulled images are placed into. Defaults to the one kubelet uses.")
-	flag.StringVar(&containerdAuthFile, "containerd-auth-file", "",
-		"Path to a Docker config.json used as the source of registry credentials. Empty means anonymous access.")
-
-	// Phase 3 flags.
 	flag.StringVar(&grpcListenAddr, "grpc-listen-addr", ":50052",
-		"Phase 3: address the NodeAgentService gRPC server listens on. Empty disables the server.")
+		"address the NodeAgentService gRPC server listens on. Empty disables the server.")
 	flag.StringVar(&creds.tlsCert, "tls-cert", "",
-		"Phase 3: path to the PEM-encoded server certificate for mTLS. "+
-			"Selects file credential mode, the default.")
+		"path to the PEM-encoded server certificate for mTLS. Selects file credential mode, the default.")
 	flag.StringVar(&creds.tlsKey, "tls-key", "",
-		"Phase 3: path to the PEM-encoded server private key. "+
-			"Selects file credential mode, the default.")
+		"path to the PEM-encoded server private key. Selects file credential mode, the default.")
 	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
-		"Phase 3: path to the PEM-encoded CA used to verify operator client certificates. "+
+		"path to the PEM-encoded CA used to verify operator client certificates. "+
 			"Selects file credential mode, the default.")
 	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
@@ -147,10 +83,8 @@ func main() {
 	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
 		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://example.org/ns/setec/sa/setec. "+
 			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
-	flag.StringVar(&snapshotBackend, "snapshot-backend", "local-disk",
-		"Phase 3: storage backend identifier. Only local-disk is supported in Phase 3.")
 	flag.StringVar(&snapshotRoot, "snapshot-root", "/var/lib/setec/snapshots",
-		"Phase 3: root directory for persisted snapshot state files.")
+		"root directory for persisted snapshot state files.")
 	flag.StringVar(&snapshotKeyFile, "snapshot-key-file", "/var/lib/setec/keys/node.key",
 		"Node-local key-encryption-key file snapshot DEKs are sealed with (created on "+
 			"first use). Snapshots are ALWAYS encrypted at rest (docs/design/isolation.md); there is no opt-out.")
@@ -158,13 +92,7 @@ func main() {
 		"Directory holding per-snapshot sealed data-encryption keys. Kept OUTSIDE the "+
 			"snapshot root so artifact-tree copies carry no key material.")
 	flag.Float64Var(&snapshotFillFraction, "snapshot-fill-threshold", 0.85,
-		"Phase 3: refuse new snapshots when the snapshot-root filesystem's used fraction exceeds this value.")
-	flag.DurationVar(&poolReconcileTick, "pool-reconcile-interval", 30*time.Second,
-		"Phase 3: interval between pre-warm pool reconciles. 0 disables the pool loop.")
-	flag.DurationVar(&orphanReapTick, "orphan-reap-interval", time.Minute,
-		"Interval between sweeps that force-remove orphaned NotReady kata sandboxes "+
-			"(microVMs leaked by a failed teardown that still hold a containerd "+
-			"name reservation). 0 disables the reaper.")
+		"refuse new snapshots when the snapshot-root filesystem's used fraction exceeds this value.")
 	flag.StringVar(&s3Endpoint, "s3-endpoint", "",
 		"Base URL of the S3-compatible object store session checkpoints are written to "+
 			"(e.g. http://minio.minio.svc:9000 for MinIO). Empty uses the AWS default "+
@@ -185,382 +113,101 @@ func main() {
 			"is invisible to ListObjects. MUST exceed the longest suspend any agent sharing "+
 			"the prefix will run, or the sweep aborts a live upload.")
 	flag.StringVar(&entropyReseedMode, "entropy-reseed", requireMode,
-		"Active entropy reseed on snapshot restore (setec#72). 'require' (default) fails a "+
-			"restore closed unless the in-guest setec-guest-agent acknowledges fresh entropy "+
-			"over vsock; 'off' is an explicit opt-out that leaves only the passive virtio-rng "+
-			"mechanism (guest images without setec-guest-agent need this).")
-	flag.StringVar(&restoreUniquifyMode, "restore-uniquify", requireMode,
-		"Per-restore identity uniquification (docs/design/isolation.md invariant 2, setec#189). 'require' (default) "+
-			"fails a restore closed unless the in-guest setec-guest-agent confirms a fresh "+
-			"machine-id/boot-id/hostname, the CNI-assigned Pod IP, and a node-unique vsock CID. "+
-			"'off' is an explicit opt-out.")
+		"Entropy reseed after a restore (setec#72). 'require' (default) fails a restore closed "+
+			"unless the guest confirms fresh entropy; 'off' is an explicit opt-out, and the "+
+			"operator gate then refuses each restore.")
 	flag.Parse()
 
 	if entropyReseedMode != requireMode && entropyReseedMode != "off" {
 		fmt.Fprintf(os.Stderr, "node-agent: invalid --entropy-reseed %q (want \"require\" or \"off\")\n", entropyReseedMode)
 		os.Exit(1)
 	}
-	if restoreUniquifyMode != requireMode && restoreUniquifyMode != "off" {
-		fmt.Fprintf(os.Stderr,
-			"node-agent: invalid --restore-uniquify %q (want \"require\" or \"off\")\n", restoreUniquifyMode)
-		os.Exit(1)
-	}
-
-	fmt.Fprintf(os.Stderr, "setec node-agent starting on node=%q pool=%q\n", nodeName, poolName)
-
+	fmt.Fprintf(os.Stderr, "setec node-agent starting on node=%q\n", nodeName)
 	if _, err := os.Stat(kvmDevicePath); errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "KVM device %q is missing; node cannot host Sandboxes. Exiting.\n", kvmDevicePath)
 		os.Exit(1)
 	}
 
-	cfg := nodeagent.Config{
-		PoolName:       poolName,
-		DataDevice:     dataDev,
-		MetadataDevice: metaDev,
-		FillThreshold:  fillThreshold,
-		SampleInterval: sampleInterval,
-	}
-
-	// Register Prometheus collectors with a private registry so we
-	// serve exactly the metrics we define here and do not pick up the
-	// default Go-runtime collectors twice.
 	reg := prometheus.NewRegistry()
-	usedGauge := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "setec_node_thinpool_used_bytes",
-		Help: "Used bytes in the Setec-managed devicemapper thin-pool.",
-	})
-	totalGauge := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "setec_node_thinpool_total_bytes",
-		Help: "Total bytes available in the Setec-managed devicemapper thin-pool.",
-	})
-	kataReady := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "setec_node_kata_runtime_ready",
-		Help: "Whether the Kata runtime is ready on this node (0 or 1).",
-	})
-	prefetchErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "setec_node_image_prefetch_errors_total",
-		Help: "Total number of OCI image prefetch failures, labeled by error class.",
-	}, []string{"reason"})
-	orphansReaped := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "setec_node_orphan_sandboxes_reaped_total",
-		Help: "Total orphaned kata sandboxes force-removed by the reaper, labeled by runtime handler.",
-	}, []string{"handler"})
-	orphanReapErrors := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "setec_node_orphan_reap_errors_total",
-		Help: "Total errors encountered while listing or removing orphaned kata sandboxes.",
-	})
-	entropyReseeds := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "setec_node_entropy_reseed_total",
-		Help: "Post-restore entropy reseed attempts by outcome (success/failure); failures fail the restore closed.",
-	}, []string{metricLabelOutcome})
-	restoreUniquifies := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "setec_node_restore_uniquify_total",
-		Help: "Post-restore identity uniquification attempts by outcome (success/failure); failures fail the restore closed.",
-	}, []string{metricLabelOutcome})
-	poolFill := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "setec_prewarm_pool_entries",
-		Help: "Number of pre-warmed pool entries currently paused on this node for a SandboxClass.",
-	}, []string{"node", "sandbox_class"})
-	poolClaims := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "setec_prewarm_pool_claims_total",
-		Help: "Pool claim attempts by outcome (restored, miss, restore_failed).",
-	}, []string{metricLabelOutcome})
-	reg.MustRegister(
-		usedGauge, totalGauge, kataReady, prefetchErrors, orphansReaped,
-		orphanReapErrors, entropyReseeds, restoreUniquifies, poolFill, poolClaims,
-	)
-	// Presence of /dev/kvm is our local ready signal; deeper health
-	// checks require the controller-side runtime class and are out
-	// of scope for the node agent.
-	kataReady.Set(1)
-
-	// Start metrics server.
 	go serveMetrics(metricsAddr, reg)
-
-	manager := nodeagent.NewThinPoolManager(cfg)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Build the production image puller up-front; a failed dial is
-	// fatal so the DaemonSet reports the misconfiguration via its
-	// restart count rather than running with a broken prefetch path.
-	puller, err := nodeagent.NewContainerdPuller(containerdSocket, containerdNamespace, containerdAuthFile)
+	if grpcListenAddr == "" {
+		fmt.Fprintln(os.Stderr, "node-agent: gRPC server disabled (--grpc-listen-addr empty)")
+		<-ctx.Done()
+		return
+	}
+	for _, dir := range []string{snapshotRoot, snapshotDEKDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", dir, err)
+			os.Exit(1)
+		}
+	}
+	// Encryption at rest is unconditional (docs/design/isolation.md invariant 5):
+	// the encrypted wrapper is the only backend ever wired.
+	backend := &storage.EncryptedBackend{
+		Inner: &storage.LocalDiskBackend{Root: snapshotRoot, FillThreshold: snapshotFillFraction},
+		KEK:   &storage.FileKEKSource{Path: snapshotKeyFile},
+		DEKs:  &storage.DirDEKStore{Dir: snapshotDEKDir},
+	}
+	sessionStorage := s3SessionStorage(ctx, s3Config{
+		endpoint: s3Endpoint, bucket: s3Bucket, region: s3Region, prefix: s3Prefix,
+		pathStyle: s3PathStyle, staleWindow: staleMultipartWindow,
+	})
+	srv := &grpcserver.Server{
+		Storage:            backend,
+		SessionStorage:     sessionStorage,
+		FirecrackerFactory: func(sock string) firecracker.Client { return firecracker.NewClientFromSocket(sock) },
+		Machines:           launchersandbox.Resolver{PodsDir: kubeletPodsDir},
+		EntropyReseedOff:   entropyReseedMode != requireMode,
+	}
+	if srv.EntropyReseedOff {
+		fmt.Fprintln(os.Stderr, "node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
+			"the operator gate refuses each restore")
+	}
+	go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
+	<-ctx.Done()
+	fmt.Fprintln(os.Stderr, "node-agent: shutdown signal received, exiting cleanly")
+}
+
+// s3Config is the S3-compatible store of session checkpoints.
+type s3Config struct {
+	endpoint, bucket, region, prefix string
+	pathStyle                        bool
+	staleWindow                      time.Duration
+}
+
+// s3SessionStorage builds the session-checkpoint backend (setec#194,
+// docs/design/storage.md), or nil when no bucket is set. Checkpoints are
+// node-independent, so a session can resume on another node; their DEKs
+// are sealed with the per-session KEK that the operator forwards per call.
+func s3SessionStorage(ctx context.Context, c s3Config) func(kek []byte) storage.StorageBackend {
+	if c.bucket == "" {
+		fmt.Fprintln(os.Stderr, "node-agent: s3 session-checkpoint backend disabled (--s3-bucket empty)")
+		return nil
+	}
+	s3Backend, err := storage.NewS3Backend(ctx, storage.S3Config{
+		Endpoint: c.endpoint, Bucket: c.bucket, Region: c.region, Prefix: c.prefix, UsePathStyle: c.pathStyle,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: dial containerd %q: %v\n", containerdSocket, err)
+		fmt.Fprintf(os.Stderr, "node-agent: build s3 checkpoint backend: %v\n", err)
 		os.Exit(1)
 	}
-	defer func() {
-		if cerr := puller.Close(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: close containerd client: %v\n", cerr)
-		}
-	}()
-
-	// Kata sandbox resolver (setec#19): snapshot, restore, pause and
-	// pool-claim RPCs name the target by Pod UID, and the node finds
-	// that Pod's CRI sandbox in containerd, then its Firecracker files
-	// under the kata Go runtime's /run/vc.
-	kataClient, err := containerdclient.New(containerdSocket)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: dial containerd %q for the kata sandbox resolver: %v\n", containerdSocket, err)
-		os.Exit(1)
+	dekStore := s3Backend.DEKStore()
+	fmt.Fprintf(os.Stderr, "node-agent: s3 session-checkpoint backend enabled (bucket=%q endpoint=%q)\n",
+		c.bucket, c.endpoint)
+	// Sweep multipart uploads orphaned by a previous life of this agent
+	// (setec#297). Best effort: a store that denies the list must not stop
+	// the agent.
+	if aborted, err := s3Backend.AbortStaleMultipartUploads(ctx, c.staleWindow); err != nil {
+		fmt.Fprintf(os.Stderr, "node-agent: sweep stale multipart uploads: %v\n", err)
+	} else if aborted > 0 {
+		fmt.Fprintf(os.Stderr, "node-agent: aborted %d stale multipart upload(s) older than %s\n", aborted, c.staleWindow)
 	}
-	defer func() {
-		if cerr := kataClient.Close(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: close containerd client: %v\n", cerr)
-		}
-	}()
-	kataSandboxes := katasandbox.Resolver{
-		Lookup: katasandbox.ContainerdLookup{Client: kataClient, Namespace: containerdNamespace},
-	}
-
-	// Orphan-sandbox reaper: force-remove NotReady kata sandboxes whose
-	// microVM leaked on a failed teardown ("Agent did not stop sandbox") and
-	// still holds a containerd name reservation. Independent of the pool/gRPC
-	// path — the leak can happen for any kata Sandbox. Uses the CRI service on
-	// the same containerd socket.
-	if orphanReapTick > 0 {
-		criClient, err := reaper.NewCRIClient(containerdSocket)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: build CRI client for reaper: %v (reaper disabled)\n", err)
-		} else {
-			defer func() { _ = criClient.Close() }()
-			orphanReaper := &reaper.OrphanReaper{
-				Client:   criClient,
-				Interval: orphanReapTick,
-				Metrics: reaper.Metrics{
-					Reaped: func(handler string) { orphansReaped.WithLabelValues(handler).Inc() },
-					Errors: orphanReapErrors.Inc,
-				},
-			}
-			go orphanReaper.Run(ctx)
-			fmt.Fprintf(os.Stderr, "node-agent: orphan-sandbox reaper started at %s interval\n", orphanReapTick)
-		}
-	} else {
-		fmt.Fprintln(os.Stderr, "node-agent: orphan-sandbox reaper disabled (--orphan-reap-interval=0)")
-	}
-
-	// Phase 3: construct the storage backend, pool manager, and gRPC
-	// server when the operator has enabled the feature (by setting
-	// --grpc-listen-addr to a non-empty value, which is the default).
-	if grpcListenAddr != "" {
-		if snapshotBackend != "local-disk" {
-			fmt.Fprintf(os.Stderr,
-				"node-agent: unsupported snapshot backend %q; only local-disk is supported in Phase 3\n",
-				snapshotBackend)
-			os.Exit(1)
-		}
-		if err := os.MkdirAll(snapshotRoot, 0o700); err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", snapshotRoot, err)
-			os.Exit(1)
-		}
-		if err := os.MkdirAll(snapshotDEKDir, 0o700); err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", snapshotDEKDir, err)
-			os.Exit(1)
-		}
-		// Encryption at rest is unconditional (docs/design/isolation.md invariant 5):
-		// the encrypted wrapper is the only backend ever wired, so an
-		// unencrypted snapshot write path does not exist.
-		backend := &storage.EncryptedBackend{
-			Inner: &storage.LocalDiskBackend{
-				Root:          snapshotRoot,
-				FillThreshold: snapshotFillFraction,
-			},
-			KEK:  &storage.FileKEKSource{Path: snapshotKeyFile},
-			DEKs: &storage.DirDEKStore{Dir: snapshotDEKDir},
-		}
-		ffactory := func(sock string) firecracker.Client {
-			return firecracker.NewClientFromSocket(sock)
-		}
-		// The node-local vsock CID authority is shared between the pool
-		// Manager (allocates a unique CID per pool boot) and the gRPC
-		// restore path (verifies the CID a restored guest reports) —
-		// docs/design/isolation.md invariant 2.
-		cids := uniquify.NewCIDAllocator()
-
-		poolMgr := pool.New(backend, nodeagent.NewImageCache(puller), ffactory, nodeName)
-		launcher := pool.DefaultExecLauncher()
-		// Pool entries seal their per-entry DEKs with the same node
-		// KEK the snapshot backend uses.
-		launcher.ExtraArgs = append(launcher.ExtraArgs, "--key-file", snapshotKeyFile)
-		poolMgr.Launcher = launcher
-		poolMgr.CIDs = cids
-
-		// S3-compatible session-checkpoint backend (setec#194,
-		// docs/design/storage.md). Checkpoints are node-independent so a session can
-		// resume on a different node; their DEKs are sealed with the
-		// per-session KEK the operator forwards per call, never the
-		// node-local keyfile. Credentials come from the AWS default
-		// chain (env vars injected from the chart's credentialsSecret,
-		// or IRSA on EKS).
-		var sessionStorage func(kek []byte) storage.StorageBackend
-		if s3Bucket != "" {
-			s3Backend, s3Err := storage.NewS3Backend(ctx, storage.S3Config{
-				Endpoint:     s3Endpoint,
-				Bucket:       s3Bucket,
-				Region:       s3Region,
-				Prefix:       s3Prefix,
-				UsePathStyle: s3PathStyle,
-			})
-			if s3Err != nil {
-				fmt.Fprintf(os.Stderr, "node-agent: build s3 checkpoint backend: %v\n", s3Err)
-				os.Exit(1)
-			}
-			dekStore := s3Backend.DEKStore()
-			sessionStorage = func(kek []byte) storage.StorageBackend {
-				return &storage.EncryptedBackend{
-					Inner: s3Backend,
-					KEK:   storage.StaticKEKSource(kek),
-					DEKs:  dekStore,
-				}
-			}
-			fmt.Fprintf(os.Stderr, "node-agent: s3 session-checkpoint backend enabled (bucket=%q endpoint=%q)\n",
-				s3Bucket, s3Endpoint)
-
-			// Sweep multipart uploads orphaned by a previous life of this
-			// agent (setec#297). Save streams through the multipart uploader,
-			// which aborts its own upload on error but cannot when the process
-			// is killed mid-suspend — an OOM or a node drain, exactly the
-			// situations checkpoints exist for. Orphaned parts are billed, are
-			// not returned by ListObjects, and nothing else reaps them on a
-			// store without an abort_incomplete_multipart_upload lifecycle
-			// rule (a self-hosted MinIO has none by default).
-			//
-			// The window has to exceed the longest suspend any agent sharing
-			// this prefix will run, or the sweep aborts a live upload. Best
-			// effort: a store that denies s3:ListBucketMultipartUploads, or
-			// does not implement the API, must not stop the agent starting.
-			if aborted, err := s3Backend.AbortStaleMultipartUploads(ctx, staleMultipartWindow); err != nil {
-				fmt.Fprintf(os.Stderr, "node-agent: sweep stale multipart uploads: %v\n", err)
-			} else if aborted > 0 {
-				fmt.Fprintf(os.Stderr, "node-agent: aborted %d stale multipart upload(s) older than %s\n",
-					aborted, staleMultipartWindow)
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "node-agent: s3 session-checkpoint backend disabled (--s3-bucket empty)")
-		}
-
-		srv := &grpcserver.Server{
-			Storage:            backend,
-			SessionStorage:     sessionStorage,
-			FirecrackerFactory: ffactory,
-			KataSandboxes: grpcserver.ResolverChain{
-				launchersandbox.Resolver{PodsDir: kubeletPodsDir},
-				kataSandboxes,
-			},
-			Pool:        poolMgr,
-			PoolKEKPath: snapshotKeyFile,
-			CIDs:        cids,
-			ReseedObserver: func(outcome string) {
-				entropyReseeds.WithLabelValues(outcome).Inc()
-			},
-			UniquifyObserver: func(outcome string) {
-				restoreUniquifies.WithLabelValues(outcome).Inc()
-			},
-			ClaimObserver: func(outcome string) {
-				poolClaims.WithLabelValues(outcome).Inc()
-			},
-		}
-		// Active entropy reseed on restore (setec#72). The default is
-		// fail-closed: a restored sandbox is only reported successful
-		// once the in-guest setec-guest-agent has acknowledged fresh
-		// entropy over vsock. --entropy-reseed=off is the explicit,
-		// auditable opt-out for guest images that do not bundle the
-		// agent; it leaves only the passive virtio-rng mechanism.
-		if entropyReseedMode == requireMode {
-			srv.Reseeder = entropy.NewVsockReseeder()
-			fmt.Fprintln(os.Stderr, "node-agent: entropy reseed on restore ENFORCED (--entropy-reseed=require)")
-		} else {
-			fmt.Fprintln(os.Stderr,
-				"node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
-					"restored snapshot clones rely on passive virtio-rng only")
-		}
-		// Per-restore identity uniquification (docs/design/isolation.md invariant 2,
-		// setec#189). Default fail-closed: a restored sandbox is only
-		// reported successful once the in-guest setec-guest-agent has
-		// confirmed a fresh machine-id/boot-id/hostname, its
-		// CNI-assigned Pod IP, and a node-unique vsock CID.
-		// --restore-uniquify=off is the explicit, auditable opt-out.
-		if restoreUniquifyMode == requireMode {
-			srv.Uniquifier = uniquify.NewVsockUniquifier()
-			fmt.Fprintln(os.Stderr, "node-agent: restore uniquification ENFORCED (--restore-uniquify=require)")
-		} else {
-			fmt.Fprintln(os.Stderr,
-				"node-agent: restore uniquification DISABLED (--restore-uniquify=off); "+
-					"restored snapshot clones keep the snapshotted machine identity")
-		}
-		go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
-
-		if poolReconcileTick > 0 {
-			lister, err := newSandboxClassLister()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "node-agent: build SandboxClass lister: %v (pool reconcile disabled)\n", err)
-			} else {
-				reconciler := &pool.TickReconciler{
-					Manager:  poolMgr,
-					Lister:   lister,
-					Interval: poolReconcileTick,
-					FillObserver: func(fills map[string]int) {
-						// Reset first so classes whose pools were torn
-						// down (class deleted or pool disabled) drop
-						// their stale series instead of freezing at the
-						// last non-zero value.
-						poolFill.Reset()
-						for class, n := range fills {
-							poolFill.WithLabelValues(nodeName, class).Set(float64(n))
-						}
-					},
-				}
-				go reconciler.Run(ctx)
-				fmt.Fprintf(os.Stderr, "node-agent: pool reconciler started at %s interval\n", poolReconcileTick)
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "node-agent: pool reconciler disabled (--pool-reconcile-interval=0)")
-		}
-	}
-
-	if dataDev != "" && metaDev != "" {
-		if err := manager.Ensure(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: thin-pool ensure failed: %v\n", err)
-			// Continue so the /metrics endpoint stays up and the
-			// operator can see the failure; do not exit.
-		}
-	} else {
-		fmt.Fprintln(os.Stderr, "node-agent: thinpool-data-device / thinpool-metadata-device not set; skipping Ensure")
-	}
-
-	// Prefetch loop is single-shot on startup. A long-running loop is
-	// unnecessary because SandboxClass changes drive future pulls.
-	if prefetchImages != "" {
-		refs := strings.Fields(prefetchImages)
-		fmt.Fprintf(os.Stderr, "node-agent: prefetching %d images\n", len(refs))
-		cache := nodeagent.NewImageCache(puller)
-		if err := cache.Prefetch(ctx, refs); err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: prefetch failed: %v\n", err)
-			prefetchErrors.WithLabelValues(prefetchErrorReason(err)).Inc()
-		}
-	}
-
-	// Monitor loop.
-	ticker := time.NewTicker(sampleInterval)
-	defer ticker.Stop()
-	for {
-		sample, err := manager.Sample(ctx)
-		if err == nil {
-			usedGauge.Set(float64(sample.Used * 512))
-			totalGauge.Set(float64(sample.Total * 512))
-			if sample.Degraded {
-				fmt.Fprintf(os.Stderr,
-					"node-agent: thin-pool %q degraded: %d%% used (threshold %d%%)\n",
-					poolName, sample.FillPercent, fillThreshold)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			fmt.Fprintln(os.Stderr, "node-agent: shutdown signal received, exiting cleanly")
-			return
-		case <-ticker.C:
-		}
+	return func(kek []byte) storage.StorageBackend {
+		return &storage.EncryptedBackend{Inner: s3Backend, KEK: storage.StaticKEKSource(kek), DEKs: dekStore}
 	}
 }
 
@@ -581,22 +228,6 @@ func serveMetrics(addr string, reg *prometheus.Registry) {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "node-agent: metrics server exited: %v\n", err)
 		os.Exit(1)
-	}
-}
-
-// prefetchErrorReason maps a ContainerdPuller error to the label value
-// applied to setec_node_image_prefetch_errors_total. Unknown errors
-// fall through to "pull_failed" so every increment carries a label.
-func prefetchErrorReason(err error) string {
-	switch {
-	case errors.Is(err, nodeagent.ErrContainerdUnreachable):
-		return "containerd_unreachable"
-	case errors.Is(err, nodeagent.ErrImageNotFound):
-		return "image_not_found"
-	case errors.Is(err, nodeagent.ErrAuthRequired):
-		return "auth_required"
-	default:
-		return "pull_failed"
 	}
 }
 
@@ -706,36 +337,6 @@ func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
 	}
 	fmt.Fprintf(os.Stderr, "node-agent: credential mode: %s\n", mode)
 	return opt
-}
-
-// newSandboxClassLister builds a controller-runtime client and
-// returns a pool.SandboxClassLister that performs a cluster-wide
-// List of SandboxClass resources on every invocation. The list is
-// small (SandboxClass is a cluster-scoped singleton-ish CRD) so
-// per-tick List is cheaper and simpler than running a full
-// informer cache inside the node-agent.
-func newSandboxClassLister() (func() []setecv1alpha1.SandboxClass, error) {
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
-	cfg, err := ctrl.GetConfig()
-	if err != nil {
-		return nil, fmt.Errorf("GetConfig: %w", err)
-	}
-	c, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
-	if err != nil {
-		return nil, fmt.Errorf("client.New: %w", err)
-	}
-	return func() []setecv1alpha1.SandboxClass {
-		listCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		var list setecv1alpha1.SandboxClassList
-		if err := c.List(listCtx, &list); err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: list SandboxClass: %v\n", err)
-			return nil
-		}
-		return list.Items
-	}, nil
 }
 
 // serveGRPC binds a TCP listener, registers the NodeAgentService

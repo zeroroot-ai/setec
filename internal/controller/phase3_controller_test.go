@@ -24,7 +24,7 @@ import (
 // this emulates is otherwise absent in envtest.
 // nodeName is fixed: every caller binds to the same fixture node.
 func bindPodToNode(t *testing.T, pod *corev1.Pod) {
-	const nodeName = "kata-node-1"
+	const nodeName = "fleet-node-1"
 	t.Helper()
 	binding := &corev1.Binding{
 		Namespace: pod.Namespace,
@@ -171,7 +171,6 @@ func TestPhase3_SnapshotCreateHappyPath(t *testing.T) {
 	cls := &setecv1alpha1.SandboxClass{
 		Name: "p3-std-" + ns,
 		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM: setecv1alpha1.VMMFirecracker,
 		},
 	}
 	g.Expect(testClient.Create(testCtx, cls)).To(gomega.Succeed())
@@ -227,7 +226,7 @@ func TestSnapshotFinalizer_BlocksDeleteWhileReferenced(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "snap-1", Node: "node-a",
 		},
 	}
@@ -290,7 +289,7 @@ func TestSnapshotFinalizer_AllowsDeleteWhenFree(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "solo",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "solo", Node: "node-a",
 		},
 	}
@@ -328,7 +327,7 @@ func TestSnapshotTTL_TriggersDelete(t *testing.T) {
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-3 * time.Second)), // not actually settable; see below
 		},
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "ephemeral", Node: "node-a",
 			TTL: &metav1.Duration{Duration: 1 * time.Second},
 		},
@@ -366,7 +365,7 @@ func TestSnapshotPhase_TerminatingWhileFinalizerHeld(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "term-1",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "term-1", Node: "node-a",
 		},
 	}
@@ -435,7 +434,7 @@ func TestSnapshotCreate_FailedSnapshotDoesNotRunAfterCreate(t *testing.T) {
 	failed := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "snap-failed",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", Node: "node-a",
 			// No storageRef: the write never completed.
 		},

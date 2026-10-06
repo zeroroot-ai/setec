@@ -16,7 +16,6 @@
 package controller
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +24,6 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,6 +45,10 @@ const (
 	convergeInterval = 100 * time.Millisecond
 )
 
+// testImage is the image of the suite Sandboxes. A launcher Sandbox needs a
+// digest: its disk belongs to one digest.
+const testImage = "docker.io/library/python@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d"
+
 // newSandbox constructs a minimal-but-valid Sandbox with the supplied name
 // and namespace. Optional overrides let individual scenarios add lifecycle
 // timeouts without duplicating the boilerplate.
@@ -55,7 +57,7 @@ func newSandbox(ns, name string, mods ...func(*setecv1alpha1.Sandbox)) *setecv1a
 		Name:      name,
 		Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/python:3.12-slim",
+			Image:   testImage,
 			Command: []string{"python", "-c", "print('hi')"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -107,8 +109,8 @@ func patchPodStatus(g Gomega, ns, podName string, mutate func(*corev1.Pod)) {
 
 // TestScenario1_PodCreation applies a minimal Sandbox and asserts the
 // controller creates a Pod named "<sandbox>-vm" with the expected owner
-// reference and runtimeClassName. This exercises the happy path of
-// podspec.Build + the controller's Create invocation.
+// reference, as a launcher Pod with no RuntimeClass. This exercises the
+// happy path of podspec.BuildLauncher + the controller's Create invocation.
 func TestScenario1_PodCreation(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "s1")
@@ -121,9 +123,9 @@ func TestScenario1_PodCreation(t *testing.T) {
 	// Pod name is derived from the Sandbox name with the -vm suffix.
 	g.Expect(pod.Name).To(Equal(sb.Name + podspec.PodNameSuffix))
 
-	// RuntimeClass is wired through from the reconciler's configuration.
-	g.Expect(pod.Spec.RuntimeClassName).NotTo(BeNil())
-	g.Expect(*pod.Spec.RuntimeClassName).To(Equal(testRuntimeClassName))
+	// The one backend: a launcher Pod, with no RuntimeClass.
+	g.Expect(pod.Spec.RuntimeClassName).To(BeNil())
+	g.Expect(pod.Spec.Containers[0].Name).To(Equal(podspec.LauncherContainerName))
 
 	// Exactly one controller-owning reference pointing at the Sandbox.
 	g.Expect(pod.OwnerReferences).To(HaveLen(1))
@@ -216,7 +218,7 @@ func TestScenario3_Completion(t *testing.T) {
 		p.Status.Phase = corev1.PodSucceeded
 		p.Status.StartTime = &startTime
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: podspec.ContainerName,
+			Name: podspec.LauncherContainerName,
 			State: corev1.ContainerState{
 				Terminated: &corev1.ContainerStateTerminated{
 					ExitCode:   0,
@@ -266,7 +268,7 @@ func TestScenario4_FailureNonZeroExit(t *testing.T) {
 		p.Status.Phase = corev1.PodFailed
 		p.Status.StartTime = &startTime
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name: podspec.ContainerName,
+			Name: podspec.LauncherContainerName,
 			State: corev1.ContainerState{
 				Terminated: &corev1.ContainerStateTerminated{
 					ExitCode:   2,
@@ -355,105 +357,6 @@ func TestScenario5_Timeout(t *testing.T) {
 		}
 		return p.DeletionTimestamp != nil
 	}, convergeTimeout, convergeInterval).Should(BeTrue(), "Pod should be deleted or marked for deletion after timeout")
-}
-
-// ---------------------------------------------------------------------------
-// Scenario 6: No RuntimeClass available.
-// ---------------------------------------------------------------------------
-
-// TestScenario6_NoRuntimeClass deletes the kata-fc RuntimeClass installed
-// by TestMain, applies a Sandbox, and asserts the reconciler keeps the
-// Sandbox in Pending with reason "RuntimeUnavailable" while emitting a
-// Warning Event. The RuntimeClass is reinstalled at the end via a
-// t.Cleanup so subsequent tests (if run in the same process) still see
-// the prerequisites.
-//
-// This test must run serially with the others because it mutates
-// cluster-global state (the RuntimeClass). We use testing.T without
-// t.Parallel and a dedicated setup/teardown guard to enforce that.
-func TestScenario6_NoRuntimeClass(t *testing.T) {
-	g := NewWithT(t)
-	ns := newNamespace(t, "s6")
-
-	// Remove the RuntimeClass installed during suite setup. Reinstall it
-	// on test exit so other tests in this package (if they run after
-	// this one) still find it.
-	rcName := testRuntimeClassName
-	deleteRuntimeClass(g, rcName)
-	t.Cleanup(func() {
-		// Reinstall with retry in case another test is racing; using
-		// the dedicated testClient is deliberate so we do not rely on
-		// the manager's cache.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = ensurePrereqs(ctx, testClient)
-	})
-
-	sb := newSandbox(ns, "pending")
-	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-
-	// The Sandbox should hold Pending/RuntimeUnavailable indefinitely.
-	// We verify it stays there for a short window to demonstrate the
-	// reconciler does not accidentally promote it.
-	g.Eventually(func() error {
-		current, err := getSandbox(testCtx, ns, sb.Name)
-		if err != nil {
-			return err
-		}
-		if current.Status.Phase != setecv1alpha1.SandboxPhasePending {
-			return errorf("phase %q is not Pending", current.Status.Phase)
-		}
-		if current.Status.Reason != "RuntimeUnavailable" {
-			return errorf("reason %q is not RuntimeUnavailable", current.Status.Reason)
-		}
-		return nil
-	}, convergeTimeout, convergeInterval).Should(Succeed())
-
-	// A Warning Event should have been emitted naming the sandbox. Events
-	// are asynchronous, so we poll until one appears.
-	g.Eventually(func() bool {
-		events := &corev1.EventList{}
-		if err := testClient.List(testCtx, events, client.InNamespace(ns)); err != nil {
-			return false
-		}
-		for _, e := range events.Items {
-			if e.Type != corev1.EventTypeWarning {
-				continue
-			}
-			if e.Reason != "RuntimeUnavailable" {
-				continue
-			}
-			if e.InvolvedObject.Kind == "Sandbox" && e.InvolvedObject.Name == sb.Name {
-				return true
-			}
-		}
-		return false
-	}, convergeTimeout, convergeInterval).Should(BeTrue(), "expected a RuntimeUnavailable Warning Event on the Sandbox")
-
-	// Also confirm the reconciler never created the Pod. A stray Pod
-	// here would indicate the RuntimeUnavailable guard was bypassed.
-	_, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Pod must not be created when RuntimeClass is missing")
-}
-
-// deleteRuntimeClass best-effort removes the named RuntimeClass. NotFound is
-// treated as success because the suite setup may have already cleaned up.
-// Deletion is synchronous and followed by a short wait for the object to
-// actually disappear from the manager's cache so the next reconcile sees
-// the absence.
-func deleteRuntimeClass(g Gomega, name string) {
-	ctx, cancel := context.WithTimeout(testCtx, 5*time.Second)
-	defer cancel()
-
-	rc := &nodev1.RuntimeClass{Name: name}
-	if err := testClient.Delete(ctx, rc); err != nil && !apierrors.IsNotFound(err) {
-		g.Expect(err).NotTo(HaveOccurred(), "delete RuntimeClass %q", name)
-	}
-
-	g.Eventually(func() bool {
-		err := testClient.Get(testCtx, types.NamespacedName{Name: name}, &nodev1.RuntimeClass{})
-		return apierrors.IsNotFound(err)
-	}, convergeTimeout, convergeInterval).Should(BeTrue(), "RuntimeClass %q should disappear after delete", name)
 }
 
 // errorf is a tiny wrapper around fmt.Errorf so Eventually closures read

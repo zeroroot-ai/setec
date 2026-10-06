@@ -6,13 +6,9 @@
 // scheduler — and hosts it under a single process-wide TestMain so every
 // scenario in sandbox_controller_test.go shares the same control plane.
 //
-// Scenarios that depend on cluster-level state (notably the presence or
-// absence of the kata-fc RuntimeClass) isolate themselves through unique
-// namespaces and, where needed, by installing the RuntimeClass inside the
-// test body itself. The default TestMain setup installs the RuntimeClass and
-// a Kata-capable Node so the majority of scenarios can run without further
-// preparation; the "no RuntimeClass" scenario explicitly deletes it before
-// running and reinstalls afterward.
+// Scenarios isolate themselves through unique namespaces. Each Sandbox gets
+// a launcher Pod; the suite plays the Job controller for the disk builder
+// Jobs (completeDiskJobs) and each test plays the kubelet for its Pods.
 package controller
 
 import (
@@ -24,9 +20,10 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -43,7 +40,6 @@ import (
 	classpkg "github.com/zeroroot-ai/setec/internal/class"
 	metricspkg "github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
-	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 	snapshotpkg "github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
@@ -57,21 +53,9 @@ var (
 	testCtx    context.Context
 	testCancel context.CancelFunc
 
-	// testRuntimeClassName matches the RuntimeClass installed by ensurePrereqs.
-	// Centralized here so the no-RuntimeClass scenario can delete precisely
-	// the object the controller is watching.
-	testRuntimeClassName = "kata-fc"
-
-	// testNodeSelectorLabel matches the label the controller's prereq check
-	// uses to discover Kata-capable Nodes. The setup installs one Node with
-	// this label so scenarios do not trip the "no Kata-capable Nodes"
-	// warning path.
-	testNodeSelectorLabel = "katacontainers.io/kata-runtime"
-
-	// testRuntimeRegistry and testRuntimeCfg are the multi-backend
-	// dispatcher registry and config wired to the SandboxReconciler.
-	testRuntimeRegistry *runtimepkg.Registry
-	testRuntimeCfg      *runtimepkg.RuntimeConfig
+	// testDiskNamespace is the operator namespace of the suite: the disk
+	// builder Jobs run there.
+	testDiskNamespace = "setec-system"
 
 	// testNetPolConfig is the egress posture the envtest reconciler
 	// generates policies from. Scenarios assert against these exact
@@ -123,8 +107,6 @@ type fakeNodeAgentClient struct {
 	ResumeErr  error
 	DeleteRes  *setecgrpcv1.DeleteSnapshotResponse
 	DeleteErr  error
-	ClaimRes   *setecgrpcv1.ClaimPoolEntryResponse
-	ClaimErr   error
 	// LastCreate is the last CreateSnapshot request.
 	LastCreate *setecgrpcv1.CreateSnapshotRequest
 }
@@ -168,15 +150,6 @@ func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, _ *setecgrpcv1.Re
 		return &setecgrpcv1.ResumeSandboxResponse{Success: true}, nil
 	}
 	return f.ResumeRes, f.ResumeErr
-}
-func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
-	return &setecgrpcv1.QueryPoolResponse{}, nil
-}
-func (f *fakeNodeAgentClient) ClaimPoolEntry(_ context.Context, _ *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
-	if f.ClaimRes == nil && f.ClaimErr == nil {
-		return &setecgrpcv1.ClaimPoolEntryResponse{Claimed: false}, nil
-	}
-	return f.ClaimRes, f.ClaimErr
 }
 func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	if f.DeleteRes == nil && f.DeleteErr == nil {
@@ -264,7 +237,6 @@ func TestMain(m *testing.M) {
 	// Events, RuntimeClasses) and the v1alpha1 Sandbox scheme.
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(nodev1.AddToScheme(scheme))
 	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
 
 	testCtx, testCancel = context.WithCancel(context.Background())
@@ -291,35 +263,6 @@ func TestMain(m *testing.M) {
 	testCollectors = metricspkg.NewCollectorsWith(testMetricsRegistry)
 	testClassResolver = classpkg.NewResolver(mgr.GetClient())
 
-	// Build the runtime registry and config for the multi-backend path.
-	// The test suite uses a kata-fc-only config to match the existing prereq
-	// setup (one kata-fc RuntimeClass + one node with testNodeSelectorLabel).
-	testRuntimeCfg = &runtimepkg.RuntimeConfig{
-		Runtimes: map[string]runtimepkg.BackendConfig{
-			runtimepkg.BackendKataFC: {
-				Enabled:          true,
-				RuntimeClassName: testRuntimeClassName,
-				// DefaultOverhead is explicitly empty so the kata-fc dispatcher
-				// returns nil overhead. envtest RuntimeClass objects do not
-				// define overhead, and Kubernetes rejects pods with non-nil
-				// Overhead that doesn't match the RuntimeClass overhead field.
-				DefaultOverhead: corev1.ResourceList{},
-			},
-		},
-		Defaults: runtimepkg.DefaultsConfig{
-			Runtime: runtimepkg.RuntimeDefaults{
-				Backend: runtimepkg.BackendKataFC,
-			},
-		},
-	}
-	testRuntimeRegistry = runtimepkg.NewRegistry()
-	testRuntimeRegistry.Register(runtimepkg.NewKataFCDispatcher(
-		testRuntimeCfg.Runtimes[runtimepkg.BackendKataFC],
-	))
-
-	// Phase 3 wiring: a package-wide fake dialer lets each scenario
-	// script node-agent responses per its needs without touching the
-	// reconciler itself.
 	testDialer = &fakeNodeAgentDialer{client: &fakeNodeAgentClient{}}
 	testCoordinator = &snapshotpkg.Coordinator{
 		Client:   mgr.GetClient(),
@@ -329,18 +272,15 @@ func TestMain(m *testing.M) {
 	}
 
 	reconciler := &SandboxReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		Recorder:          mgr.GetEventRecorder("sandbox-controller"),
-		NodeSelectorLabel: testNodeSelectorLabel,
-		Runtimes:          testRuntimeRegistry,
-		RuntimeCfg:        testRuntimeCfg,
-		// The default backend here is kata-fc, and every kata-fc session
-		// Sandbox now needs this image for its workspace-format init
-		// container (setec#91), not only a session with no spec.command.
-		// A real deployment always sets this (the chart fails to render
-		// without it), so envtest matches that.
-		KeepaliveImage: "test-keepalive:latest",
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorder("sandbox-controller"),
+		LauncherImage: "launcher:test",
+		DiskRepo:      "registry.example/disks",
+		DiskKeys:      []string{"key"},
+		DiskBuilder: DiskBuilderConfig{
+			Image: "disk-builder:test", Namespace: testDiskNamespace, SigningSecret: "disk-seed",
+		},
 		// Phase 2 dependencies wired so the envtest reconciler exercises
 		// the full Phase 2 flow. Each dependency is nil-safe so Phase 1
 		// scenarios continue to pass unchanged.
@@ -406,6 +346,7 @@ func TestMain(m *testing.M) {
 
 	// Run the manager in the background. Its lifetime is bounded by
 	// testCtx which TestMain cancels on teardown.
+	go completeDiskJobs(testCtx, testClient)
 	go func() {
 		if err := mgr.Start(testCtx); err != nil {
 			fmt.Fprintf(os.Stderr, "manager exited: %v\n", err)
@@ -430,34 +371,54 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// ensurePrereqs installs the kata-fc RuntimeClass and labels a fake Node so
-// the controller's prereq check succeeds. Envtest has no real Nodes, so we
-// create one imperatively; the scheduler is not running so the Node will
-// never actually be "ready", but prereq.Check only inspects labels.
-//
-// The Node carries both the legacy katacontainers.io/kata-runtime label
-// (for backward compatibility) and the new setec.zeroroot.ai/runtime.kata-fc
-// label (for the multi-backend prereq check and selectRuntime).
+// ensurePrereqs creates the operator namespace of the disk builder Jobs and
+// one fleet Node. Envtest has no real Nodes and no scheduler, so tests bind
+// their Pods to the Node by hand.
 func ensurePrereqs(ctx context.Context, c client.Client) error {
-	rc := &nodev1.RuntimeClass{
-		Name:    testRuntimeClassName,
-		Handler: "kata-fc",
-	}
-	if err := c.Create(ctx, rc); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create RuntimeClass: %w", err)
-	}
-
-	node := &corev1.Node{
-		Name: "kata-node-1",
-		Labels: map[string]string{
-			testNodeSelectorLabel:               "true",
-			"setec.zeroroot.ai/runtime.kata-fc": "true",
-		},
-	}
-	if err := c.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create Node: %w", err)
+	for _, obj := range []client.Object{
+		&corev1.Namespace{Name: testDiskNamespace},
+		&corev1.Node{Name: "fleet-node-1"},
+	} {
+		if err := c.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create %s: %w", obj.GetName(), err)
+		}
 	}
 	return nil
+}
+
+// completeDiskJobs plays the Job controller, which envtest does not run:
+// it marks each disk builder Job of the suite Complete, as a cluster does
+// once the disk is in the registry. The kubelet is played the same way:
+// each test sets the status of its Pods.
+func completeDiskJobs(ctx context.Context, c client.Client) {
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		jobs := &batchv1.JobList{}
+		if err := c.List(ctx, jobs, client.InNamespace(testDiskNamespace)); err != nil {
+			continue
+		}
+		for i := range jobs.Items {
+			job := &jobs.Items[i]
+			if len(job.Status.Conditions) > 0 {
+				continue
+			}
+			now := metav1.Now()
+			job.Status.StartTime = &now
+			job.Status.CompletionTime = &now
+			job.Status.Succeeded = 1
+			job.Status.Conditions = []batchv1.JobCondition{
+				{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue, LastTransitionTime: now},
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue, LastTransitionTime: now},
+			}
+			_ = c.Status().Update(ctx, job)
+		}
+	}
 }
 
 // newNamespace creates a uniquely-named namespace and registers a cleanup

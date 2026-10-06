@@ -72,7 +72,7 @@ func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 		t.Fatalf("Dial: %v", err)
 	}
 	if err := queryPool(t, client); err != nil {
-		t.Fatalf("QueryPool against a trusted node-agent: %v", err)
+		t.Fatalf("DeleteSnapshot against a trusted node-agent: %v", err)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 		t.Fatalf("Dial: %v", err)
 	}
 	if err := queryPool(t, client); err == nil {
-		t.Fatal("QueryPool against a node-agent from an untrusted CA: want refusal, got success")
+		t.Fatal("DeleteSnapshot against a node-agent from an untrusted CA: want refusal, got success")
 	}
 }
 
@@ -116,7 +116,7 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 		t.Fatalf("Dial: %v", err)
 	}
 	if err := queryPool(t, client); err == nil {
-		t.Fatal("QueryPool with an identity the node-agent does not trust: want refusal, got success")
+		t.Fatal("DeleteSnapshot with an identity the node-agent does not trust: want refusal, got success")
 	}
 }
 
@@ -133,7 +133,7 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 		t.Fatalf("Dial: %v", err)
 	}
 	if err := queryPool(t, client); err == nil {
-		t.Fatal("QueryPool against a plaintext listener: want refusal, got success")
+		t.Fatal("DeleteSnapshot against a plaintext listener: want refusal, got success")
 	}
 }
 
@@ -253,7 +253,7 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 		t.Fatalf("Dial (old node-agent): %v", err)
 	}
 	if err := queryPool(t, client); err != nil {
-		t.Fatalf("QueryPool against the old node-agent: %v", err)
+		t.Fatalf("DeleteSnapshot against the old node-agent: %v", err)
 	}
 
 	// The node-agent on node-1 restarts: its old Pod, and the listener
@@ -267,7 +267,7 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 		t.Fatalf("Dial (new node-agent): %v", err)
 	}
 	if err := queryPool(t, client); err != nil {
-		t.Fatalf("QueryPool against the new node-agent: want success (proves the stale "+
+		t.Fatalf("DeleteSnapshot against the new node-agent: want success (proves the stale "+
 			"connection to the stopped old node-agent was dropped), got %v", err)
 	}
 }
@@ -360,15 +360,15 @@ func operatorCredentials(t *testing.T, identityCA, trustCA *testCA) grpccreds.Tr
 	return creds
 }
 
-// stubNodeAgent answers QueryPool so a successful call is unambiguous:
+// stubNodeAgent answers DeleteSnapshot so a successful call is unambiguous:
 // anything other than a nil error means the connection never carried
 // an RPC.
 type stubNodeAgent struct {
 	setecgrpcv1.UnimplementedNodeAgentServiceServer
 }
 
-func (stubNodeAgent) QueryPool(context.Context, *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
-	return &setecgrpcv1.QueryPoolResponse{}, nil
+func (stubNodeAgent) DeleteSnapshot(context.Context, *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
+	return &setecgrpcv1.DeleteSnapshotResponse{Success: true}, nil
 }
 
 // servePool starts an mTLS NodeAgentService on addr:0, presenting an
@@ -443,7 +443,7 @@ func queryPool(t *testing.T, client NodeAgentClient) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	_, err := client.QueryPool(ctx, &setecgrpcv1.QueryPoolRequest{})
+	_, err := client.DeleteSnapshot(ctx, &setecgrpcv1.DeleteSnapshotRequest{StorageRef: "probe"})
 	return err
 }
 

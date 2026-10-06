@@ -32,8 +32,6 @@ func newSandboxClass(name string, mods ...func(*setecv1alpha1.SandboxClass)) *se
 	c := &setecv1alpha1.SandboxClass{
 		Name: name,
 		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM:              setecv1alpha1.VMMFirecracker,
-			RuntimeClassName: testRuntimeClassName,
 			MaxResources: &setecv1alpha1.Resources{
 				VCPU:   4,
 				Memory: resource.MustParse("4Gi"),
@@ -68,9 +66,11 @@ func TestPhase2_SandboxWithClass(t *testing.T) {
 	sb := newSandboxWithClass(ns, "classy", cls.Name)
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
 
+	// The one backend: a launcher Pod, with no RuntimeClass.
 	pod := waitForPod(g, ns, sb.Name)
-	g.Expect(pod.Spec.RuntimeClassName).NotTo(BeNil())
-	g.Expect(*pod.Spec.RuntimeClassName).To(Equal(cls.Spec.RuntimeClassName)) //nolint:staticcheck // back-compat: RuntimeClassName retained until v2
+	g.Expect(pod.Spec.RuntimeClassName).To(BeNil())
+	g.Expect(pod.Spec.Containers).To(HaveLen(1))
+	g.Expect(pod.Spec.Containers[0].Name).To(Equal(podspec.LauncherContainerName))
 }
 
 // ---------------------------------------------------------------------------
@@ -716,28 +716,30 @@ func TestPhase2_NamespaceBaselineRestoredWhenWidened(t *testing.T) {
 		"a narrowed baseline selector was not reconciled back to podSelector: {}")
 }
 
-// TestPhase2_SandboxClassInstallsWithoutVMM guards the install path. The
-// chart ships SandboxClasses that state their isolation through
-// spec.runtime.backend and set no spec.vmm, because vmm is deprecated.
-// While the CRD marked vmm required the API server rejected every one of
-// them with "spec.vmm: Required value" — no class installed, no class
-// resolved, and every Sandbox silently fell back to deny-all. This asserts
-// against a real API server that such a class is admitted.
-func TestPhase2_SandboxClassInstallsWithoutVMM(t *testing.T) {
+// TestPhase2_RemovedBackendFailsTheSandbox pins the cutover of setec#198
+// in the reconciler: a class that names a removed backend fails its
+// Sandbox with the reason UnsupportedBackend and gets no Pod. With the
+// webhook on, admission refuses the class first; this is the path without
+// the webhook.
+func TestPhase2_RemovedBackendFailsTheSandbox(t *testing.T) {
 	g := NewWithT(t)
+	ns := newNamespace(t, "p2-removed")
 
-	cls := &setecv1alpha1.SandboxClass{
-		Name: "no-vmm-class",
-		Spec: setecv1alpha1.SandboxClassSpec{
-			Runtime:            &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
-			DefaultNetworkMode: setecv1alpha1.NetworkModeExternalOnly,
-		},
-	}
-	g.Expect(testClient.Create(testCtx, cls)).To(Succeed(),
-		"a SandboxClass that declares spec.runtime.backend and no spec.vmm must be admitted")
+	cls := newSandboxClass("p2-kata-class", func(c *setecv1alpha1.SandboxClass) {
+		c.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"}
+	})
+	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 
-	fetched := &setecv1alpha1.SandboxClass{}
-	g.Expect(testClient.Get(testCtx, types.NamespacedName{Name: cls.Name}, fetched)).To(Succeed())
-	g.Expect(string(fetched.Spec.VMM)).To(BeEmpty())
+	sb := newSandboxWithClass(ns, "old-backend", cls.Name)
+	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
+	g.Eventually(func() string {
+		got, err := getSandbox(testCtx, ns, sb.Name)
+		if err != nil {
+			return ""
+		}
+		return string(got.Status.Phase) + "/" + got.Status.Reason
+	}, convergeTimeout, convergeInterval).Should(Equal("Failed/" + eventReasonUnsupportedBackend))
+	_, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "a Sandbox of a removed backend got a Pod")
 }

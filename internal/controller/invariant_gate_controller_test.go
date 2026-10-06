@@ -12,7 +12,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -20,75 +19,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
-	"github.com/zeroroot-ai/setec/internal/status"
 )
-
-// TestWarmStart_GateRejectionDestroysSandbox drives a pre-warm
-// eligible Sandbox against a node-agent that reports a "successful"
-// restore MISSING its per-restore verifications (the shape produced by
-// a node opted out via --entropy-reseed=off / --restore-uniquify=off,
-// setec#191). The docs/design/isolation.md invariant gate must reject: outcome
-// Rejected, Sandbox Failed with the typed InvariantGateViolation
-// reason, and the Pod holding the unverified state destroyed. Cold
-// boot is deliberately NOT the fallback here — the VM already received
-// the restored state.
-func TestWarmStart_GateRejectionDestroysSandbox(t *testing.T) {
-	g := gomega.NewWithT(t)
-	ns := newNamespace(t, "ws-gate")
-
-	const image = "ghcr.io/org/prewarm:v9"
-	clsName := fmt.Sprintf("prewarm-gate-%d", time.Now().UnixNano())
-	newPreWarmSandboxClass(t, clsName, image)
-
-	// Node-side success without a single verification signal — the
-	// exact shape a verification-suppressed node-agent produces.
-	testDialer.client.ClaimRes = &setecgrpcv1.ClaimPoolEntryResponse{
-		Claimed: true, Success: true, EntryId: "pool-entry-x",
-	}
-	t.Cleanup(func() { testDialer.client.ClaimRes = nil })
-
-	sb := &setecv1alpha1.Sandbox{
-		Name: "sb", Namespace: ns,
-		Spec: setecv1alpha1.SandboxSpec{
-			SandboxClassName: clsName,
-			Image:            image,
-			Command:          []string{"sh"},
-			Resources: setecv1alpha1.Resources{
-				VCPU:   1,
-				Memory: resource.MustParse("512Mi"),
-			},
-		},
-	}
-	g.Expect(testClient.Create(testCtx, sb)).To(gomega.Succeed())
-	driveSandboxPodRunning(t, g, ns, sb.Name)
-
-	// The gate refuses: terminal Failed with the typed reason and a
-	// Rejected warm-start outcome.
-	g.Eventually(func() string {
-		got, err := getSandbox(testCtx, ns, sb.Name)
-		if err != nil {
-			return ""
-		}
-		return string(got.Status.Phase) + "/" + got.Status.Reason
-	}, 10*time.Second, 250*time.Millisecond).Should(
-		gomega.Equal(string(setecv1alpha1.SandboxPhaseFailed) + "/" + status.ReasonInvariantGateViolation))
-
-	got, err := getSandbox(testCtx, ns, sb.Name)
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	g.Expect(got.Status.WarmStart).NotTo(gomega.BeNil())
-	g.Expect(got.Status.WarmStart.Outcome).To(gomega.Equal(setecv1alpha1.SandboxWarmStartRejected))
-	g.Expect(got.Status.WarmStart.EntryID).To(gomega.Equal("pool-entry-x"))
-
-	// The Pod that received the unverified restored state is destroyed.
-	g.Eventually(func() bool {
-		pod, perr := getPod(testCtx, ns, sb.Name+"-vm")
-		if apierrors.IsNotFound(perr) {
-			return true
-		}
-		return perr == nil && pod != nil && !pod.DeletionTimestamp.IsZero()
-	}, 10*time.Second, 250*time.Millisecond).Should(gomega.BeTrue(),
-		"the Pod holding unverified restored state must be deleted")
-}
 
 // TestSessionCheckpoint_GateRefusalDestroysVM drives the setec#194
 // suspend/resume loop against a node-agent whose restore reports
@@ -170,7 +101,7 @@ func TestSandboxClass_UnverifiedRestoresCondition(t *testing.T) {
 
 	// 1. Plain class: condition False/Enforced.
 	plain := fmt.Sprintf("gate-cond-plain-%d", time.Now().UnixNano())
-	newPreWarmSandboxClass(t, plain, "ghcr.io/org/x:v1")
+	newGateTestClass(t, plain)
 	g.Eventually(func() string {
 		c := getClassCondition(plain)
 		if c == nil {
@@ -183,7 +114,7 @@ func TestSandboxClass_UnverifiedRestoresCondition(t *testing.T) {
 	// with the inert-annotation reason surfaced. The class reconciler
 	// patches status concurrently, so mutate through a re-Get + retry.
 	annotated := fmt.Sprintf("gate-cond-annot-%d", time.Now().UnixNano())
-	newPreWarmSandboxClass(t, annotated, "ghcr.io/org/x:v1")
+	newGateTestClass(t, annotated)
 	g.Eventually(func() error {
 		cls := &setecv1alpha1.SandboxClass{}
 		if err := testClient.Get(testCtx, types.NamespacedName{Name: annotated}, cls); err != nil {
@@ -237,4 +168,15 @@ func TestSandboxClass_UnverifiedRestoresCondition(t *testing.T) {
 		}
 		return string(c.Status) + "/" + c.Reason
 	}, 10*time.Second, 250*time.Millisecond).Should(gomega.Equal("True/" + ReasonDevModeOptOut))
+}
+
+// newGateTestClass creates a plain SandboxClass and deletes it with the
+// test.
+func newGateTestClass(t *testing.T, name string) {
+	t.Helper()
+	cls := newSandboxClass(name)
+	if err := testClient.Create(testCtx, cls); err != nil {
+		t.Fatalf("create SandboxClass: %v", err)
+	}
+	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
 }

@@ -116,11 +116,6 @@ type SnapshotSpec struct {
 	// +optional
 	KernelVersion string `json:"kernelVersion,omitempty"`
 
-	// VMM is the virtual machine monitor the snapshot is compatible
-	// with. Cross-VMM restore is not supported.
-	// +required
-	VMM VMM `json:"vmm"`
-
 	// TTL optionally bounds the lifetime of the snapshot. Once the
 	// snapshot is older than TTL AND no Sandbox references it, the
 	// SnapshotReconciler deletes it. When unset, snapshots live until

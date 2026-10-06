@@ -17,7 +17,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
-	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -38,7 +37,7 @@ const launcherEvidencePoll = 100 * time.Millisecond
 // then joins it to the Pod network. A missing or negative piece of
 // evidence is a failed restore: the operator gate refuses it.
 func (s *Server) restoreLauncher(
-	ctx context.Context, p katasandbox.Paths, rc io.Reader, backend storage.StorageBackend, takenAtUnixNano int64,
+	ctx context.Context, p launchersandbox.Paths, rc io.Reader, backend storage.StorageBackend, takenAtUnixNano int64,
 ) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	statePath := launchersandbox.HostPath(p, podspec.LauncherRestoreState)
 	memPath := launchersandbox.HostPath(p, podspec.LauncherRestoreMemory)
@@ -65,11 +64,11 @@ func (s *Server) restoreLauncher(
 			return nil, status.Errorf(codes.Internal, "write the time of the state: %v", err)
 		}
 	}
-	// Under --entropy-reseed=off (no Reseeder) the marker says so. The
+	// Under --entropy-reseed=off the marker says so. The
 	// launcher then skips the reseed and keeps the machine off the
 	// network, and the operator gate refuses the restore.
 	var marker []byte
-	if s.Reseeder == nil {
+	if s.EntropyReseedOff {
 		marker = []byte(podspec.LauncherStagedNoReseed)
 	}
 	if err := os.WriteFile(staged, marker, 0o600); err != nil {
@@ -81,7 +80,7 @@ func (s *Server) restoreLauncher(
 		return &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: err.Error()},
 			status.Errorf(codes.DeadlineExceeded, "%v", err)
 	}
-	if ev.Error != "" || (!ev.EntropyReseeded && s.Reseeder != nil) || !ev.Uniquified || !ev.ClockSet {
+	if ev.Error != "" || (!ev.EntropyReseeded && !s.EntropyReseedOff) || !ev.Uniquified || !ev.ClockSet {
 		msg := fmt.Sprintf("the launcher did not confirm the restored guest (failing closed): %+v", ev)
 		return &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: msg}, status.Error(codes.Internal, msg)
 	}

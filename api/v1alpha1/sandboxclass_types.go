@@ -12,56 +12,17 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// VMM identifies a virtual machine monitor a SandboxClass may target. The
-// enum matches the set of VMMs Kata Containers currently ships support for;
-// the operator itself does not embed VMM-specific logic — the value is
-// surfaced to administrators as an explicit capability declaration.
-// +kubebuilder:validation:Enum=firecracker;qemu;cloud-hypervisor
-type VMM string
-
-const (
-	// VMMFirecracker selects the Firecracker VMM (Kata runtime kata-fc).
-	VMMFirecracker VMM = "firecracker"
-	// VMMQEMU selects the QEMU VMM (Kata runtime kata-qemu).
-	VMMQEMU VMM = "qemu"
-	// VMMCloudHypervisor selects Cloud Hypervisor (Kata runtime kata-clh).
-	VMMCloudHypervisor VMM = "cloud-hypervisor"
-)
-
-// SandboxClassRuntime selects the isolation backend for Sandboxes in this
-// class and optionally declares an ordered fallback chain. When Runtime is
-// nil the operator infers a backend from the legacy VMM field; when that is
-// also unset the cluster-default backend from Helm values is used.
+// SandboxClassRuntime names the isolation backend of the Sandboxes of a
+// class. setec has one backend: each Sandbox is a Firecracker machine in a
+// launcher Pod (docs/design/runtime.md). The field stays, so that a class
+// written for a removed backend gets a clear refusal from the webhook and
+// the operator rather than a silent change of its isolation.
 // +kubebuilder:validation:Optional
 type SandboxClassRuntime struct {
-	// Backend is the isolation runtime to use for Sandboxes in this class.
-	// Must be one of the five supported backends. When unset the operator
-	// falls back to the cluster default declared in Helm values.
-	// +kubebuilder:validation:Enum=kata-fc;kata-qemu;gvisor;runc;launcher
+	// Backend is "launcher" or empty. A removed backend name (kata-fc,
+	// kata-qemu, gvisor, runc) is refused.
 	// +optional
 	Backend string `json:"backend,omitempty"`
-
-	// Params is a map of backend-specific tuning parameters forwarded to the
-	// RuntimeDispatcher. Keys and semantics vary per backend (e.g.
-	// params.vcpus, params.memory for kata-qemu). Unknown keys are ignored
-	// by backends that do not understand them.
-	// +optional
-	Params map[string]string `json:"params,omitempty"`
-
-	// Fallback is an ordered list of backend names to attempt when no node
-	// advertises the requested Backend. Each entry must be one of the five
-	// supported backends. The operator tries each in order; the first backend
-	// with a capable node wins. status.runtime.chosen records the final
-	// selection.
-	//
-	// When NO candidate has a capable node the operator keeps the requested
-	// Backend, creates the Pod anyway, and holds the Sandbox Pending with
-	// reason AwaitingCapableNode. The unschedulable Pod is what makes a
-	// scale-to-zero node pool provision a node; falling back would not help,
-	// because a fallback with no capable node is exactly as unschedulable as
-	// the primary with no capable node.
-	// +optional
-	Fallback []string `json:"fallback,omitempty"`
 }
 
 // SandboxClassSpec defines the constraints and defaults a cluster
@@ -70,54 +31,10 @@ type SandboxClassRuntime struct {
 // SandboxSpec in a later task) and the operator enforces that the requested
 // Sandbox fits within the class.
 type SandboxClassSpec struct {
-	// Deprecated: use Runtime.Backend instead.
-	// VMM selects the virtual machine monitor targeted by this class.
-	//
-	// Optional. It was previously required, which made every class that
-	// states its isolation the current way — through Runtime.Backend —
-	// unadmittable: the API server rejected it with "spec.vmm: Required
-	// value", so the chart's own SandboxClasses could not be applied, no
-	// class resolved, and every Sandbox fell back to deny-all. A field
-	// that is deprecated cannot also be mandatory. When it is empty the
-	// operator reads Runtime.Backend; when both are empty the operator's
-	// configured default backend applies.
-	// +optional
-	VMM VMM `json:"vmm,omitempty"`
-
-	// Deprecated: use Runtime.Backend instead.
-	// RuntimeClassName optionally overrides the operator-wide default
-	// RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
-	// controller falls back to its --runtime-class-name flag.
-	// +optional
-	RuntimeClassName string `json:"runtimeClassName,omitempty"`
-
-	// Runtime selects the isolation backend and optional fallback chain for
-	// Sandboxes in this class. When nil the operator infers the backend from
-	// the legacy VMM field for backwards compatibility.
+	// Runtime names the isolation backend of the class. Nil means the one
+	// backend, the launcher.
 	// +optional
 	Runtime *SandboxClassRuntime `json:"runtime,omitempty"`
-
-	// KernelImage is NOT HONORED and the validating webhook refuses a class
-	// that sets it (setec#126).
-	//
-	// It read "an optional OCI reference to a custom guest kernel image the node
-	// agent pre-pulls and hands to Kata". No node agent pre-pulls it and no
-	// controller reads it, so a class naming a hardened or digest-pinned kernel
-	// was admitted and the sandbox booted the operator-wide default, reporting
-	// nothing. The microVM is the isolation boundary, so that substitution
-	// silently changed the boundary.
-	//
-	// Honoring it needs a Kata hypervisor path annotation, which Kata gates
-	// behind an operator-configured allowlist that is empty by default for the
-	// same reason. Pin the guest kernel on the node instead. The field stays
-	// served so an existing object still validates.
-	// +optional
-	KernelImage string `json:"kernelImage,omitempty"`
-
-	// RootfsImage is NOT HONORED and the validating webhook refuses a class
-	// that sets it. Same cause and same remedy as KernelImage (setec#126).
-	// +optional
-	RootfsImage string `json:"rootfsImage,omitempty"`
 
 	// DefaultResources is the resource budget applied to Sandboxes that do
 	// not specify their own. Optional; when nil the Sandbox must declare
@@ -209,8 +126,7 @@ type SandboxClassSpec struct {
 	DefaultEgressAllow []NetworkAllow `json:"defaultEgressAllow,omitempty"`
 
 	// NodeSelector is injected into every Sandbox Pod produced under this
-	// class. It is additive to any Pod-level selectors the controller sets
-	// for RuntimeClass affinity.
+	// class. It is additive to the node affinity that the controller sets.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
@@ -230,10 +146,10 @@ type SandboxClassSpec struct {
 	// +optional
 	Default bool `json:"default,omitempty"`
 
-	// PreWarmPoolSize declares how many paused microVMs the node-agent
-	// maintains per eligible node for this class. Zero disables the
-	// pool (Phase 1/2 behavior). When non-zero PreWarmImage MUST be
-	// set — the webhook enforces the pairing.
+	// PreWarmPoolSize is the number of warm pool bases that the operator
+	// keeps for this class (setec#103). Zero disables the pool. When
+	// non-zero, PreWarmImage with a digest and DefaultResources must be
+	// set; the webhook enforces both.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	PreWarmPoolSize int32 `json:"preWarmPoolSize,omitempty"`
@@ -256,13 +172,6 @@ type SandboxClassSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	CPUTemplate string `json:"cpuTemplate,omitempty"`
-
-	// PreWarmTTL bounds the age of pool entries. Entries older than
-	// this are recycled (torn down and reprovisioned) to avoid stale
-	// kernel state accumulating in paused VMs. When unset the
-	// node-agent defaults to 24h at runtime.
-	// +optional
-	PreWarmTTL *metav1.Duration `json:"preWarmTTL,omitempty"`
 
 	// MaxPauseDuration bounds how long a Sandbox may remain in
 	// phase=Paused — a paused microVM keeps its full memory
@@ -503,7 +412,6 @@ type SandboxClassWarmPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sbxcls
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="VMM",type=string,JSONPath=`.spec.vmm`
 // +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Max-VCPU",type=integer,JSONPath=`.spec.maxResources.vcpu`,priority=1
 // +kubebuilder:printcolumn:name="Max-Memory",type=string,JSONPath=`.spec.maxResources.memory`,priority=1

@@ -180,21 +180,11 @@ spec:
                   SnapshotReconciler deletes it. When unset, snapshots live until
                   explicitly deleted or garbage-collected by namespace deletion.
                 type: string
-              vmm:
-                description: |-
-                  VMM is the virtual machine monitor the snapshot is compatible
-                  with. Cross-VMM restore is not supported.
-                enum:
-                - firecracker
-                - qemu
-                - cloud-hypervisor
-                type: string
             required:
             - imageRef
             - node
             - sandboxClass
             - storageBackend
-            - vmm
             type: object
           status:
             description: status reflects the observed state of the Snapshot.

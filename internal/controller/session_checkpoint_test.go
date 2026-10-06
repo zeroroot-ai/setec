@@ -232,7 +232,7 @@ func TestSessionCheckpoint_CheckpointOnDrain(t *testing.T) {
 	setNodeUnschedulable := func(v bool) {
 		g.Eventually(func() error {
 			node := &corev1.Node{}
-			if err := testClient.Get(testCtx, types.NamespacedName{Name: "kata-node-1"}, node); err != nil {
+			if err := testClient.Get(testCtx, types.NamespacedName{Name: "fleet-node-1"}, node); err != nil {
 				return err
 			}
 			original := node.DeepCopy()

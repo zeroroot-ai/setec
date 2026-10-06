@@ -75,7 +75,6 @@ func (c *Coordinator) CreateBase(
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass:   cls.Name,
 			ImageRef:       image,
-			VMM:            setecv1alpha1.VMMFirecracker,
 			CPUTemplate:    cls.Spec.CPUTemplate,
 			InstanceType:   c.instanceType(ctx, pod.Spec.NodeName),
 			StorageBackend: c.backendName(),

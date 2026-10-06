@@ -26,7 +26,6 @@ import (
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
-	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -101,8 +100,7 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 	if err := s.checkTenantNamespace(ctx, start.GetTenant(), ns); err != nil {
 		return err
 	}
-	sb, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId())
-	if err != nil {
+	if _, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId()); err != nil {
 		return err
 	}
 
@@ -122,7 +120,7 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 		return err
 	}
 
-	container, command := execTarget(sb, start.GetCommand())
+	container, command := execTarget(start.GetCommand())
 	return s.runExec(ctx, stream, execer, ns, name, container, command)
 }
 
@@ -132,14 +130,10 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 // the launcher container; the relay only carries it into the machine.
 var LauncherExecCommand = []string{"/usr/local/bin/setec-launcher", "exec", "--"}
 
-// execTarget is the container and the command of an exec. A launcher
-// Sandbox runs the command in its machine through the relay; any other
-// Sandbox runs it in its workload container.
-func execTarget(sb *setecv1alpha1.Sandbox, command []string) (string, []string) {
-	if sb != nil && sb.Status.Runtime != nil && sb.Status.Runtime.Chosen == runtimepkg.BackendLauncher {
-		return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
-	}
-	return workloadContainerName, command
+// execTarget is the container and the command of an exec: the launcher
+// container, which carries the command into the machine of the Sandbox.
+func execTarget(command []string) (string, []string) {
+	return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
 }
 
 // recvExecStart reads the mandatory opening message and validates it.

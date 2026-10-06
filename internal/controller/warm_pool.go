@@ -104,7 +104,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.deleteAll(ctx, cls.Name, bases, pods); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Metrics.SetWarmPoolReady(cls.Name, 0)
+		r.Metrics.SetWarmPool(cls.Name, 0, 0)
 		return ctrl.Result{}, r.patchStatus(ctx, cls, nil)
 	}
 	key := baseKeyOf(cls, r.LauncherImage)
@@ -167,7 +167,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	r.Metrics.SetWarmPoolReady(cls.Name, n)
+	r.Metrics.SetWarmPool(cls.Name, n, want)
 	if err := r.patchStatus(ctx, cls, &setecv1alpha1.SandboxClassWarmPoolStatus{Ready: int32(n), Key: key}); err != nil { //nolint:gosec // a count of a small pool
 		return ctrl.Result{}, err
 	}

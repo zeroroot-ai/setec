@@ -15,6 +15,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
@@ -45,7 +46,7 @@ func sessionTestServer(t *testing.T, fc *fakeFirecracker) *Server {
 			}
 		},
 		FirecrackerFactory: func(string) firecracker.Client { return fc },
-		KataSandboxes:      fakeKata{root: fc.root},
+		Machines:           fakeMachine{root: fc.root},
 	}
 }
 
@@ -106,7 +107,12 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 		t.Fatal("empty storage ref")
 	}
 
-	// Restore with the right KEK succeeds and reaches LoadSnapshot.
+	// Restore with the right KEK succeeds and reaches the launcher.
+	p, err := srv.Machines.Resolve(ctx, testPodUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saw := fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true})
 	rresp, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId:     "ns-sb-ckpt-1",
 		StorageRef:     resp.GetStorageRef(),
@@ -117,8 +123,8 @@ func TestSessionCheckpointRoundTripThroughServer(t *testing.T) {
 	if err != nil || !rresp.GetSuccess() {
 		t.Fatalf("RestoreSandbox = (%v,%v), want success", rresp, err)
 	}
-	if len(fc.loadCalls) != 1 {
-		t.Fatalf("LoadSnapshot calls = %d, want 1", len(fc.loadCalls))
+	if got := <-saw; got != "STATE" {
+		t.Fatalf("the launcher read the state %q", got)
 	}
 
 	// Restore with the wrong KEK fails closed (corrupted, DataLoss).

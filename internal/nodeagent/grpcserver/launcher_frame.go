@@ -29,8 +29,7 @@ import (
 //	memSize(8) extentCount(8) { offset(8) length(8) data }...
 //	diskSize(8) extentCount(8) { offset(8) length(8) data }...
 //
-// A kata snapshot has another form (makeFramedReader), and the magic keeps
-// one from loading as the other.
+// The magic keeps a file of another form from loading as a snapshot.
 var launcherFrameMagic = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '1', '\n'}
 
 // maxParentChain bounds the parents that one restore follows, and
@@ -303,4 +302,33 @@ func scanSparseFiles(paths []string) error {
 		}
 	}
 	return nil
+}
+
+// writeN copies n bytes of r to a new file at path.
+func writeN(r io.Reader, path string, n int64) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = io.CopyN(f, r, n)
+	return err
+}
+
+// multiReadCloser reads one reader and closes each file under it.
+type multiReadCloser struct {
+	reader  io.Reader
+	closers []io.Closer
+}
+
+func (m *multiReadCloser) Read(p []byte) (int, error) { return m.reader.Read(p) }
+
+func (m *multiReadCloser) Close() error {
+	var firstErr error
+	for _, c := range m.closers {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

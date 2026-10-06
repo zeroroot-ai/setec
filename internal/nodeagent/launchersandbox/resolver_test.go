@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 )
 
@@ -18,7 +17,7 @@ func TestResolve_FindsTheWorkVolumeOfALauncherPod(t *testing.T) {
 	pods := t.TempDir()
 	const uid = "0a1b2c3d-0000-4000-8000-000000000001"
 	r := Resolver{PodsDir: pods}
-	if _, err := r.Resolve(t.Context(), uid); !errors.Is(err, katasandbox.ErrNotFound) {
+	if _, err := r.Resolve(t.Context(), uid); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no launcher yet: err = %v, want ErrNotFound", err)
 	}
 	work := filepath.Join(pods, uid, "volumes", "kubernetes.io~empty-dir", "work")
@@ -29,7 +28,7 @@ func TestResolve_FindsTheWorkVolumeOfALauncherPod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.Launcher || p.APISocket != filepath.Join(work, "vm", "api.sock") || p.HybridVsock != filepath.Join(work, "vm", "v.sock") {
+	if p.APISocket != filepath.Join(work, "vm", "api.sock") || p.HybridVsock != filepath.Join(work, "vm", "v.sock") {
 		t.Fatalf("paths = %+v", p)
 	}
 	// Firecracker sees the work volume at /work, so a file the node agent

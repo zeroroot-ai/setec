@@ -20,7 +20,7 @@ limitations under the License.
 */
 
 // Phase 2 E2E scenarios. These run only with the `e2e` build tag on a
-// bare-metal host that has Kata Containers installed. Each test is
+// cluster whose nodes expose /dev/kvm. Each test is
 // self-sufficient: it assumes the Phase 2 chart has been rendered with
 // the relevant value overrides, and skips gracefully if the cluster
 // does not meet the prerequisites (e.g. missing NetworkPolicy CNI).
@@ -181,7 +181,6 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 
 	// Seed a tight SandboxClass.
 	cls := newSandboxClass("e2e-tight", setecv1alpha1.SandboxClassSpec{
-		VMM: setecv1alpha1.VMMFirecracker,
 		MaxResources: &setecv1alpha1.Resources{
 			VCPU:   1,
 			Memory: resource.MustParse("256Mi"),
