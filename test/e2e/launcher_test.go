@@ -457,7 +457,16 @@ func TestLauncher_KeptSnapshot(t *testing.T) {
 		t.Fatalf("kp-snap is not kept: %+v", snap.Spec)
 	}
 
-	normal := restoreFrom(t, "kp-normal", "kp-snap", nil)
+	// A normal Sandbox: the webhook refuses it, or without the webhook the
+	// operator keeps it Pending.
+	normal := launcherSandbox("kp-normal", "true")
+	normal.Spec.SnapshotRef = &setecv1alpha1.SandboxSnapshotRef{Name: "kp-snap"}
+	normalErr := k8sClient.Create(context.Background(), normal)
+	if normalErr == nil {
+		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), normal) })
+	} else if !strings.Contains(normalErr.Error(), "is kept") {
+		t.Fatalf("create kp-normal: %v", normalErr)
+	}
 	review := restoreFrom(t, "kp-review", "kp-snap", func(s *setecv1alpha1.SandboxSpec) {
 		s.Review = true
 		s.Network = &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeNone}
@@ -466,11 +475,13 @@ func TestLauncher_KeptSnapshot(t *testing.T) {
 	if got := mustLauncherExec(t, sandboxNamespace, review.Name, "cat", "/tmp/marker"); got != "kept-state" {
 		t.Errorf("the review Sandbox has /tmp/marker = %q", got)
 	}
-	if got, err := getSandboxE2E(client.ObjectKeyFromObject(normal)); err != nil ||
-		got.Status.Phase == setecv1alpha1.SandboxPhaseRunning {
-		t.Errorf("a normal Sandbox loaded a kept snapshot: %+v %v", got.Status, err)
+	if normalErr == nil {
+		if got, err := getSandboxE2E(client.ObjectKeyFromObject(normal)); err != nil ||
+			got.Status.Phase == setecv1alpha1.SandboxPhaseRunning {
+			t.Errorf("a normal Sandbox loaded a kept snapshot: %+v %v", got, err)
+		}
+		_ = k8sClient.Delete(context.Background(), normal)
 	}
-	_ = k8sClient.Delete(context.Background(), normal)
 
 	// The pin: the snapshot outlives its TTL.
 	pin := func(v bool) {
