@@ -82,7 +82,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -106,7 +106,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -130,7 +130,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -154,7 +154,7 @@ jobs:
         CMD=frontend
 
   setec-runtime-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -178,7 +178,7 @@ jobs:
         CMD=runtime-agent
 
   setec-guest-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -202,7 +202,7 @@ jobs:
         CMD=setec-guest-agent
 
   setec-keepalive:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -226,7 +226,7 @@ jobs:
         CMD=setec-keepalive
 
   setec-device-plugin:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
