@@ -294,11 +294,11 @@ jobs:
         run: ./hack/verify-chart-security.sh charts/setec
 
       - name: Helm credential-mode assertions (setec#183)
-        # Renders both credential modes and asserts the install-wide
-        # switch holds: file mode (default) keeps the Secret-mounted
-        # posture with no SPIFFE leakage, spiffe mode flips the frontend,
-        # the node-agent AND the operator's node-agent dialer together,
-        # and an empty authorized-ID list fails the render instead of
+        # Renders the chart and asserts its one credential source
+        # (setec#175): the frontend, the node-agent AND the operator's
+        # node-agent dialer use the SPIFFE Workload API, no PEM file
+        # credential flag renders (the check has a failing fixture), and
+        # an empty authorized-ID list fails the render instead of
         # becoming a startup error.
         run: ./hack/verify-chart-credentials.sh charts/setec
 
@@ -324,46 +324,43 @@ jobs:
 
       - name: Helm template (Phase 3 enabled)
         # Catches regressions in Phase 3 chart extensions without
-        # requiring a live cluster. mTLS is mandatory so the tls
-        # Secret names are supplied explicitly; sandboxNamespaces and a
-        # webhook CA source are required the same way as above.
+        # requiring a live cluster. The operator and the node-agent
+        # authorize each other by SPIFFE ID, so both allow-lists are
+        # supplied. sandboxNamespaces and a webhook CA source are
+        # required the same way as above.
         run: |
           helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set snapshots.enabled=true \
             --set nodeAgent.enabled=true \
             --set webhook.enabled=true \
             --set webhook.certManager.enabled=true \
-            --set snapshots.mTLS.caProvided=true \
+            --set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec-system/sa/setec}' \
+            --set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec-system/sa/setec-node-agent}' \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
 
-          # With certManager.enabled=false the chart does not create
-          # snapshots.mTLS.caSecret, so rendering this path asserts
-          # caProvided=true, i.e. "an operator has supplied the CA out of
-          # band". Without it the chart refuses to render rather than
-          # producing a release whose pods wedge on a missing non-optional
-          # Secret. Assert that refusal too, so the guard itself cannot rot
-          # into a no-op. The cert-manager path (setec#14) is asserted in
-          # hack/verify-chart-security.sh.
+          # An empty allow-list would accept no peer at boot. The chart
+          # refuses to render it, so assert that refusal too, and the
+          # guard cannot rot into a no-op (setec#175).
           if helm template setec charts/setec -f hack/chart-launcher-values.yaml \
                --set snapshots.enabled=true \
                --set nodeAgent.enabled=true \
                --set webhook.enabled=true \
                --set webhook.certManager.enabled=true \
                --set sandboxNamespaces={sandbox-workloads} >/dev/null 2>&1; then
-            echo "::error::snapshots.enabled=true rendered without snapshots.mTLS.caProvided; the chart mounts a CA Secret it does not create (setec#320) and must refuse"
+            echo "::error::snapshots.enabled=true rendered with no SPIFFE allow-list for the node-agent hop; the chart must refuse"
             exit 1
           fi
 
-      - name: Helm template (frontend enabled with mTLS)
-        # The frontend requires both TLS Secret names; without them the
-        # chart refuses to render. This gate exercises that path.
-        # sandboxNamespaces and a webhook CA source are required the
-        # same way as the default-values render check above.
+      - name: Helm template (frontend enabled)
+        # The frontend serves its SVID and authorizes each enrolled
+        # client by SPIFFE ID. It needs the trust domain of the fleet and
+        # at least one client. sandboxNamespaces and a webhook CA source
+        # are required the same way as the default-values render check
+        # above.
         run: |
           helm template setec charts/setec -f hack/chart-launcher-values.yaml \
             --set frontend.enabled=true \
-            --set frontend.tlsCertSecretName=frontend-tls \
-            --set frontend.tlsClientCASecretName=frontend-ca \
+            --set credentials.spiffe.trustDomain=example.org \
             --set 'frontend.clients[0].name=saas' \
             --set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
             --set webhook.certManager.enabled=true \
@@ -420,12 +417,12 @@ jobs:
 
       - name: Smoke-test manager --help
         # Catches flag-parsing regressions (Phase 3 adds snapshots-enabled
-        # and the nodeagent-tls-* triple). --help is a pure dry-run, no
+        # and the nodeagent-spiffe-* pair). --help is a pure dry-run, no
         # side effects.
         run: |
           ./bin/manager --help 2>&1 | tee manager-help.txt
           grep -q -- '--snapshots-enabled' manager-help.txt
-          grep -q -- '--nodeagent-tls-cert' manager-help.txt
+          grep -q -- '--nodeagent-spiffe-socket' manager-help.txt
 
       - name: Smoke-test node-agent --help
         run: |

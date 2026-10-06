@@ -63,9 +63,22 @@ data:
 
         creds := credentials.NewTLS(&tls.Config{
             Certificates: []tls.Certificate{cert},
-            RootCAs:      pool,
-            ServerName:   "setec-frontend.setec-system.svc",
-            MinVersion:   tls.VersionTLS12,
+            MinVersion:   tls.VersionTLS13,
+            // The frontend serves an SVID, which has no hostname. The chain
+            // and the SPIFFE ID of the frontend are checked instead.
+            InsecureSkipVerify: true,
+            VerifyConnection: func(cs tls.ConnectionState) error {
+                if len(cs.PeerCertificates) == 0 { return fmt.Errorf("no server certificate") }
+                inter := x509.NewCertPool()
+                for _, c := range cs.PeerCertificates[1:] { inter.AddCert(c) }
+                leaf := cs.PeerCertificates[0]
+                if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter,
+                    KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil { return err }
+                for _, u := range leaf.URIs {
+                    if u.String() == "spiffe://dev.local/ns/setec-system/sa/setec-frontend" { return nil }
+                }
+                return fmt.Errorf("the server is not the setec frontend")
+            },
         })
 
         ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)

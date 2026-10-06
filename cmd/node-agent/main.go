@@ -76,19 +76,12 @@ func runMain() int {
 		"the Pod directory of the kubelet; the agent finds the work volume of a launcher Pod under it")
 	flag.StringVar(&grpcListenAddr, "grpc-listen-addr", ":50052",
 		"address the NodeAgentService gRPC server listens on. Empty disables the server.")
-	flag.StringVar(&creds.tlsCert, "tls-cert", "",
-		"path to the PEM-encoded server certificate for mTLS. Selects file credential mode, the default.")
-	flag.StringVar(&creds.tlsKey, "tls-key", "",
-		"path to the PEM-encoded server private key. Selects file credential mode, the default.")
-	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
-		"path to the PEM-encoded CA used to verify operator client certificates. "+
-			"Selects file credential mode, the default.")
 	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
-			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
+			"Required: the node-agent serves its SVID and authorizes each caller by SPIFFE ID.")
 	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
 		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://example.org/ns/setec/sa/setec. "+
-			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
+			"Repeat for each caller. Required: there is no accept-everyone setting.")
 	flag.StringVar(&snapshotRoot, "snapshot-root", "/var/lib/setec/snapshots",
 		"root directory for persisted snapshot state files.")
 	flag.StringVar(&snapshotKeyFile, "snapshot-key-file", "/var/lib/setec/keys/node.key",
@@ -238,59 +231,20 @@ func serveMetrics(addr string, reg *prometheus.Registry) {
 	}
 }
 
-// Credential mode names, used only in log and error output so an
-// operator can tell from a pod's logs which posture it is running.
-// They match cmd/frontend's names because an operator comparing two
-// pods' logs is comparing postures, not components.
-const (
-	fileMode        = "file"
-	spiffeMode      = "spiffe"
-	conflictingMode = "conflicting"
-	unsetMode       = "unset"
-)
-
 // credentialFlags carries the node-agent's credential flags.
 type credentialFlags struct {
-	tlsCert             string
-	tlsKey              string
-	tlsClientCA         string
 	spiffeSocket        string
 	spiffeAuthorizedIDs repeatedString
 }
 
-// config maps the flags onto a credentials.Config and names the mode
-// they selected.
-//
-// It deliberately validates nothing, and it is deliberately a copy of
-// cmd/frontend's function rather than an approximation of it. A source
-// is *selected* by any of its flags being set, not by all of them;
-// whether the selection is coherent — both modes, neither, or half of
-// one — is credentials.New's decision, so that every setec component
-// gets the same answer and the same message. An operator must not be
-// able to end up with the frontend on SPIFFE and the node-agent
-// silently still on files, and the way to guarantee that is for
-// neither component to hold an opinion of its own.
-func (f credentialFlags) config() (cfg credentials.Config, mode string) {
-	mode = unsetMode
-	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
-		cfg.Files = &credentials.FileSource{
-			CertFile: f.tlsCert,
-			KeyFile:  f.tlsKey,
-			CAFile:   f.tlsClientCA,
-		}
-		mode = fileMode
+// source maps the flags onto the SPIFFE credential source. It validates
+// nothing: credentials.New decides whether the source is complete, so
+// every setec component gives the same answer and the same message.
+func (f credentialFlags) source() credentials.SPIFFESource {
+	return credentials.SPIFFESource{
+		SocketPath:    f.spiffeSocket,
+		AuthorizedIDs: f.spiffeAuthorizedIDs,
 	}
-	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
-		cfg.SPIFFE = &credentials.SPIFFESource{
-			SocketPath:    f.spiffeSocket,
-			AuthorizedIDs: f.spiffeAuthorizedIDs,
-		}
-		mode = spiffeMode
-	}
-	if cfg.Files != nil && cfg.SPIFFE != nil {
-		mode = conflictingMode
-	}
-	return cfg, mode
 }
 
 // repeatedString collects a flag given more than once. The credential
@@ -307,39 +261,36 @@ func (r *repeatedString) Set(v string) error {
 }
 
 // serverCredentials resolves the gRPC server option carrying this
-// node-agent's mTLS credentials, and names the mode it used.
+// node-agent's mTLS credentials.
 //
 // Where the key material comes from, what the TLS floor is, whether a
 // client certificate is required and verified, and which peers are
 // authorized are all properties of internal/credentials — this
 // function only says which surface it needs.
-func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, string, error) {
-	cfg, mode := f.config()
-	provider, err := credentials.New(cfg)
+func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOption, error) {
+	provider, err := credentials.New(f.source())
 	if err != nil {
-		return nil, mode, err
+		return nil, err
 	}
 	// Acquiring the credentials here rather than lazily is what makes
-	// an unreachable SPIFFE Workload API a boot failure. There is no
-	// fallback to files.
+	// an unreachable SPIFFE Workload API a boot failure.
 	creds, err := provider.ServerCredentials(ctx)
 	if err != nil {
-		return nil, mode, err
+		return nil, err
 	}
-	return grpc.Creds(creds), mode, nil
+	return grpc.Creds(creds), nil
 }
 
 // grpcTLS returns the credentials option for the gRPC server. mTLS is
-// mandatory and the credential mode is explicit: half a mode, both
-// modes, or neither causes the process to exit so the DaemonSet
-// surfaces the misconfiguration via its restart count.
+// mandatory: an incomplete source or an unreachable Workload API exits
+// the process, so the DaemonSet surfaces the misconfiguration through
+// its restart count.
 func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
-	opt, mode, err := serverCredentials(ctx, f)
+	opt, err := serverCredentials(ctx, f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "node-agent: credentials (%s mode): %v\n", mode, err)
+		fmt.Fprintf(os.Stderr, "node-agent: credentials: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "node-agent: credential mode: %s\n", mode)
 	return opt
 }
 

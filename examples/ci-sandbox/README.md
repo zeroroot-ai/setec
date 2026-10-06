@@ -15,7 +15,7 @@ This is the "run untrusted CI job" pattern: a pull-request-driven build system c
 ## Prerequisites
 
 - A running Setec cluster with the gRPC frontend enabled.
-- Client TLS material (cert, key, and the signing CA).
+- The X509-SVID of the caller, its key, and the trust bundle.
 - Go 1.23 or later to build the client.
 - A Node.js project with an `npm test` (or equivalent) command; the example defaults to that.
 
@@ -34,6 +34,7 @@ go build -o ci-sandbox .
   --client-cert=./client.crt \
   --client-key=./client.key \
   --ca=./ca.crt \
+  --server-spiffe-id=spiffe://example.org/ns/setec-system/sa/setec-frontend \
   --project=./my-node-app \
   --command='npm ci && npm test'
 ```

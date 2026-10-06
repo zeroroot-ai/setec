@@ -11,7 +11,7 @@
 # Prerequisites:
 #   - `make up` completed (k3s + disk registry + Setec running)
 #   - Kind cluster 'gibson' is up with LAN access to the host (default for Kind)
-#   - Dev mTLS PKI produced by `make pki` (scripts/30-gen-dev-pki.sh)
+#   - SPIRE runs on the k3s cluster (scripts/30-install-spire.sh)
 #
 # This script is non-destructive: it pulls the gibson-executor image, loads it
 # into k3s containerd, applies the smoke Job, waits for completion, and prints
@@ -56,12 +56,10 @@ docker save ghcr.io/zeroroot-ai/gibson-executor:main | \
     sudo KUBECONFIG="${KUBECONFIG_K3S}" k3s ctr images import -
 
 # 4. Regenerate + apply mTLS client Secret to the Kind cluster (idempotent).
-green "Applying dev mTLS client Secret to ${KIND_CONTEXT}/gibson"
+green "Applying the dev client SVID Secret to ${KIND_CONTEXT}/gibson"
 PKI="${ROOT}/pki"
-[[ -f "${PKI}/ca.crt" && -f "${PKI}/client.crt" && -f "${PKI}/client.key" ]] || {
-    red "FAIL: dev PKI missing under ${PKI} — run scripts/30-generate-pki.sh first"
-    exit 1
-}
+# A fresh SVID of the dev client (it lives a few hours).
+"${ROOT}/scripts/35-mint-client-svid.sh"
 GEN="${ROOT}/manifests/gibson-kind/setec-client-tls.generated.yaml"
 sed \
     -e "s|__CA_B64__|$(base64 -w0 < "${PKI}/ca.crt")|" \

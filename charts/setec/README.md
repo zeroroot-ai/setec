@@ -233,11 +233,8 @@ verify the expected new manifests appear via `helm template`.
   port 9090. It runs as root and privileged, because it reads and writes
   those volumes on the host.
 - `frontend.enabled=true` installs the `setec-frontend` Deployment + ClusterIP
-  Service. In the default file credential mode, **both `tlsCertSecretName`
-  and `tlsClientCASecretName` are required** — mTLS is mandatory for the
-  frontend and the chart refuses to render without them (in SPIFFE mode the
-  identities come from the Workload API instead; see "Credential modes"
-  below). The frontend does NOT bypass Kubernetes admission; every call
+  Service. mTLS is mandatory for the frontend, and its identity comes
+  from the SPIFFE Workload API (see "Credentials" below). The frontend does NOT bypass Kubernetes admission; every call
   still flows through the webhook. `frontend.clients` enrolls each Gibson
   cluster as a named client, with the SPIFFE ID of its daemon, and is
   required. The frontend refuses a caller that is not enrolled. Each
@@ -353,23 +350,16 @@ None of this enforces anything unless the cluster's CNI implements
 `networking.k8s.io/v1` NetworkPolicy. Verify that against the running
 cluster; the chart cannot detect it.
 
-### Credential modes (`credentials.mode`)
+### Credentials
 
 The chart renders three mTLS surfaces: the frontend gRPC server, the
 node-agent snapshot gRPC server, and the operator's node-agent dialer.
-`credentials.mode` selects how all three obtain and verify identities —
-one install-wide switch, so a values file cannot produce a frontend on
-SPIFFE with a node-agent still on files.
+All three take their identities from the SPIFFE Workload API, the one
+credential source of setec (setec#175). No PEM file credential source
+exists.
 
-**`file` (default).** Secret-mounted certificates. A chart install that
-specifies nothing renders exactly what it rendered before the switch
-existed: `frontend.tlsCertSecretName` / `frontend.tlsClientCASecretName`
-feed the frontend, `snapshots.mTLS.*` feeds the operator↔node-agent
-channel, and both are required where the component is enabled.
-
-**`spiffe`.** Identities come from the SPIFFE Workload API — a SPIRE
-agent socket on each node, given as a bare absolute path in
-`credentials.spiffe.socketPath` (default
+The Workload API is a SPIRE agent socket on each node, given as a bare
+absolute path in `credentials.spiffe.socketPath` (default
 `/run/spire/agent-sockets/api.sock`). The chart mounts the socket's
 directory read-only via `hostPath` into each component and renders
 `--spiffe-socket` on each component. The frontend authorizes the SPIFFE
@@ -384,7 +374,7 @@ get one `--spiffe-authorized-id` per entry in the matching
 
 **Federation.** Each install has its own trust domain (see Authentication in `docs/frontend-api.md`).
 `credentials.spiffe.trustDomain` names the domain of this fleet and is
-required in SPIFFE mode with the frontend on. An enrolled client in a
+required with the frontend on. An enrolled client in a
 different domain needs a `federation` block: `bundleEndpointURL`,
 `bundleEndpointProfile` (`https_spiffe` or `https_web`) and, for
 `https_spiffe`, `endpointSPIFFEID`. The chart renders one
@@ -401,15 +391,13 @@ versa. An empty list that is in use **fails the render** — "accept
 everyone" cannot be reached by omitting configuration, matching the
 binaries' own refusal to start with an empty allow-list.
 
-There is no fallback between the modes: a SPIFFE component that cannot
-reach its Workload API fails to boot rather than quietly reverting to
-files, and the socket `hostPath` uses `type: Directory` so a node
-without a SPIRE agent fails Pod creation loudly. `snapshots.mTLS.certManager`
-is a file-mode mechanism; enabling it in spiffe mode fails the render
-rather than rendering unused Certificate objects.
+A component that cannot reach its Workload API fails to boot, and the
+socket `hostPath` uses `type: Directory` so a node without a SPIRE agent
+fails Pod creation loudly.
 
 `hack/verify-chart-credentials.sh` (CI: "Helm credential-mode
-assertions") asserts both modes render what this section claims.
+assertions") asserts that the chart renders what this section claims,
+and that no PEM file credential flag renders.
 
 ### Phase 1 to Phase 2 migration
 

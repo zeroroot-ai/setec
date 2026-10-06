@@ -226,22 +226,13 @@ func runMain() int {
 		"Phase 3: namespace the node-agent DaemonSet runs in. The operator lists Pods labeled "+
 			"app.kubernetes.io/component=node-agent in this namespace to find the one running on "+
 			"a given node.")
-	pflag.StringVar(&nodeAgentCreds.certPath, "nodeagent-tls-cert", "",
-		"Phase 3: path to the operator's client certificate for mTLS to node-agents. "+
-			"Selects file credential mode, the default.")
-	pflag.StringVar(&nodeAgentCreds.keyPath, "nodeagent-tls-key", "",
-		"Phase 3: path to the operator's client private key. Selects file credential mode, the default.")
-	pflag.StringVar(&nodeAgentCreds.caPath, "nodeagent-ca", "",
-		"Phase 3: path to the CA used to verify node-agent server certificates. "+
-			"Selects file credential mode, the default.")
 	pflag.StringVar(&nodeAgentCreds.spiffeSocket, "nodeagent-spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
-			"Selects SPIFFE credential mode for the node-agent hop; mutually exclusive with the "+
-			"--nodeagent-tls-* flags.")
+			"Required with --snapshots-enabled: the operator dials each node-agent with its SVID.")
 	pflag.StringArrayVar(&nodeAgentCreds.spiffeAuthorizedIDs, "nodeagent-spiffe-authorized-id", nil,
 		"Full SPIFFE ID a node-agent must present, e.g. "+
-			"spiffe://example.org/ns/setec/sa/setec-node-agent. Repeat for each. Required in SPIFFE "+
-			"mode; there is no accept-any-server setting.")
+			"spiffe://example.org/ns/setec/sa/setec-node-agent. Repeat for each. Required with "+
+			"--snapshots-enabled; there is no accept-any-server setting.")
 
 	// Controller-runtime's zap helper registers its flags on the stdlib
 	// flag.CommandLine. We bridge the stdlib set into pflag so --help
@@ -385,12 +376,11 @@ func runMain() int {
 	// Phase 2-equivalent.
 	var coordinator *snapshot.Coordinator
 	if snapshotsEnabled {
-		creds, credMode, err := nodeAgentClientCredentials(context.Background(), nodeAgentCreds)
+		creds, err := nodeAgentClientCredentials(context.Background(), nodeAgentCreds)
 		if err != nil {
-			setupLog.Error(err, "unable to load node-agent client credentials", "mode", credMode)
+			setupLog.Error(err, "unable to load node-agent client credentials")
 			return 1
 		}
-		setupLog.Info("Resolved node-agent client credentials", "mode", credMode)
 		nodeAgentPodResolver := &snapshot.PodResolver{
 			Client:    mgr.GetClient(),
 			Namespace: nodeAgentNamespace,
@@ -537,83 +527,45 @@ func runMain() int {
 	return 0
 }
 
-// Credential mode names, used only in log and error output so an
-// operator can tell from a pod's logs which posture it is running.
-// They match cmd/frontend's and cmd/node-agent's names because an
-// operator comparing two pods' logs is comparing postures, not
-// components.
-const (
-	fileMode        = "file"
-	spiffeMode      = "spiffe"
-	conflictingMode = "conflicting"
-	unsetMode       = "unset"
-)
-
 // nodeAgentCredentialFlags carries the credential flags the operator
 // parsed for its client hop to the node-agents.
 type nodeAgentCredentialFlags struct {
-	certPath            string
-	keyPath             string
-	caPath              string
 	spiffeSocket        string
 	spiffeAuthorizedIDs []string
 }
 
-// config maps the flags onto a credentials.Config and names the mode
-// they selected.
-//
-// It deliberately validates nothing, and is deliberately the same
-// function cmd/frontend and cmd/node-agent have. A source is *selected*
-// by any of its flags being set, not by all of them; whether the
-// selection is coherent is credentials.New's decision, so every setec
-// component gives the same answer and the same message.
-func (f nodeAgentCredentialFlags) config() (cfg credentials.Config, mode string) {
-	mode = unsetMode
-	if f.certPath != "" || f.keyPath != "" || f.caPath != "" {
-		cfg.Files = &credentials.FileSource{
-			CertFile: f.certPath,
-			KeyFile:  f.keyPath,
-			CAFile:   f.caPath,
-		}
-		mode = fileMode
+// source maps the flags onto the SPIFFE credential source. It validates
+// nothing: credentials.New decides whether the source is complete, so
+// every setec component gives the same answer and the same message.
+func (f nodeAgentCredentialFlags) source() credentials.SPIFFESource {
+	return credentials.SPIFFESource{
+		SocketPath:    f.spiffeSocket,
+		AuthorizedIDs: f.spiffeAuthorizedIDs,
 	}
-	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
-		cfg.SPIFFE = &credentials.SPIFFESource{
-			SocketPath:    f.spiffeSocket,
-			AuthorizedIDs: f.spiffeAuthorizedIDs,
-		}
-		mode = spiffeMode
-	}
-	if cfg.Files != nil && cfg.SPIFFE != nil {
-		mode = conflictingMode
-	}
-	return cfg, mode
 }
 
 // nodeAgentClientCredentials resolves the transport credentials the
-// snapshot dialer presents to node-agents, and names the mode it used.
+// snapshot dialer presents to node-agents.
 //
 // The operator is the client on this hop, so what it must get right is
-// whose node-agent it is willing to talk to. In SPIFFE mode that is the
-// allow-list of server SPIFFE IDs, checked in place of the hostname —
-// chaining to the trust bundle is not sufficient. The credential module
-// owns that decision; this function only names the surface it needs.
+// whose node-agent it is willing to talk to: the allow-list of server
+// SPIFFE IDs, checked in place of the hostname. Chaining to the trust
+// bundle is not sufficient. The credential module owns that decision.
+// This function only names the surface it needs.
 func nodeAgentClientCredentials(
 	ctx context.Context, f nodeAgentCredentialFlags,
-) (grpccreds.TransportCredentials, string, error) {
-	cfg, mode := f.config()
-	provider, err := credentials.New(cfg)
+) (grpccreds.TransportCredentials, error) {
+	provider, err := credentials.New(f.source())
 	if err != nil {
-		return nil, mode, err
+		return nil, err
 	}
 	// Acquiring the credentials here rather than lazily is what makes
-	// an unreachable SPIFFE Workload API a boot failure. There is no
-	// fallback to files.
+	// an unreachable SPIFFE Workload API a boot failure.
 	creds, err := provider.ClientCredentials(ctx)
 	if err != nil {
-		return nil, mode, err
+		return nil, err
 	}
-	return creds, mode, nil
+	return creds, nil
 }
 
 // probeServer serves /healthz and /readyz on EVERY replica, leader or not.

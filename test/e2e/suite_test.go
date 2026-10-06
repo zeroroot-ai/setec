@@ -353,7 +353,7 @@ func (c sessionS3Config) helmArgs() []string {
 	args := []string{
 		// The checkpoint backend lives in the node-agent, and the whole
 		// snapshots subtree (including the operator's node-agent dialer
-		// and its mTLS) is gated behind snapshots.enabled — which
+		// and its SPIFFE allow-lists) is gated behind snapshots.enabled — which
 		// snapshotsEnabled() turns on for this axis, in installChart, so
 		// there is exactly one place that decides it.
 		"--set", "nodeAgent.enabled=true",
@@ -366,12 +366,6 @@ func (c sessionS3Config) helmArgs() []string {
 		"--set-string", fmt.Sprintf("snapshots.s3.endpoint=%s", c.endpoint),
 		// Real S3 rejects path-style addressing; MinIO requires it.
 		"--set", fmt.Sprintf("snapshots.s3.pathStyle=%t", c.endpoint != ""),
-		// The operator<->node-agent channel is mTLS, and the chart's
-		// certManager path stays OFF here: it needs the right to create
-		// an Issuer, which the ARC runner does not hold. installChart
-		// mints all three Secrets from one CA instead and confirms the
-		// CA with caProvided (see nodeagentcert_test.go).
-		"--set", "snapshots.mTLS.certManager.enabled=false",
 	}
 	if c.nodeAgentImageRepo != "" {
 		args = append(args, "--set-string",
@@ -628,16 +622,11 @@ func installChart() error {
 		}
 	}
 
-	// Same story one layer down: with snapshots on, the chart mounts three
-	// operator<->node-agent mTLS Secrets it does not fully create, and
-	// `helm --wait` blocks forever on a Pod whose Secret volume never
-	// resolves. Mint them here, from ONE CA, before the install. See
-	// nodeagentcert_test.go for why the suite does this rather than the
-	// chart's cert-manager path (setec#320: the ARC runner cannot create an
-	// Issuer, and issuing both leaves from a selfsigned ClusterIssuer gives
-	// them no shared trust root anyway).
+	// With snapshots on, the operator and the node-agent authenticate
+	// each other with SVIDs from the SPIFFE Workload API (setec#175), so
+	// SPIRE runs before the install (spire_test.go).
 	if snapshotsEnabled() {
-		if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
+		if err := installSPIRE(ctx); err != nil {
 			return err
 		}
 	}
@@ -718,25 +707,8 @@ func installChart() error {
 	// verified none of them. That is the failure mode TestEnv_KVMPresent exists
 	// to prevent, arriving through a different door.
 	if snapshotsEnabled() {
-		args = append(args,
-			"--set", "snapshots.enabled=true",
-			// The acknowledgment the chart requires (setec#326): it refuses
-			// to render a release that mounts snapshots.mTLS.caSecret without
-			// someone declaring the Secret exists, because a non-optional
-			// missing Secret wedges the Pods and surfaces as an opaque
-			// "context deadline exceeded" ten minutes into the install.
-			//
-			// setec#331 spelled out what that leaves outstanding: the chart
-			// refuses to render, but it does not conjure a CA, so turning
-			// snapshots on still needs somebody to create setec-nodeagent-ca
-			// signing BOTH leaves — with a selfsigned issuer each leaf is its
-			// own root and the two sides do not trust each other — and to pass
-			// this flag. "Somebody" is now this suite: createNodeAgentMTLSSecrets
-			// a few lines above mints exactly that, one CA and both leaves from
-			// it, which is the part the chart's own cert-manager path cannot do
-			// (setec#320, still open for the chart-managed CA Issuer).
-			"--set", "snapshots.mTLS.caProvided=true",
-		)
+		args = append(args, "--set", "snapshots.enabled=true")
+		args = append(args, spireHelmArgs(chartFullname, testNamespace)...)
 	}
 
 	// Enable the SandboxClass/Sandbox admission webhook with the

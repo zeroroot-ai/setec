@@ -40,27 +40,21 @@ import (
 func main() {
 	var (
 		listenAddr        string
-		creds             credentialFlags
+		spiffeSocket      string
 		clients           repeatedString
 		grants            repeatedString
 		metricsAddr       string
 		shutdownGraceTime time.Duration
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":50051", "gRPC server listen address.")
-	flag.StringVar(&creds.tlsCert, "tls-cert", "",
-		"Path to server TLS certificate. Selects file credential mode, the default.")
-	flag.StringVar(&creds.tlsKey, "tls-key", "",
-		"Path to server TLS key. Selects file credential mode, the default.")
-	flag.StringVar(&creds.tlsClientCA, "tls-client-ca", "",
-		"Path to client-CA bundle enabling mTLS. Selects file credential mode, the default.")
-	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
+	flag.StringVar(&spiffeSocket, "spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
-			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
+			"Required: the frontend serves its SVID and authorizes each caller by SPIFFE ID.")
 	flag.Var(&clients, "client",
 		"An enrolled client cluster, as <name>=<spiffe-id>, e.g. "+
 			"saas=spiffe://example.org/ns/gibson/sa/gibson-daemon. Repeat for each Gibson cluster. "+
-			"Required: the frontend refuses every caller that is not enrolled. In SPIFFE mode "+
-			"these IDs are also the credential allow-list.")
+			"Required: the frontend refuses every caller that is not enrolled. These IDs "+
+			"are also the credential allow-list.")
 	flag.Var(&grants, "pair-namespace-grant",
 		"A RoleBinding that each new pair namespace gets, as <cluster-role>=<sa-namespace>/<sa-name>. "+
 			"Repeat for each: the operator needs its Pod-write role and the frontend its exec role there.")
@@ -115,25 +109,25 @@ func main() {
 		Resolver:   resolver,
 	}
 
-	// mTLS is mandatory and the credential mode is explicit. Half a
-	// mode, both modes, or neither is a misconfiguration the Deployment
-	// should restart out of, not paper over; credentials.New is what
-	// decides that, so there is one answer and not one per component.
-	credConfig, credMode := creds.config(enrollment.SPIFFEIDs())
-	provider, err := credentials.New(credConfig)
+	// mTLS is mandatory, and the SPIFFE Workload API is the one
+	// credential source. The allow-list is the SPIFFE ID of each
+	// enrolled client, so one list names who may call. A missing socket
+	// is a misconfiguration the Deployment should restart out of.
+	provider, err := credentials.New(credentials.SPIFFESource{
+		SocketPath:    spiffeSocket,
+		AuthorizedIDs: enrollment.SPIFFEIDs(),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: credentials: %v\n", err)
 		os.Exit(1)
 	}
 	// Acquiring the credentials here rather than lazily is what makes
-	// an unreachable SPIFFE Workload API a boot failure. There is no
-	// fallback to files.
+	// an unreachable SPIFFE Workload API a boot failure.
 	serverCreds, err := provider.ServerCredentials(context.Background())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "frontend: credentials (%s mode): %v\n", credMode, err)
+		fmt.Fprintf(os.Stderr, "frontend: credentials: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "frontend: credential mode: %s\n", credMode)
 	grpcOpts := []grpc.ServerOption{grpc.Creds(serverCreds)}
 
 	grpcServer := grpc.NewServer(grpcOpts...)
@@ -171,57 +165,6 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: gRPC serve: %v\n", err)
 	}
-}
-
-// Credential mode names, used only in log and error output so an
-// operator can tell from a pod's logs which posture it is running.
-const (
-	fileMode        = "file"
-	spiffeMode      = "spiffe"
-	conflictingMode = "conflicting"
-	unsetMode       = "unset"
-)
-
-// credentialFlags carries the frontend's credential flags.
-type credentialFlags struct {
-	tlsCert      string
-	tlsKey       string
-	tlsClientCA  string
-	spiffeSocket string
-}
-
-// config maps the flags onto a credentials.Config and names the mode
-// they selected. In SPIFFE mode the allow-list is the SPIFFE ID of each
-// enrolled client, so one list names who may call.
-//
-// It deliberately validates nothing. A source is *selected* by any of
-// its flags being set, not by all of them; whether the selection is
-// coherent — both modes, neither, or half of one — is
-// credentials.New's decision, so that every setec component gets the
-// same answer and the same message. Selecting on "any flag set" is what
-// makes a typo in one flag name a startup error naming the missing
-// piece rather than a silent switch to the other mode.
-func (f credentialFlags) config(enrolledIDs []string) (cfg credentials.Config, mode string) {
-	mode = unsetMode
-	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
-		cfg.Files = &credentials.FileSource{
-			CertFile: f.tlsCert,
-			KeyFile:  f.tlsKey,
-			CAFile:   f.tlsClientCA,
-		}
-		mode = fileMode
-	}
-	if f.spiffeSocket != "" {
-		cfg.SPIFFE = &credentials.SPIFFESource{
-			SocketPath:    f.spiffeSocket,
-			AuthorizedIDs: enrolledIDs,
-		}
-		mode = spiffeMode
-	}
-	if cfg.Files != nil && cfg.SPIFFE != nil {
-		mode = conflictingMode
-	}
-	return cfg, mode
 }
 
 // repeatedString collects a flag given more than once. The enrolled

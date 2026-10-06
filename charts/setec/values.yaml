@@ -349,29 +349,16 @@ webhook:
       kind: ClusterIssuer
       name: selfsigned
 
-# -- credentials selects how every mTLS surface the chart renders obtains
-# and verifies TLS identities: the frontend server, the node-agent server,
-# and the operator's node-agent dialer. One install-wide switch by design
-# (setec#183) — a values file cannot produce a frontend on SPIFFE with a
-# node-agent still on files, because that mixed posture is exactly what
-# the per-binary mode validation exists to prevent.
+# -- credentials configures the one credential source of every mTLS
+# surface the chart renders: the frontend server, the node-agent server,
+# and the operator's node-agent dialer. The source is the SPIFFE Workload
+# API, a SPIRE agent socket on each node (setec#175). The chart renders
+# --spiffe-socket on the frontend (whose allow-list is frontend.clients),
+# --spiffe-socket and --spiffe-authorized-id on the node-agent, and the
+# --nodeagent-spiffe-* dialer flags on the operator, plus a read-only
+# hostPath mount of the socket directory. A component that cannot reach
+# its Workload API fails to boot. No PEM file credential source exists.
 credentials:
-  # mode is "file" (default) or "spiffe".
-  #
-  #   file   — Secret-mounted certificates. Renders exactly what the chart
-  #            rendered before this switch existed: --tls-* flags fed from
-  #            frontend.tlsCertSecretName / frontend.tlsClientCASecretName
-  #            and snapshots.mTLS.*.
-  #   spiffe — the SPIFFE Workload API (a SPIRE agent socket on each
-  #            node). Renders --spiffe-socket on the frontend (whose
-  #            allow-list is frontend.clients), --spiffe-socket /
-  #            --spiffe-authorized-id on the node-agent, and the
-  #            --nodeagent-spiffe-*
-  #            dialer flags on the operator, plus a read-only hostPath
-  #            mount of the socket directory. There is NO fallback between
-  #            modes: a SPIFFE component that cannot reach its Workload
-  #            API fails to boot rather than quietly reverting to files.
-  mode: file
   spiffe:
     # socketPath is the SPIFFE Workload API socket on the host, as a bare
     # absolute filesystem path (the binaries read it as unix://<path>).
@@ -379,8 +366,8 @@ credentials:
     # component at the same path.
     socketPath: /run/spire/agent-sockets/api.sock
     # trustDomain is the SPIFFE trust domain of this fleet, e.g.
-    # example.org. Each install has its own (ADR-0164). REQUIRED in spiffe
-    # mode with frontend.enabled=true. An enrolled client in a different
+    # example.org. Each install has its own (ADR-0164). REQUIRED with
+    # frontend.enabled=true. An enrolled client in a different
     # domain needs a federation block (see frontend.clients).
     trustDomain: ""
     # className is the className of the SPIRE controller manager that
@@ -391,7 +378,7 @@ credentials:
     # path), one list per trust relationship — the sets are distinct on
     # purpose: an ID authorized to call the frontend must not thereby be
     # trusted as a node-agent, or vice versa. Each list that is in use is
-    # REQUIRED in spiffe mode: an empty one fails the render, so "accept
+    # REQUIRED: an empty one fails the render, so "accept
     # everyone" cannot be reached by omitting configuration (mirrors the
     # binaries' own refusal to start with an empty allow-list).
     #
@@ -463,14 +450,6 @@ frontend:
   servicePort: 50051
   # metricsPort is the HTTP Prometheus port.
   metricsPort: 9091
-  # tlsCertSecretName is the name of the Secret holding server.crt/server.key.
-  # REQUIRED when frontend.enabled=true — mTLS is mandatory for the
-  # gRPC frontend.
-  tlsCertSecretName: ""
-  # tlsClientCASecretName is a Secret holding ca.crt for client-cert
-  # verification. REQUIRED when frontend.enabled=true — mTLS is the
-  # only supported authentication mechanism.
-  tlsClientCASecretName: ""
   # clients enrolls each Gibson cluster that may call the frontend
   # (docs/design/isolation.md). Renders one --client=<name>=<spiffeID> for each entry.
   # REQUIRED when frontend.enabled=true: the frontend refuses a caller
@@ -483,7 +462,7 @@ frontend:
   # default-deny policy and two RoleBindings. The policy -frontend-scope
   # limits the frontend to these writes.
   #
-  # In spiffe mode, a client whose SPIFFE ID is in a different trust domain
+  # A client whose SPIFFE ID is in a different trust domain
   # than credentials.spiffe.trustDomain needs a federation block. The chart
   # renders one ClusterFederatedTrustDomain for it, so SPIRE fetches the
   # bundle of that domain. The render fails when the block is missing. The
@@ -685,36 +664,3 @@ snapshots:
     # AWS_SECRET_ACCESS_KEY. Empty relies on the AWS default
     # credential chain instead (IRSA on EKS).
     credentialsSecret: ""
-  # mTLS configuration for the operator<->node-agent gRPC channel. When
-  # certManager.enabled is true the chart renders Certificate resources
-  # and the Deployment/DaemonSet mount the resulting Secrets. Otherwise
-  # the operator must mount its own Secrets.
-  mTLS:
-    operatorCertSecret: setec-nodeagent-client-tls
-    nodeAgentCertSecret: setec-nodeagent-server-tls
-    caSecret: setec-nodeagent-ca
-    # -- caProvided acknowledges that caSecret exists in the release namespace
-    # when certManager.enabled is false. In that mode the chart creates none
-    # of the three Secrets, and both the operator and the node-agent mount
-    # caSecret non-optionally, so a missing one wedges the pods and surfaces
-    # as an opaque `context deadline exceeded` from `helm install --wait`.
-    # Leaving this false makes the chart refuse to render instead.
-    #
-    # The CA must sign BOTH leaves: a leaf that is its own root cannot be
-    # verified by the other side. The workloads read only the ca.crt key of
-    # caSecret.
-    #
-    # Exclusive with certManager.enabled=true, which issues caSecret itself.
-    caProvided: false
-    certManager:
-      # -- enabled makes cert-manager issue the whole channel from one trust
-      # root: a self-signed CA Certificate into caSecret, a namespaced Issuer
-      # of kind ca over it, and both leaves from that Issuer. Needs
-      # cert-manager and the right to create Issuers in the release namespace.
-      enabled: false
-      # -- issuerRef is the bootstrap issuer that signs the CA Certificate
-      # only. A selfsigned ClusterIssuer is the normal choice. The leaves
-      # never use it directly.
-      issuerRef:
-        kind: ClusterIssuer
-        name: selfsigned

@@ -16,7 +16,7 @@ This is the "run a CPU-hungry, potentially-misbehaving tool without hurting anyt
 ## Prerequisites
 
 - A running Setec cluster with the gRPC frontend enabled.
-- Client TLS material (cert, key, CA).
+- The X509-SVID of the caller, its key, and the trust bundle.
 - Go 1.23 or later to build the client.
 - **Hardware:** AFL++ is CPU-intensive. Plan for the fuzzer to saturate the vCPUs assigned to the sandbox for the full run. A laptop-class node can handle one sandbox; a bare-metal server can handle several concurrently.
 - An AFL-instrumented target binary. Building one is out of scope here; the upstream [AFL++ docs](https://aflplus.plus/) cover instrumentation.
@@ -36,6 +36,7 @@ go build -o sec-research .
   --client-cert=./client.crt \
   --client-key=./client.key \
   --ca=./ca.crt \
+  --server-spiffe-id=spiffe://example.org/ns/setec-system/sa/setec-frontend \
   --target=./my_target \
   --seed-dir=./seeds \
   --timeout=1h

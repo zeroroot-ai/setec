@@ -300,11 +300,11 @@ func TestPhase3_UpgradeFromPhase2(t *testing.T) {
 	waitForPhaseCtx(ctx, t, ns, before.Name, setecv1alpha1.SandboxPhaseRunning, defaultWait)
 	podBefore := getPod(ctx, t, ns, before.Name+"-vm")
 
-	// The upgrade. The operator mounts the node-agent mTLS trio once
-	// snapshots are on, and the chart creates none of it (setec#320), so
-	// mint it first exactly as installChart does on a snapshots install.
-	if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
-		t.Fatalf("mint node-agent mTLS secrets: %v", err)
+	// The upgrade. With snapshots on, the operator dials each node-agent
+	// with its SVID, so SPIRE runs first, exactly as installChart does on
+	// a snapshots install.
+	if err := installSPIRE(ctx); err != nil {
+		t.Fatalf("install SPIRE: %v", err)
 	}
 	revision := helmRevision(t)
 	t.Cleanup(func() {
@@ -314,19 +314,15 @@ func TestPhase3_UpgradeFromPhase2(t *testing.T) {
 		if err := waitForOperatorRollout(c, false); err != nil {
 			t.Errorf("operator did not roll back to the pre-upgrade shape: %v", err)
 		}
-		for _, name := range []string{nodeAgentCASecret, nodeAgentServerSecret, operatorClientSecret} {
-			_ = k8sClient.Delete(c, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace}})
-		}
 	})
-	helmRun(t, "upgrade", helmReleaseName, chartPath,
+	helmRun(t, append([]string{"upgrade", helmReleaseName, chartPath,
 		"--namespace", testNamespace,
 		// Every install-time value stays as installChart set it. Only the
 		// snapshots subtree changes, which is the whole Phase 2 to Phase 3
 		// delta.
 		"--reuse-values",
 		"--set", "snapshots.enabled=true",
-		"--set", "snapshots.mTLS.caProvided=true",
-	)
+	}, spireHelmArgs(chartFullname, testNamespace)...)...)
 	if err := waitForOperatorRollout(ctx, true); err != nil {
 		dumpInstallFailureState()
 		t.Fatalf("operator did not roll out with %s: %v", snapshotsEnabledArg, err)

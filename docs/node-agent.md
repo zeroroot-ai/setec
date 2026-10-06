@@ -41,39 +41,27 @@ snapshot root. The agent refuses a new snapshot when the used fraction
 of the snapshot filesystem is above `--snapshot-fill-threshold`
 (default 0.85).
 
-## Credential modes
+## Credentials
 
 The node-agent's gRPC surface (`--grpc-listen-addr`, default `:50052`)
 is mTLS with TLS 1.3 as the floor and a mandatory, verified client
-certificate. It runs in exactly one credential mode, selected the same
-way and with the same failure semantics as the frontend — configuring
-both or neither is a startup error naming the cause, and there is no
-fallback between them.
+certificate. setec has one credential source: the SPIFFE Workload API
+(setec#175).
 
-**File mode (default).** `--tls-cert`, `--tls-key` and
-`--tls-client-ca`. A caller is accepted if the configured CA issued its
-certificate — any caller, not a particular one.
+`--spiffe-socket` points at the SPIFFE Workload API (for example
+`unix:///run/spire/agent-sockets/api.sock`), and one or more
+`--spiffe-authorized-id` flags list the full SPIFFE IDs allowed to call
+this node-agent. The agent's own SVID and the trust bundle come from the
+socket and rotate in-process. An empty allow-list is a startup error:
+there is no accept-everyone setting. A node-agent that cannot reach its
+Workload API fails to boot.
 
-**SPIFFE mode.** `--spiffe-socket` points at the SPIFFE Workload API
-(for example `unix:///run/spire/agent-sockets/api.sock`), and one or
-more `--spiffe-authorized-id` flags list the full SPIFFE IDs allowed to
-call this node-agent. The agent's own SVID and the trust bundle come
-from the socket and rotate in-process. An empty allow-list is a startup
-error: there is no accept-everyone setting. A node-agent that cannot
-reach its Workload API fails to boot rather than reverting to files.
-
-The selected mode is stated on stderr at startup
-(`node-agent: credential mode: file`), so a pod's logs answer the
-question without a manifest diff.
-
-From the Helm chart the mode is `credentials.mode` — install-wide, so
-the node-agent, the frontend and the operator's node-agent dialer flip
-together. In spiffe mode the chart renders `--spiffe-socket` from
+The chart renders `--spiffe-socket` from
 `credentials.spiffe.socketPath` and the allow-list from
 `credentials.spiffe.authorizedIDs.nodeAgentClients` (empty fails the
-render); the operator's dialer takes its accepted server IDs from
+render). The operator's dialer takes its accepted server IDs from
 `credentials.spiffe.authorizedIDs.nodeAgentServers`. See the chart
-README "Credential modes".
+README "Credentials".
 
 ## Troubleshooting
 

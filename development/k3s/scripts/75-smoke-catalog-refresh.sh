@@ -20,7 +20,7 @@
 #   - Kind cluster 'gibson' up
 #   - Gibson Helm release deployed with tool_runner.enabled=true and
 #     tool_runner.images=[<runner tag>]
-#   - Dev PKI present under ../pki/
+#   - The dev client SVID under ../pki/ (35-mint-client-svid.sh)
 #
 # sudo is required for `k3s ctr images import` when loading a local image.
 
