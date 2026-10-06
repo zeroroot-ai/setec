@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.124.0](https://github.com/zeroroot-ai/setec/compare/v0.123.0...v0.124.0) (2026-10-06)
+
+
+### Features
+
+* **session:** Attach reports the last recovery of a session ([#245](https://github.com/zeroroot-ai/setec/issues/245)) ([2296c60](https://github.com/zeroroot-ai/setec/commit/2296c604c9b6b133362e476def078fbf3fdc6f08)), closes [#237](https://github.com/zeroroot-ai/setec/issues/237)
+
 ## [0.123.0](https://github.com/zeroroot-ai/setec/compare/v0.122.0...v0.123.0) (2026-10-06)
 
 
