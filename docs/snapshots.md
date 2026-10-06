@@ -191,7 +191,7 @@ with the default resources.
 
 The operator builds no base from an image that it cannot check. Before
 the first base, a Job of the disk builder checks the cosign signature of
-`preWarmImage` (`internal/diskbuilder/signature.go`). cosign v3 attaches
+`preWarmImage` (`internal/diskbuilder/imagesig`). cosign v3 attaches
 the signature as a Sigstore bundle, an OCI referrer of the image.
 `preWarmImageSignature` names the signer in one of two ways:
 
