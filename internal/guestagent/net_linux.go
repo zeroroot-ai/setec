@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // LinkConfigurer gives eth0 of the machine the identity of the Pod: MAC,
@@ -67,6 +68,11 @@ func (l LinkConfigurer) Configure(req Request) error {
 	if err := netlink.RouteReplace(&netlink.Route{LinkIndex: link.Attrs().Index, Gw: gw}); err != nil {
 		return fmt.Errorf("default route: %w", err)
 	}
+	if req.Hostname != "" {
+		if err := l.setHostname(req.Hostname); err != nil {
+			return err
+		}
+	}
 	if len(req.DNS) > 0 {
 		etc := filepath.Join(l.Root, "etc")
 		if err := os.MkdirAll(etc, 0o755); err != nil {
@@ -77,4 +83,19 @@ func (l LinkConfigurer) Configure(req Request) error {
 		}
 	}
 	return nil
+}
+
+// setHostname gives the machine the name of the Pod: the kernel name, when
+// the configurer runs in the machine, and /etc/hostname.
+func (l LinkConfigurer) setHostname(name string) error {
+	if l.Root == "" || l.Root == "/" {
+		if err := unix.Sethostname([]byte(name)); err != nil {
+			return fmt.Errorf("set the hostname: %w", err)
+		}
+	}
+	etc := filepath.Join(l.Root, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(etc, "hostname"), []byte(name+"\n"), 0o644) //nolint:gosec // world-readable, as /etc/hostname is
 }

@@ -129,7 +129,7 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 		}
 		if _, err := g.Call(rctx, guestagent.Request{
 			Op: guestagent.OpConfigureNet, Address: pn.Address.String(), MAC: pn.MAC,
-			MTU: pn.MTU, Gateway: pn.Gateway.String(), DNS: dns,
+			MTU: pn.MTU, Gateway: pn.Gateway.String(), DNS: dns, Hostname: g.Hostname,
 		}); err != nil {
 			return err
 		}

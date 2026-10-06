@@ -62,6 +62,8 @@ type Request struct {
 	MTU     int    `json:"mtu,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
 	DNS     []byte `json:"dns,omitempty"` // the resolv.conf of the Pod
+	// Hostname is the name of the Pod, which the machine takes.
+	Hostname string `json:"hostname,omitempty"`
 	// SetTime: the time of the node, in Unix nanoseconds.
 	UnixNano int64 `json:"unixNano,omitempty"`
 	// CopyIn and CopyOut: the path in the machine. CopyIn sends Size bytes
