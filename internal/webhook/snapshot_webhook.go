@@ -129,7 +129,7 @@ func (v *SnapshotValidator) validate(ctx context.Context, snap *setecv1alpha1.Sn
 // takes the pinned Snapshots of the namespace above PinnedLimitBytes.
 func (v *SnapshotValidator) checkPin(ctx context.Context, snap *setecv1alpha1.Snapshot) error {
 	if !snap.Spec.Kept {
-		return fmt.Errorf("spec.pinned: only a kept Snapshot can be pinned")
+		return errors.New("spec.pinned: only a kept Snapshot can be pinned")
 	}
 	if v.Client == nil {
 		return nil

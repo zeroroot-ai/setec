@@ -62,7 +62,7 @@ func (g *Guest) dial(ctx context.Context, port int) (net.Conn, *bufio.Reader, er
 	line, err := r.ReadString('\n')
 	if err != nil || !strings.HasPrefix(line, "OK ") {
 		_ = c.Close()
-		return nil, nil, fmt.Errorf("vsock CONNECT %d: %q %v", port, line, err)
+		return nil, nil, fmt.Errorf("vsock CONNECT %d: %q %w", port, line, err)
 	}
 	return c, r, nil
 }

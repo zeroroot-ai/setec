@@ -388,7 +388,7 @@ func servePool(t *testing.T, addr string, identityCA, trustCA *testCA) (int, *gr
 func servePoolOnFixedPort(t *testing.T, addr string, port int, identityCA, trustCA *testCA) (int, *grpc.Server) {
 	t.Helper()
 	dir := t.TempDir()
-	certPath, keyPath := identityCA.issue(t, dir, fmt.Sprintf("node-agent-%s", addr), serverLeaf)
+	certPath, keyPath := identityCA.issue(t, dir, "node-agent-"+addr, serverLeaf)
 	provider, err := credentials.New(credentials.Config{
 		Files: &credentials.FileSource{
 			CertFile: certPath,

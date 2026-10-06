@@ -4,7 +4,6 @@
 package controller
 
 import (
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -339,9 +338,6 @@ func TestSnapshotTTL_TriggersDelete(t *testing.T) {
 		err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "ephemeral"}, got)
 		return err != nil // fully deleted
 	}, 90*time.Second, 1*time.Second).Should(gomega.BeTrue(), "Snapshot should be deleted by TTL")
-
-	// Housekeeping.
-	_ = fmt.Sprintf("ns=%s", ns)
 }
 
 // TestSnapshotPhase_TerminatingWhileFinalizerHeld is the Terminating

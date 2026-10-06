@@ -25,6 +25,7 @@ package entropy
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -82,7 +83,7 @@ type Ack struct {
 //	magic[4] | version[1] | payloadLen uint16 BE | payload
 func WriteRequest(w io.Writer, payload []byte) error {
 	if len(payload) == 0 {
-		return fmt.Errorf("entropy: refusing to send an empty payload")
+		return errors.New("entropy: refusing to send an empty payload")
 	}
 	if len(payload) > MaxPayloadBytes {
 		return fmt.Errorf("entropy: payload %d exceeds max %d", len(payload), MaxPayloadBytes)
@@ -114,7 +115,7 @@ func ReadRequest(r io.Reader) ([]byte, error) {
 	}
 	n := binary.BigEndian.Uint16(header[5:7])
 	if n == 0 {
-		return nil, fmt.Errorf("entropy: zero-length payload")
+		return nil, errors.New("entropy: zero-length payload")
 	}
 	if int(n) > MaxPayloadBytes {
 		return nil, fmt.Errorf("entropy: payload length %d exceeds max %d", n, MaxPayloadBytes)

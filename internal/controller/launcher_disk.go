@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -72,7 +73,7 @@ func (r *SandboxReconciler) ensureLauncherDisk(ctx context.Context, sb *setecv1a
 // of a warm pool base.
 func ensureDisk(ctx context.Context, c client.Client, cfg DiskBuilderConfig, diskRepo, image string) (bool, error) {
 	if cfg.Image == "" || cfg.Namespace == "" || cfg.SigningSecret == "" {
-		return false, fmt.Errorf("the launcher backend needs the disk builder image, namespace and signing Secret")
+		return false, errors.New("the launcher backend needs the disk builder image, namespace and signing Secret")
 	}
 	name, err := diskJobName(image)
 	if err != nil {

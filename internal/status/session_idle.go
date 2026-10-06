@@ -28,7 +28,7 @@ func LastSessionActivity(sb *setecv1alpha1.Sandbox) time.Time {
 		return time.Time{}
 	}
 	last := sb.CreationTimestamp.Time
-	if sb.Status.StartedAt != nil && sb.Status.StartedAt.Time.After(last) {
+	if sb.Status.StartedAt != nil && sb.Status.StartedAt.After(last) {
 		last = sb.Status.StartedAt.Time
 	}
 	if raw, ok := sb.Annotations[setecv1alpha1.AnnotationLastActivity]; ok {

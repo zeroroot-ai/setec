@@ -102,7 +102,7 @@ func Validate(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) []Cons
 	} else if scratch.Sign() <= 0 {
 		out = append(out, ConstraintViolation{
 			Field:   "spec.resources.scratch",
-			Message: fmt.Sprintf("Sandbox scratch must be positive, got %s", scratch.String()),
+			Message: "Sandbox scratch must be positive, got " + scratch.String(),
 		})
 	}
 

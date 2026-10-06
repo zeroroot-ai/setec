@@ -158,13 +158,13 @@ func split(token string) (header, Claims, string, []byte, error) {
 	pb, err2 := b64.DecodeString(parts[1])
 	sig, err3 := b64.DecodeString(parts[2])
 	if err := errors.Join(err1, err2, err3); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := json.Unmarshal(hb, &h); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the header: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the header: %w", ErrInvalid, err)
 	}
 	if err := json.Unmarshal(pb, &c); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the claims: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the claims: %w", ErrInvalid, err)
 	}
 	return h, c, parts[0] + "." + parts[1], sig, nil
 }

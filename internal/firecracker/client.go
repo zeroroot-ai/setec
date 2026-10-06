@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -183,7 +184,7 @@ func (c *httpClient) CreateDiffSnapshot(ctx context.Context, statePath, memPath 
 func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, memPath string) error {
 	c, ok := NewClientFromSocket(socketPath).(*httpClient)
 	if !ok {
-		return fmt.Errorf("firecracker: unexpected client type")
+		return errors.New("firecracker: unexpected client type")
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/load", map[string]any{
 		keySnapshotPath:     statePath,
@@ -200,7 +201,7 @@ func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, 
 func SendCtrlAltDel(ctx context.Context, socketPath string) error {
 	c, ok := NewClientFromSocket(socketPath).(*httpClient)
 	if !ok {
-		return fmt.Errorf("firecracker: unexpected client type")
+		return errors.New("firecracker: unexpected client type")
 	}
 	return c.do(ctx, http.MethodPut, "/actions", map[string]string{"action_type": "SendCtrlAltDel"})
 }

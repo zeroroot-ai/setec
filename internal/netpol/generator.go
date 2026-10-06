@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -769,7 +770,7 @@ type allowPort struct {
 // "1-65535" for a TCP range, and a "udp/" prefix for UDP. One TCP port
 // keeps the form it had before an entry could state a range.
 func (p allowPort) String() string {
-	s := fmt.Sprintf("%d", p.port)
+	s := strconv.Itoa(int(p.port))
 	if p.endPort != 0 {
 		s = fmt.Sprintf("%d-%d", p.port, p.endPort)
 	}

@@ -64,6 +64,16 @@ linters:
       checks: ["all"]
     gosec:
       severity: medium
+    wrapcheck:
+      # A gRPC handler returns a status error as is: a wrap hides its code
+      # from the client. An error of a setec package already names its
+      # step. The default signatures stay in the list.
+      extra-ignore-sigs:
+        - google.golang.org/grpc/status.Error(
+        - google.golang.org/grpc/status.Errorf(
+        - sigs.k8s.io/controller-runtime/pkg/client.IgnoreNotFound(
+      ignore-package-globs:
+        - github.com/zeroroot-ai/setec/*
     exhaustive:
       default-signifies-exhaustive: false
       check: [switch]
@@ -100,39 +110,11 @@ linters:
           - dupl
           - lll
         path: internal/*
-      # --- pre-existing findings (176 total) tracked at zeroroot-ai/setec#35 ---
-      # TODO: fix and remove these exclusions once setec#35 is addressed.
-      # wrapcheck: 78 findings — error wrapping across the codebase
+      # A test returns its errors to the test itself, which needs no
+      # context added on the way.
       - linters:
           - wrapcheck
-        path: ".*\\.go$"
-      # gosec: 41 findings — security patterns
-      - linters:
-          - gosec
-        path: ".*\\.go$"
-      # gocritic: 20 findings — style issues
-      - linters:
-          - gocritic
-        path: ".*\\.go$"
-      # perfsprint: 9 findings, errorlint: 7 findings
-      - linters:
-          - perfsprint
-          - errorlint
-        path: ".*\\.go$"
-      # exhaustive: 6 findings — missing switch cases
-      - linters:
-          - exhaustive
-        path: ".*\\.go$"
-      # thelper: 4, contextcheck: 2, gocyclo: 2, staticcheck: 2, fatcontext: 1, mirror: 1, intrange: 1
-      - linters:
-          - thelper
-          - contextcheck
-          - gocyclo
-          - staticcheck
-          - fatcontext
-          - mirror
-          - intrange
-        path: ".*\\.go$"
+        path: _test\.go$
 
 issues:
   max-issues-per-linter: 0
@@ -153,6 +135,4 @@ formatters:
 # Per-repo opt-outs with TODO referencing the follow-up issue.
 #
 # depguard: disabled — requires explicit rules config. See zeroroot-ai/.github#93.
-#
-# 176 pre-existing findings suppressed via exclusions.rules above.
-# TODO: zeroroot-ai/setec#35 — fix all findings and remove the exclusion rules.
+

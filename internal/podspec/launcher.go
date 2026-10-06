@@ -5,6 +5,7 @@ package podspec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -255,10 +256,10 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		return nil, ErrMissingName
 	}
 	if opts.Image == "" {
-		return nil, fmt.Errorf("podspec: the launcher image is empty")
+		return nil, errors.New("podspec: the launcher image is empty")
 	}
 	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
-		return nil, fmt.Errorf("podspec: the disk repository or the disk keys are empty")
+		return nil, errors.New("podspec: the disk repository or the disk keys are empty")
 	}
 	if !strings.Contains(sb.Spec.Image, "@sha256:") {
 		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)

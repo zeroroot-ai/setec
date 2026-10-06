@@ -6,6 +6,7 @@ package diskbuilder
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -38,7 +39,7 @@ func ParsePublicKeys(encoded []string) ([]ed25519.PublicKey, error) {
 		keys = append(keys, ed25519.PublicKey(k))
 	}
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("diskbuilder: no public key to check a disk with")
+		return nil, errors.New("diskbuilder: no public key to check a disk with")
 	}
 	return keys, nil
 }

@@ -5,6 +5,7 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestSandboxClass_UnverifiedRestoresCondition(t *testing.T) {
 		if cls.Labels == nil {
 			cls.Labels = map[string]string{}
 		}
-		cls.Labels["test-bump"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		cls.Labels["test-bump"] = strconv.FormatInt(time.Now().UnixNano(), 10)
 		return testClient.Update(testCtx, cls)
 	}, 10*time.Second, 250*time.Millisecond).Should(gomega.Succeed())
 

@@ -240,7 +240,7 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	backend, kek := c.backendName(), []byte(nil)
 	if sb.Spec.Snapshot.Kept {
 		if parentRef != "" {
-			return fmt.Errorf("coordinator: a kept snapshot is a full snapshot, not a diff")
+			return errors.New("coordinator: a kept snapshot is a full snapshot, not a diff")
 		}
 		if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
 			return err

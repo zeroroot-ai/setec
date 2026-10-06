@@ -22,6 +22,7 @@ limitations under the License.
 package entropy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"unsafe"
@@ -56,7 +57,7 @@ type KernelPool struct {
 // len(p)*8 bits.
 func (k *KernelPool) AddEntropy(p []byte) error {
 	if len(p) == 0 {
-		return fmt.Errorf("entropy: refusing to credit an empty payload")
+		return errors.New("entropy: refusing to credit an empty payload")
 	}
 	if len(p) > MaxPayloadBytes {
 		return fmt.Errorf("entropy: payload %d exceeds max %d", len(p), MaxPayloadBytes)

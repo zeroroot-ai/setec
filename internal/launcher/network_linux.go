@@ -33,7 +33,7 @@ func (TCNetwork) Join() (PodNet, error) {
 	pn := PodNet{MAC: eth.Attrs().HardwareAddr.String(), MTU: eth.Attrs().MTU}
 	addrs, err := netlink.AddrList(eth, unix.AF_INET)
 	if err != nil || len(addrs) == 0 {
-		return PodNet{}, fmt.Errorf("the IPv4 address of %s: %v", PodInterface, err)
+		return PodNet{}, fmt.Errorf("the IPv4 address of %s: %w", PodInterface, err)
 	}
 	ip, _ := netip.AddrFromSlice(addrs[0].IP.To4())
 	ones, _ := addrs[0].Mask.Size()

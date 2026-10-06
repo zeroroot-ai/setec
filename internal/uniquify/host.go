@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -38,7 +39,7 @@ func NewSpec(hostname, podIP string) (Spec, error) {
 		return Spec{}, fmt.Errorf("uniquify: gather machine-id entropy: %w", err)
 	}
 	return Spec{
-		MachineID: fmt.Sprintf("%x", raw),
+		MachineID: hex.EncodeToString(raw[:]),
 		BootID:    uuid.NewString(),
 		Hostname:  SanitizeHostname(hostname),
 		PodIP:     podIP,

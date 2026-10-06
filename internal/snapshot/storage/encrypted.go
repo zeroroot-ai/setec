@@ -237,7 +237,7 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 		_ = pr.CloseWithError(saveErr)
 		// The ciphertext never landed; destroy the orphan key.
 		if shredErr := b.DEKs.Destroy(ctx, snapshotID); shredErr != nil && !errors.Is(shredErr, os.ErrNotExist) {
-			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %v", saveErr, shredErr)
+			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %w", saveErr, shredErr)
 		}
 		return 0, "", saveErr
 	}
@@ -269,7 +269,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 	}
 	dek, err := atrest.OpenDEK(kek, sealed, dekAAD(storageRef))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorrupted, err)
+		return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
 	}
 
 	rc, err := b.Inner.Open(ctx, storageRef)
@@ -280,7 +280,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 	if err != nil {
 		_ = rc.Close()
 		if errors.Is(err, atrest.ErrDecrypt) {
-			return nil, fmt.Errorf("%w: %v", ErrCorrupted, err)
+			return nil, fmt.Errorf("%w: %w", ErrCorrupted, err)
 		}
 		return nil, err
 	}

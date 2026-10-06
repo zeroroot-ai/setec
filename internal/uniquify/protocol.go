@@ -33,7 +33,9 @@ package uniquify
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -124,7 +126,7 @@ type Report struct {
 // writeFrame frames body onto w: magic[4] | version[1] | len uint32 BE | body.
 func writeFrame(w io.Writer, magic [4]byte, body []byte) error {
 	if len(body) == 0 {
-		return fmt.Errorf("uniquify: refusing to send an empty frame")
+		return errors.New("uniquify: refusing to send an empty frame")
 	}
 	if len(body) > MaxFrameBytes {
 		return fmt.Errorf("uniquify: frame %d exceeds max %d", len(body), MaxFrameBytes)
@@ -156,7 +158,7 @@ func readFrame(r io.Reader, magic [4]byte) ([]byte, error) {
 	}
 	n := binary.BigEndian.Uint32(header[5:9])
 	if n == 0 {
-		return nil, fmt.Errorf("uniquify: zero-length frame")
+		return nil, errors.New("uniquify: zero-length frame")
 	}
 	if n > MaxFrameBytes {
 		return nil, fmt.Errorf("uniquify: frame length %d exceeds max %d", n, MaxFrameBytes)
@@ -220,5 +222,5 @@ func ReadReport(r io.Reader) (Report, error) {
 // DigestHex returns the lowercase-hex SHA-256 of b.
 func DigestHex(b []byte) string {
 	sum := sha256.Sum256(b)
-	return fmt.Sprintf("%x", sum)
+	return hex.EncodeToString(sum[:])
 }

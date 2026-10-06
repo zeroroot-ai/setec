@@ -101,7 +101,7 @@ type ClientNamespaceGetter struct {
 // "namespace not found" remediation message.
 func (g *ClientNamespaceGetter) GetNamespaceLabels(ctx context.Context, name string) (map[string]string, error) {
 	if g == nil || g.Client == nil {
-		return nil, fmt.Errorf("ClientNamespaceGetter: client is nil")
+		return nil, errors.New("ClientNamespaceGetter: client is nil")
 	}
 	ns := &corev1.Namespace{}
 	if err := g.Client.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {
@@ -191,8 +191,7 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 	// skipping the check.
 	if v.MultiTenancyEnabled && v.TenantLabelKey != "" {
 		if v.NamespaceGetter == nil {
-			return nil, fmt.Errorf(
-				"webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
+			return nil, errors.New("webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
 		}
 		if err := v.checkTenantLabel(ctx, sb); err != nil {
 			errs = append(errs, err)
@@ -212,12 +211,10 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 		// single-tenant cluster without any SandboxClass must still
 		// be admitted.
 		if v.MultiTenancyEnabled || sb.Spec.SandboxClassName != "" {
-			errs = append(errs, fmt.Errorf(
-				"no default SandboxClass configured and Sandbox did not specify sandboxClassName"))
+			errs = append(errs, errors.New("no default SandboxClass configured and Sandbox did not specify sandboxClassName"))
 		}
 	case errors.Is(err, class.ErrAmbiguousDefault):
-		errs = append(errs, fmt.Errorf(
-			"multiple SandboxClasses marked default:true; administrator must resolve ambiguity"))
+		errs = append(errs, errors.New("multiple SandboxClasses marked default:true; administrator must resolve ambiguity"))
 	case err != nil:
 		// Unexpected error (e.g., API server down). Return directly
 		// so the admission controller can apply failurePolicy.

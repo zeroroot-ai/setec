@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -136,7 +137,7 @@ func (f *versionedFakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeS3Error(w, http.StatusNotFound, "NoSuchKey")
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 
@@ -152,7 +153,7 @@ func (f *versionedFakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodDelete:

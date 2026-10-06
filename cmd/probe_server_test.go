@@ -24,7 +24,7 @@ import (
 // was killed on a ~60s loop forever — the Deployment never reached 2/2 at the
 // chart's default replica count.
 func TestProbeServerDoesNotWaitForLeadership(t *testing.T) {
-	var r manager.Runnable = newProbeServer("127.0.0.1:0")
+	var r = newProbeServer("127.0.0.1:0")
 
 	ler, ok := r.(manager.LeaderElectionRunnable)
 	if !ok {
@@ -81,7 +81,7 @@ func waitForOK(url string) error {
 	deadline := time.Now().Add(10 * time.Second)
 	var last error
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
 		if err != nil {
 			return err
 		}

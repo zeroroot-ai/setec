@@ -4,6 +4,7 @@
 package snapshot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -155,7 +156,7 @@ func TestCreateSnapshot_KeptIsSealedWithTheTenantKey(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: TenantKEKSecret}, key); err != nil {
 		t.Fatalf("the tenant key: %v", err)
 	}
-	if na.lastCreate.GetStorageBackend() != KeptBackend || string(na.lastCreate.GetSessionKek()) != string(key.Data["kek"]) {
+	if na.lastCreate.GetStorageBackend() != KeptBackend || !bytes.Equal(na.lastCreate.GetSessionKek(), key.Data["kek"]) {
 		t.Fatalf("create = backend %q, key sent %v", na.lastCreate.GetStorageBackend(), len(na.lastCreate.GetSessionKek()))
 	}
 	got := &setecv1alpha1.Snapshot{}
