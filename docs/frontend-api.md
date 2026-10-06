@@ -449,6 +449,23 @@ store, so a node that never held it can open it.
 - When the tenant goes, its namespace goes with its kept snapshots and
   its key.
 
+## Verify a sandbox identity (`VerifySandboxIdentity`)
+
+A process in a launcher sandbox gets an identity token from its machine:
+`GET /v1/token?audience=<verifier>` on the Unix socket that
+`SETEC_IDENTITY_SOCKET` names. It sends the token on its calls. The
+verifier sends the token and its audience to `VerifySandboxIdentity`
+and gets the `sandbox_id` that Launch and Fork return.
+
+- The check uses the key and the identity generation of the sandbox that
+  the token names (`docs/design/isolation.md`, "Sandbox identity"). A
+  token of a fork never verifies as its source. A token from before a
+  snapshot of the sandbox no longer verifies.
+- A token that does not verify is `UNAUTHENTICATED`. Only the owner of
+  the sandbox can verify its tokens.
+- `token_id` is the `jti` of the token, for a verifier that refuses a
+  second use of one token. A token lives 5 minutes.
+
 ## Streaming logs
 
 `StreamLogs` opens the kubelet log stream for the Sandbox's workload

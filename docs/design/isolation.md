@@ -42,3 +42,13 @@ A Sandbox that starts from a snapshot is served only when five checks have posit
 5. **Encrypted at rest**: each artifact has its own key, sealed by a node key. `internal/snapshot/atrest/atrest.go`.
 
 A dev cluster can turn the checks off only with two signals: a label on the gate namespace and an annotation on the class. The class then carries a condition that says so, and each restore records a warning event.
+
+## Sandbox identity
+
+Each launcher Sandbox has an identity that a verifier outside the Sandbox can check (setec#235). A hostname or a header that a process writes is not an identity: a fork has the memory of its source and can write any value.
+
+- **The key.** The operator makes an ed25519 key for each Sandbox, so for each fork, in the Secret `<name>-identity`. Only the launcher container mounts it. No process in the machine can read it. The status holds the public key: `status.identity.publicKey`. `internal/controller/identity.go`, `internal/podspec/launcher.go`.
+- **The token.** A process gets a token with `GET /v1/token?audience=<verifier>` on the Unix socket that `SETEC_IDENTITY_SOCKET` names (`/run/setec/identity.sock`). The guest agent asks the launcher over vsock, and the launcher signs the token. The token is a compact JWS with the EdDSA algorithm. It names the sandbox id (`sub`, `<namespace>/<name>/<uid>`), the audience, the owner pair, the identity generation, a `jti`, and a lifetime of 5 minutes. A process asks for a new token for each call, so no rotation is necessary. `internal/sandboxid/`, `internal/launcher/identity.go`, `internal/guestagent/identity.go`.
+- **The generation.** Each snapshot of a Sandbox raises its identity generation (`status.identity.generation`). The node agent gives the new generation to the launcher while the machine is paused, so each token after the snapshot carries it, and no token in the snapshot does. The Snapshot is Ready only after the status holds the new generation. So a fork or a restore that finds a token of its source in its copy of the memory cannot use it. `internal/snapshot/coordinator.go`, `internal/nodeagent/grpcserver/server.go`.
+- **The check.** `SandboxService.VerifySandboxIdentity` checks a token for the owner of the Sandbox: the signature with the key of the Sandbox that the token names, the uid of that Sandbox, the audience, the lifetime and the current generation. A fork signs with its own key, so its token never verifies as its source. A verifier can also refuse a second use of one `jti`. `internal/frontend/identity.go`.
+

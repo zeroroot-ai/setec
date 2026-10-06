@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -184,3 +185,22 @@ func (m memBackend) Stat(_ context.Context, ref string) (int64, bool, error) {
 	return int64(len(m.blobs[ref])), true, nil
 }
 func (m memBackend) EncryptedAtRest() bool { return m.encrypted }
+
+// TestWriteIdentityGeneration_ReplacesTheValueWhole proves that the
+// launcher reads either the old or the new generation, never a part.
+func TestWriteIdentityGeneration_ReplacesTheValueWhole(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "identity-generation")
+	for _, gen := range []int64{2, 13} {
+		if err := writeIdentityGeneration(path, gen); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil || string(raw) != strconv.FormatInt(gen, 10)+"\n" {
+			t.Fatalf("generation file = %q, %v", raw, err)
+		}
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("the temporary file stays")
+	}
+}

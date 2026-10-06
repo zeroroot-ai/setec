@@ -117,6 +117,12 @@ message CreateSnapshotRequest {
   // asks for it: the Pod ends next, and a machine that ran on after the
   // snapshot would leave the workspace newer than the memory.
   bool leave_paused = 9;
+
+  // identity_generation, when above zero, is the identity generation of
+  // a launcher sandbox after this snapshot (setec#235). The node agent
+  // gives it to the launcher while the machine is paused, so each token
+  // after the snapshot carries it, and no token in the snapshot does.
+  int64 identity_generation = 10;
 }
 
 // CreateSnapshotResponse carries the backend ref for the persisted

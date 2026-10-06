@@ -161,6 +161,22 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		return LaunchFailedExit, fail(ReasonVMMStart, err)
 	}
 	defer func() { _ = exitL.Close() }()
+	// The identity of the Sandbox (setec#235): the guest asks for a token
+	// over vsock, and the launcher signs it with a key that the machine
+	// never sees.
+	if id := l.Spec.Identity; id != nil {
+		signer, err := newIdentitySigner(id)
+		if err != nil {
+			return LaunchFailedExit, fail(ReasonBadSpec, err)
+		}
+		idL, err := listenIdentity(l.Spec.WorkDir)
+		if err != nil {
+			return LaunchFailedExit, fail(ReasonVMMStart, err)
+		}
+		idCtx, stopIdentity := context.WithCancel(ctx)
+		defer stopIdentity()
+		go serveIdentity(idCtx, idL, signer)
+	}
 
 	configFile := ""
 	if b := l.Spec.Source.Boot; b != nil {

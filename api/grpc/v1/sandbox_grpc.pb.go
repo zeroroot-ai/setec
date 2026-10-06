@@ -27,17 +27,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxService_Launch_FullMethodName     = "/setec.v1.SandboxService/Launch"
-	SandboxService_StreamLogs_FullMethodName = "/setec.v1.SandboxService/StreamLogs"
-	SandboxService_Wait_FullMethodName       = "/setec.v1.SandboxService/Wait"
-	SandboxService_Kill_FullMethodName       = "/setec.v1.SandboxService/Kill"
-	SandboxService_Suspend_FullMethodName    = "/setec.v1.SandboxService/Suspend"
-	SandboxService_Resume_FullMethodName     = "/setec.v1.SandboxService/Resume"
-	SandboxService_Fork_FullMethodName       = "/setec.v1.SandboxService/Fork"
-	SandboxService_Keep_FullMethodName       = "/setec.v1.SandboxService/Keep"
-	SandboxService_Pin_FullMethodName        = "/setec.v1.SandboxService/Pin"
-	SandboxService_Attach_FullMethodName     = "/setec.v1.SandboxService/Attach"
-	SandboxService_Exec_FullMethodName       = "/setec.v1.SandboxService/Exec"
+	SandboxService_Launch_FullMethodName                = "/setec.v1.SandboxService/Launch"
+	SandboxService_StreamLogs_FullMethodName            = "/setec.v1.SandboxService/StreamLogs"
+	SandboxService_Wait_FullMethodName                  = "/setec.v1.SandboxService/Wait"
+	SandboxService_Kill_FullMethodName                  = "/setec.v1.SandboxService/Kill"
+	SandboxService_Suspend_FullMethodName               = "/setec.v1.SandboxService/Suspend"
+	SandboxService_Resume_FullMethodName                = "/setec.v1.SandboxService/Resume"
+	SandboxService_Fork_FullMethodName                  = "/setec.v1.SandboxService/Fork"
+	SandboxService_Keep_FullMethodName                  = "/setec.v1.SandboxService/Keep"
+	SandboxService_Pin_FullMethodName                   = "/setec.v1.SandboxService/Pin"
+	SandboxService_VerifySandboxIdentity_FullMethodName = "/setec.v1.SandboxService/VerifySandboxIdentity"
+	SandboxService_Attach_FullMethodName                = "/setec.v1.SandboxService/Attach"
+	SandboxService_Exec_FullMethodName                  = "/setec.v1.SandboxService/Exec"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -102,6 +103,17 @@ type SandboxServiceClient interface {
 	// The pinned snapshots of a tenant count against a storage limit, and a
 	// pin above it is FAILED_PRECONDITION.
 	Pin(ctx context.Context, in *PinRequest, opts ...grpc.CallOption) (*PinResponse, error)
+	// VerifySandboxIdentity checks an identity token that a process in a
+	// launcher sandbox got from the identity socket of its machine
+	// (setec#235), and returns the sandbox that the token names. A verifier
+	// uses it in place of a hostname or a header that the process writes.
+	// The token must be signed with the key of that sandbox, be for the
+	// audience of the request, be in its lifetime, and carry the current
+	// identity generation of the sandbox. A token from before a snapshot,
+	// which a fork finds in its copy of the memory, does not verify. Only
+	// the owner of the sandbox can verify its tokens. A token that does
+	// not verify is UNAUTHENTICATED.
+	VerifySandboxIdentity(ctx context.Context, in *VerifySandboxIdentityRequest, opts ...grpc.CallOption) (*VerifySandboxIdentityResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -287,6 +299,16 @@ func (c *sandboxServiceClient) Pin(ctx context.Context, in *PinRequest, opts ...
 	return out, nil
 }
 
+func (c *sandboxServiceClient) VerifySandboxIdentity(ctx context.Context, in *VerifySandboxIdentityRequest, opts ...grpc.CallOption) (*VerifySandboxIdentityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifySandboxIdentityResponse)
+	err := c.cc.Invoke(ctx, SandboxService_VerifySandboxIdentity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AttachResponse)
@@ -372,6 +394,17 @@ type SandboxServiceServer interface {
 	// The pinned snapshots of a tenant count against a storage limit, and a
 	// pin above it is FAILED_PRECONDITION.
 	Pin(context.Context, *PinRequest) (*PinResponse, error)
+	// VerifySandboxIdentity checks an identity token that a process in a
+	// launcher sandbox got from the identity socket of its machine
+	// (setec#235), and returns the sandbox that the token names. A verifier
+	// uses it in place of a hostname or a header that the process writes.
+	// The token must be signed with the key of that sandbox, be for the
+	// audience of the request, be in its lifetime, and carry the current
+	// identity generation of the sandbox. A token from before a snapshot,
+	// which a fork finds in its copy of the memory, does not verify. Only
+	// the owner of the sandbox can verify its tokens. A token that does
+	// not verify is UNAUTHENTICATED.
+	VerifySandboxIdentity(context.Context, *VerifySandboxIdentityRequest) (*VerifySandboxIdentityResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -484,6 +517,9 @@ func (UnimplementedSandboxServiceServer) Keep(context.Context, *KeepRequest) (*K
 }
 func (UnimplementedSandboxServiceServer) Pin(context.Context, *PinRequest) (*PinResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pin not implemented")
+}
+func (UnimplementedSandboxServiceServer) VerifySandboxIdentity(context.Context, *VerifySandboxIdentityRequest) (*VerifySandboxIdentityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method VerifySandboxIdentity not implemented")
 }
 func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
@@ -667,6 +703,24 @@ func _SandboxService_Pin_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_VerifySandboxIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifySandboxIdentityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).VerifySandboxIdentity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_VerifySandboxIdentity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).VerifySandboxIdentity(ctx, req.(*VerifySandboxIdentityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AttachRequest)
 	if err := dec(in); err != nil {
@@ -730,6 +784,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Pin",
 			Handler:    _SandboxService_Pin_Handler,
+		},
+		{
+			MethodName: "VerifySandboxIdentity",
+			Handler:    _SandboxService_VerifySandboxIdentity_Handler,
 		},
 		{
 			MethodName: "Attach",

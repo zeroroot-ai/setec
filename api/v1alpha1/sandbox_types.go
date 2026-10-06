@@ -569,6 +569,27 @@ type SandboxStatus struct {
 	// most once per Sandbox.
 	// +optional
 	WarmStart *SandboxWarmStartStatus `json:"warmStart,omitempty"`
+
+	// Identity is the identity of a launcher Sandbox (setec#235): the
+	// public key that verifies the identity tokens of the Sandbox, and
+	// its identity generation. A verifier outside the Sandbox checks a
+	// token against both.
+	// +optional
+	Identity *SandboxIdentityStatus `json:"identity,omitempty"`
+}
+
+// SandboxIdentityStatus is the identity of a Sandbox. The private key is
+// in the Secret <name>-identity, which only the launcher container of the
+// Sandbox mounts. No process in the machine can read it.
+type SandboxIdentityStatus struct {
+	// PublicKey is the base64 ed25519 public key of the Sandbox.
+	PublicKey string `json:"publicKey"`
+
+	// Generation rises with each snapshot of the Sandbox. A token carries
+	// the generation at its signing, and a verifier accepts only the
+	// current one. So a token from before a snapshot, which a fork or a
+	// restore finds in its copy of the memory, no longer verifies.
+	Generation int64 `json:"generation"`
 }
 
 // SandboxCheckpointStatus tracks the single retained memory checkpoint

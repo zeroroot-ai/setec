@@ -79,6 +79,18 @@ service SandboxService {
   // pin above it is FAILED_PRECONDITION.
   rpc Pin(PinRequest) returns (PinResponse);
 
+  // VerifySandboxIdentity checks an identity token that a process in a
+  // launcher sandbox got from the identity socket of its machine
+  // (setec#235), and returns the sandbox that the token names. A verifier
+  // uses it in place of a hostname or a header that the process writes.
+  // The token must be signed with the key of that sandbox, be for the
+  // audience of the request, be in its lifetime, and carry the current
+  // identity generation of the sandbox. A token from before a snapshot,
+  // which a fork finds in its copy of the memory, does not verify. Only
+  // the owner of the sandbox can verify its tokens. A token that does
+  // not verify is UNAUTHENTICATED.
+  rpc VerifySandboxIdentity(VerifySandboxIdentityRequest) returns (VerifySandboxIdentityResponse);
+
   // Attach resolves a session handle (the sandbox_id returned by
   // Launch) to its live session so a caller that disconnected — or a
   // caller talking to a restarted frontend — can reattach and continue
@@ -621,3 +633,26 @@ message PinRequest {
 }
 
 message PinResponse {}
+
+message VerifySandboxIdentityRequest {
+  // token is the identity token that the process presented.
+  string token = 1;
+  // audience is the audience that the token must name.
+  string audience = 2;
+  // tenant is the tenant of the caller, as in each other request.
+  string tenant = 3;
+}
+message VerifySandboxIdentityResponse {
+  // sandbox_id is the <namespace>/<name>/<uid> of the sandbox that the
+  // token names. It is the id that Launch and Fork return.
+  string sandbox_id = 1;
+  // tenant is the tenant of the sandbox.
+  string tenant = 2;
+  // generation is the identity generation of the sandbox.
+  int64 generation = 3;
+  // token_id is the jti of the token, for a verifier that refuses a
+  // second use of one token.
+  string token_id = 4;
+  // expires_unix is the end of the lifetime of the token.
+  int64 expires_unix = 5;
+}

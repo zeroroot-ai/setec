@@ -648,6 +648,29 @@ spec:
                   Sandbox reaches a terminal phase. Nil while still running.
                 format: int32
                 type: integer
+              identity:
+                description: |-
+                  Identity is the identity of a launcher Sandbox (setec#235): the
+                  public key that verifies the identity tokens of the Sandbox, and
+                  its identity generation. A verifier outside the Sandbox checks a
+                  token against both.
+                properties:
+                  generation:
+                    description: |-
+                      Generation rises with each snapshot of the Sandbox. A token carries
+                      the generation at its signing, and a verifier accepts only the
+                      current one. So a token from before a snapshot, which a fork or a
+                      restore finds in its copy of the memory, no longer verifies.
+                    format: int64
+                    type: integer
+                  publicKey:
+                    description: PublicKey is the base64 ed25519 public key of the
+                      Sandbox.
+                    type: string
+                required:
+                - generation
+                - publicKey
+                type: object
               lastTransitionTime:
                 description: LastTransitionTime is the timestamp of the most recent
                   phase change.

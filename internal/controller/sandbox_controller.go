@@ -1719,7 +1719,14 @@ func (r *SandboxReconciler) createPod(
 		} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
 			r.countWarmStart(cls, "miss")
 		}
+		// The identity of the Sandbox (setec#235): its own key, outside
+		// the machine, and the generation that the next token carries.
+		identity, ierr := r.ensureIdentity(ctx, sb)
+		if ierr != nil {
+			return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the identity of the Sandbox: %w", ierr))
+		}
 		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
+			Identity: identity,
 			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
 			// Scratch here once both are on main; until then the default holds.
 			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,

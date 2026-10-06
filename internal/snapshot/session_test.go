@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -143,5 +144,44 @@ func TestSessionCheckpointID_HoldsTheUID(t *testing.T) {
 	}
 	if SessionCheckpointID(a, 3) != "ns-sess-uid-a-ckpt-3" {
 		t.Fatalf("id = %q", SessionCheckpointID(a, 3))
+	}
+}
+
+// TestCheckpointSessionRaisesTheIdentityGeneration pins setec#235 at the
+// coordinator: a checkpoint of a Sandbox with an identity asks the node
+// agent for the next generation and records it in the live status, so a
+// token in the checkpoint no longer verifies.
+func TestCheckpointSessionRaisesTheIdentityGeneration(t *testing.T) {
+	sb := sessionSandbox()
+	sb.Status.Identity = &setecv1alpha1.SandboxIdentityStatus{PublicKey: "k", Generation: 3}
+	pod := newPodForSandbox(sb, "node-a")
+	na := &fakeNodeAgentClient{createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: sessCkpt3}}
+	c := newFakeClient(t, sb, pod)
+	coord := newCoord(c, &fakeDialer{client: na})
+	if _, _, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, bytes.Repeat([]byte{5}, 32), false, ""); err != nil {
+		t.Fatalf("CheckpointSession: %v", err)
+	}
+	if got := na.lastCreate.GetIdentityGeneration(); got != 4 {
+		t.Fatalf("identity_generation = %d, want 4", got)
+	}
+	live := &setecv1alpha1.Sandbox{}
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(sb), live); err != nil {
+		t.Fatal(err)
+	}
+	if live.Status.Identity.Generation != 4 {
+		t.Fatalf("live generation = %d, want 4", live.Status.Identity.Generation)
+	}
+
+	// A Sandbox with no identity asks for none.
+	plain := sessionSandbox()
+	plain.Name = "plain"
+	plain.Status.PodName = "plain-vm"
+	na2 := &fakeNodeAgentClient{createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: "t-a-plain-ckpt-1"}}
+	coord2 := newCoord(newFakeClient(t, plain, newPodForSandbox(plain, "node-a")), &fakeDialer{client: na2})
+	if _, _, err := coord2.CheckpointSession(t.Context(), plain, "s3", 1, bytes.Repeat([]byte{5}, 32), false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if na2.lastCreate.GetIdentityGeneration() != 0 {
+		t.Fatal("a Sandbox with no identity asked for a generation")
 	}
 }

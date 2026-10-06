@@ -28,6 +28,9 @@ type Supervisor struct {
 	// Root is the root of the image, for example /newroot. Empty runs in
 	// the root of the agent, which tests use.
 	Root string
+	// Env is added to the environment of each process, unless the
+	// process sets the same key (for example the identity socket).
+	Env []string
 
 	mu      sync.Mutex
 	waiters map[int]chan syscall.WaitStatus
@@ -99,6 +102,11 @@ func (s *Supervisor) Start(p Process, stdin, stdout, stderr *os.File) (*Running,
 	}
 	if !hasKey(env, "PATH") {
 		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	for _, kv := range s.Env {
+		if k, _, ok := strings.Cut(kv, "="); ok && !hasKey(env, k) {
+			env = append(env, kv)
+		}
 	}
 	bin, err := s.resolve(p.Argv[0], env)
 	if err != nil {
