@@ -690,7 +690,7 @@ credentials:
     # binaries' own refusal to start with an empty allow-list).
     #
     # The callers of the frontend are not here. They are frontend.clients,
-    # because each one is an enrolled client with a name (ADR-0142).
+    # because each one is an enrolled client with a name (docs/design/isolation.md).
     authorizedIDs:
       # nodeAgentClients — IDs allowed to call the node-agent snapshot
       # gRPC service (normally the operator's own ID). Required when
@@ -778,7 +778,7 @@ frontend:
   # only supported authentication mechanism.
   tlsClientCASecretName: ""
   # clients enrolls each Gibson cluster that may call the frontend
-  # (ADR-0142). Renders one --client=<name>=<spiffeID> for each entry.
+  # (docs/design/isolation.md). Renders one --client=<name>=<spiffeID> for each entry.
   # REQUIRED when frontend.enabled=true: the frontend refuses a caller
   # whose certificate does not carry one of these SPIFFE IDs.
   #

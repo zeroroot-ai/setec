@@ -24,7 +24,7 @@ import (
 var ErrNoPeerCert = errors.New("frontend: no TLS peer certificate")
 
 // Enrollment is the list of client clusters that may call the frontend
-// (ADR-0142). Each entry joins a client name to the SPIFFE ID of the daemon
+// (docs/design/isolation.md). Each entry joins a client name to the SPIFFE ID of the daemon
 // of that cluster. The frontend refuses a caller whose SPIFFE ID is not in
 // the list. The name of the client is half of the owner pair of a Sandbox,
 // and the tenant field of the request is the other half.

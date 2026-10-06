@@ -311,7 +311,7 @@ admission still produce clear `ConstraintViolated` Events.
 
 ## gRPC frontend
 
-The frontend serves many Gibson clusters of one owner (ADR-0142). Each
+The frontend serves many Gibson clusters of one owner (docs/design/isolation.md). Each
 cluster is an enrolled client: `frontend.clients` joins a client name to
 the SPIFFE ID of the daemon of that cluster. Each request carries the
 tenant. Each pair of client and tenant has its own namespace, which the

@@ -29,6 +29,7 @@ The reserved ranges cover private, link-local and metadata addresses in IPv4 and
 - Each Sandbox namespace gets a default-deny NetworkPolicy for every Pod, so a Pod that `setec` did not build is not open by default. `internal/netpol/baseline.go`, `charts/setec/templates/sandbox-namespace-baseline-netpol.yaml`.
 - A ValidatingAdmissionPolicy refuses host network, host PID, host IPC, host ports, `hostPath` volumes and privileged containers in a Sandbox namespace. `charts/setec/templates/sandbox-namespace-host-guard.yaml`.
 - The operator can write Pods only in the Sandbox namespaces that the install lists. `charts/setec/templates/sandbox-namespace-rbac.yaml`.
+- The frontend serves the enrolled client clusters of one owner. Each pair of client cluster and tenant has its own namespace. A call from another pair on a Sandbox gets `PERMISSION_DENIED`. `internal/frontend/auth.go`, `internal/tenancy/identity.go`.
 
 ## Restored Sandboxes
 

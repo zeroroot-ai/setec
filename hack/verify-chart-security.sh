@@ -325,7 +325,7 @@ assert_absent "$workdir/le-off.yaml" "no leader-elect flag when disabled" \
 	"--leader-elect=true"
 
 # ---------------------------------------------------------------------------
-# Frontend enrollment (setec#168, ADR-0142).
+# Frontend enrollment (setec#168, docs/design/isolation.md).
 #
 # The frontend refuses a caller that is not an enrolled client, so an
 # install with no client serves nobody. The chart must render one --client

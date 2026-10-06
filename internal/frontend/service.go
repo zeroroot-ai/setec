@@ -71,7 +71,7 @@ type Service struct {
 	// RPCs degrade gracefully when nil.
 	Clientset kubernetes.Interface
 
-	// Enrollment names the client cluster of each caller (ADR-0142).
+	// Enrollment names the client cluster of each caller (docs/design/isolation.md).
 	// Required unless AuthDisabled is true.
 	Enrollment *Enrollment
 
