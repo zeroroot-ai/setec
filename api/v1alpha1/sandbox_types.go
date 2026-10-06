@@ -515,7 +515,7 @@ type SandboxStatus struct {
 
 	// Reason is a short, machine-readable explanation for the current
 	// phase. Populated on Failed (e.g. "Timeout", "ImagePullFailure",
-	// "RuntimeUnavailable", "ContainerExitedNonZero").
+	// "UnsupportedBackend", "ContainerExitedNonZero").
 	// +optional
 	Reason string `json:"reason,omitempty"`
 

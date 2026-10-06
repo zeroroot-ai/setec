@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Command setec-guest-agent is the tiny in-guest daemon that receives
-// fresh entropy from the setec node-agent after a snapshot restore and
-// credits it into the kernel CRNG via the RNDADDENTROPY ioctl
-// (setec#72). Without it, every microVM restored from the same
-// Snapshot resumes with an identical CSPRNG state — catastrophic for
-// keys and nonces minted right after resume.
+// Command setec-guest-agent is the init process of each launcher machine
+// (docs/design/runtime.md). As PID 1 it prepares the machine and
+// supervises the workload. After a snapshot load it receives fresh
+// entropy from the launcher and credits it into the kernel CRNG via the
+// RNDADDENTROPY ioctl (setec#72). Without it, every microVM restored
+// from the same Snapshot resumes with an identical CSPRNG state, which
+// is catastrophic for keys and nonces minted right after resume.
 //
-// The agent listens on an AF_VSOCK port (default 2600) reachable
-// through the vsock device setec-pool-vm attaches at boot. Guest image
-// builders must bundle this binary in the microVM rootfs and start it
-// early (before any workload that consumes randomness); the node-agent
-// refuses to hand over a restored sandbox until the agent has
-// acknowledged the reseed, unless the operator explicitly opted out
-// with --entropy-reseed=off.
+// The agent listens on AF_VSOCK ports (entropy default 2600) of the
+// vsock device that the launcher attaches at boot. The launcher image
+// carries the agent as /init of its initrd, so a Sandbox image needs no
+// copy of it. The launcher refuses to report a restore successful until
+// the agent has acknowledged the reseed, unless the operator explicitly
+// opted out with --entropy-reseed=off.
 //
 // The binary is static, dependency-light, and speaks nothing but the
 // setec entropy-reseed wire protocol (internal/entropy). It never

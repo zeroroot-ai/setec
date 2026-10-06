@@ -213,11 +213,10 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 	}
 }
 
-// Frontend roundtrip coverage lives in the manual smoke-test walkthrough
-// at docs/dev-smoke-test.md — it requires a full chart install plus
-// client certs, neither of which the go-test harness provisions. The
-// previous placeholder Go test that unconditionally skipped here has
-// been removed to avoid the silent-skip anti-pattern.
+// Frontend roundtrip coverage needs a full chart install plus client
+// certs, which this harness does not provision. The placeholder Go test
+// that unconditionally skipped here was removed to avoid the silent-skip
+// anti-pattern.
 
 // TestPhase2_UpgradeFromPhase1 verifies a Phase 1-shape Sandbox keeps
 // running after the Phase 2 operator takes over.

@@ -4,7 +4,7 @@
 // Package controller wires the Sandbox custom resource to a backing Pod via
 // the controller-runtime reconciler pattern. This file is the only place in
 // the operator that performs Kubernetes I/O — all transformation logic lives
-// in the pure packages (internal/podspec, internal/status, internal/prereq)
+// in the pure packages (internal/podspec, internal/status, internal/runtime)
 // that the reconciler composes.
 package controller
 

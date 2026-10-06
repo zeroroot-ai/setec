@@ -62,7 +62,7 @@ request named no class and cluster-default resolution happens at
 schedule time; `AttachResponse.runtime` is empty while the Sandbox is
 still Pending; `WaitResponse.runtime` is empty only when the Sandbox
 reached a terminal phase before a backend was ever selected (for
-example `ClassNotFound` or `RuntimeUnavailable`). A client can
+example `ClassNotFound` or `UnsupportedBackend`). A client can
 therefore distinguish "the frontend did not report" from "the operator
 reported X" and decide for itself how to treat an unresolved value.
 

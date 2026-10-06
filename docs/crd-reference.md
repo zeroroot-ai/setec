@@ -216,7 +216,7 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` \| `Paused` \| `Snapshotting` \| `Restoring` \| `Suspended` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. `Suspended` (session + class `sessionCheckpoint` only) means the microVM was checkpointed to the portable store and released; no Pod exists while suspended, and the workspace PVC plus the checkpoint survive. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, docs/design/lifecycles.md), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, docs/design/lifecycles.md), `ImagePullFailure`, `UnsupportedBackend`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |

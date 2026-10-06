@@ -14,11 +14,9 @@ examples/*/sec-research
 
 # Compiled cmd/ binaries that land at the repo root when someone runs
 # `go build ./cmd/<name>` without -o. Named after the cmd/ subdirectory.
-/runtime-agent
 /setec-operator
 /setec-node-agent
 /setec-frontend
-/setec-pool-vm
 
 # Test binary, built with `go test -c`
 *.test

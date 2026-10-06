@@ -280,7 +280,7 @@ func TestWait_RuntimeEmptyWhenNeverResolved(t *testing.T) {
 		Name: "sb", Namespace: "team-a", UID: "u-1",
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:  setecv1alpha1.SandboxPhaseFailed,
-			Reason: "RuntimeUnavailable",
+			Reason: "UnsupportedBackend",
 		},
 	}
 	c := newClient(t, sb)
