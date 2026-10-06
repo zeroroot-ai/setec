@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,8 +22,8 @@ import (
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
-// The pool image of a class is checked before the pool builds a base: a
-// Job of the disk builder verifies the cosign signature of the image
+// Each pool image of a class is checked before the pool builds a base of
+// it: a Job of the disk builder verifies the cosign signature of the image
 // against spec.preWarmImageSignature.
 const (
 	verifyJobPrefix = "setec-verify-"
@@ -43,18 +44,18 @@ const (
 
 // verifyJobName names the check of one image against one signer for one
 // class, so a change of the image or of the signer runs a new check.
-func verifyJobName(cls *setecv1alpha1.SandboxClass) string {
+func verifyJobName(cls *setecv1alpha1.SandboxClass, image string) string {
 	h := sha256.New()
 	sig := cls.Spec.PreWarmImageSignature
-	for _, part := range []string{cls.Name, cls.Spec.PreWarmImage, sig.Issuer, sig.Identity, sig.PublicKey} {
+	for _, part := range []string{cls.Name, image, sig.Issuer, sig.Identity, sig.PublicKey} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
 	return verifyJobPrefix + hex.EncodeToString(h.Sum(nil))[:20]
 }
 
-// verifyJob is the Job that checks the signature of the pool image of cls.
-func verifyJob(cfg DiskBuilderConfig, name string, cls *setecv1alpha1.SandboxClass) *batchv1.Job {
+// verifyJob is the Job that checks the signature of a pool image of cls.
+func verifyJob(cfg DiskBuilderConfig, name string, cls *setecv1alpha1.SandboxClass, image string) *batchv1.Job {
 	sig := cls.Spec.PreWarmImageSignature
 	args := []string{"--temp-dir", builderWorkDir}
 	var env []corev1.EnvVar
@@ -63,19 +64,21 @@ func verifyJob(cfg DiskBuilderConfig, name string, cls *setecv1alpha1.SandboxCla
 	} else {
 		args = append(args, "--issuer", sig.Issuer, "--identity", sig.Identity)
 	}
-	args = append(args, "verify", cls.Spec.PreWarmImage)
+	args = append(args, "verify", image)
 	return builderJob(cfg, name, "image-verify", args, env, false)
 }
 
-// ensureImageVerified starts or reads the signature check of the pool
-// image of cls. A class with no signer fails: the pool builds no base from
-// an image it cannot check.
-func (r *WarmPoolReconciler) ensureImageVerified(ctx context.Context, cls *setecv1alpha1.SandboxClass) (verifyState, string, error) {
+// ensureImageVerified starts or reads the signature check of a pool image
+// of cls. A class with no signer fails: the pool builds no base from an
+// image it cannot check.
+func (r *WarmPoolReconciler) ensureImageVerified(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, image string,
+) (verifyState, string, error) {
 	if cls.Spec.PreWarmImageSignature == nil {
 		return verifyFailed, "the class names no signer of its pool image (spec.preWarmImageSignature)", nil
 	}
 	cfg := r.DiskBuilder
-	name := verifyJobName(cls)
+	name := verifyJobName(cls, image)
 	reader := cfg.Reader
 	if reader == nil {
 		reader = r.Client
@@ -83,7 +86,7 @@ func (r *WarmPoolReconciler) ensureImageVerified(ctx context.Context, cls *setec
 	job := &batchv1.Job{}
 	err := reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: name}, job)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, verifyJob(cfg, name, cls)); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, verifyJob(cfg, name, cls, image)); err != nil && !apierrors.IsAlreadyExists(err) {
 			return verifyPending, "", fmt.Errorf("create the image check Job %s: %w", name, err)
 		}
 		return verifyPending, "", nil
@@ -120,4 +123,41 @@ func (r *WarmPoolReconciler) setImageCondition(ctx context.Context, cls *setecv1
 		return nil
 	}
 	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
+}
+
+// checkImages checks the signature of each pool image and returns the
+// state of each. The class gets the condition ImageNotVerified, True with
+// the images that failed, or False once each image passed.
+func (r *WarmPoolReconciler) checkImages(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, images []setecv1alpha1.SandboxClassWarmPoolImage,
+) (map[string]verifyState, error) {
+	states := make(map[string]verifyState, len(images))
+	var failed []string
+	pending := false
+	for _, im := range images {
+		state, msg, err := r.ensureImageVerified(ctx, cls, im.Image)
+		if err != nil {
+			return nil, err
+		}
+		states[im.Image] = state
+		switch state {
+		case verifyFailed:
+			failed = append(failed, msg)
+		case verifyPending:
+			pending = true
+		case verifyPassed:
+		}
+	}
+	switch {
+	case len(failed) > 0:
+		reason := reasonImageNotVerified
+		if cls.Spec.PreWarmImageSignature == nil {
+			reason = reasonImageNoSigner
+		}
+		return states, r.setImageCondition(ctx, cls, true, reason, strings.Join(failed, "; "))
+	case !pending && len(images) > 0:
+		return states, r.setImageCondition(ctx, cls, false, reasonImageVerified,
+			"each pool image has a signature of the named signer")
+	}
+	return states, nil
 }

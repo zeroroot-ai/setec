@@ -3,7 +3,7 @@
 Setec captures the state of a running Firecracker machine as a
 `Snapshot`, restores that state into a new Sandbox, forks one Sandbox
 into several, and pauses and resumes a Sandbox. A SandboxClass can keep
-a warm pool: snapshots of a machine that booted the image of the class,
+a warm pool: snapshots of a machine that booted an image of the class,
 which a new Sandbox loads instead of a boot. The launcher loads each
 snapshot (docs/design/runtime.md).
 
@@ -20,9 +20,9 @@ renders Phase 2-equivalent manifests.
   `Running` and `Paused`. A paused microVM consumes near-zero CPU and
   retains memory until resumed.
 - **Warm pool**: a SandboxClass may declare
-  `spec.preWarmPoolSize=N` to keep N warm bases, each on another node.
-  A base is a full snapshot of a machine that booted
-  `spec.preWarmImage` and ran no workload.
+  `spec.preWarmPoolSize=N` to keep N warm bases of each image that its
+  Sandboxes ask for, each on another node. A base is a full snapshot of a
+  machine that booted the image and ran no workload.
 
 ## Enabling Phase 3
 
@@ -153,23 +153,30 @@ spec:
     identity: https://github.com/org/app/.github/workflows/release.yml@refs/tags/v1.2.3
 ```
 
-A base is a full Snapshot of a launcher machine that booted the pool
+A base is a full Snapshot of a launcher machine that booted a pool
 image with the default resources of the class and ran no workload
-(`internal/controller/warm_pool.go`). The operator keeps
-`preWarmPoolSize` Ready bases, each on another node, in the namespace
-of the pool. A pool keeps its bases for as long as Sandboxes ask for its
-image, and it drops them after seven days with no such Sandbox.
+(`internal/controller/warm_pool.go`). A pool image is an image by digest
+that a Sandbox of the class asked for with the default resources, so
+each catalog tool image that the Sandboxes of a class run joins the pool
+on its first request (setec#238). `preWarmImage` is optional: it is a
+first pool image that the pool warms from the creation of the class.
 
-The admission webhook refuses a class with `preWarmPoolSize > 0` and
-no `preWarmImage` with a digest, no `defaultResources`, or no
-`preWarmImageSignature`. A base belongs to one image digest, and it boots
-with the default resources.
+The operator keeps `preWarmPoolSize` Ready bases of each pool image, each
+on another node, in the namespace of the pool. It drops an image, and its
+bases, 7 days after the last Sandbox that asked for it. A class keeps at
+most 32 pool images, the most recent ones. `status.warmPool.images` lists
+each pool image with its last request, its key and its Ready bases.
+
+The admission webhook refuses a class with `preWarmPoolSize > 0` and no
+`defaultResources` or no `preWarmImageSignature`, and a `preWarmImage`
+with no digest. A base belongs to one image digest, and it boots with the
+default resources.
 
 ### The signature of the pool image
 
 The operator builds no base from an image that it cannot check. Before
-the first base, a Job of the disk builder checks the cosign signature of
-`preWarmImage` (`internal/diskbuilder/imagesig`). cosign v3 attaches
+the first base of each pool image, a Job of the disk builder checks the
+cosign signature of the image (`internal/diskbuilder/imagesig`). cosign v3 attaches
 the signature as a Sigstore bundle, an OCI referrer of the image.
 `preWarmImageSignature` names the signer in one of two ways:
 
@@ -181,16 +188,17 @@ the signature as a Sigstore bundle, an OCI referrer of the image.
 - `publicKey`: a PEM public key, for an image signed with a key. The
   check needs no outside service, so it suits an air-gapped install.
 
-An image with no signature of the named signer gets the condition
-`ImageNotVerified=True` on the class, and the pool drops each base of
-the class. The check runs again when its Job expires, and when the image
+An image with no signature of the named signer gets no base, and the
+pool drops each base of it. The condition `ImageNotVerified=True` on the
+class names each such image. The check runs again when its Job expires, and when the image
 or the signer changes.
 
 ### Warm-start flow
 
-A Sandbox can warm start when its class keeps a pool, it asks for the
-pool image with the default resources of the class, and it names no
-snapshot. Before the operator creates the Pod, it selects a Ready base
+A Sandbox can warm start when its class keeps a pool, it asks for an
+image by digest with the default resources of the class, it is not a
+session, and it names no snapshot. Its request also stamps the image in
+the pool. Before the operator creates the Pod, it selects a Ready base
 and records it in the `setec.zeroroot.ai/warm-base` annotation. The Pod
 lands on the node of the base. The launcher loads the base instead of
 a boot, gives the guest a new identity and fresh entropy, and then
