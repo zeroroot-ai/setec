@@ -111,7 +111,7 @@ func TestRuntimeBackends_Smoke(t *testing.T) {
 				},
 				Spec: setecv1alpha1.SandboxSpec{
 					SandboxClassName: sc.className,
-					Image:            "busybox:1.36",
+					Image:            testImage("busybox:1.36"),
 					Command:          []string{"sleep", "5"},
 					Resources: setecv1alpha1.Resources{
 						VCPU:   1,
@@ -246,7 +246,7 @@ func TestRuntimeBackends_ZZ_Fallback(t *testing.T) {
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: "fallback-test-cls",
-			Image:            "busybox:1.36",
+			Image:            testImage("busybox:1.36"),
 			Command:          []string{"sleep", "5"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,

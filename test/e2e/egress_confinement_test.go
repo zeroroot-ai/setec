@@ -98,7 +98,7 @@ func TestEgress_ExternalReachableControlPlaneNot(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "busybox:1.36",
+			Image:   testImage("busybox:1.36"),
 			Command: []string{"sh", "-c", fmt.Sprintf(probeScript, reservedHost, reservedPort)},
 			Resources: setecv1alpha1.Resources{
 				VCPU: 1, Memory: resource.MustParse("128Mi"),
@@ -159,7 +159,7 @@ func TestEgress_ModeNoneBlocksEverything(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "busybox:1.36",
+			Image:   testImage("busybox:1.36"),
 			Command: []string{"sh", "-c", fmt.Sprintf(probeScript, "10.0.0.1", 443)},
 			Resources: setecv1alpha1.Resources{
 				VCPU: 1, Memory: resource.MustParse("128Mi"),

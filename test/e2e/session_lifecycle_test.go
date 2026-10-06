@@ -102,7 +102,7 @@ func sessionClassName() string { return "e2e-session-" + testNamespace }
 func installSessionClass(t *testing.T) {
 	t.Helper()
 	cls := newSandboxClass(sessionClassName(), setecv1alpha1.SandboxClassSpec{
-		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: kataRuntimeClass},
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: sessionBackend()},
 	})
 	if err := k8sClient.Create(context.Background(), cls); err != nil {
 		t.Fatalf("create session SandboxClass %q: %v", cls.Name, err)
@@ -112,11 +112,21 @@ func installSessionClass(t *testing.T) {
 	})
 }
 
+// sessionBackend is the backend of the session class: the launcher on the
+// launcher backend, else the kata-fc RuntimeClass name.
+func sessionBackend() string {
+	if onLauncher() {
+		return backendLauncher
+	}
+	return kataRuntimeClass
+}
+
 // podLogs returns the workload container logs of the named Pod via
 // kubectl, consistent with the harness's other cluster inspection.
 func podLogs(t *testing.T, podName string) string {
 	t.Helper()
-	out, err := exec.Command("kubectl", "logs", podName, "-n", sandboxNamespace, "-c", "workload").CombinedOutput()
+	out, err := exec.Command("kubectl", "logs", podName, "-n", sandboxNamespace,
+		"-c", workloadContainer()).CombinedOutput()
 	if err != nil {
 		t.Logf("kubectl logs %s: %v (output: %s)", podName, err, out)
 	}

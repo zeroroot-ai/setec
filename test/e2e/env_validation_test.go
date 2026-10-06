@@ -83,7 +83,29 @@ func TestEnv_KVMPresent(t *testing.T) {
 		requireLocalKVM(t)
 		return
 	}
+	if onLauncher() {
+		requireLauncherNode(t)
+		return
+	}
 	requireKataFCCapableNode(t)
+}
+
+// requireLauncherNode fails unless a node offers the KVM device of the
+// device plugin within kataFCLabelWait: a launcher Pod runs nowhere else.
+func requireLauncherNode(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(kataFCLabelWait)
+	for {
+		if nodes := sandboxCapableNodes(t, backendLauncher); len(nodes) > 0 {
+			t.Logf("nodes that offer %s: %v", launcherKVMResource, nodes)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("FATAL: no node offers %s after %s. The device plugin found no /dev/kvm, "+
+				"so no launcher Sandbox can run. Do NOT bypass this check.", launcherKVMResource, kataFCLabelWait)
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 // requireLocalKVM fails when the machine running the test binary has no
