@@ -433,6 +433,28 @@ message AttachResponse {
   // Empty means the operator has not yet resolved a backend (the
   // Sandbox is still Pending), not "resolved but unreported".
   string runtime = 6;
+
+  // last_recovery is the most recent recovery of the session: a resume
+  // from a checkpoint, for example on another node after a node loss, or
+  // a restart from the workspace (setec#237). Unset when the session has
+  // not recovered.
+  SessionRecovery last_recovery = 7;
+}
+
+// SessionRecovery reports one recovery of a session (setec#237).
+message SessionRecovery {
+  // kind is ResumedFromCheckpoint (the process continued from the state
+  // of state_taken_unix_nano) or RestartedFromWorkspace (the process
+  // restarted against the workspace and no process state survived).
+  string kind = 1;
+  // state_taken_unix_nano is the time of the state that the session
+  // resumed from, in Unix nanoseconds. Zero for RestartedFromWorkspace.
+  int64 state_taken_unix_nano = 2;
+  // recovered_unix_nano is the time of the recovery, in Unix nanoseconds.
+  int64 recovered_unix_nano = 3;
+  // count counts the recoveries of the session. A caller tells a new
+  // recovery from one that it saw by a higher count.
+  int64 count = 4;
 }
 
 // SandboxServiceExecRequest is one message of the client half of an

@@ -164,6 +164,14 @@ func TestSessionCheckpoint_SuspendAndResume(t *testing.T) {
 	g.Expect(got.Status.Checkpoint.Ref).To(BeEmpty(), "a restored checkpoint is consumed (single-restore invariant)")
 	g.Expect(got.Status.Checkpoint.PendingRestore).To(BeFalse())
 	g.Expect(got.Status.Phase).To(Equal(setecv1alpha1.SandboxPhaseRunning))
+	// The record of the resume (setec#237): the time of the state, the
+	// time of the resume, and the first count.
+	ck := got.Status.Checkpoint
+	g.Expect(ck.Recoveries).To(Equal(int64(1)))
+	g.Expect(ck.LastRecoveryAt).NotTo(BeNil())
+	g.Expect(ck.LastRecoveryStateTakenAt).NotTo(BeNil(), "a resume records the time of its state")
+	g.Expect(ck.LastRecoveryStateTakenAt.Time.After(ck.LastRecoveryAt.Time)).To(BeFalse(),
+		"the state is older than the resume")
 }
 
 // TestSessionCheckpoint_IdleSuspendsInsteadOfEvicting asserts the
@@ -295,6 +303,13 @@ func TestSessionCheckpoint_VMLossWithoutCheckpointIsDistinct(t *testing.T) {
 		return string(got.Status.Checkpoint.LastRecovery)
 	}, convergeTimeout, convergeInterval).Should(Equal(string(setecv1alpha1.SessionRecoveryRestartedFromWorkspace)),
 		"VM loss without a checkpoint must surface the distinct degraded condition")
+	lost, err := getSandbox(testCtx, ns, sb.Name)
+	g.Expect(err).NotTo(HaveOccurred())
+	// The record of the restart (setec#237): a time and a count, and no
+	// time of a state, because no process state survived.
+	g.Expect(lost.Status.Checkpoint.Recoveries).To(BeNumerically(">=", 1))
+	g.Expect(lost.Status.Checkpoint.LastRecoveryAt).NotTo(BeNil())
+	g.Expect(lost.Status.Checkpoint.LastRecoveryStateTakenAt).To(BeNil())
 
 	// And the session still restarts (workspace-backed replacement Pod).
 	g.Eventually(func() bool {

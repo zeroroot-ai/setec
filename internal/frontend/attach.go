@@ -80,6 +80,7 @@ func (s *Service) Attach(ctx context.Context, req *setecv1grpc.AttachRequest) (*
 	if rt := sb.Status.Runtime; rt != nil {
 		resp.Runtime = rt.Chosen
 	}
+	resp.LastRecovery = sessionRecovery(sb.Status.Checkpoint)
 	return resp, nil
 }
 
@@ -174,4 +175,20 @@ func (s *Service) keepSessionActive(ctx context.Context, ns, name string) (stop 
 		defer fcancel()
 		_ = s.touchSessionActivity(fctx, ns, name, time.Now())
 	}
+}
+
+// sessionRecovery is the wire form of the last recovery of a session
+// (setec#237), or nil when the session has not recovered.
+func sessionRecovery(ck *setecv1alpha1.SandboxCheckpointStatus) *setecv1grpc.SessionRecovery {
+	if ck == nil || ck.LastRecovery == "" {
+		return nil
+	}
+	out := &setecv1grpc.SessionRecovery{Kind: string(ck.LastRecovery), Count: ck.Recoveries}
+	if ck.LastRecoveryStateTakenAt != nil {
+		out.StateTakenUnixNano = ck.LastRecoveryStateTakenAt.UnixNano()
+	}
+	if ck.LastRecoveryAt != nil {
+		out.RecoveredUnixNano = ck.LastRecoveryAt.UnixNano()
+	}
+	return out
 }

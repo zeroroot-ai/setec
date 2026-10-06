@@ -228,6 +228,14 @@ func (in *SandboxCheckpointStatus) DeepCopyInto(out *SandboxCheckpointStatus) {
 		in, out := &in.TakenAt, &out.TakenAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LastRecoveryAt != nil {
+		in, out := &in.LastRecoveryAt, &out.LastRecoveryAt
+		*out = (*in).DeepCopy()
+	}
+	if in.LastRecoveryStateTakenAt != nil {
+		in, out := &in.LastRecoveryStateTakenAt, &out.LastRecoveryStateTakenAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Parents != nil {
 		in, out := &in.Parents, &out.Parents
 		*out = make([]string, len(*in))

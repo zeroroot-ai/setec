@@ -597,6 +597,20 @@ spec:
                     - ResumedFromCheckpoint
                     - RestartedFromWorkspace
                     type: string
+                  lastRecoveryAt:
+                    description: |-
+                      LastRecoveryAt is when the most recent recovery happened: the time
+                      of the resume or of the restart (setec#237).
+                    format: date-time
+                    type: string
+                  lastRecoveryStateTakenAt:
+                    description: |-
+                      LastRecoveryStateTakenAt is the time of the state that the most
+                      recent recovery resumed from: the time of its checkpoint. It is
+                      empty when the session restarted from the workspace, because no
+                      process state survived (setec#237).
+                    format: date-time
+                    type: string
                   parents:
                     description: |-
                       Parents are the storage references below Ref when Ref is a diff:
@@ -618,6 +632,12 @@ spec:
                       PodUID is the Pod whose machine wrote the checkpoint. A diff is
                       only valid on a checkpoint of the same machine (setec#194).
                     type: string
+                  recoveries:
+                    description: |-
+                      Recoveries counts the recoveries of the session. A caller that saw
+                      a recovery tells a new one by a higher count (setec#237).
+                    format: int64
+                    type: integer
                   ref:
                     description: |-
                       Ref is the storage reference of the latest checkpoint. Empty

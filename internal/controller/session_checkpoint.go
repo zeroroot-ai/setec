@@ -373,9 +373,7 @@ func (r *SandboxReconciler) takeCheckpoint(
 		PodUID:    podUID,
 		Parents:   parents,
 	}
-	if prev != nil {
-		ck.LastRecovery = prev.LastRecovery
-	}
+	ck.CopyRecovery(prev)
 	sb.Status.Checkpoint = ck
 	if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
 		return fmt.Errorf("patch checkpoint status: %w", err)
@@ -527,11 +525,10 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	r.deleteCheckpointChain(ctx, logger, sb, ck)
 
 	original := sb.DeepCopy()
-	sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{
-		Backend:      ck.Backend,
-		Sequence:     ck.Sequence,
-		LastRecovery: recovery,
-	}
+	next := &setecv1alpha1.SandboxCheckpointStatus{Backend: ck.Backend, Sequence: ck.Sequence}
+	next.CopyRecovery(ck)
+	next.RecordRecovery(recovery, metav1.Now(), ck.TakenAt)
+	sb.Status.Checkpoint = next
 	if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
 		return ctrl.Result{}, true, fmt.Errorf("patch post-restore checkpoint status: %w", err)
 	}
