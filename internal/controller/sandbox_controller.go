@@ -221,6 +221,12 @@ type SandboxReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
+	// APIReader reads from the API server, not from the cache. A step
+	// that must run once, such as the restore of a session checkpoint,
+	// checks the live object with it: the cache can still show the state
+	// from before the step. Nil reads through Client.
+	APIReader client.Reader
+
 	// Runtimes is the registry of enabled RuntimeDispatcher implementations.
 	// It is used by selectRuntime to pick the appropriate backend for each Sandbox.
 	// Set at construction time; replaces the old RuntimeClassName string field.

@@ -465,6 +465,14 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	ck := sb.Status.Checkpoint
 	recovery := setecv1alpha1.SessionRecoveryResumedFromCheckpoint
 
+	// The restore runs once. A reconcile on a stale cache still sees the
+	// pending checkpoint after the restore consumed it, and a second
+	// restore fails on the deleted checkpoint and ends a healthy session
+	// (setec#197). So the live object decides.
+	if pending, err := r.restoreStillPending(ctx, sb, ck.Ref); err != nil || !pending {
+		return ctrl.Result{}, true, err
+	}
+
 	kek, kekErr := r.readSessionKEK(ctx, sb)
 	var restoreErr error
 	if kekErr != nil {
@@ -727,4 +735,19 @@ func (r *SandboxReconciler) resumeAfterNodeLoss(
 		return ctrl.Result{}, fmt.Errorf("remove the Pod of the lost node: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
+}
+
+// restoreStillPending reports whether the live Sandbox still has the
+// pending checkpoint ref.
+func (r *SandboxReconciler) restoreStillPending(ctx context.Context, sb *setecv1alpha1.Sandbox, ref string) (bool, error) {
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	live := &setecv1alpha1.Sandbox{}
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(sb), live); err != nil {
+		return false, fmt.Errorf("read the live sandbox before the restore: %w", err)
+	}
+	lc := live.Status.Checkpoint
+	return lc != nil && lc.PendingRestore && lc.Ref == ref, nil
 }

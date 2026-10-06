@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -114,5 +115,36 @@ func TestNodeLoss_MovesADurableSession(t *testing.T) {
 	}
 	if _, ok := r.nodeLostFor(ctx, "node-gone"); !ok {
 		t.Fatal("a deleted node is not lost")
+	}
+}
+
+// TestRestorePendingCheckpoint_RunsOnceOnAStaleCache pins the fix of a
+// drain run of setec#197: the cache still showed the pending checkpoint
+// after the restore consumed it, and a second restore ended the healthy
+// session. The live object decides, so a stale cache restores nothing.
+func TestRestorePendingCheckpoint_RunsOnceOnAStaleCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	na := &fakeNodeAgentClient{RestoreErr: errors.New("a second restore must not run")}
+	r, sb := durableFixture(t, na)
+	sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Ref: "ref-1", Backend: "s3", Sequence: 1, PendingRestore: true}
+	if err := r.Status().Update(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	// The API server already holds the consumed checkpoint.
+	live := sb.DeepCopy()
+	live.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: "s3", Sequence: 1,
+		LastRecovery: setecv1alpha1.SessionRecoveryResumedFromCheckpoint}
+	r.APIReader = fake.NewClientBuilder().WithScheme(r.Scheme).WithObjects(live).Build()
+
+	_, handled, err := r.restorePendingCheckpoint(ctx, logr.Discard(), sb, &setecv1alpha1.SessionCheckpointSpec{})
+	if err != nil || !handled {
+		t.Fatalf("restorePendingCheckpoint = %t, %v", handled, err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "sess-vm"}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the healthy session Pod is gone: %v", err)
+	}
+	if got := sb.Status.Checkpoint.LastRecovery; got == setecv1alpha1.SessionRecoveryRestartedFromWorkspace {
+		t.Fatal("a stale cache degraded the session to RestartedFromWorkspace")
 	}
 }
