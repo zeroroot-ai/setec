@@ -257,8 +257,6 @@ verify the expected new manifests appear via `helm template`.
   Every class must state a `defaultNetworkMode` or the chart refuses to
   render.
 
-### Sandbox egress posture
-
 ### The network policy of the setec namespace
 
 On a cluster that serves `cilium.io/v2`, the chart denies all traffic of each Pod in its own namespace by default, with DNS to kube-dns allowed (`templates/system-namespace-policy.yaml`). One policy for each component then allows only the traffic setec uses:
@@ -269,6 +267,8 @@ On a cluster that serves `cilium.io/v2`, the chart denies all traffic of each Po
 - Each metrics port admits the Pods of `systemPolicy.metricsScrapers`.
 
 The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. On a cluster with no Cilium the chart renders none of this.
+
+### Sandbox egress posture
 
 `netpol.reservedCIDRs` is the address space no Sandbox may reach. It is
 subtracted from every permissive egress rule the operator generates, and
