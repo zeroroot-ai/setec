@@ -1,0 +1,34 @@
+# Fails when the pinned guest kernel is not the newest release of its stable
+# series (setec#191). Each later release of a longterm series carries fixes,
+# and kernel.org does not say which of them are security fixes, so any later
+# release counts. The routine is in docs/guest-kernel.md.
+name: guest-kernel-currency
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  currency:
+    name: The guest kernel is the newest release of its series
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Compare with kernel.org
+        run: |
+          set -euo pipefail
+          . kernel/kernel.env
+          series="${KERNEL_VERSION%.*}"
+          latest="$(curl -fsSL --retry 3 https://www.kernel.org/releases.json \
+            | jq -r --arg s "$series" '.releases[] | select(.version | startswith($s + ".")) | .version' | head -1)"
+          test -n "$latest" || { echo "::error::kernel.org lists no release of series $series; it may be end of life"; exit 1; }
+          if [ "$latest" != "$KERNEL_VERSION" ]; then
+            echo "::error::the guest kernel pins $KERNEL_VERSION and $series has $latest; follow docs/guest-kernel.md"
+            exit 1
+          fi
+          echo "the guest kernel $KERNEL_VERSION is the newest release of $series"
