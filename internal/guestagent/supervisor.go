@@ -144,11 +144,43 @@ func (s *Supervisor) resolve(name string, env []string) (string, error) {
 	}
 	for _, d := range filepath.SplitList(path) {
 		cand := filepath.Join(d, name)
-		if fi, err := os.Stat(filepath.Join(s.Root, cand)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+		if fi, err := statInRoot(s.Root, cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 			return cand, nil
 		}
 	}
 	return "", fmt.Errorf("guestagent: %s is not on the PATH of the image", name)
+}
+
+// maxLinks bounds the symbolic links that statInRoot follows, as the
+// kernel does.
+const maxLinks = 40
+
+// statInRoot stats path as the chrooted child sees it. A symbolic link
+// resolves inside root: an absolute target starts at root, not at the root
+// of the agent. Images such as alpine link /bin/sh to /bin/busybox.
+func statInRoot(root, path string) (os.FileInfo, error) {
+	if root == "" {
+		return os.Stat(path)
+	}
+	cur := filepath.Clean("/" + path)
+	for range maxLinks {
+		fi, err := os.Lstat(filepath.Join(root, cur))
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fi, nil
+		}
+		target, err := os.Readlink(filepath.Join(root, cur))
+		if err != nil {
+			return nil, err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(cur), target)
+		}
+		cur = filepath.Clean("/" + target)
+	}
+	return nil, fmt.Errorf("guestagent: too many symbolic links at %s", path)
 }
 
 func hasKey(env []string, key string) bool {
