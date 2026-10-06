@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
@@ -196,7 +197,7 @@ func TestRestoreSessionCheckpoint_ForeignRefRefusedBeforeRPC(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	err := coord.RestoreSessionCheckpoint(context.Background(), sb,
-		"t-a-other-session-ckpt-1", "s3", []byte("0123456789abcdef0123456789abcdef"))
+		"t-a-other-session-ckpt-1", "s3", []byte("0123456789abcdef0123456789abcdef"), time.Time{})
 	if !errors.Is(err, ErrInvariantGateViolation) {
 		t.Fatalf("err = %v, want ErrInvariantGateViolation", err)
 	}
@@ -220,7 +221,7 @@ func TestRestoreSessionCheckpoint_UnverifiedResumeRefused(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	err := coord.RestoreSessionCheckpoint(context.Background(), sb,
-		"t-a-sess-ckpt-4", "s3", []byte("0123456789abcdef0123456789abcdef"))
+		"t-a-sess-ckpt-4", "s3", []byte("0123456789abcdef0123456789abcdef"), time.Time{})
 	if !errors.Is(err, ErrInvariantGateViolation) {
 		t.Fatalf("err = %v, want ErrInvariantGateViolation", err)
 	}

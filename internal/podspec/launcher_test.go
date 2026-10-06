@@ -229,7 +229,8 @@ func TestBuildLauncher_RestoreLoadsTheStagedSnapshot(t *testing.T) {
 		t.Fatalf("source = %+v, workload = %+v; want a snapshot and no workload", s.Source, s.Workload)
 	}
 	if snap.State != "/work/vm/restore/state.bin" || snap.Memory != "/work/vm/restore/memory.bin" ||
-		snap.Staged != "/work/vm/restore/staged" || snap.Evidence != "/work/vm/restore/evidence.json" {
+		snap.Staged != "/work/vm/restore/staged" || snap.Evidence != "/work/vm/restore/evidence.json" ||
+		snap.TakenAt != "/work/vm/restore/taken-at" {
 		t.Fatalf("snapshot = %+v", snap)
 	}
 }

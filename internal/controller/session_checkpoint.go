@@ -90,6 +90,7 @@ const (
 	eventReasonSessionKEKCreated      = "SessionKEKCreated"
 	eventReasonSessionKEKDeleted      = "SessionKEKDeleted"
 	eventReasonSessionRecycled        = "SessionRecycled"
+	eventReasonNodeLost               = "SessionNodeLost"
 )
 
 // sessionCheckpointPolicy returns the class's checkpoint spec when the
@@ -205,6 +206,20 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 		return r.restorePendingCheckpoint(ctx, logger, sb, policy)
 	}
 
+	// (c0) Node loss with no notice (setec#194): the node of a durable
+	// session stopped reporting. No kubelet will confirm the end of the
+	// Pod, so after nodeLossGrace it is removed with no grace, and the
+	// session resumes from its last checkpoint on another node.
+	if policy.Durable && pod.Spec.NodeName != "" && pod.Annotations[annotationSuspendedPod] == "" {
+		if lostFor, lost := r.nodeLostFor(ctx, pod.Spec.NodeName); lost {
+			if lostFor < nodeLossGrace {
+				return ctrl.Result{RequeueAfter: nodeLossGrace - lostFor}, true, nil
+			}
+			res, err := r.resumeAfterNodeLoss(ctx, logger, sb, pod)
+			return res, true, err
+		}
+	}
+
 	// (c) Checkpoint-on-drain: the VM Pod is being evicted (node
 	// drain, preemption) or its node was cordoned. Checkpoint while
 	// the VM is still alive and suspend; the resume policy brings the
@@ -256,13 +271,13 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 
 	// (f) Periodic checkpoint while Running.
 	if desired.Phase == setecv1alpha1.SandboxPhaseRunning &&
-		policy.Interval != nil && policy.Interval.Duration > 0 {
+		policy.EffectiveInterval() > 0 {
 		due := true
 		if ck := sb.Status.Checkpoint; ck != nil && ck.TakenAt != nil {
-			due = time.Since(ck.TakenAt.Time) >= policy.Interval.Duration
+			due = time.Since(ck.TakenAt.Time) >= policy.EffectiveInterval()
 		} else if sb.Status.StartedAt != nil {
 			// First checkpoint one full interval after the VM started.
-			due = time.Since(sb.Status.StartedAt.Time) >= policy.Interval.Duration
+			due = time.Since(sb.Status.StartedAt.Time) >= policy.EffectiveInterval()
 		}
 		if due {
 			if err := r.takeCheckpoint(ctx, logger, sb, policy, false); err != nil {
@@ -270,7 +285,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 				// session: record and retry on the next interval tick.
 				logger.Error(err, "periodic session checkpoint failed; VM keeps running")
 			}
-			return ctrl.Result{RequeueAfter: policy.Interval.Duration}, true, nil
+			return ctrl.Result{RequeueAfter: policy.EffectiveInterval()}, true, nil
 		}
 		// Not due yet — make sure a quiet session still gets its next
 		// checkpoint on time.
@@ -289,7 +304,7 @@ func nextCheckpointDue(sb *setecv1alpha1.Sandbox, policy *setecv1alpha1.SessionC
 	} else if sb.Status.StartedAt != nil {
 		base = sb.Status.StartedAt.Time
 	}
-	return base.Add(policy.Interval.Duration)
+	return base.Add(policy.EffectiveInterval())
 }
 
 // takeCheckpoint persists a fresh memory checkpoint of the Running
@@ -319,18 +334,27 @@ func (r *SandboxReconciler) takeCheckpoint(
 	}
 	backend := policy.CheckpointBackend()
 
-	ref, size, err := r.Coordinator.CheckpointSession(ctx, sb, backend, seq, kek, leavePaused)
+	// A durable launcher session takes a diff on its last checkpoint when
+	// the same machine wrote it (setec#194). The chain is kept to
+	// maxDiffChain diffs; then a full checkpoint starts a new chain.
+	podUID := r.sessionPodUID(ctx, sb)
+	parent, parents := "", []string(nil)
+	if policy.Durable && isLauncherSandbox(sb) && prev != nil && prev.Ref != "" && podUID != "" &&
+		prev.PodUID == podUID && len(prev.Parents) < maxDiffChain {
+		parent = prev.Ref
+		parents = append(append([]string(nil), prev.Parents...), prev.Ref)
+	}
+
+	ref, size, err := r.Coordinator.CheckpointSession(ctx, sb, backend, seq, kek, leavePaused, parent)
 	if err != nil {
 		return fmt.Errorf("checkpoint session: %w", err)
 	}
 
 	// New checkpoint is durable; destroy the superseded one (its DEK
 	// first, via the backend's Delete). Best-effort: a failed cleanup
-	// never invalidates the fresh checkpoint.
-	if prev != nil && prev.Ref != "" {
-		if delErr := r.Coordinator.DeleteSessionCheckpoint(ctx, sb, prev.Ref, prev.Backend); delErr != nil {
-			logger.Error(delErr, "failed to delete superseded session checkpoint", "ref", prev.Ref)
-		}
+	// never invalidates the fresh checkpoint. A diff keeps its chain.
+	if prev != nil && prev.Ref != "" && parent == "" {
+		r.deleteCheckpointChain(ctx, logger, sb, prev)
 	}
 
 	now := metav1.Now()
@@ -341,6 +365,8 @@ func (r *SandboxReconciler) takeCheckpoint(
 		Sequence:  seq,
 		TakenAt:   &now,
 		SizeBytes: size,
+		PodUID:    podUID,
+		Parents:   parents,
 	}
 	if prev != nil {
 		ck.LastRecovery = prev.LastRecovery
@@ -402,7 +428,10 @@ func (r *SandboxReconciler) suspendSession(
 	if sb.Status.Checkpoint == nil {
 		sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
 	}
-	sb.Status.Checkpoint.PendingRestore = sb.Status.Checkpoint.Ref != "" && ckErr == nil
+	// A drain whose fresh checkpoint failed still resumes a durable
+	// session from its last one (setec#194); any other session restarts
+	// from the workspace.
+	sb.Status.Checkpoint.PendingRestore = sb.Status.Checkpoint.Ref != "" && (ckErr == nil || policy.Durable)
 	sb.Status.Phase = setecv1alpha1.SandboxPhaseSuspended
 	sb.Status.Reason = reason
 	// A Suspended session holds no microVM, so it is outside the
@@ -441,7 +470,11 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	if kekErr != nil {
 		restoreErr = kekErr
 	} else {
-		restoreErr = r.Coordinator.RestoreSessionCheckpoint(ctx, sb, ck.Ref, ck.Backend, kek)
+		var takenAt time.Time
+		if ck.TakenAt != nil {
+			takenAt = ck.TakenAt.Time
+		}
+		restoreErr = r.Coordinator.RestoreSessionCheckpoint(ctx, sb, ck.Ref, ck.Backend, kek, takenAt)
 	}
 	switch {
 	case errors.Is(restoreErr, snapshot.ErrInvariantGateViolation):
@@ -478,9 +511,7 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	}
 
 	// The checkpoint is consumed either way: destroy its objects.
-	if delErr := r.Coordinator.DeleteSessionCheckpoint(ctx, sb, ck.Ref, ck.Backend); delErr != nil {
-		logger.Error(delErr, "failed to delete consumed session checkpoint", "ref", ck.Ref)
-	}
+	r.deleteCheckpointChain(ctx, logger, sb, ck)
 
 	original := sb.DeepCopy()
 	sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{
@@ -493,8 +524,8 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	}
 	// Requeue so the periodic-interval branch re-establishes a fresh
 	// checkpoint on its own schedule.
-	if policy.Interval != nil && policy.Interval.Duration > 0 {
-		return ctrl.Result{RequeueAfter: policy.Interval.Duration}, true, nil
+	if policy.EffectiveInterval() > 0 {
+		return ctrl.Result{RequeueAfter: policy.EffectiveInterval()}, true, nil
 	}
 	return ctrl.Result{}, true, nil
 }
@@ -569,10 +600,8 @@ func (r *SandboxReconciler) teardownSessionCheckpoint(
 	}
 
 	if ck := sb.Status.Checkpoint; ck != nil && ck.Ref != "" && r.Coordinator != nil {
-		if delErr := r.Coordinator.DeleteSessionCheckpoint(ctx, sb, ck.Ref, ck.Backend); delErr != nil {
-			logger.Info("best-effort checkpoint object delete failed (already crypto-erased via KEK deletion)",
-				"ref", ck.Ref, "error", delErr.Error())
-		}
+		// Objects only: the KEK deletion above already crypto-erased them.
+		r.deleteCheckpointChain(ctx, logger, sb, ck)
 	}
 }
 
@@ -618,4 +647,84 @@ func (r *SandboxReconciler) recycleIfExpired(
 		return ctrl.Result{}, fmt.Errorf("recycle the suspended session: %w", err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// maxDiffChain bounds the diffs on one full checkpoint.
+const maxDiffChain = 8
+
+// deleteCheckpointChain deletes a checkpoint and the chain below it.
+// Best-effort: a failed delete is logged.
+func (r *SandboxReconciler) deleteCheckpointChain(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox, ck *setecv1alpha1.SandboxCheckpointStatus,
+) {
+	for _, ref := range append(append([]string(nil), ck.Parents...), ck.Ref) {
+		if ref == "" {
+			continue
+		}
+		if err := r.Coordinator.DeleteSessionCheckpoint(ctx, sb, ref, ck.Backend); err != nil {
+			logger.Error(err, "failed to delete a session checkpoint", "ref", ref)
+		}
+	}
+}
+
+// sessionPodUID returns the UID of the VM Pod of a session, or "".
+func (r *SandboxReconciler) sessionPodUID(ctx context.Context, sb *setecv1alpha1.Sandbox) string {
+	name := sb.Status.PodName
+	if name == "" {
+		name = sb.Name + "-vm"
+	}
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: name}, pod); err != nil {
+		return ""
+	}
+	return string(pod.UID)
+}
+
+// nodeLossGrace is how long the node of a durable session may stay not
+// Ready before the session moves (setec#194). It is shorter than the
+// default eviction of Kubernetes (5 minutes), which waits for a kubelet
+// that is gone.
+const nodeLossGrace = 90 * time.Second
+
+// nodeLostFor reports whether a node is gone or not Ready, and for how
+// long.
+func (r *SandboxReconciler) nodeLostFor(ctx context.Context, name string) (time.Duration, bool) {
+	node := &corev1.Node{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nodeLossGrace, true
+		}
+		return 0, false
+	}
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			if c.Status == corev1.ConditionTrue {
+				return 0, false
+			}
+			return time.Since(c.LastTransitionTime.Time), true
+		}
+	}
+	return 0, false
+}
+
+// resumeAfterNodeLoss removes the Pod of a session whose node is lost and
+// marks its last checkpoint for the restore. The next reconcile makes a
+// Pod on another node that loads it.
+func (r *SandboxReconciler) resumeAfterNodeLoss(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonNodeLost, actionManageCheckpoint,
+		"Node %q stopped reporting; the session resumes from its last checkpoint on another node", pod.Spec.NodeName)
+	logger.Info("session node lost; moving the session", "node", pod.Spec.NodeName)
+	if ck := sb.Status.Checkpoint; ck != nil && ck.Ref != "" && !ck.PendingRestore {
+		original := sb.DeepCopy()
+		sb.Status.Checkpoint.PendingRestore = true
+		if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("mark the last checkpoint for the restore: %w", err)
+		}
+	}
+	if err := r.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("remove the Pod of the lost node: %w", err)
+	}
+	return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
 }

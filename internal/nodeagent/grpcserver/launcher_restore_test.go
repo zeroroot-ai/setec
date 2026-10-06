@@ -93,7 +93,7 @@ func TestRestoreLauncher_StagesTheFilesAndReturnsTheEvidence(t *testing.T) {
 	saw := fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "STATE", "MEMORY"), memBackend{encrypted: true})
+	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "STATE", "MEMORY"), memBackend{encrypted: true}, 0)
 	if err != nil || !resp.GetSuccess() || !resp.GetEntropyReseeded() || !resp.GetUniquified() || !resp.GetEncryptedAtRest() {
 		t.Fatalf("restoreLauncher = %+v, %v", resp, err)
 	}
@@ -116,7 +116,7 @@ func TestRestoreLauncher_FailsClosedOnMissingEvidence(t *testing.T) {
 	fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, ClockSet: true})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "S", "M"), memBackend{encrypted: true})
+	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
 	if err == nil || resp.GetSuccess() {
 		t.Fatalf("a restore with no identity confirmation succeeded: %+v", resp)
 	}
@@ -124,7 +124,7 @@ func TestRestoreLauncher_FailsClosedOnMissingEvidence(t *testing.T) {
 	q := launcherPaths(t)
 	ctx2, cancel2 := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel2()
-	if resp, err := (&Server{}).restoreLauncher(ctx2, q, framed(t, "S", "M"), memBackend{encrypted: true}); err == nil || resp.GetSuccess() {
+	if resp, err := (&Server{}).restoreLauncher(ctx2, q, framed(t, "S", "M"), memBackend{encrypted: true}, 0); err == nil || resp.GetSuccess() {
 		t.Fatalf("a restore with no launcher succeeded: %+v", resp)
 	}
 }

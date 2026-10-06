@@ -47,6 +47,7 @@ func (c *Coordinator) CheckpointSession(
 	sequence int64,
 	sessionKEK []byte,
 	leavePaused bool,
+	parentRef string,
 ) (string, int64, error) {
 	ctx, span := c.startSpan(ctx, "snapshot.CheckpointSession")
 	defer span.End()
@@ -73,12 +74,13 @@ func (c *Coordinator) CheckpointSession(
 	}
 
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		SnapshotId:     SessionCheckpointID(sb, sequence),
-		StorageBackend: backendName,
-		SourcePodUid:   string(pod.UID),
-		SessionKek:     sessionKEK,
-		LeavePaused:    leavePaused,
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+		SnapshotId:       SessionCheckpointID(sb, sequence),
+		StorageBackend:   backendName,
+		SourcePodUid:     string(pod.UID),
+		SessionKek:       sessionKEK,
+		LeavePaused:      leavePaused,
+		ParentStorageRef: parentRef,
 	})
 	if rpcErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonCheckpointCreateFailed, rpcErr.Error())
@@ -108,6 +110,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	ref string,
 	backendName string,
 	sessionKEK []byte,
+	takenAt time.Time,
 ) error {
 	ctx, span := c.startSpan(ctx, "snapshot.RestoreSessionCheckpoint")
 	defer span.End()
@@ -161,14 +164,15 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	// fresh machine identity, reconciles to its new Pod IP, and takes
 	// a node-unique vsock CID — fail-closed like the E10 path.
 	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:     ref,
-		StorageRef:     ref,
-		StorageBackend: backendName,
-		TargetPodUid:   string(pod.UID),
-		SessionKek:     sessionKEK,
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		PodIp:          pod.Status.PodIP,
-		Hostname:       sb.Name,
+		SnapshotId:         ref,
+		StorageRef:         ref,
+		StorageBackend:     backendName,
+		TargetPodUid:       string(pod.UID),
+		SessionKek:         sessionKEK,
+		SandboxId:          sb.Namespace + "/" + sb.Name,
+		PodIp:              pod.Status.PodIP,
+		Hostname:           sb.Name,
+		StateTakenUnixNano: unixNanoOrZero(takenAt),
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -315,4 +319,12 @@ func nodeIsReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// unixNanoOrZero returns t in Unix nanoseconds, or 0 for the zero time.
+func unixNanoOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }

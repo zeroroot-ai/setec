@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -37,7 +38,7 @@ const launcherEvidencePoll = 100 * time.Millisecond
 // then joins it to the Pod network. A missing or negative piece of
 // evidence is a failed restore: the operator gate refuses it.
 func (s *Server) restoreLauncher(
-	ctx context.Context, p katasandbox.Paths, rc io.Reader, backend storage.StorageBackend,
+	ctx context.Context, p katasandbox.Paths, rc io.Reader, backend storage.StorageBackend, takenAtUnixNano int64,
 ) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	statePath := launchersandbox.HostPath(p, podspec.LauncherRestoreState)
 	memPath := launchersandbox.HostPath(p, podspec.LauncherRestoreMemory)
@@ -57,6 +58,12 @@ func (s *Server) restoreLauncher(
 	openParent := func(ref string) (io.ReadCloser, error) { return backend.Open(ctx, ref) }
 	if err := writeLauncherFramedStream(rc, statePath, memPath, diskPath, openParent); err != nil {
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
+	}
+	if takenAtUnixNano > 0 {
+		takenAt := launchersandbox.HostPath(p, podspec.LauncherRestoreTakenAt)
+		if err := os.WriteFile(takenAt, []byte(strconv.FormatInt(takenAtUnixNano, 10)), 0o600); err != nil {
+			return nil, status.Errorf(codes.Internal, "write the time of the state: %v", err)
+		}
 	}
 	if err := os.WriteFile(staged, nil, 0o600); err != nil {
 		return nil, status.Errorf(codes.Internal, "mark the snapshot staged: %v", err)

@@ -598,6 +598,17 @@ type SandboxCheckpointStatus struct {
 	// restarted against the durable workspace; no data lost).
 	// +optional
 	LastRecovery SessionRecoveryKind `json:"lastRecovery,omitempty"`
+
+	// PodUID is the Pod whose machine wrote the checkpoint. A diff is
+	// only valid on a checkpoint of the same machine (setec#194).
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+
+	// Parents are the storage references below Ref when Ref is a diff:
+	// the full checkpoint first, then each diff. A restore loads them in
+	// that order, and they go with Ref.
+	// +optional
+	Parents []string `json:"parents,omitempty"`
 }
 
 // SandboxWarmStartOutcome enumerates how a pool warm-start attempt

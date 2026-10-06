@@ -578,6 +578,14 @@ spec:
                     - ResumedFromCheckpoint
                     - RestartedFromWorkspace
                     type: string
+                  parents:
+                    description: |-
+                      Parents are the storage references below Ref when Ref is a diff:
+                      the full checkpoint first, then each diff. A restore loads them in
+                      that order, and they go with Ref.
+                    items:
+                      type: string
+                    type: array
                   pendingRestore:
                     description: |-
                       PendingRestore is set when the next VM start should restore
@@ -586,6 +594,11 @@ spec:
                       attempt — success or failure — so a restore is attempted at
                       most once per checkpoint.
                     type: boolean
+                  podUID:
+                    description: |-
+                      PodUID is the Pod whose machine wrote the checkpoint. A diff is
+                      only valid on a checkpoint of the same machine (setec#194).
+                    type: string
                   ref:
                     description: |-
                       Ref is the storage reference of the latest checkpoint. Empty

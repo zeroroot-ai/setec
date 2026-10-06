@@ -6,6 +6,7 @@
 package guestagent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Supervisor starts processes in the root of the image and is the one
@@ -255,4 +257,24 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 		chown = os.Chown
 	}
 	return chown(dir, int(uid), int(gid))
+}
+
+// ResumedFile is where a workload reads that it resumed from a snapshot:
+// JSON with the time of the state and the time of the resume (setec#194).
+const ResumedFile = "run/setec/resumed"
+
+// WriteResumed writes ResumedFile in root.
+func WriteResumed(root string, stateAt, resumedAt time.Time) error {
+	path := filepath.Join(root, ResumedFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(map[string]string{
+		"stateTakenAt": stateAt.UTC().Format(time.RFC3339Nano),
+		"resumedAt":    resumedAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(raw, '\n'), 0o644) //nolint:gosec // the workload reads it
 }

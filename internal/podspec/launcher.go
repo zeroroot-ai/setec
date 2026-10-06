@@ -59,6 +59,9 @@ const (
 	LauncherRestoreMemory   = LauncherRestoreDir + "/memory.bin"
 	LauncherRestoreStaged   = LauncherRestoreDir + "/staged"
 	LauncherRestoreEvidence = LauncherRestoreDir + "/evidence.json"
+	// LauncherRestoreTakenAt holds the time of the state, in Unix
+	// nanoseconds, when the node agent knows it (setec#194).
+	LauncherRestoreTakenAt = LauncherRestoreDir + "/taken-at"
 )
 
 const (
@@ -166,6 +169,7 @@ type launcherSnapshot struct {
 	Memory   string `json:"memory"`
 	Staged   string `json:"staged"`
 	Evidence string `json:"evidence"`
+	TakenAt  string `json:"takenAt"`
 }
 
 type launcherBoot struct {
@@ -250,6 +254,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			Memory:   LauncherRestoreMemory,
 			Staged:   LauncherRestoreStaged,
 			Evidence: LauncherRestoreEvidence,
+			TakenAt:  LauncherRestoreTakenAt,
 		}
 	} else {
 		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}

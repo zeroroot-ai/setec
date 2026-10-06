@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -44,7 +45,7 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{5}, 32)
-	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek, false)
+	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek, false, "")
 	if err != nil {
 		t.Fatalf("CheckpointSession: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestRestoreSessionCheckpointNoNodePinning(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{6}, 32)
-	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3", kek); err != nil {
+	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3", kek, time.Time{}); err != nil {
 		t.Fatalf("RestoreSessionCheckpoint: %v", err)
 	}
 	if na.lastRestore.GetStorageRef() != sessCkpt3 ||
@@ -95,7 +96,7 @@ func TestRestoreSessionCheckpointFailurePropagates(t *testing.T) {
 		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: "corrupted snapshot"},
 	}
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
-	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-9", "s3", bytes.Repeat([]byte{1}, 32))
+	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-9", "s3", bytes.Repeat([]byte{1}, 32), time.Time{})
 	if err == nil {
 		t.Fatal("want error from failed restore")
 	}

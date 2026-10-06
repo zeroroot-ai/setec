@@ -336,7 +336,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	defer func() { _ = rc.Close() }()
 
 	if kata.Launcher {
-		return s.restoreLauncher(ctx, kata, rc, backend)
+		return s.restoreLauncher(ctx, kata, rc, backend, in.GetStateTakenUnixNano())
 	}
 
 	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))

@@ -670,6 +670,14 @@ spec:
                     enum:
                     - s3
                     type: string
+                  durable:
+                    description: |-
+                      Durable keeps a session through the loss of its node (setec#194).
+                      A durable session gets a checkpoint each Interval (15 minutes when
+                      Interval is unset), as a diff on the last checkpoint of the same
+                      machine. When its node goes away with no notice, the session resumes
+                      from its last checkpoint on another node.
+                    type: boolean
                   interval:
                     description: |-
                       Interval is the cadence of periodic memory checkpoints while
