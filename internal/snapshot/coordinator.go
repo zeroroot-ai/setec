@@ -96,6 +96,11 @@ type Coordinator struct {
 	// fails closed on any unverified invariant. A nil Gate only means
 	// no dev opt-out can ever be granted.
 	Gate *gate.Gate
+
+	// PoolNamespace is the namespace of the warm pool (setec#103). Only
+	// the operator writes there. A base Snapshot is trusted as a clean
+	// base only in this namespace.
+	PoolNamespace string
 }
 
 // Event reason constants — exported so callers can use them for
@@ -469,7 +474,7 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	// another — invariants 1/3/4 all fail — so outside dev-mode it is
 	// refused BEFORE any state is loaded into the target VM.
 	cls := c.classOf(ctx, sb)
-	bound := snap.Spec.SourceSandbox == sb.Name
+	bound := snap.Spec.SourceSandbox == sb.Name || c.isCleanBase(snap)
 	preflight := gate.Evidence{
 		CleanBase:          bound,
 		EntropyReseeded:    true, // verified post-RPC

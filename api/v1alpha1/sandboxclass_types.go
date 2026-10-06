@@ -425,6 +425,27 @@ type SandboxClassStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// WarmPool reports the warm pool of a launcher class (setec#103).
+	// +optional
+	WarmPool *SandboxClassWarmPoolStatus `json:"warmPool,omitempty"`
+}
+
+// SandboxClassWarmPoolStatus is the state of the warm pool of a class.
+type SandboxClassWarmPoolStatus struct {
+	// Ready is the number of Ready bases with the current key.
+	// +optional
+	Ready int32 `json:"ready,omitempty"`
+
+	// Key is the hash of the inputs of the current base: the image
+	// digest, the launcher image, the CPU template and the machine size.
+	// +optional
+	Key string `json:"key,omitempty"`
+
+	// LastUsed is the last time a Sandbox of the class asked for the pool
+	// image. A pool whose image nobody ran for 7 days keeps no base.
+	// +optional
+	LastUsed *metav1.Time `json:"lastUsed,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -434,6 +455,8 @@ type SandboxClassStatus struct {
 // +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Max-VCPU",type=integer,JSONPath=`.spec.maxResources.vcpu`,priority=1
 // +kubebuilder:printcolumn:name="Max-Memory",type=string,JSONPath=`.spec.maxResources.memory`,priority=1
+// +kubebuilder:printcolumn:name="Pool-Ready",type=integer,JSONPath=`.status.warmPool.ready`
+// +kubebuilder:printcolumn:name="Pool-Key",type=string,JSONPath=`.status.warmPool.key`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SandboxClass is a cluster-scoped, administrator-authored resource that

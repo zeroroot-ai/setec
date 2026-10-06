@@ -106,6 +106,12 @@ message CreateSnapshotRequest {
   // reference, which the same machine took. A restore loads the parent
   // first. Only the machine of a launcher Pod supports it (setec#105).
   string parent_storage_ref = 7;
+
+  // scan_for_secrets asks the node agent to scan the state, the memory
+  // and the writable layer for secret-shaped material before it stores
+  // them. A snapshot with a finding is not stored. The base of a warm
+  // pool is taken with it (setec#103).
+  bool scan_for_secrets = 8;
 }
 
 // CreateSnapshotResponse carries the backend ref for the persisted
@@ -115,6 +121,10 @@ message CreateSnapshotResponse {
   string storage_ref = 1;
   int64 size_bytes = 2;
   string sha256 = 3;
+
+  // clean_base_verified is true only when the request asked for the
+  // secret scan and the scan found nothing in any of the files.
+  bool clean_base_verified = 4;
 }
 
 // RestoreSandboxRequest identifies a snapshot to load into a fresh

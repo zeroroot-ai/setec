@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -80,20 +81,39 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 			name:    "pool on gvisor → reject",
 			class:   mk(1, "ghcr.io/org/tools:v1", nil, setecruntime.BackendGVisor),
 			wantErr: true,
-			wantMsg: "require the \"kata-fc\" backend",
+			wantMsg: "require the \"kata-fc\" or the \"launcher\" backend",
 		},
 		{
 			name:    "pool on kata-qemu → reject",
 			class:   mk(1, "ghcr.io/org/tools:v1", nil, setecruntime.BackendKataQEMU),
 			wantErr: true,
-			wantMsg: "require the \"kata-fc\" backend",
+			wantMsg: "require the \"kata-fc\" or the \"launcher\" backend",
+		},
+		{
+			name: "launcher pool with a digest and a default size → accept",
+			class: withDefaultResources(mk(2, "ghcr.io/org/tools@sha256:"+strings.Repeat("a", 64), nil,
+				setecruntime.BackendLauncher)),
+		},
+		{
+			name:    "launcher pool with a tag → reject",
+			class:   withDefaultResources(mk(2, "ghcr.io/org/tools:v1", nil, setecruntime.BackendLauncher)),
+			wantErr: true,
+			wantMsg: "needs an image with a digest",
+		},
+		{
+			name:    "launcher pool with no default size → reject",
+			class:   mk(2, "ghcr.io/org/tools@sha256:"+strings.Repeat("a", 64), nil, setecruntime.BackendLauncher),
+			wantErr: true,
+			wantMsg: "default resources",
 		},
 	}
 
+	cfg := baseConfig()
+	cfg.Runtimes[setecruntime.BackendLauncher] = setecruntime.BackendConfig{Enabled: true}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), cfg)
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
 				if err == nil {
@@ -125,4 +145,9 @@ func TestSandboxClassWebhook_ValidatePreWarm_NilRuntime(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "requires preWarmImage") {
 		t.Fatalf("expected preWarmImage pairing error with nil Runtime, got: %v", err)
 	}
+}
+
+func withDefaultResources(cls *setecv1alpha1.SandboxClass) *setecv1alpha1.SandboxClass {
+	cls.Spec.DefaultResources = &setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("1Gi")}
+	return cls
 }

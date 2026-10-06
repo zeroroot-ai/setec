@@ -65,22 +65,27 @@ func diskJobName(image string) (string, error) {
 // digest whose disk the registry already holds, so a Job for such a digest
 // ends at once.
 func (r *SandboxReconciler) ensureLauncherDisk(ctx context.Context, sb *setecv1alpha1.Sandbox) (bool, error) {
-	cfg := r.DiskBuilder
+	return ensureDisk(ctx, r.Client, r.DiskBuilder, r.DiskRepo, sb.Spec.Image)
+}
+
+// ensureDisk is the disk step of a launcher Pod of image: of a Sandbox, or
+// of a warm pool base.
+func ensureDisk(ctx context.Context, c client.Client, cfg DiskBuilderConfig, diskRepo, image string) (bool, error) {
 	if cfg.Image == "" || cfg.Namespace == "" || cfg.SigningSecret == "" {
 		return false, fmt.Errorf("the launcher backend needs the disk builder image, namespace and signing Secret")
 	}
-	name, err := diskJobName(sb.Spec.Image)
+	name, err := diskJobName(image)
 	if err != nil {
 		return false, err
 	}
 	job := &batchv1.Job{}
 	reader := cfg.Reader
 	if reader == nil {
-		reader = r.Client
+		reader = c
 	}
 	err = reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: name}, job)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, r.diskJob(name, sb.Spec.Image)); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := c.Create(ctx, diskJob(cfg, diskRepo, name, image)); err != nil && !apierrors.IsAlreadyExists(err) {
 			return false, fmt.Errorf("create the disk builder Job %s: %w", name, err)
 		}
 		return false, nil
@@ -88,15 +93,15 @@ func (r *SandboxReconciler) ensureLauncherDisk(ctx context.Context, sb *setecv1a
 	if err != nil {
 		return false, err
 	}
-	for _, c := range job.Status.Conditions {
-		if c.Status != corev1.ConditionTrue {
+	for _, cond := range job.Status.Conditions {
+		if cond.Status != corev1.ConditionTrue {
 			continue
 		}
-		switch c.Type {
+		switch cond.Type {
 		case batchv1.JobComplete:
 			return true, nil
 		case batchv1.JobFailed:
-			return false, &diskBuildError{job: name, msg: c.Message}
+			return false, &diskBuildError{job: name, msg: cond.Message}
 		}
 	}
 	return false, nil
@@ -111,8 +116,7 @@ func (e *diskBuildError) Error() string {
 // diskJob is the Job that builds the disk of image. It runs as a user that
 // is not root, with no ServiceAccount token, and keeps the build in an
 // emptyDir with a size limit.
-func (r *SandboxReconciler) diskJob(name, image string) *batchv1.Job {
-	cfg := r.DiskBuilder
+func diskJob(cfg DiskBuilderConfig, diskRepo, name, image string) *batchv1.Job {
 	ttl := int32(diskJobTTLSeconds)
 	backoff := int32(2)
 	work := resource.MustParse("20Gi")
@@ -152,7 +156,7 @@ func (r *SandboxReconciler) diskJob(name, image string) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "disk-builder",
 						Image: cfg.Image,
-						Args: []string{"--disk-repo", r.DiskRepo, "--key-file", "/etc/setec/disk-signing/seed",
+						Args: []string{"--disk-repo", diskRepo, "--key-file", "/etc/setec/disk-signing/seed",
 							"--temp-dir", "/work", "build", image},
 						Env: env,
 						SecurityContext: &corev1.SecurityContext{

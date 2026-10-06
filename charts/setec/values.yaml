@@ -181,6 +181,16 @@ runtimes:
       # Each launcher refuses a disk that none of them signed. List two
       # while the signing key rotates. Required when enabled.
       publicKeys: []
+    # -- warmPool keeps the bases of each launcher class with a pool
+    # (preWarmPoolSize, preWarmImage with a digest, defaultResources). A
+    # base is a snapshot of a machine that booted the image and ran no
+    # workload. A Sandbox of the class with that image and size loads a
+    # base instead of a boot (setec#103). Needs snapshots.enabled.
+    warmPool:
+      # -- namespace holds the base Pods and the base Snapshots. It must
+      # be one of sandboxNamespaces, and no tenant may use it. Empty
+      # turns the launcher warm pool off.
+      namespace: ""
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
     # CI where you want to exercise the Setec control plane without a

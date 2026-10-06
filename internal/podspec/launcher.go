@@ -97,6 +97,13 @@ type LauncherOptions struct {
 	// Restore makes a Pod whose launcher loads a snapshot that the node
 	// agent stages in the work volume, instead of a boot (setec#105).
 	Restore bool
+	// Base makes the Pod of a warm pool base: a boot with no workload
+	// that the node agent snapshots (setec#103). BuildLauncherBase sets it.
+	Base bool
+	// FromBase makes a Pod whose launcher loads a warm pool base that the
+	// node agent stages, and then starts the workload of the Sandbox
+	// (setec#103). It implies the snapshot source of Restore.
+	FromBase bool
 	// NodeName, when set, pins the Pod to that node: the node that holds a
 	// snapshot on its local disk.
 	NodeName string
@@ -136,6 +143,7 @@ type launcherSpec struct {
 	ImageDisk     string           `json:"imageDisk"`
 	DiskSignature string           `json:"diskSignature"`
 	CPUTemplate   string           `json:"cpuTemplate,omitempty"`
+	Base          bool             `json:"base,omitempty"`
 	WritableDisk  string           `json:"writableDisk"`
 	WritableBytes int64            `json:"writableBytes"`
 	WorkDir       string           `json:"workDir"`
@@ -226,8 +234,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	if opts.CPUTemplate != "" {
 		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
 	}
-	if opts.Restore {
-		// A loaded snapshot already runs its workload.
+	if opts.Restore || opts.FromBase {
 		spec.Source.Snapshot = &launcherSnapshot{
 			State:    LauncherRestoreState,
 			Memory:   LauncherRestoreMemory,
@@ -236,6 +243,10 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		}
 	} else {
 		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
+	}
+	// A loaded Sandbox snapshot already runs its workload, and a base runs
+	// none. A boot and the load of a base start the workload of the Sandbox.
+	if !opts.Restore && !opts.Base {
 		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
 		for _, e := range sb.Spec.Env {
 			if e.ValueFrom == nil {
@@ -243,6 +254,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			}
 		}
 	}
+	spec.Base = opts.Base
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return nil, err
@@ -346,4 +358,25 @@ type RestoreEvidence struct {
 	Uniquified      bool   `json:"uniquified"`
 	ClockSet        bool   `json:"clockSet"`
 	Error           string `json:"error,omitempty"`
+}
+
+// BaseLabel marks the launcher Pods and the Snapshots of the warm pool.
+const BaseLabel = "setec.zeroroot.ai/base"
+
+// BuildLauncherBase returns the launcher Pod that boots a warm pool base:
+// the image and the default resources of a class, no workload, no owner
+// Sandbox. The Pod lives in the namespace of the operator.
+func BuildLauncherBase(name, namespace, image string, res setecv1alpha1.Resources, opts LauncherOptions) (*corev1.Pod, error) {
+	sb := &setecv1alpha1.Sandbox{Name: name, Namespace: namespace}
+	sb.Spec.Image = image
+	sb.Spec.Resources = res
+	opts.Base, opts.Restore, opts.FromBase = true, false, false
+	pod, err := BuildLauncher(sb, opts)
+	if err != nil {
+		return nil, err
+	}
+	pod.Name = name
+	pod.OwnerReferences = nil
+	pod.Labels = map[string]string{BaseLabel: "true"}
+	return pod, nil
 }

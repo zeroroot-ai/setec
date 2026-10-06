@@ -100,12 +100,26 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 		Gateway: netip.MustParseAddr("10.42.0.1")}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := g.AfterStart(&guestagent.Process{Argv: []string{"true"}})(ctx, pn, true); err != nil {
+	// The load of a Sandbox snapshot: its workload already runs.
+	if err := g.AfterStart(nil)(ctx, pn, true); err != nil {
 		t.Fatalf("AfterStart: %v", err)
 	}
-	want := []string{"reseed", string(guestagent.OpSetTime), string(guestagent.OpConfigureNet), "uniquify"}
+	want := make([]string, 0, 5)
+	want = append(want, "reseed", string(guestagent.OpSetTime), string(guestagent.OpConfigureNet), "uniquify")
 	if got := s.list(); !slices.Equal(got, want) {
 		t.Fatalf("steps = %v, want %v", got, want)
+	}
+	// The load of a warm pool base: the workload of the Sandbox starts
+	// last, after the new identity (setec#103).
+	s.mu.Lock()
+	s.got = nil
+	s.mu.Unlock()
+	if err := g.AfterStart(&guestagent.Process{Argv: []string{"true"}})(ctx, pn, true); err != nil {
+		t.Fatalf("AfterStart of a base: %v", err)
+	}
+	want = append(want, string(guestagent.OpStart))
+	if got := s.list(); !slices.Equal(got, want) {
+		t.Fatalf("steps of a base load = %v, want %v", got, want)
 	}
 	if u.spec.PodIP != "10.42.0.9" || u.spec.Hostname != "work-vm" || u.spec.MachineID == "" {
 		t.Fatalf("identity = %+v", u.spec)

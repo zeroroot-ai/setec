@@ -250,6 +250,9 @@ type SandboxReconciler struct {
 	LauncherImage string
 	DiskRepo      string
 	DiskKeys      []string
+	// WarmPoolNamespace is the namespace of the warm pool bases
+	// (WarmPoolReconciler). Empty turns warm starts off.
+	WarmPoolNamespace string
 	// DiskBuilder runs setec-disk-builder before the first launcher Pod of
 	// an image digest.
 	DiskBuilder DiskBuilderConfig
@@ -1121,7 +1124,8 @@ func (r *SandboxReconciler) maybeWarmStart(
 	desired setecv1alpha1.SandboxStatus,
 	prevPhase setecv1alpha1.SandboxPhase,
 ) setecv1alpha1.SandboxStatus {
-	if r.Coordinator == nil || cls == nil ||
+	// A launcher class warm starts at Pod creation (selectBase), not here.
+	if r.Coordinator == nil || cls == nil || poolActive(cls) ||
 		cls.Spec.PreWarmPoolSize <= 0 || cls.Spec.PreWarmImage == "" ||
 		sb.Spec.Image != cls.Spec.PreWarmImage ||
 		(sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") ||
@@ -1685,11 +1689,30 @@ func (r *SandboxReconciler) createPod(
 		if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
 			return res, derr
 		}
+		if err := r.markPoolUsed(ctx, sb, cls); err != nil {
+			log.FromContext(ctx).Error(err, "stamp the use of the warm pool", "class", cls.Name)
+		}
+		// A warm start loads a base of the pool instead of a boot
+		// (setec#103). The choice is recorded before the Pod exists, so
+		// the restore step knows the base.
+		base, berr := r.selectBase(ctx, sb, cls)
+		if berr != nil {
+			return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select a warm pool base: %w", berr))
+		}
+		if err := r.markWarmBase(ctx, sb, base); err != nil {
+			return ctrl.Result{}, err
+		}
+		if base != nil {
+			nodeName = base.Spec.Node
+		} else if poolActive(cls) && sb.Spec.Image == cls.Spec.PreWarmImage {
+			r.countWarmStart(cls, "miss")
+		}
 		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
 			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
 			// Scratch here once both are on main; until then the default holds.
 			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
 			Restore: sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "", NodeName: nodeName,
+			FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
 			CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
 		})
 	} else {

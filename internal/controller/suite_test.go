@@ -125,9 +125,12 @@ type fakeNodeAgentClient struct {
 	DeleteErr  error
 	ClaimRes   *setecgrpcv1.ClaimPoolEntryResponse
 	ClaimErr   error
+	// LastCreate is the last CreateSnapshot request.
+	LastCreate *setecgrpcv1.CreateSnapshotRequest
 }
 
 func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
+	f.LastCreate = in
 	if f.CreateResp == nil && f.CreateErr == nil {
 		// Mirror the real backends (LocalDisk/S3): the storage ref
 		// echoes the snapshot id. Session-checkpoint refs therefore
