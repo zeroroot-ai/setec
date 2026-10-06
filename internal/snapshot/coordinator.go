@@ -364,10 +364,14 @@ func (c *Coordinator) diffParent(ctx context.Context, sb *setecv1alpha1.Sandbox,
 // fall back to Firecracker, matching Phase 3's supported-VMM default.
 func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandbox, nodeName string) *setecv1alpha1.Snapshot {
 	vmm := setecv1alpha1.VMMFirecracker
+	cpuTemplate := ""
 	if sb.Spec.SandboxClassName != "" {
 		cls := &setecv1alpha1.SandboxClass{}
-		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil && cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
-			vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
+		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil {
+			if cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
+				vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
+			}
+			cpuTemplate = cls.Spec.CPUTemplate
 		}
 	}
 	className := sb.Spec.SandboxClassName
@@ -388,8 +392,20 @@ func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandb
 			TTL:            ttlFrom(sb.Spec.Snapshot.TTL),
 			StorageBackend: c.backendName(),
 			Node:           nodeName,
+			CPUTemplate:    cpuTemplate,
+			InstanceType:   c.instanceType(ctx, nodeName),
 		},
 	}
+}
+
+// instanceType returns the node.kubernetes.io/instance-type of a node, or
+// "" when the node or the label is missing.
+func (c *Coordinator) instanceType(ctx context.Context, nodeName string) string {
+	node := &corev1.Node{}
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+		return ""
+	}
+	return node.Labels[corev1.LabelInstanceTypeStable]
 }
 
 // markPhase writes one phase/reason pair to the Snapshot status

@@ -125,6 +125,19 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 		}
 	}
 
+	// CPU template. The guest of a snapshot saw the CPU features of its
+	// template, so it loads only into a machine with the same template
+	// (setec#105).
+	if class != nil && snap.Spec.CPUTemplate != class.Spec.CPUTemplate {
+		out = append(out, ConstraintViolation{
+			Field: "spec.sandboxClassName",
+			Message: fmt.Sprintf(
+				"Snapshot %q was captured with CPU template %q but the resolved class uses %q",
+				snap.Name, snap.Spec.CPUTemplate, class.Spec.CPUTemplate,
+			),
+		})
+	}
+
 	// Readiness. A Snapshot only holds restorable state once the backend
 	// write has finished, and spec.storageRef is empty until it has
 	// (setec#129). Before the CR was created ahead of the write, both

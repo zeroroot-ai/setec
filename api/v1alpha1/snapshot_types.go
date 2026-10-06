@@ -132,6 +132,17 @@ type SnapshotSpec struct {
 	// +optional
 	Size int64 `json:"size,omitempty"`
 
+	// CPUTemplate is the CPU template of the class at the time of the
+	// snapshot. A restore needs a class with the same template.
+	// +optional
+	CPUTemplate string `json:"cpuTemplate,omitempty"`
+
+	// InstanceType is the node.kubernetes.io/instance-type of the source
+	// node. With no CPU template, a restore runs only on a node of this
+	// instance type, which has the same CPU.
+	// +optional
+	InstanceType string `json:"instanceType,omitempty"`
+
 	// SHA256 is the hex-encoded SHA256 digest of the persisted state
 	// file, written alongside the state on disk and verified on
 	// restore. Populated by the operator; must not be edited.

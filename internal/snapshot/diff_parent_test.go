@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -73,5 +74,26 @@ func TestCreateSnapshot_DiffRefusesAParentOfAnotherMachine(t *testing.T) {
 				t.Fatalf("CreateSnapshot = %v, rpc = %v; want ErrInvalidParent and no call", err, na.lastCreate)
 			}
 		})
+	}
+}
+
+// TestCreateSnapshot_RecordsTheCPUOfItsSource proves that a Snapshot names
+// the CPU template of its class and the instance type of its node.
+func TestCreateSnapshot_RecordsTheCPUOfItsSource(t *testing.T) {
+	sb := newSandboxForCoord()
+	pod := newPodForSandbox(sb, "node-a")
+	cls := &setecv1alpha1.SandboxClass{Name: "standard"}
+	cls.Spec.CPUTemplate = "fleet-v1"
+	node := &corev1.Node{Name: "node-a"}
+	node.Labels = map[string]string{corev1.LabelInstanceTypeStable: "m8i.2xlarge"}
+	c := newFakeClient(t, sb, pod, cls, node)
+	na := &fakeNodeAgentClient{createResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: "t-a-snap-1"}}
+	if err := newCoord(c, &fakeDialer{client: na}).CreateSnapshot(context.Background(), sb); err != nil {
+		t.Fatal(err)
+	}
+	got := &setecv1alpha1.Snapshot{}
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got)
+	if got.Spec.CPUTemplate != "fleet-v1" || got.Spec.InstanceType != "m8i.2xlarge" {
+		t.Fatalf("snapshot = %+v", got.Spec)
 	}
 }

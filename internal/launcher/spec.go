@@ -49,6 +49,11 @@ type Spec struct {
 	// Source is the boot or the snapshot that the machine starts from.
 	Source Source `json:"source"`
 
+	// CPUTemplate, when set, is the path of a Firecracker custom CPU
+	// template. The guest sees the CPU features of the template, so a
+	// snapshot of it loads on each node of the class.
+	CPUTemplate string `json:"cpuTemplate,omitempty"`
+
 	// WorkDir holds the API socket, the vsock socket and the config.
 	WorkDir string `json:"workDir"`
 
@@ -124,6 +129,8 @@ func (s *Spec) Validate() error {
 		return fmt.Errorf("launcher: memory must be at least 128 MiB, got %d", s.MemoryMiB)
 	case !filepath.IsAbs(s.ImageDisk), !filepath.IsAbs(s.WritableDisk), !filepath.IsAbs(s.WorkDir):
 		return errors.New("launcher: imageDisk, writableDisk and workDir must be absolute paths")
+	case s.CPUTemplate != "" && !filepath.IsAbs(s.CPUTemplate):
+		return errors.New("launcher: cpuTemplate must be an absolute path")
 	case s.WritableBytes <= 0:
 		return errors.New("launcher: writableBytes must be positive")
 	case s.WorkspaceDevice != "" && !filepath.IsAbs(s.WorkspaceDevice):

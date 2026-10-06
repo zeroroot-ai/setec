@@ -1690,6 +1690,7 @@ func (r *SandboxReconciler) createPod(
 			// Scratch here once both are on main; until then the default holds.
 			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
 			Restore: sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "", NodeName: nodeName,
+			CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
 		})
 	} else {
 		pod, err = podspec.BuildWithOptions(sb, rcName, opts)

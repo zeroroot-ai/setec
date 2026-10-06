@@ -244,6 +244,17 @@ type SandboxClassSpec struct {
 	// +optional
 	PreWarmImage string `json:"preWarmImage,omitempty"`
 
+	// CPUTemplate names a Firecracker custom CPU template that the
+	// launcher image holds. The machine of each launcher Sandbox of the
+	// class shows the guest the CPU features of the template, so a
+	// snapshot loads on any node of the class. With no template a
+	// snapshot loads only on a node of the instance type of its source.
+	// A snapshot loads only into a class with the same template.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	CPUTemplate string `json:"cpuTemplate,omitempty"`
+
 	// PreWarmTTL bounds the age of pool entries. Entries older than
 	// this are recycled (torn down and reprovisioned) to avoid stale
 	// kernel state accumulating in paused VMs. When unset the

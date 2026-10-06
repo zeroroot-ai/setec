@@ -230,3 +230,30 @@ func TestBuildLauncher_RestoreLoadsTheStagedSnapshot(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snap)
 	}
 }
+
+// TestBuildLauncher_CPUTemplateAndInstanceType pins the two ways a restore
+// gets a CPU that its snapshot can run on: the template of the class, or a
+// node of the instance type of the source.
+func TestBuildLauncher_CPUTemplateAndInstanceType(t *testing.T) {
+	opts := launcherOpts()
+	opts.CPUTemplate = "fleet-v1"
+	opts.InstanceType = "m8i.2xlarge"
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil || s.CPUTemplate != "/opt/setec/cpu-templates/fleet-v1.json" {
+		t.Fatalf("cpu template = %q, %v", s.CPUTemplate, err)
+	}
+	found := false
+	for _, e := range pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions {
+		if e.Key == corev1.LabelInstanceTypeStable && e.Values[0] == "m8i.2xlarge" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the Pod is not kept on the instance type of the source")
+	}
+}

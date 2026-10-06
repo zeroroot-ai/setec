@@ -173,3 +173,5 @@ field podspec.launcherSnapshot.Memory	# internal/podspec/launcher.go
 field podspec.launcherSnapshot.Staged	# internal/podspec/launcher.go
 field podspec.launcherSnapshot.State	# internal/podspec/launcher.go
 field podspec.launcherSource.Snapshot	# internal/podspec/launcher.go
+field launcher.vmConfig.CPUConfig	# internal/launcher/vmconfig.go
+field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go

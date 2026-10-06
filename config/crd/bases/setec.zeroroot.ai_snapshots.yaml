@@ -68,6 +68,11 @@ spec:
           spec:
             description: spec defines the desired state of the Snapshot.
             properties:
+              cpuTemplate:
+                description: |-
+                  CPUTemplate is the CPU template of the class at the time of the
+                  snapshot. A restore needs a class with the same template.
+                type: string
               imageRef:
                 description: |-
                   ImageRef is the OCI reference the source Sandbox was running at
@@ -75,6 +80,12 @@ spec:
                   (empty image on the Sandbox is allowed — the snapshot's image is
                   used verbatim).
                 minLength: 1
+                type: string
+              instanceType:
+                description: |-
+                  InstanceType is the node.kubernetes.io/instance-type of the source
+                  node. With no CPU template, a restore runs only on a node of this
+                  instance type, which has the same CPU.
                 type: string
               kernelVersion:
                 description: |-

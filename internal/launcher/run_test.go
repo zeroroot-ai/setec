@@ -152,6 +152,9 @@ func TestRun_BootConfigTakesTheSandboxLimitsAndThePodMAC(t *testing.T) {
 	if len(cfg.Drives) != 2 || !cfg.Drives[0].IsReadOnly || cfg.Drives[1].IsReadOnly {
 		t.Fatalf("drives = %+v; want a read-only image and a writable layer", cfg.Drives)
 	}
+	if cfg.CPUConfig != "" {
+		t.Fatalf("cpu-config = %q with no template", cfg.CPUConfig)
+	}
 	if cfg.BootSource.BootArgs != defaultBootArgs {
 		t.Fatalf("boot args = %q", cfg.BootSource.BootArgs)
 	}
@@ -338,5 +341,20 @@ func TestRun_RestoreFailureWritesTheErrorAndNeverConnects(t *testing.T) {
 	raw, _ := os.ReadFile(s.Source.Snapshot.Evidence)
 	if json.Unmarshal(raw, &ev) != nil || ev.Error == "" || ev.EntropyReseeded {
 		t.Fatalf("evidence = %s", raw)
+	}
+}
+
+func TestRun_BootConfigCarriesTheCPUTemplate(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	s.CPUTemplate = "/opt/setec/cpu-templates/fleet-v1.json"
+	vmm := &fakeVMM{}
+	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat}
+	if _, err := l.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var cfg vmConfig
+	if err := json.Unmarshal([]byte(vmm.config), &cfg); err != nil || cfg.CPUConfig != s.CPUTemplate {
+		t.Fatalf("cpu-config = %q, %v", cfg.CPUConfig, err)
 	}
 }

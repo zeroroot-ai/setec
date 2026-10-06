@@ -101,3 +101,27 @@ func holdUntilRestored(sb *setecv1alpha1.Sandbox, desired setecv1alpha1.SandboxS
 	}
 	return desired
 }
+
+// classCPUTemplate returns the CPU template of a class, or "".
+func classCPUTemplate(cls *setecv1alpha1.SandboxClass) string {
+	if cls == nil {
+		return ""
+	}
+	return cls.Spec.CPUTemplate
+}
+
+// restoreInstanceType returns the instance type that a restore Pod needs:
+// the one of the source node of its snapshot, when the class has no CPU
+// template. A template shows every node the same CPU, so it needs none.
+func (r *SandboxReconciler) restoreInstanceType(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+) string {
+	if sb.Spec.SnapshotRef == nil || sb.Spec.SnapshotRef.Name == "" || classCPUTemplate(cls) != "" {
+		return ""
+	}
+	snap := &setecv1alpha1.Snapshot{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.SnapshotRef.Name}, snap); err != nil {
+		return ""
+	}
+	return snap.Spec.InstanceType
+}

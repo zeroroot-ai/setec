@@ -100,7 +100,19 @@ type LauncherOptions struct {
 	// NodeName, when set, pins the Pod to that node: the node that holds a
 	// snapshot on its local disk.
 	NodeName string
+	// InstanceType, when set, keeps the Pod on nodes of that
+	// node.kubernetes.io/instance-type: a restore with no CPU template
+	// needs the CPU of its source.
+	InstanceType string
+	// CPUTemplate names the Firecracker custom CPU template of the class,
+	// a file of the launcher image. Empty shows the guest the CPU of the
+	// node.
+	CPUTemplate string
 }
+
+// LauncherCPUTemplateDir holds the custom CPU templates in the launcher
+// image, one <name>.json each.
+const LauncherCPUTemplateDir = "/opt/setec/cpu-templates"
 
 // LauncherSpecEnv is the environment variable that carries the launcher
 // spec (internal/launcher.Spec) as JSON.
@@ -123,6 +135,7 @@ type launcherSpec struct {
 	DiskKeys      []string         `json:"diskKeys"`
 	ImageDisk     string           `json:"imageDisk"`
 	DiskSignature string           `json:"diskSignature"`
+	CPUTemplate   string           `json:"cpuTemplate,omitempty"`
 	WritableDisk  string           `json:"writableDisk"`
 	WritableBytes int64            `json:"writableBytes"`
 	WorkDir       string           `json:"workDir"`
@@ -210,6 +223,9 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		WritableBytes: work.Value(),
 		WorkDir:       LauncherVMDir,
 	}
+	if opts.CPUTemplate != "" {
+		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
+	}
 	if opts.Restore {
 		// A loaded snapshot already runs its workload.
 		spec.Source.Snapshot = &launcherSnapshot{
@@ -295,11 +311,16 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			}},
 		},
 	}
+	term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
 	if opts.NodeName != "" {
-		term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
 		term.MatchFields = []corev1.NodeSelectorRequirement{{
 			Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{opts.NodeName},
 		}}
+	}
+	if opts.InstanceType != "" {
+		term.MatchExpressions = append(term.MatchExpressions, corev1.NodeSelectorRequirement{
+			Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{opts.InstanceType},
+		})
 	}
 	if len(opts.ResolverIPs) > 0 {
 		pod.Spec.DNSPolicy = corev1.DNSNone

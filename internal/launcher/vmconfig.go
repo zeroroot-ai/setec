@@ -35,6 +35,8 @@ type vmConfig struct {
 	MachineConfig     machine     `json:"machine-config"`
 	NetworkInterfaces []netIface  `json:"network-interfaces"`
 	Vsock             vsockDevice `json:"vsock"`
+	// CPUConfig is the path of a custom CPU template.
+	CPUConfig string `json:"cpu-config,omitempty"`
 }
 
 type bootSource struct {
@@ -100,5 +102,6 @@ func (s *Spec) bootConfig(guestMAC string) vmConfig {
 		MachineConfig:     machine{VCPUCount: s.VCPU, MemSizeMiB: s.MemoryMiB, TrackDirtyPages: true},
 		NetworkInterfaces: []netIface{{IfaceID: "eth0", HostDevName: TapDevice, GuestMAC: guestMAC}},
 		Vsock:             vsockDevice{GuestCID: GuestCID, UDSPath: VsockSocket},
+		CPUConfig:         s.CPUTemplate,
 	}
 }
