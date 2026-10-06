@@ -128,14 +128,15 @@ func launcherHelmArgs(publicKey string) []string {
 
 // launcherImageDigests pins each image of the scenarios by digest. A
 // launcher Sandbox needs a digest: its disk belongs to one digest. The
-// digest is the one of the image index. The disk builder takes its
-// linux/amd64 image.
+// reference has no tag, because the disk builder refuses a reference that
+// names both. The digest is the one of the image index. The disk builder
+// takes its linux/amd64 image. Each comment names the tag of the digest.
 var launcherImageDigests = map[string]string{
-	"busybox:1.36": "docker.io/library/busybox:1.36" +
+	"busybox:1.36": "docker.io/library/busybox" + // 1.36
 		"@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-	"docker.io/library/alpine:3.19": "docker.io/library/alpine:3.19" +
+	"docker.io/library/alpine:3.19": "docker.io/library/alpine" + // 3.19
 		"@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1",
-	"docker.io/library/python:3.12-slim": "docker.io/library/python:3.12-slim" +
+	"docker.io/library/python:3.12-slim": "docker.io/library/python" + // 3.12-slim
 		"@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d",
 }
 

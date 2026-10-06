@@ -263,6 +263,9 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 		{"kubectl", "describe", "nodes"},
 		{"kubectl", "get", "events", "-n", key.Namespace, "--sort-by=.lastTimestamp"},
 		{"kubectl", "logs", "-l", operatorLabel, "-n", testNamespace, "--tail=200"},
+		// The disk builder Jobs of the launcher run in the release namespace.
+		{"kubectl", "logs", "-l", "app.kubernetes.io/component=disk-builder", "-n", testNamespace,
+			"--tail=40", "--prefix"},
 	}
 	for _, c := range cmds {
 		out, _ := exec.Command(c[0], c[1:]...).CombinedOutput()
