@@ -106,18 +106,20 @@ func (g *Guest) WaitReady(ctx context.Context) error {
 
 // AfterStart is the Launcher.AfterStart of a launcher machine. After a
 // snapshot load it reseeds the guest and sets its clock to the node time
-// before anything else (proof 4, setec#183). It always gives the guest the
+// before anything else (proof 4, setec#183). A load with LoadedNoReseed
+// skips the reseed only. It always gives the guest the
 // address of this Pod. After a load it then gives the guest a new identity
 // and checks that the guest sees the Pod address. It starts the workload
 // when there is one: after a boot, and after the load of a warm pool base.
-func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, PodNet, bool) error {
-	return func(ctx context.Context, pn PodNet, fromSnapshot bool) error {
+func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, PodNet, Start) error {
+	return func(ctx context.Context, pn PodNet, start Start) error {
+		fromSnapshot := start != Booted
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := g.WaitReady(rctx); err != nil {
 			return err
 		}
-		if fromSnapshot {
+		if start == Loaded {
 			rs := g.Reseeder
 			if rs == nil {
 				rs = entropy.NewVsockReseeder()
@@ -125,6 +127,8 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 			if err := rs.Reseed(rctx, g.UDS); err != nil {
 				return fmt.Errorf("reseed after the snapshot load: %w", err)
 			}
+		}
+		if fromSnapshot {
 			if _, err := g.Call(rctx, guestagent.Request{Op: guestagent.OpSetTime, UnixNano: time.Now().UnixNano()}); err != nil {
 				return err
 			}

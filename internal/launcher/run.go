@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,27 @@ const (
 	ReasonSourceFailed Reason = "SourceFailed"
 	ReasonVMMExited    Reason = "VMMExitedWithoutReport"
 )
+
+// Start says how a machine started.
+type Start int
+
+// The ways a machine starts.
+const (
+	// Booted is a machine that booted its kernel.
+	Booted Start = iota
+	// Loaded is a machine that loaded a snapshot. The guest gets fresh
+	// randomness before anything else.
+	Loaded
+	// LoadedNoReseed is a machine that loaded a snapshot while the node
+	// agent runs with --entropy-reseed=off. The guest gets no fresh
+	// randomness, the machine stays off the Pod network, and the evidence
+	// says so. The operator gate then refuses the restore.
+	LoadedNoReseed
+)
+
+// StagedNoReseed is the content of the staged marker when the node agent
+// runs with --entropy-reseed=off. An empty marker asks for a reseed.
+const StagedNoReseed = "entropy-reseed=off"
 
 // LaunchFailedExit is the exit code of the Pod when the machine never ran
 // the workload. The termination message carries the Reason.
@@ -76,7 +98,7 @@ type Launcher struct {
 	// AfterStart runs once the machine runs, with the identity of the Pod.
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
-	AfterStart func(ctx context.Context, pn PodNet, fromSnapshot bool) error
+	AfterStart func(ctx context.Context, pn PodNet, start Start) error
 }
 
 // Run starts the machine, waits for the exit report of the guest, stops
@@ -99,12 +121,23 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	// A restore waits for the node agent: it stages the state, the memory
 	// and the writable layer, so the disks are ready only after that.
 	snap := l.Spec.Source.Snapshot
+	start := Booted
+	if snap != nil {
+		start = Loaded
+	}
 	if snap != nil && snap.Staged != "" {
 		wctx, cancel := context.WithTimeout(ctx, stagedWait)
 		err := waitFile(wctx, snap.Staged)
 		cancel()
 		if err != nil {
 			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("wait for the staged snapshot: %w", err)))
+		}
+		marker, err := os.ReadFile(snap.Staged)
+		if err != nil {
+			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("read the staged marker: %w", err)))
+		}
+		if strings.TrimSpace(string(marker)) == StagedNoReseed {
+			start = LoadedNoReseed
 		}
 	}
 	defer func() {
@@ -162,11 +195,12 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
 	}
 	if l.AfterStart != nil {
-		if err := l.AfterStart(ctx, pn, snap != nil); err != nil {
+		if err := l.AfterStart(ctx, pn, start); err != nil {
 			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
 		}
 	}
-	if snap != nil {
+	switch start {
+	case Loaded:
 		// A loaded machine joins the Pod network only after the guest
 		// agent confirmed fresh randomness, the clock and a new identity.
 		// Until then its frames reach nothing (setec#105).
@@ -176,6 +210,13 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		if err := writeEvidence(snap.Evidence, RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true}); err != nil {
 			return LaunchFailedExit, fail(ReasonSourceFailed, err)
 		}
+	case LoadedNoReseed:
+		// No fresh randomness, so no network. The evidence tells the
+		// operator gate, which refuses the restore.
+		if err := writeEvidence(snap.Evidence, RestoreEvidence{Uniquified: true, ClockSet: true}); err != nil {
+			return LaunchFailedExit, fail(ReasonSourceFailed, err)
+		}
+	case Booted:
 	}
 
 	// The exit report ends the run. A Firecracker process that ends with
