@@ -106,14 +106,23 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 	// VMM match. The Snapshot is bound to a specific VMM; the
 	// restore target's class must agree. We treat the class's VMM as
 	// authoritative when a class is supplied.
-	if class != nil && snap.Spec.VMM != "" && snap.Spec.VMM != class.Spec.VMM { //nolint:staticcheck // back-compat: VMM retained until v2
-		out = append(out, ConstraintViolation{
-			Field: "spec.sandboxClassName",
-			Message: fmt.Sprintf(
-				"Snapshot %q was captured on VMM %q but the resolved class uses VMM %q",
-				snap.Name, snap.Spec.VMM, class.Spec.VMM, //nolint:staticcheck // back-compat: VMM retained until v2
-			),
-		})
+	// A class with no VMM gets Firecracker, the same default that the
+	// Coordinator records on a new Snapshot (newSnapshotCR). A launcher
+	// class names no VMM.
+	if class != nil {
+		classVMM := class.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
+		if classVMM == "" {
+			classVMM = setecv1alpha1.VMMFirecracker
+		}
+		if snap.Spec.VMM != "" && snap.Spec.VMM != classVMM {
+			out = append(out, ConstraintViolation{
+				Field: "spec.sandboxClassName",
+				Message: fmt.Sprintf(
+					"Snapshot %q was captured on VMM %q but the resolved class uses VMM %q",
+					snap.Name, snap.Spec.VMM, classVMM,
+				),
+			})
+		}
 	}
 
 	// Readiness. A Snapshot only holds restorable state once the backend
