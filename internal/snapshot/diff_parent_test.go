@@ -97,3 +97,22 @@ func TestCreateSnapshot_RecordsTheCPUOfItsSource(t *testing.T) {
 		t.Fatalf("snapshot = %+v", got.Spec)
 	}
 }
+
+// TestIsOwnFork pins who may load a forkable Snapshot (setec#195): another
+// Sandbox of the same namespace, and nobody outside it.
+func TestIsOwnFork(t *testing.T) {
+	snap := &setecv1alpha1.Snapshot{Namespace: "pair-a", Name: "fork-1"}
+	snap.Spec.SourceSandbox = "src"
+	fork := &setecv1alpha1.Sandbox{Namespace: "pair-a", Name: "src-fork-x"}
+	if isOwnFork(fork, snap) {
+		t.Fatal("a Snapshot that is not forkable loads in another Sandbox")
+	}
+	snap.Spec.Forkable = true
+	if !isOwnFork(fork, snap) {
+		t.Fatal("a fork of its own namespace is refused")
+	}
+	other := &setecv1alpha1.Sandbox{Namespace: "pair-b", Name: "x"}
+	if isOwnFork(other, snap) {
+		t.Fatal("a Sandbox of another owner loads a fork")
+	}
+}

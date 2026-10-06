@@ -55,6 +55,7 @@ method frontend.LeaseService.PoolStatus	# internal/frontend/leaseservice.go:218
 method frontend.LeaseService.Release	# internal/frontend/leaseservice.go:198
 method frontend.Service.Attach	# internal/frontend/attach.go:47
 method frontend.Service.Exec	# internal/frontend/exec.go:87
+method frontend.Service.Fork	# internal/frontend/fork.go
 method frontend.Service.Kill	# internal/frontend/service.go:350
 method frontend.Service.Launch	# internal/frontend/service.go:160
 method frontend.Service.Resume	# internal/frontend/suspend.go

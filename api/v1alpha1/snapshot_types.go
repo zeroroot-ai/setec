@@ -57,6 +57,12 @@ const (
 // Snapshot CRs are accepted but uncommon (the usual entry point is
 // Sandbox.spec.snapshot.create=true).
 type SnapshotSpec struct {
+	// Forkable lets a Sandbox of the same namespace other than the source
+	// start from this Snapshot (setec#195). The namespace is the one owner
+	// pair, so a fork loads only for the owner of the Snapshot.
+	// +optional
+	Forkable bool `json:"forkable,omitempty"`
+
 	// Parent is the Snapshot that this diff snapshot builds on. A restore
 	// loads the parent first, and a parent is not deleted while a diff
 	// names it. Empty for a full snapshot.

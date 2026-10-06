@@ -189,6 +189,14 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 	); err != nil {
 		return 0, err
 	}
+	// A launcher Sandbox that has loaded the Snapshot no longer needs it,
+	// so the TTL of a fork snapshot can end it (setec#195).
+	inUse := 0
+	for i := range sbs.Items {
+		if sbs.Items[i].Annotations[RestoredAnnotation] != snap.Name {
+			inUse++
+		}
+	}
 	diffs := &setecv1alpha1.SnapshotList{}
 	if err := r.List(ctx, diffs,
 		client.InNamespace(snap.Namespace),
@@ -196,7 +204,7 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 	); err != nil {
 		return 0, err
 	}
-	return len(sbs.Items) + len(diffs.Items), nil
+	return inUse + len(diffs.Items), nil
 }
 
 // SetupWithManager registers the reconciler and installs the field
