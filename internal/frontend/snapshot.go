@@ -124,6 +124,7 @@ func (s *Service) launchFromSnapshot(
 	return &setecv1grpc.LaunchResponse{
 		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
 		Name:      sb.Name, Namespace: sb.Namespace, SandboxClass: sb.Spec.SandboxClassName,
+		Runtime: s.launchRuntime(ctx, sb),
 	}, nil
 }
 
