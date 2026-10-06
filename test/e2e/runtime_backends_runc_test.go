@@ -137,7 +137,7 @@ func TestRunc_ContainerOnly(t *testing.T) {
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: "runc-dev-cls",
-			Image:            "busybox:1.36",
+			Image:            testImage("busybox:1.36"),
 			Command:          []string{"sleep", "5"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,

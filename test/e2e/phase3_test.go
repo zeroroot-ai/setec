@@ -88,7 +88,7 @@ func TestPhase3_SnapshotRoundtrip(t *testing.T) {
 	source := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "source"},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/alpine:3.19",
+			Image:   testImage("docker.io/library/alpine:3.19"),
 			Command: []string{"sh", "-c", "echo hello > /tmp/marker && sleep 60"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -120,7 +120,7 @@ func TestPhase3_SnapshotRoundtrip(t *testing.T) {
 	restored := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "restored"},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/alpine:3.19",
+			Image:   testImage("docker.io/library/alpine:3.19"),
 			Command: []string{"sh", "-c", "cat /tmp/marker && sleep 5"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -204,7 +204,7 @@ func TestPhase3_PauseResume(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "sb"},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/alpine:3.19",
+			Image:   testImage("docker.io/library/alpine:3.19"),
 			Command: []string{"sh", "-c", "while true; do :; done"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,

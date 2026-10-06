@@ -125,10 +125,14 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 	restore := setNodeAgentFlag(t, "--entropy-reseed", "require", "off")
 	t.Cleanup(restore)
 
-	const poolImage = "docker.io/library/alpine:3.19"
+	poolImage := testImage("docker.io/library/alpine:3.19")
 	clsName := fmt.Sprintf("e2e-gate-%d", time.Now().Unix())
+	backend := "kata-fc"
+	if onLauncher() {
+		backend = backendLauncher
+	}
 	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
-		Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"},
+		Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: backend},
 		PreWarmPoolSize: 1,
 		PreWarmImage:    poolImage,
 		PreWarmTTL:      &metav1.Duration{Duration: time.Hour},
@@ -148,8 +152,11 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 
 	// Step 1: wait for the pool to build (same observable as the
 	// warm-start lifecycle e2e).
+	if onLauncher() {
+		waitForWarmPoolReady(ctx, t, clsName, 10*time.Minute)
+	}
 	buildDeadline := time.Now().Add(6 * time.Minute)
-	for {
+	for !onLauncher() {
 		scrapeCtx, scrapeCancel := context.WithTimeout(ctx, 30*time.Second)
 		families, err := scrapeNodeAgentMetrics(scrapeCtx)
 		scrapeCancel()
@@ -237,6 +244,12 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 				Memory: resource.MustParse("256Mi"),
 			},
 		},
+	}
+	// A launcher base is not consumed: it stays in the pool, and the
+	// refusal comes from the node, not from the base. So the cold boot
+	// asks for another size, which no base serves.
+	if onLauncher() {
+		cold.Spec.Resources.Memory = resource.MustParse("384Mi")
 	}
 	if err := k8sClient.Create(ctx, cold); err != nil {
 		t.Fatalf("create cold-boot sandbox: %v", err)

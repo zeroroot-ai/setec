@@ -101,7 +101,7 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	// The load of a Sandbox snapshot: its workload already runs.
-	if err := g.AfterStart(nil)(ctx, pn, true); err != nil {
+	if err := g.AfterStart(nil)(ctx, pn, Loaded); err != nil {
 		t.Fatalf("AfterStart: %v", err)
 	}
 	want := make([]string, 0, 5)
@@ -117,7 +117,7 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 	takenAt := filepath.Join(dir, "taken-at")
 	_ = os.WriteFile(takenAt, []byte("1759712523000000000\n"), 0o600)
 	g.TakenAtFile = takenAt
-	if err := g.AfterStart(nil)(ctx, pn, true); err != nil {
+	if err := g.AfterStart(nil)(ctx, pn, Loaded); err != nil {
 		t.Fatalf("AfterStart with a state time: %v", err)
 	}
 	if got := s.list(); len(got) != 5 || got[4] != string(guestagent.OpResumed) {
@@ -125,12 +125,23 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 	}
 	g.TakenAtFile = ""
 
+	// A load under --entropy-reseed=off skips the reseed and nothing else.
+	s.mu.Lock()
+	s.got = nil
+	s.mu.Unlock()
+	if err := g.AfterStart(nil)(ctx, pn, LoadedNoReseed); err != nil {
+		t.Fatalf("AfterStart with no reseed: %v", err)
+	}
+	if got := s.list(); !slices.Equal(got, want[1:]) {
+		t.Fatalf("steps with no reseed = %v, want %v", got, want[1:])
+	}
+
 	// The load of a warm pool base: the workload of the Sandbox starts
 	// last, after the new identity (setec#103).
 	s.mu.Lock()
 	s.got = nil
 	s.mu.Unlock()
-	if err := g.AfterStart(&guestagent.Process{Argv: []string{"true"}})(ctx, pn, true); err != nil {
+	if err := g.AfterStart(&guestagent.Process{Argv: []string{"true"}})(ctx, pn, Loaded); err != nil {
 		t.Fatalf("AfterStart of a base: %v", err)
 	}
 	want = append(want, string(guestagent.OpStart))
@@ -148,7 +159,7 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 	uds2 := filepath.Join(dir, "v2.sock")
 	fakeMux(t, uds2, agent2)
 	g2 := &Guest{UDS: uds2, Reseeder: stepReseeder{s2}, Uniquifier: &stepUniquifier{s: s2, err: errors.New("no")}}
-	if err := g2.AfterStart(nil)(ctx, pn, true); err == nil {
+	if err := g2.AfterStart(nil)(ctx, pn, Loaded); err == nil {
 		t.Fatal("AfterStart accepted a guest that refused its identity")
 	}
 }

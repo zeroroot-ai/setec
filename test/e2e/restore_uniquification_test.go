@@ -74,7 +74,7 @@ func TestPhase3_RestoredClonesHaveUniqueIdentity(t *testing.T) {
 	source := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "uniq-source"},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/alpine:3.19",
+			Image:   testImage("docker.io/library/alpine:3.19"),
 			Command: []string{"sh", "-c", "sleep 120"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -119,7 +119,7 @@ func TestPhase3_RestoredClonesHaveUniqueIdentity(t *testing.T) {
 		clone := &setecv1alpha1.Sandbox{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec: setecv1alpha1.SandboxSpec{
-				Image:   "docker.io/library/alpine:3.19",
+				Image:   testImage("docker.io/library/alpine:3.19"),
 				Command: []string{"sh", "-c", dumpCmd},
 				Resources: setecv1alpha1.Resources{
 					VCPU:   1,

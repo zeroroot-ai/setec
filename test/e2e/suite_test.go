@@ -223,8 +223,15 @@ func TestMain(m *testing.M) {
 	installerEnabled = os.Getenv("SETEC_E2E_INSTALLER") == "1"
 	installerImageRepo = os.Getenv("SETEC_E2E_INSTALLER_IMAGE_REPO")
 	webhookEnabled = envOr("SETEC_E2E_WEBHOOK", "1") != "0"
+	sandboxBackend = envOr("SETEC_E2E_BACKEND", "kata-fc")
 
 	var err error
+	if onLauncher() {
+		if launcherCfg, err = loadLauncherConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: launcher configuration is incomplete: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	if sessionS3, err = loadSessionS3Config(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: session-checkpoint S3 configuration is incomplete: %v\n", err)
 		os.Exit(1)
@@ -320,6 +327,10 @@ type sessionS3Config struct {
 	// credentialsSecret names a pre-existing Secret of AWS_ACCESS_KEY_ID
 	// / AWS_SECRET_ACCESS_KEY, for environments with no IRSA (MinIO).
 	credentialsSecret string
+	// accessKeyID and secretAccessKey, when set, are the keys of a store
+	// that the run itself started (the launcher pass). The suite writes
+	// them into credentialsSecret in the release namespace it creates.
+	accessKeyID, secretAccessKey string
 	// nodeAgentImageTag / nodeAgentImageRepo pin the node-agent image.
 	// The checkpoint scenarios are the only ones that run a node-agent,
 	// so this is the one component the base install never references —
@@ -345,6 +356,8 @@ func loadSessionS3Config() (sessionS3Config, error) {
 		endpoint:           os.Getenv("SETEC_E2E_S3_ENDPOINT"),
 		roleARN:            os.Getenv("SETEC_E2E_S3_ROLE_ARN"),
 		credentialsSecret:  os.Getenv("SETEC_E2E_S3_CREDENTIALS_SECRET"),
+		accessKeyID:        os.Getenv("SETEC_E2E_S3_ACCESS_KEY_ID"),
+		secretAccessKey:    os.Getenv("SETEC_E2E_S3_SECRET_ACCESS_KEY"),
 		nodeAgentImageTag:  envOr("SETEC_E2E_NODE_AGENT_IMAGE_TAG", imageTag),
 		nodeAgentImageRepo: os.Getenv("SETEC_E2E_NODE_AGENT_IMAGE_REPO"),
 	}
@@ -352,6 +365,13 @@ func loadSessionS3Config() (sessionS3Config, error) {
 		return sessionS3Config{}, fmt.Errorf(
 			"SETEC_E2E_S3=1 requires SETEC_E2E_S3_BUCKET (the checkpoint bucket); " +
 				"refusing to install a node-agent whose checkpoint backend would fail closed at the first suspend")
+	}
+	if cfg.accessKeyID != "" {
+		if cfg.secretAccessKey == "" || cfg.endpoint == "" {
+			return sessionS3Config{}, fmt.Errorf(
+				"SETEC_E2E_S3_ACCESS_KEY_ID needs SETEC_E2E_S3_SECRET_ACCESS_KEY and SETEC_E2E_S3_ENDPOINT")
+		}
+		cfg.credentialsSecret = envOr("SETEC_E2E_S3_CREDENTIALS_SECRET", "setec-e2e-s3")
 	}
 	if cfg.endpoint == "" && cfg.roleARN == "" && cfg.credentialsSecret == "" {
 		return sessionS3Config{}, fmt.Errorf(
@@ -523,19 +543,26 @@ func preflight() error {
 		return fmt.Errorf("list namespaces: %w", err)
 	}
 
-	// The kata-fc RuntimeClass is required for all scenarios except #5,
-	// which temporarily deletes and restores it.
-	var rc nodev1.RuntimeClass
-	if err := k8sClient.Get(ctx, client.ObjectKey{Name: kataRuntimeClass}, &rc); err != nil {
-		return fmt.Errorf("RuntimeClass %q not found on cluster: %w (install kata-deploy before running E2E)", kataRuntimeClass, err)
-	}
-
 	// Cluster DNS, for the selector allowance scenario (setec#76). Absent
 	// is not an error here: the scenario skips loudly on its own.
 	var dns corev1.Service
 	dnsKey := client.ObjectKey{Namespace: "kube-system", Name: "kube-dns"}
 	if err := k8sClient.Get(ctx, dnsKey, &dns); err == nil {
 		clusterDNSIP = dns.Spec.ClusterIP
+	}
+
+	// The launcher needs no RuntimeClass: its Pod asks for the KVM device.
+	backendOverheads = map[string]corev1.ResourceList{}
+	if onLauncher() {
+		return nil
+	}
+
+	// The kata-fc RuntimeClass is required for all scenarios except #5,
+	// which temporarily deletes and restores it.
+	var rc nodev1.RuntimeClass
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: kataRuntimeClass}, &rc); err != nil {
+		return fmt.Errorf("RuntimeClass %q not found on cluster: %w (install kata-deploy before running E2E)",
+			kataRuntimeClass, err)
 	}
 
 	// Capture the RuntimeClass's pod overhead. The operator stamps Sandbox
@@ -554,7 +581,6 @@ func preflight() error {
 	// gvisor) so TestRuntimeBackends_Smoke's Sandboxes pass the same overhead
 	// equality check. A backend whose RuntimeClass is absent or carries no
 	// overhead simply gets no override.
-	backendOverheads = map[string]corev1.ResourceList{}
 	if kataOverhead != nil {
 		backendOverheads["kata-fc"] = kataOverhead
 	}
@@ -589,9 +615,16 @@ func preflight() error {
 // stale class from a previous run cannot silently govern this one.
 func ensureDefaultSandboxClass() error {
 	ctx := context.Background()
+	runtimeClassName := kataRuntimeClass
+	var classRuntime *setecv1alpha1.SandboxClassRuntime
+	if onLauncher() {
+		runtimeClassName = ""
+		classRuntime = &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher}
+	}
 	desired := newSandboxClass(e2eDefaultClassName, setecv1alpha1.SandboxClassSpec{
 		VMM:              setecv1alpha1.VMMFirecracker,
-		RuntimeClassName: kataRuntimeClass,
+		RuntimeClassName: runtimeClassName,
+		Runtime:          classRuntime,
 		// Generous ceiling: this class exists to carry a toleration, not to
 		// constrain anything. Scenarios that test ceilings build their own.
 		MaxResources: &setecv1alpha1.Resources{
@@ -658,6 +691,22 @@ func installChart() error {
 	if err := k8sClient.Create(ctx, sbNs); err != nil {
 		return fmt.Errorf("create sandbox namespace %q: %w", sandboxNamespace, err)
 	}
+	// The launcher keeps its warm pool in a Sandbox namespace of its own,
+	// and signs each disk with a key that the run makes.
+	sandboxNamespaces := []string{sandboxNamespace}
+	var diskPublicKey string
+	if onLauncher() {
+		poolNs := &corev1.Namespace{}
+		poolNs.Name = launcherCfg.warmPoolNamespace
+		if err := k8sClient.Create(ctx, poolNs); err != nil {
+			return fmt.Errorf("create the warm pool namespace %q: %w", poolNs.Name, err)
+		}
+		sandboxNamespaces = append(sandboxNamespaces, poolNs.Name)
+		var err error
+		if diskPublicKey, err = createDiskSigningSecret(ctx); err != nil {
+			return err
+		}
+	}
 
 	// Provision the webhook serving cert before install so the operator can
 	// mount it on startup: the Service is <fullname>-webhook and the cert
@@ -685,6 +734,18 @@ func installChart() error {
 	if snapshotsEnabled() {
 		if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
 			return err
+		}
+	}
+	if sessionS3.accessKeyID != "" {
+		sec := &corev1.Secret{
+			StringData: map[string]string{
+				"AWS_ACCESS_KEY_ID":     sessionS3.accessKeyID,
+				"AWS_SECRET_ACCESS_KEY": sessionS3.secretAccessKey,
+			},
+		}
+		sec.Name, sec.Namespace = sessionS3.credentialsSecret, testNamespace
+		if err := k8sClient.Create(ctx, sec); err != nil {
+			return fmt.Errorf("create the S3 credentials Secret: %w", err)
 		}
 	}
 
@@ -730,7 +791,7 @@ func installChart() error {
 		// with the baseline default-deny NetworkPolicy and the host-access
 		// guard, which is the topology the chart documents and the one
 		// every scenario that goes through newSandbox now runs in.
-		"--set", fmt.Sprintf("sandboxNamespaces={%s}", sandboxNamespace),
+		"--set", fmt.Sprintf("sandboxNamespaces={%s}", strings.Join(sandboxNamespaces, ",")),
 		// The resolvers every Sandbox may query. The kube-dns ClusterIP
 		// goes first when the cluster has one (setec#76): the operator
 		// points only a class with a port-53 selector allowance at it, so
@@ -828,6 +889,9 @@ func installChart() error {
 		}
 	}
 	args = append(args, sessionS3.helmArgs()...)
+	if onLauncher() {
+		args = append(args, launcherHelmArgs(diskPublicKey)...)
+	}
 
 	// Enable every backend TestRuntimeBackends_Smoke exercises (kata-fc is
 	// already enabled by default). With the webhook on, the vsandboxclass
@@ -1144,6 +1208,9 @@ func waitForInstallReady(parent context.Context) error {
 	if sessionS3.enabled {
 		components = append(components, "node-agent")
 	}
+	if onLauncher() {
+		components = append(components, "device-plugin")
+	}
 	for _, c := range components {
 		if err := waitForAgentsOnReadyNodes(ctx, c); err != nil {
 			return err
@@ -1453,7 +1520,11 @@ func uninstallChart() error {
 	// Delete both namespaces (ignore not-found; helm uninstall removes
 	// neither). The Sandbox namespace goes first so its Pods are gone before
 	// the operator that reaps them is.
-	for _, ns := range []string{sandboxNamespace, testNamespace} {
+	namespaces := []string{sandboxNamespace, testNamespace}
+	if onLauncher() {
+		namespaces = []string{launcherCfg.warmPoolNamespace, sandboxNamespace, testNamespace}
+	}
+	for _, ns := range namespaces {
 		delCmd := exec.Command("kubectl", "delete", "namespace", ns, "--wait=true", "--ignore-not-found=true", "--timeout=2m")
 		delCmd.Stdout = os.Stdout
 		delCmd.Stderr = os.Stderr

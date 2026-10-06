@@ -169,10 +169,10 @@ func TestRun_SnapshotIsTheSameCall(t *testing.T) {
 	s := testSpec(t)
 	s.Source = Source{Snapshot: &SnapshotSource{State: "/snap/state", Memory: "/snap/mem"}}
 	vmm := &fakeVMM{report: 0}
-	var after []bool
+	var after []Start
 	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
-		AfterStart: func(_ context.Context, _ PodNet, fromSnapshot bool) error {
-			after = append(after, fromSnapshot)
+		AfterStart: func(_ context.Context, _ PodNet, start Start) error {
+			after = append(after, start)
 			return nil
 		}}
 	if _, err := l.Run(t.Context()); err != nil {
@@ -181,7 +181,7 @@ func TestRun_SnapshotIsTheSameCall(t *testing.T) {
 	if vmm.config != "" || len(vmm.snapshot) != 2 || vmm.snapshot[0] != "/snap/state" {
 		t.Fatalf("config=%q snapshot=%v; want a snapshot load and no boot config", vmm.config, vmm.snapshot)
 	}
-	if len(after) != 1 || !after[0] {
+	if len(after) != 1 || after[0] != Loaded {
 		t.Fatalf("AfterStart = %v; want one call for a snapshot", after)
 	}
 }
@@ -295,7 +295,7 @@ func TestRun_RestoreWaitsForTheStagedFilesAndConnectsLast(t *testing.T) {
 	vmm := &fakeVMM{report: 0}
 	connectedAtAfterStart := -1
 	l := &Launcher{Spec: s, Net: nw, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
-		AfterStart: func(context.Context, PodNet, bool) error {
+		AfterStart: func(context.Context, PodNet, Start) error {
 			connectedAtAfterStart = nw.connected
 			return nil
 		}}
@@ -320,6 +320,40 @@ func TestRun_RestoreWaitsForTheStagedFilesAndConnectsLast(t *testing.T) {
 	}
 }
 
+// TestRun_NoReseedMarkerKeepsTheMachineOffTheNetwork proves that a restore
+// that the node agent staged under --entropy-reseed=off reaches no network
+// and reports no reseed, so the operator gate refuses it.
+func TestRun_NoReseedMarkerKeepsTheMachineOffTheNetwork(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	dir := t.TempDir()
+	s.Source = Source{Snapshot: &SnapshotSource{
+		State: filepath.Join(dir, "state.bin"), Memory: filepath.Join(dir, "memory.bin"),
+		Staged: filepath.Join(dir, "staged"), Evidence: filepath.Join(dir, "evidence.json"),
+	}}
+	if err := os.WriteFile(s.Source.Snapshot.Staged, []byte(StagedNoReseed+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nw := &fakeNet{}
+	var got Start
+	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{report: 0}, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		AfterStart: func(_ context.Context, _ PodNet, start Start) error {
+			got = start
+			return nil
+		}}
+	if _, err := l.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got != LoadedNoReseed || nw.connected != 0 {
+		t.Fatalf("start = %v, connected = %d; want LoadedNoReseed and no network", got, nw.connected)
+	}
+	var ev RestoreEvidence
+	raw, err := os.ReadFile(s.Source.Snapshot.Evidence)
+	if err != nil || json.Unmarshal(raw, &ev) != nil || ev.EntropyReseeded || !ev.Uniquified || !ev.ClockSet || ev.Error != "" {
+		t.Fatalf("evidence = %s, %v", raw, err)
+	}
+}
+
 // TestRun_RestoreFailureWritesTheErrorAndNeverConnects proves that a guest
 // that is not confirmed never reaches the Pod network.
 func TestRun_RestoreFailureWritesTheErrorAndNeverConnects(t *testing.T) {
@@ -332,7 +366,7 @@ func TestRun_RestoreFailureWritesTheErrorAndNeverConnects(t *testing.T) {
 	}}
 	nw := &fakeNet{}
 	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{report: 0}, Console: io.Discard, Grace: time.Second, Format: noFormat,
-		AfterStart: func(context.Context, PodNet, bool) error { return errors.New("no fresh entropy") }}
+		AfterStart: func(context.Context, PodNet, Start) error { return errors.New("no fresh entropy") }}
 	code, err := l.Run(t.Context())
 	if err == nil || code != LaunchFailedExit || nw.connected != 0 {
 		t.Fatalf("Run = %d, %v, connected %d", code, err, nw.connected)

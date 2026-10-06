@@ -501,6 +501,7 @@ func main() {
 	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{
 		Client:                mgr.GetClient(),
+		APIReader:             mgr.GetAPIReader(),
 		Scheme:                mgr.GetScheme(),
 		Recorder:              sandboxRecorder,
 		NodeSelectorLabel:     nodeSelectorLabel,

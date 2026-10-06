@@ -110,7 +110,7 @@ func TestGuest_AfterStartBootConfiguresTheNetworkThenStartsTheWorkload(t *testin
 		Gateway: netip.MustParseAddr("10.42.0.1")}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := g.AfterStart(&guestagent.Process{Argv: []string{"sh", "-c", "exit 4"}})(ctx, pn, false); err != nil {
+	if err := g.AfterStart(&guestagent.Process{Argv: []string{"sh", "-c", "exit 4"}})(ctx, pn, Booted); err != nil {
 		t.Fatalf("AfterStart: %v", err)
 	}
 	if len(rn.got) != 1 || rn.got[0].Address != "10.42.0.7/32" || rn.got[0].Gateway != "10.42.0.1" ||

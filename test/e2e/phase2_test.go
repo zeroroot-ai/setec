@@ -81,7 +81,7 @@ spec:
 		sb := &setecv1alpha1.Sandbox{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("a-%d", i), Namespace: nsA},
 			Spec: setecv1alpha1.SandboxSpec{
-				Image:   "docker.io/library/python:3.12-slim",
+				Image:   testImage("docker.io/library/python:3.12-slim"),
 				Command: []string{"sleep", "60"},
 				Resources: setecv1alpha1.Resources{
 					VCPU: 1, Memory: resource.MustParse("512Mi"),
@@ -96,7 +96,7 @@ spec:
 	sbB := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "b-1", Namespace: nsB},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/python:3.12-slim",
+			Image:   testImage("docker.io/library/python:3.12-slim"),
 			Command: []string{"true"},
 			Resources: setecv1alpha1.Resources{
 				VCPU: 1, Memory: resource.MustParse("512Mi"),
@@ -138,7 +138,7 @@ func TestPhase2_NetworkPolicyEnforced(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "isolated", Namespace: ns},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/python:3.12-slim",
+			Image:   testImage("docker.io/library/python:3.12-slim"),
 			Command: []string{"sleep", "30"},
 			Resources: setecv1alpha1.Resources{
 				VCPU: 1, Memory: resource.MustParse("256Mi"),
@@ -197,7 +197,7 @@ func TestPhase2_WebhookRejects(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "over", Namespace: ns},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: "e2e-tight",
-			Image:            "docker.io/library/python:3.12-slim",
+			Image:            testImage("docker.io/library/python:3.12-slim"),
 			Command:          []string{"true"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   8,
@@ -238,7 +238,7 @@ func TestPhase2_UpgradeFromPhase1(t *testing.T) {
 	sb := &setecv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "phase1-shape", Namespace: ns},
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "docker.io/library/python:3.12-slim",
+			Image:   testImage("docker.io/library/python:3.12-slim"),
 			Command: []string{"echo", "hi"},
 			Resources: setecv1alpha1.Resources{
 				VCPU: 1, Memory: resource.MustParse("128Mi"),

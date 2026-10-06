@@ -65,7 +65,14 @@ func (s *Server) restoreLauncher(
 			return nil, status.Errorf(codes.Internal, "write the time of the state: %v", err)
 		}
 	}
-	if err := os.WriteFile(staged, nil, 0o600); err != nil {
+	// Under --entropy-reseed=off (no Reseeder) the marker says so. The
+	// launcher then skips the reseed and keeps the machine off the
+	// network, and the operator gate refuses the restore.
+	var marker []byte
+	if s.Reseeder == nil {
+		marker = []byte(podspec.LauncherStagedNoReseed)
+	}
+	if err := os.WriteFile(staged, marker, 0o600); err != nil {
 		return nil, status.Errorf(codes.Internal, "mark the snapshot staged: %v", err)
 	}
 
@@ -74,7 +81,7 @@ func (s *Server) restoreLauncher(
 		return &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: err.Error()},
 			status.Errorf(codes.DeadlineExceeded, "%v", err)
 	}
-	if ev.Error != "" || !ev.EntropyReseeded || !ev.Uniquified || !ev.ClockSet {
+	if ev.Error != "" || (!ev.EntropyReseeded && s.Reseeder != nil) || !ev.Uniquified || !ev.ClockSet {
 		msg := fmt.Sprintf("the launcher did not confirm the restored guest (failing closed): %+v", ev)
 		return &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: msg}, status.Error(codes.Internal, msg)
 	}

@@ -129,6 +129,38 @@ func TestRestoreLauncher_FailsClosedOnMissingEvidence(t *testing.T) {
 	}
 }
 
+// TestRestoreLauncher_ReseedModeReachesTheLauncher proves both modes of
+// --entropy-reseed. Under require, the marker asks for a reseed and a guest
+// with no reseed fails closed. Under off, the marker tells the launcher, and
+// the response reports no reseed, so the operator gate refuses the restore.
+func TestRestoreLauncher_ReseedModeReachesTheLauncher(t *testing.T) {
+	t.Parallel()
+	noReseed := podspec.RestoreEvidence{Uniquified: true, ClockSet: true}
+
+	p := launcherPaths(t)
+	fakeLauncher(t, p, noReseed)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require := &Server{Reseeder: &recordingReseeder{}}
+	resp, err := require.restoreLauncher(ctx, p, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
+	if err == nil || resp.GetSuccess() {
+		t.Fatalf("require mode accepted a guest with no reseed: %+v", resp)
+	}
+	if m, _ := os.ReadFile(launchersandbox.HostPath(p, podspec.LauncherRestoreStaged)); len(m) != 0 {
+		t.Fatalf("require mode wrote the marker %q, want an empty marker", m)
+	}
+
+	q := launcherPaths(t)
+	fakeLauncher(t, q, noReseed)
+	resp, err = (&Server{}).restoreLauncher(ctx, q, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
+	if err != nil || !resp.GetSuccess() || resp.GetEntropyReseeded() || !resp.GetUniquified() {
+		t.Fatalf("off mode = %+v, %v; want a success that reports no reseed", resp, err)
+	}
+	if m, _ := os.ReadFile(launchersandbox.HostPath(q, podspec.LauncherRestoreStaged)); string(m) != podspec.LauncherStagedNoReseed {
+		t.Fatalf("off mode wrote the marker %q, want %q", m, podspec.LauncherStagedNoReseed)
+	}
+}
+
 // memBackend is a storage backend in memory for the launcher tests.
 type memBackend struct {
 	encrypted bool

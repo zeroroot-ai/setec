@@ -188,6 +188,9 @@ func TestLauncherFileNamesMatchTheLauncher(t *testing.T) {
 		t.Fatalf("socket names differ: %s %s and %s %s",
 			LauncherAPISocket, LauncherVsockSocket, launcher.APISocket, launcher.VsockSocket)
 	}
+	if LauncherStagedNoReseed != launcher.StagedNoReseed {
+		t.Fatalf("staged markers differ: %s and %s", LauncherStagedNoReseed, launcher.StagedNoReseed)
+	}
 	pod := launcherOrFatal(t)
 	var s launcherSpec
 	if err := json.Unmarshal([]byte(pod.Spec.Containers[0].Env[0].Value), &s); err != nil {

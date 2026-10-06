@@ -125,22 +125,9 @@ func requireTwoSandboxNodes(t *testing.T, backend string) {
 	t.Helper()
 	optedIn := os.Getenv(drainCapacityEnv) != ""
 
-	nodes := &corev1.NodeList{}
-	if err := k8sClient.List(context.Background(), nodes); err != nil {
-		t.Fatalf("list nodes: %v", err)
-	}
-	label := "setec.zeroroot.ai/runtime." + backend
-	var capable []string
-	for _, n := range nodes.Items {
-		if n.Labels[label] != "true" {
-			continue
-		}
-		// A cordoned node is not somewhere the replacement Pod can go.
-		if n.Spec.Unschedulable {
-			continue
-		}
-		capable = append(capable, n.Name)
-	}
+	// A cordoned node is not somewhere the replacement Pod can go, so
+	// only schedulable nodes count.
+	capable := sandboxCapableNodes(t, backend)
 
 	if !optedIn {
 		loudSkip(t,
@@ -150,10 +137,11 @@ func requireTwoSandboxNodes(t *testing.T, backend string) {
 		return
 	}
 	if len(capable) < 2 {
-		t.Fatalf(`%s=1 asserts a second %s-capable node was provisioned for this run, but only %d schedulable node(s) carry %s=true: %v.
+		t.Fatalf(`%s=1 asserts a second %s-capable node was provisioned for this run, but only %d schedulable node(s)
+can run it: %v.
 Either the NodePool ceiling was never raised, the second m5zn.metal has not joined yet, or the runtime probe is mislabeling the nodes (setec#281 class — check the label before blaming this test).
 Failing rather than skipping: the opt-in means capacity was paid for, so a silent skip would verify nothing at full cost.`,
-			drainCapacityEnv, backend, len(capable), label, capable)
+			drainCapacityEnv, backend, len(capable), capable)
 	}
 	t.Logf("drain scenario opted in via %s=1; %d schedulable %s-capable nodes: %v",
 		drainCapacityEnv, len(capable), backend, capable)
@@ -166,7 +154,15 @@ Failing rather than skipping: the opt-in means capacity was paid for, so a silen
 // constant so the node-capability probe and the SandboxClass can never
 // drift apart, which is how a "have 2 nodes" probe can silently look
 // at the wrong label.
-const checkpointBackend = "kata-fc"
+//
+// On the launcher backend it is the launcher: every launcher machine is a
+// Firecracker machine.
+func checkpointBackend() string {
+	if onLauncher() {
+		return backendLauncher
+	}
+	return "kata-fc"
+}
 
 // checkpointClassName names the SandboxClass fixture these scenarios
 // install (and remove) around themselves. SandboxClass is
@@ -180,7 +176,7 @@ func checkpointClassName() string { return "e2e-session-checkpoint-" + testNames
 func installCheckpointClass(t *testing.T, idle time.Duration) {
 	t.Helper()
 	cls := newSandboxClass(checkpointClassName(), setecv1alpha1.SandboxClassSpec{
-		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend},
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: checkpointBackend()},
 		SessionCheckpoint: &setecv1alpha1.SessionCheckpointSpec{
 			Backend: "s3",
 		},
@@ -204,7 +200,7 @@ func checkpointSessionSpec() setecv1alpha1.SandboxSpec {
 	size := resource.MustParse("1Gi")
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
-		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
+		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size, StorageClassName: workspaceStorageClassName()},
 	}
 	return spec
 }
@@ -308,7 +304,7 @@ func TestSessionCheckpoint_DrainResumeOnOtherNode(t *testing.T) {
 	// Checked BEFORE anything is created: provisioning a session VM and
 	// then discovering there is nowhere to drain it to wastes a metal
 	// node's worth of scheduling for nothing.
-	requireTwoSandboxNodes(t, checkpointBackend)
+	requireTwoSandboxNodes(t, checkpointBackend())
 	installCheckpointClass(t, 0)
 
 	sb := newSandbox("e2e-ckpt-drain", checkpointSessionSpec())

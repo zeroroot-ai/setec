@@ -153,7 +153,7 @@ func minimalSpec(cmd ...string) setecv1alpha1.SandboxSpec {
 	}
 	return setecv1alpha1.SandboxSpec{
 		SandboxClassName: e2eDefaultClassName,
-		Image:            "busybox:1.36",
+		Image:            testImage("busybox:1.36"),
 		Command:          cmd,
 		Resources: setecv1alpha1.Resources{
 			VCPU:   1,
@@ -243,7 +243,7 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 	// are tried on every poll.
 	deadline := time.Now().Add(8 * time.Second)
 	for attempt := 1; time.Now().Before(deadline); attempt++ {
-		for _, c := range []string{"workload", "setec-keepalive"} {
+		for _, c := range []string{"workload", "setec-keepalive", launcherContainer} {
 			for _, extra := range [][]string{{}, {"--previous"}} {
 				args := append([]string{"logs", key.Name + "-vm", "-n", key.Namespace, "-c", c}, extra...)
 				out, _ := exec.Command("kubectl", args...).CombinedOutput()
@@ -263,6 +263,9 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 		{"kubectl", "describe", "nodes"},
 		{"kubectl", "get", "events", "-n", key.Namespace, "--sort-by=.lastTimestamp"},
 		{"kubectl", "logs", "-l", operatorLabel, "-n", testNamespace, "--tail=200"},
+		// The disk builder Jobs of the launcher run in the release namespace.
+		{"kubectl", "logs", "-l", "app.kubernetes.io/component=disk-builder", "-n", testNamespace,
+			"--tail=40", "--prefix"},
 	}
 	for _, c := range cmds {
 		out, _ := exec.Command(c[0], c[1:]...).CombinedOutput()
@@ -303,10 +306,20 @@ func TestSandbox_SuccessfulExit(t *testing.T) {
 		t.Fatalf("expected exitCode=0, got %d", *final.Status.ExitCode)
 	}
 
-	// The backing Pod must have used the Kata runtime class.
+	// The backing Pod must have used the Kata runtime class, or on the
+	// launcher the KVM device and no RuntimeClass.
 	var pod corev1.Pod
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}, &pod); err != nil {
 		t.Fatalf("get pod: %v", err)
+	}
+	if onLauncher() {
+		if pod.Spec.RuntimeClassName != nil {
+			t.Fatalf("a launcher Pod has runtimeClassName=%q, want none", *pod.Spec.RuntimeClassName)
+		}
+		if _, ok := pod.Spec.Containers[0].Resources.Limits[launcherKVMResource]; !ok {
+			t.Fatalf("the launcher Pod asks for no %s", launcherKVMResource)
+		}
+		return
 	}
 	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != kataRuntimeClass {
 		t.Fatalf("expected pod runtimeClassName=%q, got %v", kataRuntimeClass, pod.Spec.RuntimeClassName)

@@ -59,6 +59,10 @@ const (
 	LauncherRestoreMemory   = LauncherRestoreDir + "/memory.bin"
 	LauncherRestoreStaged   = LauncherRestoreDir + "/staged"
 	LauncherRestoreEvidence = LauncherRestoreDir + "/evidence.json"
+	// LauncherStagedNoReseed is the content of the staged marker when
+	// the node agent runs with --entropy-reseed=off. The launcher then
+	// skips the reseed and keeps the machine off the Pod network.
+	LauncherStagedNoReseed = "entropy-reseed=off"
 	// LauncherRestoreTakenAt holds the time of the state, in Unix
 	// nanoseconds, when the node agent knows it (setec#194).
 	LauncherRestoreTakenAt = LauncherRestoreDir + "/taken-at"
