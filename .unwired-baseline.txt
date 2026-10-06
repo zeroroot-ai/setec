@@ -57,7 +57,9 @@ method frontend.Service.Attach	# internal/frontend/attach.go:47
 method frontend.Service.Exec	# internal/frontend/exec.go:87
 method frontend.Service.Kill	# internal/frontend/service.go:350
 method frontend.Service.Launch	# internal/frontend/service.go:160
+method frontend.Service.Resume	# internal/frontend/suspend.go
 method frontend.Service.StreamLogs	# internal/frontend/service.go:400
+method frontend.Service.Suspend	# internal/frontend/suspend.go
 method frontend.Service.Wait	# internal/frontend/service.go:301
 method frontend.execStreamWriter.Write	# internal/frontend/exec.go:538
 method grpcserver.Server.QueryPool	# internal/nodeagent/grpcserver/server.go:559

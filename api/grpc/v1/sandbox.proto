@@ -46,6 +46,19 @@ service SandboxService {
   // long between SIGTERM and SIGKILL first.
   rpc Kill(KillRequest) returns (KillResponse);
 
+  // Suspend checkpoints a session and releases its microVM. The session
+  // keeps its workspace and its checkpoint, and costs no compute while it
+  // is suspended (setec#193). Only a session of a class with
+  // sessionCheckpoint suspends: FAILED_PRECONDITION otherwise. A suspend
+  // of a suspended session succeeds.
+  rpc Suspend(SuspendRequest) returns (SuspendResponse);
+
+  // Resume brings a suspended session back: a new microVM loads its
+  // checkpoint and passes the isolation checks before the session runs.
+  // An Attach or an Exec on a session that suspended for idleness resumes
+  // it too. A resume of a running session succeeds.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+
   // Attach resolves a session handle (the sandbox_id returned by
   // Launch) to its live session so a caller that disconnected — or a
   // caller talking to a restarted frontend — can reattach and continue
@@ -518,3 +531,23 @@ message AttachFailure {
   // REASON_SESSION_ENDED ("Completed" or "Failed"); empty otherwise.
   string phase = 2;
 }
+
+// SuspendRequest names the session to suspend.
+message SuspendRequest {
+  string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox, as in KillRequest.
+  string tenant = 2;
+}
+
+message SuspendResponse {}
+
+// ResumeRequest names the session to resume.
+message ResumeRequest {
+  string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox, as in KillRequest.
+  string tenant = 2;
+}
+
+message ResumeResponse {}
