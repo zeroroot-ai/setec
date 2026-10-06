@@ -87,7 +87,8 @@ func finalizeTerminatingPod(g Gomega, ns, sbName string, oldUID types.UID) {
 
 // runSessionVM waits for the Sandbox's Pod, binds it to the suite
 // node, and marks it Running.
-func runSessionVM(g Gomega, t *testing.T, ns, sbName string) *corev1.Pod {
+func runSessionVM(t *testing.T, g Gomega, ns, sbName string) *corev1.Pod {
+	t.Helper()
 	pod := waitForPod(g, ns, sbName)
 	bindPodToNode(t, pod)
 	markPodRunning(g, ns, sbName)
@@ -109,7 +110,7 @@ func TestSessionCheckpoint_SuspendAndResume(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "susp", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	firstPod := runSessionVM(g, t, ns, sb.Name)
+	firstPod := runSessionVM(t, g, ns, sb.Name)
 
 	// The per-session KEK Secret exists before any checkpoint could.
 	g.Eventually(func() error {
@@ -149,7 +150,7 @@ func TestSessionCheckpoint_SuspendAndResume(t *testing.T) {
 		p, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
 		return err == nil && p.DeletionTimestamp == nil
 	}, convergeTimeout, convergeInterval).Should(BeTrue(), "resume must recreate the VM Pod")
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 
 	g.Eventually(func() string {
 		got, err := getSandbox(testCtx, ns, sb.Name)
@@ -192,7 +193,7 @@ func TestSessionCheckpoint_IdleSuspendsInsteadOfEvicting(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "idler", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	idlePod := runSessionVM(g, t, ns, sb.Name)
+	idlePod := runSessionVM(t, g, ns, sb.Name)
 
 	g.Eventually(func() string {
 		return phaseAndReason(ns, sb.Name)
@@ -224,7 +225,7 @@ func TestSessionCheckpoint_CheckpointOnDrain(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "drained", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	firstPod := runSessionVM(g, t, ns, sb.Name)
+	firstPod := runSessionVM(t, g, ns, sb.Name)
 	firstUID := firstPod.UID
 
 	// Cordon the node (kubectl cordon equivalent). Uncordon on the way
@@ -262,7 +263,7 @@ func TestSessionCheckpoint_CheckpointOnDrain(t *testing.T) {
 	// Un-cordon (the "other node" in a one-node envtest), run the new
 	// VM, and watch the restore land.
 	setNodeUnschedulable(false)
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 	g.Eventually(func() string {
 		got, err := getSandbox(testCtx, ns, sb.Name)
 		if err != nil || got.Status.Checkpoint == nil {
@@ -288,7 +289,7 @@ func TestSessionCheckpoint_VMLossWithoutCheckpointIsDistinct(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "lost", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 
 	// Kill the VM (simulates the node dying between checkpoints).
 	patchPodStatus(g, ns, sb.Name+podspec.PodNameSuffix, func(p *corev1.Pod) {
@@ -331,7 +332,7 @@ func TestSessionCheckpoint_TeardownDeletesKEK(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "ender", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 	g.Eventually(func() error {
 		err := getKEKSecret(ns, sb.Name)
 		return err

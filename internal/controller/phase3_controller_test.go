@@ -23,8 +23,8 @@ import (
 // this emulates is otherwise absent in envtest.
 // nodeName is fixed: every caller binds to the same fixture node.
 func bindPodToNode(t *testing.T, pod *corev1.Pod) {
-	const nodeName = "fleet-node-1"
 	t.Helper()
+	const nodeName = "fleet-node-1"
 	binding := &corev1.Binding{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,

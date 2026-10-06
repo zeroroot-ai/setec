@@ -205,11 +205,11 @@ func (r *SandboxReconciler) restoreInstanceType(
 // base. Its machine already holds the state of the base, so a cold boot
 // is not a safe fallback, and the Sandbox fails.
 func (r *SandboxReconciler) failWarm(
-	_ context.Context, sb *setecv1alpha1.Sandbox, src types.NamespacedName,
+	ctx context.Context, sb *setecv1alpha1.Sandbox, src types.NamespacedName,
 	fail func(string, error) setecv1alpha1.SandboxStatus,
 ) func(string, error) setecv1alpha1.SandboxStatus {
 	return func(reason string, err error) setecv1alpha1.SandboxStatus {
-		r.countWarmStart(r.classOrNil(context.Background(), sb), "error")
+		r.countWarmStart(r.classOrNil(ctx, sb), "error")
 		desired := fail(reason, err)
 		desired.WarmStart = &setecv1alpha1.SandboxWarmStartStatus{
 			Outcome: setecv1alpha1.SandboxWarmStartRejected, EntryID: src.String(), Reason: reason,

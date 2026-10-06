@@ -104,6 +104,8 @@ func ensureDisk(ctx context.Context, c client.Client, cfg DiskBuilderConfig, dis
 			return true, nil
 		case batchv1.JobFailed:
 			return false, &diskBuildError{job: name, msg: cond.Message}
+		case batchv1.JobSuspended, batchv1.JobFailureTarget, batchv1.JobSuccessCriteriaMet:
+			// Not an end: JobComplete or JobFailed follows.
 		}
 	}
 	return false, nil

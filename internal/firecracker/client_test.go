@@ -79,6 +79,7 @@ func TestPauseSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPatch, path: "/vm", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]string
 			if err := json.Unmarshal(raw, &m); err != nil {
 				t.Fatalf("unmarshal: %v", err)
@@ -98,6 +99,7 @@ func TestResumeSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPatch, path: "/vm", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]string
 			_ = json.Unmarshal(raw, &m)
 			if m["state"] != "Resumed" {
@@ -115,6 +117,7 @@ func TestCreateSnapshotSuccess(t *testing.T) {
 	sock := startUnixServer(t, []handler{{
 		method: http.MethodPut, path: "/snapshot/create", status: http.StatusNoContent,
 		assertBody: func(t *testing.T, raw []byte) {
+			t.Helper()
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)
 			if m["snapshot_type"] != "Full" {
@@ -217,6 +220,7 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 				open++
 			case http.StateClosed, http.StateHijacked:
 				open--
+			case http.StateActive, http.StateIdle:
 			}
 		},
 	}
@@ -269,6 +273,7 @@ func TestCreateDiffSnapshotAndTrackedLoad(t *testing.T) {
 		{
 			method: http.MethodPut, path: "/snapshot/create", status: http.StatusNoContent,
 			assertBody: func(t *testing.T, raw []byte) {
+				t.Helper()
 				var m map[string]any
 				_ = json.Unmarshal(raw, &m)
 				if m["snapshot_type"] != "Diff" || m["mem_file_path"] != "/tmp/d.mem" {
@@ -280,6 +285,7 @@ func TestCreateDiffSnapshotAndTrackedLoad(t *testing.T) {
 		{
 			method: http.MethodPut, path: "/snapshot/load", status: http.StatusNoContent,
 			assertBody: func(t *testing.T, raw []byte) {
+				t.Helper()
 				var m map[string]any
 				_ = json.Unmarshal(raw, &m)
 				if m["track_dirty_pages"] != true || m["resume_vm"] != true {

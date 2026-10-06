@@ -182,6 +182,8 @@ func Derive(
 		out = setPhase(out, setecv1alpha1.SandboxPhaseRunning, "", now)
 		return out
 
+	case corev1.PodPending, corev1.PodUnknown:
+		fallthrough
 	default:
 		// PodPending, PodUnknown, or an empty Phase. Check for a stuck
 		// image pull first; otherwise remain Pending.
@@ -210,6 +212,10 @@ func isCoordinatorPhase(p setecv1alpha1.SandboxPhase) bool {
 		setecv1alpha1.SandboxPhaseSnapshotting,
 		setecv1alpha1.SandboxPhaseRestoring:
 		return true
+	case setecv1alpha1.SandboxPhasePending, setecv1alpha1.SandboxPhaseRunning,
+		setecv1alpha1.SandboxPhaseCompleted, setecv1alpha1.SandboxPhaseFailed,
+		setecv1alpha1.SandboxPhaseSuspended:
+		return false
 	}
 	return false
 }

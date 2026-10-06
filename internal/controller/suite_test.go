@@ -239,7 +239,7 @@ func TestMain(m *testing.M) {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
 
-	testCtx, testCancel = context.WithCancel(context.Background())
+	testCtx, testCancel = context.WithCancel(context.Background()) //nolint:fatcontext // TestMain sets the suite context once
 
 	// Build a manager backed by the envtest apiserver. Metrics and health
 	// probes are disabled because this manager is not long-lived and we do

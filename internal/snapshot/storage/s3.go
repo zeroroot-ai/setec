@@ -20,7 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
@@ -151,8 +151,7 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	h := sha256.New()
 	counter := &countingReader{inner: io.TeeReader(state, h)}
 
-	uploader := manager.NewUploader(b.Client)
-	if _, err := uploader.Upload(ctx, &s3.PutObjectInput{
+	if _, err := transfermanager.New(b.Client).UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: aws.String(b.Bucket),
 		Key:    aws.String(b.stateKey(snapshotID)),
 		Body:   counter,

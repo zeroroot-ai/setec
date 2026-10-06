@@ -269,6 +269,8 @@ func (g *Guest) Exec(ctx context.Context, p guestagent.Process, stdin io.Reader,
 			}
 		case guestagent.FrameExit:
 			return guestagent.ExitCode(data), nil
+		case guestagent.FrameStdin, guestagent.FrameStdinEOF:
+			// The guest never sends stdin frames to the host. Skip one.
 		}
 	}
 }

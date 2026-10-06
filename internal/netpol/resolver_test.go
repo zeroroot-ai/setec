@@ -80,8 +80,8 @@ func addrs(ss ...string) []netip.Addr {
 // lookup.
 // ttl is fixed: every caller uses a one-minute TTL.
 func newTestResolver(t *testing.T, grace time.Duration) (*CachingResolver, *scriptedLookup, *fakeClock) {
-	const ttl = time.Minute
 	t.Helper()
+	const ttl = time.Minute
 	lk := &scriptedLookup{}
 	clk := newFakeClock()
 	r := NewCachingResolver(ResolverOptions{

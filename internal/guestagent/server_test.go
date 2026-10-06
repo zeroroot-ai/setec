@@ -146,6 +146,8 @@ func TestServer_ExecStreamsAndReturnsTheExitCode(t *testing.T) {
 			errOut.Write(data)
 		case FrameExit:
 			code = ExitCode(data)
+		case FrameStdin, FrameStdinEOF:
+			t.Fatalf("the agent sent a stdin frame %d", ft)
 		}
 	}
 	if code != 3 || out.String() != "got hello\n" || errOut.String() != "to-stderr\n" {
@@ -226,7 +228,7 @@ func zombies(t *testing.T) int {
 		if err != nil {
 			continue
 		}
-		f := strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))
+		f := strings.Fields(string(raw[bytes.LastIndexByte(raw, ')')+1:]))
 		if len(f) > 1 && f[0] == "Z" && f[1] == me {
 			n++
 		}

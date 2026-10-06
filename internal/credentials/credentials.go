@@ -166,6 +166,7 @@ func (p *Provider) ServerCredentials(ctx context.Context) (grpccreds.TransportCr
 		// function, so the guarantees it sets hold on every handshake
 		// and not only the first; it carries no GetConfigForClient of
 		// its own, so this does not recurse.
+		//nolint:contextcheck // each handshake has its own context, not the context of setup
 		cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 			return p.serverConfig(hello.Context())
 		}

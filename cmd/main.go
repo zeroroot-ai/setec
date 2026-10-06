@@ -663,7 +663,9 @@ func newProbeServer(addr string) manager.Runnable {
 		shutdownDone := make(chan struct{})
 		go func() {
 			<-ctx.Done()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// The manager context is done here, so the shutdown keeps its
+			// values and drops its cancellation.
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			_ = srv.Shutdown(shutdownCtx)
 			close(shutdownDone)

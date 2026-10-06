@@ -39,7 +39,7 @@ func TestSessionCheckpoint_GateRefusalDestroysVM(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "gated", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(gomega.Succeed())
-	firstPod := runSessionVM(g, t, ns, sb.Name)
+	firstPod := runSessionVM(t, g, ns, sb.Name)
 
 	// Suspend with a healthy checkpoint.
 	patchDesiredState(g, ns, sb.Name, setecv1alpha1.SandboxDesiredStateSuspended)
@@ -61,7 +61,7 @@ func TestSessionCheckpoint_GateRefusalDestroysVM(t *testing.T) {
 		p, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
 		return err == nil && p.DeletionTimestamp == nil
 	}, convergeTimeout, convergeInterval).Should(gomega.BeTrue(), "resume must recreate the VM Pod")
-	resumedPod := runSessionVM(g, t, ns, sb.Name)
+	resumedPod := runSessionVM(t, g, ns, sb.Name)
 
 	g.Eventually(func() string {
 		got, err := getSandbox(testCtx, ns, sb.Name)

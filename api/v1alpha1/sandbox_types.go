@@ -754,10 +754,6 @@ type SandboxList struct {
 	Items           []Sandbox `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&Sandbox{}, &SandboxList{})
-}
-
 // RecordRecovery records one recovery of a session on its checkpoint
 // status (setec#237): the kind, the time of the recovery, the time of the
 // state that it resumed from (nil for a restart from the workspace), and a

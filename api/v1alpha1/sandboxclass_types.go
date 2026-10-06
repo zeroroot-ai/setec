@@ -443,7 +443,3 @@ type SandboxClassList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SandboxClass `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&SandboxClass{}, &SandboxClassList{})
-}

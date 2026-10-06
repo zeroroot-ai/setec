@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
+// Package testutil holds test doubles for the controller tests.
 package testutil
 
 import (

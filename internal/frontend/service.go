@@ -702,6 +702,8 @@ func podLogsAvailable(pod *corev1.Pod) bool {
 	switch pod.Status.Phase {
 	case corev1.PodRunning, corev1.PodSucceeded, corev1.PodFailed:
 		return true
+	case corev1.PodPending, corev1.PodUnknown:
+		return false
 	default:
 		return false
 	}

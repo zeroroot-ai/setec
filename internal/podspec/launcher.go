@@ -182,8 +182,6 @@ const (
 	launcherBootArgs = "console=ttyS0 reboot=k panic=1 pci=off setec.lowerfs=squashfs"
 )
 
-// launcherSpec is the JSON of internal/launcher.Spec. It is written here
-// rather than imported, so the operator does not link the launcher.
 // LauncherIdentity is the identity of a Sandbox, as the launcher signs it.
 type LauncherIdentity struct {
 	// SandboxID is the <namespace>/<name>/<uid> of the Sandbox.
@@ -203,6 +201,8 @@ type launcherIdentitySpec struct {
 	GenerationFile string `json:"generationFile"`
 }
 
+// launcherSpec is the JSON of internal/launcher.Spec. It is written here
+// rather than imported, so the operator does not link the launcher.
 type launcherSpec struct {
 	Identity        *launcherIdentitySpec `json:"identity,omitempty"`
 	VCPU            int                   `json:"vcpu"`

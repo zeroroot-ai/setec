@@ -1006,6 +1006,10 @@ func nextLifecycleDeadline(
 		if d, ok := status.PauseDeadline(st, cls); ok {
 			earliest = d
 		}
+	case setecv1alpha1.SandboxPhasePending, setecv1alpha1.SandboxPhaseCompleted,
+		setecv1alpha1.SandboxPhaseFailed, setecv1alpha1.SandboxPhaseSnapshotting,
+		setecv1alpha1.SandboxPhaseRestoring, setecv1alpha1.SandboxPhaseSuspended:
+		// No lifecycle deadline runs in these phases.
 	}
 	if earliest.IsZero() {
 		return 0, false
@@ -1716,6 +1720,8 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 					"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
 					existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
 				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+			case setecv1alpha1.SnapshotPhaseReady, setecv1alpha1.SnapshotPhaseTerminating:
+				fallthrough
 			default:
 				// Ready, Terminating, or a phase this version does not
 				// know. Honor the AfterCreate intent without
@@ -1754,7 +1760,9 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 				return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
 			}
 			return ctrl.Result{}, nil
-		default: // Running
+		case setecv1alpha1.SandboxSnapshotAfterCreateRunning:
+			fallthrough
+		default:
 			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
 		}
 	}

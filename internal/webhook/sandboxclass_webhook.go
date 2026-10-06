@@ -58,14 +58,14 @@ func (w *SandboxClassWebhook) Default(_ context.Context, class *setecv1alpha1.Sa
 // ValidateCreate implements admission.Validator[*SandboxClass] for creates
 // (REQ-4.2, REQ-4.3, Error Handling scenario 3).
 func (w *SandboxClassWebhook) ValidateCreate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
-	return w.validate(ctx, class)
+	return w.validate(class)
 }
 
 // ValidateUpdate implements admission.Validator[*SandboxClass] for updates.
 // The same rules that apply to creation apply to mutation: a class cannot be
 // updated to name a removed backend.
 func (w *SandboxClassWebhook) ValidateUpdate(ctx context.Context, _, newClass *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
-	return w.validate(ctx, newClass)
+	return w.validate(newClass)
 }
 
 // ValidateDelete implements admission.Validator[*SandboxClass]. Deletion is
@@ -76,7 +76,7 @@ func (w *SandboxClassWebhook) ValidateDelete(_ context.Context, _ *setecv1alpha1
 
 // validate is the shared create/update path. It aggregates all field errors so
 // users see every violation at once rather than playing whack-a-mole.
-func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
+func (w *SandboxClassWebhook) validate(class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 
 	// Default-deny egress consistency (docs/design/threat-model.md, setec#66): when a class
