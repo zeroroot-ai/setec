@@ -13,6 +13,9 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
+// fieldSandboxClassName is the field of a violation about the class.
+const fieldSandboxClassName = "spec.sandboxClassName"
+
 // fieldSnapshotRef is the dotted JSON path every snapshot-compatibility
 // violation points at. One name for one field: the webhook turns it into a
 // metav1.StatusCause, so a typo in one copy would surface as a cause for a
@@ -78,7 +81,7 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 	// controller's job; this function compares names as-given.
 	if class != nil && snap.Spec.SandboxClass != class.Name {
 		out = append(out, ConstraintViolation{
-			Field: "spec.sandboxClassName",
+			Field: fieldSandboxClassName,
 			Message: fmt.Sprintf(
 				"Snapshot %q was captured under SandboxClass %q but the resolved class is %q",
 				snap.Name, snap.Spec.SandboxClass, class.Name,
@@ -116,7 +119,7 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 		}
 		if snap.Spec.VMM != "" && snap.Spec.VMM != classVMM {
 			out = append(out, ConstraintViolation{
-				Field: "spec.sandboxClassName",
+				Field: fieldSandboxClassName,
 				Message: fmt.Sprintf(
 					"Snapshot %q was captured on VMM %q but the resolved class uses VMM %q",
 					snap.Name, snap.Spec.VMM, classVMM,
@@ -130,7 +133,7 @@ func Validate(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, class *se
 	// (setec#105).
 	if class != nil && snap.Spec.CPUTemplate != class.Spec.CPUTemplate {
 		out = append(out, ConstraintViolation{
-			Field: "spec.sandboxClassName",
+			Field: fieldSandboxClassName,
 			Message: fmt.Sprintf(
 				"Snapshot %q was captured with CPU template %q but the resolved class uses %q",
 				snap.Name, snap.Spec.CPUTemplate, class.Spec.CPUTemplate,

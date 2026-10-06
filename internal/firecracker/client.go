@@ -25,6 +25,10 @@ import (
 	"time"
 )
 
+// keySnapshotPath is the JSON key of the state file in the snapshot calls
+// of the Firecracker API.
+const keySnapshotPath = "snapshot_path"
+
 // Client is the narrow surface Phase 3 uses. Implementations speak to
 // a single Firecracker API socket; callers construct a Client per
 // microVM via NewClientFromSocket.
@@ -161,7 +165,7 @@ func (c *httpClient) Resume(ctx context.Context) error {
 func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
 		"snapshot_type": "Full",
-		"snapshot_path": statePath,
+		keySnapshotPath: statePath,
 		"mem_file_path": memPath,
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/create", body)
@@ -172,7 +176,7 @@ func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath stri
 func (c *httpClient) CreateDiffSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
 		"snapshot_type": "Diff",
-		"snapshot_path": statePath,
+		keySnapshotPath: statePath,
 		"mem_file_path": memPath,
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/create", body)
@@ -188,7 +192,7 @@ func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, 
 		return fmt.Errorf("firecracker: unexpected client type")
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/load", map[string]any{
-		"snapshot_path":     statePath,
+		keySnapshotPath:     statePath,
 		"mem_backend":       map[string]string{"backend_type": "File", "backend_path": memPath},
 		"track_dirty_pages": true,
 		"resume_vm":         true,
@@ -201,7 +205,7 @@ func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, 
 // mem_backend: Firecracker v1.12.1 deprecates mem_file_path for loads.
 func (c *httpClient) LoadSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
-		"snapshot_path": statePath,
+		keySnapshotPath: statePath,
 		"mem_backend": map[string]string{
 			"backend_type": "File",
 			"backend_path": memPath,
