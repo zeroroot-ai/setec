@@ -237,7 +237,10 @@ verify the expected new manifests appear via `helm template`.
   from the SPIFFE Workload API (see "Credentials" below). The frontend does NOT bypass Kubernetes admission; every call
   still flows through the webhook. `frontend.clients` enrolls each Gibson
   cluster as a named client, with the SPIFFE ID of its daemon, and is
-  required. The frontend refuses a caller that is not enrolled. Each
+  required. An entry gives the full ID in `spiffeID`, or the path only in
+  `spiffePath`. For a path, the chart builds `spiffe://<trust domain>/<path>`
+  from `global.spire.trustDomain`, else `credentials.spiffe.trustDomain`, so
+  a parent chart enrolls its daemon with no trust domain literal. The frontend refuses a caller that is not enrolled. Each
   request carries a tenant. The frontend makes one namespace for each pair
   of client and tenant on the first call of the pair, with its two
   RoleBindings. The ValidatingAdmissionPolicy `-frontend-scope` limits the

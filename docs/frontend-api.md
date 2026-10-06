@@ -257,7 +257,10 @@ README "Credentials".
 Each Gibson cluster that calls the frontend is an enrolled client. The
 frontend takes one `--client=<name>=<spiffe-id>` flag for each client.
 The chart renders them from `frontend.clients`. A name is a DNS label.
-An empty list is a startup error.
+An empty list is a startup error. An entry gives the full ID in
+`spiffeID`, or the path only in `spiffePath`. For a path, the chart
+builds `spiffe://<trust domain>/<path>` from `global.spire.trustDomain`,
+else from `credentials.spiffe.trustDomain`.
 
 The frontend reads the SPIFFE ID from the URI SAN of the verified client
 certificate and finds the enrolled name. A caller with no SPIFFE ID, or

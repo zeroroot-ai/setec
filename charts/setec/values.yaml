@@ -499,8 +499,18 @@ frontend:
   # ClusterSPIFFEID of the frontend must list the domain under
   # federatesWith; the install owns that registration.
   #
+  # Each client names its ID in one of two ways (setec#233). spiffeID is
+  # the full ID. spiffePath is the path only: the chart builds
+  # spiffe://<trust domain>/<path>, with global.spire.trustDomain when a
+  # parent chart sets it, else credentials.spiffe.trustDomain. A parent
+  # chart uses spiffePath, so the ID follows the trust domain of its
+  # install with no literal (ADR-0164). An entry with both, or neither,
+  # fails the render.
+  #
   #   clients:
   #     - name: saas
+  #       spiffePath: platform/daemon
+  #     - name: other
   #       spiffeID: spiffe://example.org/ns/gibson/sa/gibson-daemon
   #     - name: onprem
   #       spiffeID: spiffe://onprem.example/ns/gibson/sa/gibson-daemon
