@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/runtime"
@@ -143,7 +144,23 @@ func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
 		errs = append(errs, field.Required(specPath.Child("defaultResources"),
 			"a pool boots its bases with the default resources of the class"))
 	}
+	errs = append(errs, validateImageSignature(class.Spec.PreWarmImageSignature, specPath.Child("preWarmImageSignature"))...)
 	return errs
+}
+
+// validateImageSignature requires the signer of the pool image: a keyless
+// issuer and identity, or a PEM public key, and not both. The operator
+// builds no base from an image it cannot verify.
+func validateImageSignature(sig *setecv1alpha1.ImageSignature, path *field.Path) field.ErrorList {
+	if sig == nil {
+		return field.ErrorList{field.Required(path,
+			"a pool needs the signer of its image: the operator checks the signature before it builds a base")}
+	}
+	p := diskbuilder.SignaturePolicy{Issuer: sig.Issuer, Identity: sig.Identity, PublicKey: []byte(sig.PublicKey)}
+	if err := p.Validate(); err != nil {
+		return field.ErrorList{field.Invalid(path, "", err.Error())}
+	}
+	return nil
 }
 
 // SetupWebhookWithManager registers both the defaulting and validating webhooks

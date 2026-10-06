@@ -125,12 +125,13 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 	restore := setNodeAgentFlag(t, "--entropy-reseed", "require", "off")
 	t.Cleanup(restore)
 
-	poolImage := testImage("docker.io/library/alpine:3.19")
+	poolImage, signer := signedPoolImage(ctx, t, testImage("docker.io/library/alpine:3.19"))
 	clsName := fmt.Sprintf("e2e-gate-%d", time.Now().Unix())
 	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
-		Runtime:         &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
-		PreWarmPoolSize: 1,
-		PreWarmImage:    poolImage,
+		Runtime:               &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
+		PreWarmPoolSize:       1,
+		PreWarmImage:          poolImage,
+		PreWarmImageSignature: signer,
 		DefaultResources: &setecv1alpha1.Resources{
 			VCPU:   1,
 			Memory: resource.MustParse("256Mi"),

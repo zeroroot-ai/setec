@@ -323,11 +323,13 @@ func TestLauncher_WarmPool(t *testing.T) {
 	defer cancel()
 	res := launcherResources()
 	clsName := "e2e-pool-" + testNamespace
+	poolImage, signer := signedPoolImage(ctx, t, launcherImage())
 	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
-		Runtime:          &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
-		PreWarmPoolSize:  1,
-		PreWarmImage:     launcherImage(),
-		DefaultResources: &res,
+		Runtime:               &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
+		PreWarmPoolSize:       1,
+		PreWarmImage:          poolImage,
+		PreWarmImageSignature: signer,
+		DefaultResources:      &res,
 	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		t.Fatalf("create %s: %v", clsName, err)
@@ -357,6 +359,7 @@ func TestLauncher_WarmPool(t *testing.T) {
 		name := fmt.Sprintf("wp-warm-%d", i)
 		warm := launcherSandbox(name, "sleep 600")
 		warm.Spec.SandboxClassName = clsName
+		warm.Spec.Image = poolImage
 		createAndCleanup(t, warm)
 		warmTook := waitRunning(t, warm, launcherRestoreWait)
 		got, err := getSandboxE2E(client.ObjectKeyFromObject(warm))

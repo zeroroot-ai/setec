@@ -116,3 +116,23 @@ Dismissal reasons: `security-events: write` as false positive (the SARIF
 upload exists, one workflow_call away), the rest as won't fix.
 
 **Reverses if** the reusable workflow needs fewer permissions.
+
+### Entry 9 — GO-2026-5932 (`golang.org/x/crypto/openpgp` is unmaintained), disk builder image
+
+The disk builder checks the cosign signature of a pool image with
+sigstore-go (`internal/diskbuilder/imagesig`). Its module graph brings in
+`golang.org/x/crypto`, and Trivy matches the advisory by module. The advisory
+names the `openpgp` packages only, and no setec binary links them:
+`go list -deps ./cmd/setec-disk-builder | grep openpgp` and the same for
+`./cmd` print nothing. The packages reach the module graph through the PGP
+type of `github.com/sigstore/rekor`, which only tests import. There is no
+fixed version: the advisory covers every version.
+
+This is not a dismissal under class A: the advisory names no code that the
+binary contains. The evidence is symbol-level, as class B requires.
+
+Dismissal reason, when the alert opens: false positive (the package is not
+linked).
+
+**Reverses if** `go list -deps` of a setec binary lists an `openpgp`
+package.

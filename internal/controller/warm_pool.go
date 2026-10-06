@@ -108,6 +108,12 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		r.Metrics.SetWarmPool(cls.Name, 0, 0)
 		return ctrl.Result{}, r.patchStatus(ctx, cls, nil)
 	}
+	// The signature of the pool image comes before any base: an image
+	// that does not verify gets no base at all.
+	if res, stop, err := r.gateOnImage(ctx, cls, bases, pods); stop || err != nil {
+		return res, err
+	}
+
 	key := baseKeyOf(cls, r.LauncherImage)
 	want := int(cls.Spec.PreWarmPoolSize)
 	if lu := cls.Status.WarmPool; lu != nil && lu.LastUsed != nil && r.now().Sub(lu.LastUsed.Time) > warmPoolIdle {
@@ -192,6 +198,38 @@ func (r *WarmPoolReconciler) stepBasePods(
 		}
 	}
 	return building
+}
+
+// gateOnImage checks the signature of the pool image. stop is true while
+// the check runs, and when the image does not verify: the pool then drops
+// each base and sets the condition ImageNotVerified.
+func (r *WarmPoolReconciler) gateOnImage(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, bases []setecv1alpha1.Snapshot, pods []corev1.Pod,
+) (res ctrl.Result, stop bool, err error) {
+	state, msg, err := r.ensureImageVerified(ctx, cls)
+	if err != nil {
+		return ctrl.Result{}, true, err
+	}
+	switch state {
+	case verifyFailed:
+		reason := reasonImageNotVerified
+		if cls.Spec.PreWarmImageSignature == nil {
+			reason = reasonImageNoSigner
+		}
+		if err := r.deleteAll(ctx, cls.Name, bases, pods); err != nil {
+			return ctrl.Result{}, true, err
+		}
+		r.Metrics.SetWarmPool(cls.Name, 0, int(cls.Spec.PreWarmPoolSize))
+		if err := r.setImageCondition(ctx, cls, true, reason, msg); err != nil {
+			return ctrl.Result{}, true, err
+		}
+		return ctrl.Result{RequeueAfter: warmPoolRequeue}, true, r.patchStatus(ctx, cls, nil)
+	case verifyPending:
+		return ctrl.Result{RequeueAfter: diskBuildRequeue}, true, nil
+	case verifyPassed:
+	}
+	return ctrl.Result{}, false, r.setImageCondition(ctx, cls, false, reasonImageVerified,
+		"the pool image has a signature of the named signer")
 }
 
 // stepBasePod moves one base Pod on. A Ready Pod (its guest agent answers)

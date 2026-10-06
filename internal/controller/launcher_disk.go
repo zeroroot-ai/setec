@@ -47,7 +47,9 @@ const (
 	ReasonDiskBuilding    = "DiskBuilding"
 	ReasonDiskBuildFailed = "DiskBuildFailed"
 
-	diskJobPrefix     = "setec-disk-"
+	diskJobPrefix = "setec-disk-"
+	// builderWorkDir is the emptyDir of a disk builder Job.
+	builderWorkDir    = "/work"
 	diskBuildRequeue  = 5 * time.Second
 	diskJobTTLSeconds = 600
 )
@@ -121,18 +123,24 @@ func (e *diskBuildError) Error() string {
 // is not root, with no ServiceAccount token, and keeps the build in an
 // emptyDir with a size limit.
 func diskJob(cfg DiskBuilderConfig, diskRepo, name, image string) *batchv1.Job {
+	return builderJob(cfg, name, "disk-builder", []string{"--disk-repo", diskRepo, "--key-file", "/etc/setec/disk-signing/seed",
+		"--temp-dir", builderWorkDir, "build", image}, nil, true)
+}
+
+// builderJob is a Job of the setec-disk-builder image with args. signing
+// mounts the disk signing Secret. The Job runs as a user that is not
+// root, with no ServiceAccount token, and keeps its files in an emptyDir
+// with a size limit.
+func builderJob(cfg DiskBuilderConfig, name, component string, args []string, env []corev1.EnvVar, signing bool) *batchv1.Job {
 	ttl := int32(diskJobTTLSeconds)
 	backoff := int32(2)
 	work := resource.MustParse("20Gi")
-	vols := []corev1.Volume{
-		{Name: "work", EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &work}},
-		{Name: "signing", Secret: &corev1.SecretVolumeSource{SecretName: cfg.SigningSecret}},
+	vols := []corev1.Volume{{Name: "work", EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &work}}}
+	mounts := []corev1.VolumeMount{{Name: "work", MountPath: builderWorkDir}}
+	if signing {
+		vols = append(vols, corev1.Volume{Name: "signing", Secret: &corev1.SecretVolumeSource{SecretName: cfg.SigningSecret}})
+		mounts = append(mounts, corev1.VolumeMount{Name: "signing", MountPath: "/etc/setec/disk-signing", ReadOnly: true})
 	}
-	mounts := []corev1.VolumeMount{
-		{Name: "work", MountPath: "/work"},
-		{Name: "signing", MountPath: "/etc/setec/disk-signing", ReadOnly: true},
-	}
-	var env []corev1.EnvVar
 	if cfg.RegistrySecret != "" {
 		vols = append(vols, corev1.Volume{Name: "registry", Secret: &corev1.SecretVolumeSource{
 			SecretName: cfg.RegistrySecret,
@@ -144,7 +152,7 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, name, image string) *batchv1.Job {
 	return &batchv1.Job{
 		Name:      name,
 		Namespace: cfg.Namespace,
-		Labels:    map[string]string{"app.kubernetes.io/component": "disk-builder"},
+		Labels:    map[string]string{"app.kubernetes.io/component": component},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
@@ -160,9 +168,8 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, name, image string) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "disk-builder",
 						Image: cfg.Image,
-						Args: []string{"--disk-repo", diskRepo, "--key-file", "/etc/setec/disk-signing/seed",
-							"--temp-dir", "/work", "build", image},
-						Env: env,
+						Args:  args,
+						Env:   env,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: new(false),
 							ReadOnlyRootFilesystem:   new(true),

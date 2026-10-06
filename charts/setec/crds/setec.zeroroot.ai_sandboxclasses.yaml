@@ -520,6 +520,29 @@ spec:
                   grammar; validation beyond non-empty is a webhook concern so the
                   CRD schema remains minimal.
                 type: string
+              preWarmImageSignature:
+                description: |-
+                  PreWarmImageSignature names who must have signed PreWarmImage. The
+                  operator checks the cosign signature of the image before it builds a
+                  base. An image that does not verify gets the condition
+                  ImageNotVerified on the class, and no base. A pool needs it; the
+                  webhook enforces that.
+                properties:
+                  identity:
+                    description: |-
+                      Identity is the certificate identity of a keyless signature, for
+                      example the URI of the release workflow of the image owner.
+                    type: string
+                  issuer:
+                    description: |-
+                      Issuer is the OIDC issuer of a keyless signature, for example
+                      https://token.actions.githubusercontent.com.
+                    type: string
+                  publicKey:
+                    description: PublicKey is a PEM public key, for an image signed
+                      with a key.
+                    type: string
+                type: object
               preWarmPoolSize:
                 description: |-
                   PreWarmPoolSize is the number of warm pool bases that the operator

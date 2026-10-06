@@ -89,7 +89,9 @@ launcher:
     # signing key rotates. Required.
     publicKeys: []
   # -- warmPool keeps the bases of each class with a pool (preWarmPoolSize,
-  # preWarmImage with a digest, defaultResources). A base is a snapshot of a
+  # preWarmImage with a digest, its signer preWarmImageSignature,
+  # defaultResources). The operator checks the cosign signature of the
+  # image before the first base. A base is a snapshot of a
   # machine that booted the image and ran no workload. A Sandbox of the
   # class with that image and size loads a base instead of a boot
   # (setec#103). Needs snapshots.enabled.

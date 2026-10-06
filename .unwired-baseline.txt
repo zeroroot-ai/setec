@@ -177,3 +177,7 @@ method webhook.SnapshotValidator.ValidateCreate	# internal/webhook/snapshot_webh
 method webhook.SnapshotValidator.ValidateDelete	# internal/webhook/snapshot_webhook.go:75
 method webhook.SnapshotValidator.ValidateUpdate	# internal/webhook/snapshot_webhook.go:70
 var frontend.ErrNoPeerCert	# internal/frontend/auth.go:24
+# signtest signs a test image with a new key, as cosign does. The unit
+# tests of the disk builder and the e2e suite read it; the measurer does
+# not count _test.go files.
+func signtest.SignWithNewKey	# internal/diskbuilder/signtest/signtest.go:32

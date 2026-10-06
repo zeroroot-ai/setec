@@ -170,6 +170,9 @@ spec:
     memory: 2Gi
   preWarmPoolSize: 3
   preWarmImage: ghcr.io/org/app@sha256:<digest>
+  preWarmImageSignature:
+    issuer: https://token.actions.githubusercontent.com
+    identity: https://github.com/org/app/.github/workflows/release.yml@refs/tags/v1.2.3
 ```
 
 A base is a full Snapshot of a launcher machine that booted the pool
@@ -180,8 +183,30 @@ of the pool. A pool keeps its bases for as long as Sandboxes ask for its
 image, and it drops them after seven days with no such Sandbox.
 
 The admission webhook refuses a class with `preWarmPoolSize > 0` and
-no `preWarmImage` with a digest, or with no `defaultResources`. A base
-belongs to one image digest, and it boots with the default resources.
+no `preWarmImage` with a digest, no `defaultResources`, or no
+`preWarmImageSignature`. A base belongs to one image digest, and it boots
+with the default resources.
+
+### The signature of the pool image
+
+The operator builds no base from an image that it cannot check. Before
+the first base, a Job of the disk builder checks the cosign signature of
+`preWarmImage` (`internal/diskbuilder/signature.go`). cosign v3 attaches
+the signature as a Sigstore bundle, an OCI referrer of the image.
+`preWarmImageSignature` names the signer in one of two ways:
+
+- `issuer` and `identity`: a keyless signature. The certificate of the
+  signature must carry exactly this OIDC issuer and identity, for
+  example the release workflow of the image owner. The check reads the
+  Sigstore public-good trusted root through TUF, so the Job needs to
+  reach `tuf-repo-cdn.sigstore.dev`.
+- `publicKey`: a PEM public key, for an image signed with a key. The
+  check needs no outside service, so it suits an air-gapped install.
+
+An image with no signature of the named signer gets the condition
+`ImageNotVerified=True` on the class, and the pool drops each base of
+the class. The check runs again when its Job expires, and when the image
+or the signer changes.
 
 ### Warm-start flow
 

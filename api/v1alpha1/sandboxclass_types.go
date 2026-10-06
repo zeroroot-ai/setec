@@ -163,6 +163,14 @@ type SandboxClassSpec struct {
 	// +optional
 	PreWarmImage string `json:"preWarmImage,omitempty"`
 
+	// PreWarmImageSignature names who must have signed PreWarmImage. The
+	// operator checks the cosign signature of the image before it builds a
+	// base. An image that does not verify gets the condition
+	// ImageNotVerified on the class, and no base. A pool needs it; the
+	// webhook enforces that.
+	// +optional
+	PreWarmImageSignature *ImageSignature `json:"preWarmImageSignature,omitempty"`
+
 	// CPUTemplate names a Firecracker custom CPU template that the
 	// launcher image holds. The machine of each launcher Sandbox of the
 	// class shows the guest the CPU features of the template, so a
@@ -385,6 +393,29 @@ type SandboxClassStatus struct {
 	// +optional
 	WarmPool *SandboxClassWarmPoolStatus `json:"warmPool,omitempty"`
 }
+
+// ImageSignature names the signer of an image: a keyless signer (the OIDC
+// issuer and the certificate identity of a cosign keyless signature), or a
+// public key. Exactly one of the two is set.
+type ImageSignature struct {
+	// Issuer is the OIDC issuer of a keyless signature, for example
+	// https://token.actions.githubusercontent.com.
+	// +optional
+	Issuer string `json:"issuer,omitempty"`
+
+	// Identity is the certificate identity of a keyless signature, for
+	// example the URI of the release workflow of the image owner.
+	// +optional
+	Identity string `json:"identity,omitempty"`
+
+	// PublicKey is a PEM public key, for an image signed with a key.
+	// +optional
+	PublicKey string `json:"publicKey,omitempty"`
+}
+
+// ConditionImageNotVerified is True on a class whose pool image has no
+// signature that matches spec.preWarmImageSignature.
+const ConditionImageNotVerified = "ImageNotVerified"
 
 // SandboxClassWarmPoolStatus is the state of the warm pool of a class.
 type SandboxClassWarmPoolStatus struct {

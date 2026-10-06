@@ -307,8 +307,9 @@ Administrators author classes; tenants reference them by name in
   admission with a message that names setec#198. A class that skipped
   admission cannot run a Sandbox either: the operator fails the Sandbox
   with the reason `UnsupportedBackend`.
-- A class with `spec.preWarmPoolSize` needs `spec.preWarmImage` by digest
-  and `spec.defaultResources`.
+- A class with `spec.preWarmPoolSize` needs `spec.preWarmImage` by digest,
+  `spec.defaultResources`, and `spec.preWarmImageSignature`: a keyless
+  `issuer` and `identity`, or a `publicKey`, not both.
 - `spec.requests.cpu` and `spec.requests.memory`, when set, must be
   positive and must not exceed `spec.maxResources` when the class
   states a ceiling.
@@ -408,13 +409,18 @@ Three additive fields on `SandboxSpec`:
 
 ### SandboxClass extensions
 
-Three additive fields on `SandboxClassSpec`:
+These fields of `SandboxClassSpec` belong to the pool and the pause:
 
 - `preWarmPoolSize` (int; default 0). The number of warm bases of the
   class: snapshots of a machine that booted `preWarmImage` and ran no
   workload. A Sandbox of the class with that image and size loads a base
   instead of a boot.
 - `preWarmImage` (string, by digest; required when pool size is non-zero)
+- `preWarmImageSignature` (object; required when pool size is non-zero).
+  The signer of `preWarmImage`: `issuer` and `identity` of a keyless
+  cosign signature, or a PEM `publicKey`. The operator builds no base from
+  an image without a signature of this signer, and sets the condition
+  `ImageNotVerified` on the class. See [snapshots](snapshots.md).
 - `maxPauseDuration` (Go duration; optional, must be positive when set —
   the webhook rejects zero or negative values). Bounds how long a
   Sandbox may hold a paused microVM (`phase=Paused`). Past the cap the

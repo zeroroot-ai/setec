@@ -15,8 +15,8 @@ import (
 )
 
 // TestSandboxClassWebhook_ValidatePreWarm covers the warm pool of a class
-// (setec#103): an active pool needs an image with a digest and the default
-// resources of the class.
+// (setec#103): an active pool needs an image with a digest, the default
+// resources of the class, and the signer of the image.
 func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 	t.Parallel()
 	digest := "ghcr.io/org/tools@sha256:" + strings.Repeat("a", 64)
@@ -24,8 +24,15 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 		cls := mkSandboxClass("pw", mkRuntime(setecruntime.BackendLauncher))
 		cls.Spec.PreWarmPoolSize = size
 		cls.Spec.PreWarmImage = image
+		cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{
+			Issuer: "https://token.actions.githubusercontent.com", Identity: "https://github.com/org/tools/.github/workflows/release.yml@refs/tags/v1",
+		}
 		return cls
 	}
+	unsigned := withDefaultResources(mk(2, digest))
+	unsigned.Spec.PreWarmImageSignature = nil
+	both := withDefaultResources(mk(2, digest))
+	both.Spec.PreWarmImageSignature.PublicKey = "-----BEGIN PUBLIC KEY-----"
 	tests := []struct {
 		name    string
 		class   *setecv1alpha1.SandboxClass
@@ -37,6 +44,8 @@ func TestSandboxClassWebhook_ValidatePreWarm(t *testing.T) {
 		{name: "a pool with no image", class: withDefaultResources(mk(2, "")), wantErr: true, wantMsg: "requires preWarmImage"},
 		{name: "a pool with a tag", class: withDefaultResources(mk(2, "ghcr.io/org/tools:v1")), wantErr: true, wantMsg: "digest"},
 		{name: "a pool with no size", class: mk(2, digest), wantErr: true, wantMsg: "defaultResources"},
+		{name: "a pool with no signer", class: unsigned, wantErr: true, wantMsg: "preWarmImageSignature"},
+		{name: "a pool with a keyless signer and a key", class: both, wantErr: true, wantMsg: "not both"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
