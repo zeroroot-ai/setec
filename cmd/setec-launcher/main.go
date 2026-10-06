@@ -35,6 +35,12 @@ func main() {
 	if flag.NArg() > 0 && flag.Arg(0) == "exec" {
 		os.Exit(execInMachine(*specPath, flag.Args()[1:]))
 	}
+	// setec-launcher ready exits 0 when the guest agent answers. It is the
+	// readiness probe of the launcher container, so a Sandbox is Running
+	// only once an exec can reach the machine.
+	if flag.NArg() > 0 && flag.Arg(0) == "ready" {
+		os.Exit(guestReady(*specPath))
+	}
 	os.Exit(run(*specPath, *fcBinary, *grace, *termLog))
 }
 
@@ -109,4 +115,20 @@ func execInMachine(specPath string, args []string) int {
 		return 126
 	}
 	return code
+}
+
+// guestReady pings the guest agent once and returns 0 when it answers.
+func guestReady(specPath string) int {
+	spec, err := launcher.ReadSpec(specPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "setec-launcher ready:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := launcher.NewGuest(spec).Call(ctx, guestagent.Request{Op: guestagent.OpPing}); err != nil {
+		fmt.Fprintln(os.Stderr, "setec-launcher ready:", err)
+		return 1
+	}
+	return 0
 }

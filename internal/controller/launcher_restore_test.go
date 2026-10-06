@@ -24,7 +24,7 @@ import (
 
 // restoreFixture is a launcher Sandbox named work whose snapshotRef names a
 // Ready local Snapshot of a Sandbox also named work, and its running Pod.
-func restoreFixture(t *testing.T, na *fakeNodeAgentClient) (*SandboxReconciler, *setecv1alpha1.Sandbox) {
+func restoreFixture(t *testing.T, na *fakeNodeAgentClient) (*SandboxReconciler, *setecv1alpha1.Sandbox, *corev1.Pod) {
 	t.Helper()
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
@@ -36,24 +36,28 @@ func restoreFixture(t *testing.T, na *fakeNodeAgentClient) (*SandboxReconciler, 
 	snap.Spec = setecv1alpha1.SnapshotSpec{SourceSandbox: "work", Node: "node-a", StorageBackend: "local-disk", StorageRef: "tenant-snap"}
 	pod := &corev1.Pod{Name: "work-vm", Namespace: "tenant"}
 	pod.Spec.NodeName = "node-a"
+	pod.Status.Phase = corev1.PodRunning
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sb, snap, pod).Build()
 	r := &SandboxReconciler{Client: c, Coordinator: &snapshotpkg.Coordinator{
 		Client: c, Dialer: &fakeNodeAgentDialer{client: na},
 	}}
-	return r, sb
+	return r, sb, pod
 }
 
 func TestMaybeRestoreLauncher_RunningOnlyAfterTheGatePasses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	r, sb := restoreFixture(t, &fakeNodeAgentClient{})
-	pending := holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhasePending}))
+	r, sb, pod := restoreFixture(t, &fakeNodeAgentClient{})
+	waiting := pod.DeepCopy()
+	waiting.Status.Phase = corev1.PodPending
+	pending := holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, waiting, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhasePending}))
 	if pending.Phase != setecv1alpha1.SandboxPhasePending || pending.Reason != ReasonRestoring {
 		t.Fatalf("before the Pod runs = %+v; want Pending Restoring", pending)
 	}
-	got := r.maybeRestoreLauncher(ctx, sb, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning})
-	if got.Phase != setecv1alpha1.SandboxPhaseRunning {
-		t.Fatalf("after a confirmed restore = %+v; want Running", got)
+	// The Pod runs but is not Ready: the guest waits for the snapshot.
+	got := r.maybeRestoreLauncher(ctx, sb, pod, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhasePending})
+	if got.Phase != setecv1alpha1.SandboxPhasePending {
+		t.Fatalf("after a confirmed restore = %+v; want the derived phase", got)
 	}
 	stored := &setecv1alpha1.Sandbox{}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(sb), stored); err != nil || stored.Annotations[RestoredAnnotation] != "snap" {
@@ -67,23 +71,23 @@ func TestMaybeRestoreLauncher_RunningOnlyAfterTheGatePasses(t *testing.T) {
 func TestMaybeRestoreLauncher_UnconfirmedGuestFailsTheSandbox(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	r, sb := restoreFixture(t, &fakeNodeAgentClient{RestoreRes: &setecgrpcv1.RestoreSandboxResponse{
+	r, sb, pod := restoreFixture(t, &fakeNodeAgentClient{RestoreRes: &setecgrpcv1.RestoreSandboxResponse{
 		Success: true, EntropyReseeded: true, Uniquified: false, EncryptedAtRest: true,
 	}})
-	got := r.maybeRestoreLauncher(ctx, sb, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning})
+	got := r.maybeRestoreLauncher(ctx, sb, pod, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhasePending})
 	if got.Phase != setecv1alpha1.SandboxPhaseFailed || got.Reason != status.ReasonInvariantGateViolation {
 		t.Fatalf("a guest with no new identity = %+v; want Failed %s", got, status.ReasonInvariantGateViolation)
 	}
 
 	// A Snapshot of another Sandbox is refused before any state loads.
-	r2, sb2 := restoreFixture(t, &fakeNodeAgentClient{})
+	r2, sb2, pod2 := restoreFixture(t, &fakeNodeAgentClient{})
 	snap := &setecv1alpha1.Snapshot{}
 	_ = r2.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "snap"}, snap)
 	snap.Spec.SourceSandbox = "other"
 	if err := r2.Update(ctx, snap); err != nil {
 		t.Fatal(err)
 	}
-	if got := r2.maybeRestoreLauncher(ctx, sb2, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning}); got.Phase != setecv1alpha1.SandboxPhaseFailed {
+	if got := r2.maybeRestoreLauncher(ctx, sb2, pod2, setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhasePending}); got.Phase != setecv1alpha1.SandboxPhaseFailed {
 		t.Fatalf("a restore from another Sandbox = %+v; want Failed", got)
 	}
 }

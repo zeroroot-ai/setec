@@ -61,6 +61,9 @@ func TestBuildLauncher_IsNotPrivileged(t *testing.T) {
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Fatal("the launcher Pod mounts a ServiceAccount token")
 	}
+	if rp := c.ReadinessProbe; rp == nil || rp.Exec == nil || rp.Exec.Command[len(rp.Exec.Command)-1] != "ready" {
+		t.Fatal("the launcher container has no readiness probe on the guest agent")
+	}
 }
 
 // TestBuildLauncher_HasExactlyOneCapability fails on a second capability.

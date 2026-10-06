@@ -47,14 +47,19 @@ func needsLauncherRestore(sb *setecv1alpha1.Sandbox) bool {
 // snapshotRef (setec#105). Its launcher Pod waits for the snapshot. Once
 // the Pod runs, the node agent stages the snapshot, the launcher loads it
 // and confirms the guest, and the invariant gate decides. The Sandbox is
-// Running only after all of that. A failure fails the Sandbox, and step
+// Running only after all of that and after the Pod is Ready. A failure fails the Sandbox, and step
 // (12) of the reconcile deletes the Pod.
 func (r *SandboxReconciler) maybeRestoreLauncher(
 	ctx context.Context,
 	sb *setecv1alpha1.Sandbox,
+	pod *corev1.Pod,
 	desired setecv1alpha1.SandboxStatus,
 ) setecv1alpha1.SandboxStatus {
-	if !needsLauncherRestore(sb) || desired.Phase != setecv1alpha1.SandboxPhaseRunning {
+	// The launcher container runs and waits for the snapshot. The Pod is
+	// not Ready until the guest answers, so the Pod phase, not the
+	// Sandbox phase, starts the restore.
+	if !needsLauncherRestore(sb) || pod == nil || pod.Status.Phase != corev1.PodRunning ||
+		desired.Phase == setecv1alpha1.SandboxPhaseFailed {
 		return desired
 	}
 	fail := func(reason string, err error) setecv1alpha1.SandboxStatus {

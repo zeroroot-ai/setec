@@ -285,6 +285,15 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 						Add:  []corev1.Capability{LauncherCapability},
 					},
 				},
+				// The Sandbox is Running only once the guest agent answers
+				// (internal/status: a Pod that declares readiness stays
+				// Pending until it is Ready).
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{
+						Command: []string{"/usr/local/bin/setec-launcher", "ready"},
+					}},
+					PeriodSeconds: 1, TimeoutSeconds: 3, FailureThreshold: 3,
+				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: LauncherWorkVolume, MountPath: LauncherWorkMountPath},
 					{Name: launcherDiskVolume, MountPath: launcherDiskMountPath, ReadOnly: true},

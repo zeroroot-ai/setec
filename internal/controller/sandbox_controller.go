@@ -871,7 +871,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 
 	// (10a') A launcher Sandbox with a snapshotRef loads the snapshot
 	// before it is Running (setec#105).
-	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, desired))
+	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
 
 	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
 	// status: a Running session past its per-SandboxClass idle
