@@ -63,3 +63,16 @@ func TestDeleteSnapshot_S3IsNeverNodeGone(t *testing.T) {
 type dialerFunc func() (NodeAgentClient, error)
 
 func (f dialerFunc) Dial(context.Context, string) (NodeAgentClient, error) { return f() }
+
+// TestDeleteSnapshot_AFailedWriteStoredNothing asserts that a Snapshot with
+// no storage reference deletes without a node agent. Its write failed, and
+// the node agent refuses an empty reference, which kept the finalizer on.
+func TestDeleteSnapshot_AFailedWriteStoredNothing(t *testing.T) {
+	c := newFakeClient(t, &corev1.Node{Name: "node-1"})
+	coord := newCoord(c, &fakeDialer{dialErr: errors.New("dial must not happen")})
+	snap := snapshotOn("node-1", "local-disk")
+	snap.Spec.StorageRef = ""
+	if err := coord.DeleteSnapshot(context.Background(), snap); err != nil {
+		t.Fatalf("DeleteSnapshot of a failed write = %v, want nil", err)
+	}
+}

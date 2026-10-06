@@ -709,6 +709,13 @@ func (c *Coordinator) DeleteSnapshot(ctx context.Context, snap *setecv1alpha1.Sn
 	defer span.End()
 	start := time.Now()
 
+	// A snapshot whose write failed has no storage reference: nothing was
+	// stored, so nothing is erased. Asking the node agent kept the
+	// finalizer on and the Snapshot undeletable.
+	if snap.Spec.StorageRef == "" {
+		c.recordDelete(snap, time.Since(start))
+		return nil
+	}
 	if snap.Spec.Node == "" {
 		return errors.New("coordinator: Snapshot has no node; cannot delete without a routing target")
 	}
