@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.122.0](https://github.com/zeroroot-ai/setec/compare/v0.121.0...v0.122.0) (2026-10-06)
+
+
+### Features
+
+* **identity:** each launcher sandbox has an identity that a verifier can check ([#236](https://github.com/zeroroot-ai/setec/issues/236)) ([ca075ef](https://github.com/zeroroot-ai/setec/commit/ca075ef88c55646f2e82a00d9289e00d0a076cc3)), closes [#235](https://github.com/zeroroot-ai/setec/issues/235)
+
+
+### Bug Fixes
+
+* **session:** a checkpoint never loads into the Pod that wrote it ([#232](https://github.com/zeroroot-ai/setec/issues/232)) ([081ba41](https://github.com/zeroroot-ai/setec/commit/081ba417b0e4ad535b74c39d7f6e7afb51752ec4)), closes [#220](https://github.com/zeroroot-ai/setec/issues/220)
+
 ## [0.121.0](https://github.com/zeroroot-ai/setec/compare/v0.120.0...v0.121.0) (2026-10-06)
 
 
