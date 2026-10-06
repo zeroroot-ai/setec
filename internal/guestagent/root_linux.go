@@ -48,7 +48,7 @@ func PrepareRoot(lowerFS string) error {
 		lowerFS = "squashfs"
 	}
 	for _, d := range []string{dirProc, dirSys, dirDev, "/lower", "/rw", NewRoot} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 	}
@@ -69,7 +69,7 @@ func PrepareRoot(lowerFS string) error {
 		}
 	}
 	for _, d := range []string{"/rw/upper", "/rw/work"} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 	}
@@ -88,7 +88,7 @@ func PrepareRoot(lowerFS string) error {
 	}
 	for _, m := range inner {
 		dst := filepath.Join(NewRoot, m.dst)
-		if err := os.MkdirAll(dst, 0o755); err != nil {
+		if err := os.MkdirAll(dst, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 		if err := syscall.Mount(m.src, dst, m.fs, 0, m.data); err != nil {
@@ -97,7 +97,7 @@ func PrepareRoot(lowerFS string) error {
 	}
 	if _, err := os.Stat(WorkspaceDevice); err == nil {
 		dst := filepath.Join(NewRoot, "workspace")
-		if err := os.MkdirAll(dst, 0o755); err != nil {
+		if err := os.MkdirAll(dst, 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 			return errwrap.Wrap(err, "os.MkdirAll")
 		}
 		if err := syscall.Mount(WorkspaceDevice, dst, "ext4", 0, ""); err != nil {

@@ -134,7 +134,7 @@ func writeFrame(w io.Writer, magic [4]byte, body []byte) error {
 	header := make([]byte, 0, len(magic)+1+4)
 	header = append(header, magic[:]...)
 	header = append(header, ProtocolVersion)
-	header = binary.BigEndian.AppendUint32(header, uint32(len(body)))
+	header = binary.BigEndian.AppendUint32(header, uint32(len(body))) //nolint:gosec // G115: the check above bounds the body to MaxFrameBytes
 	if _, err := w.Write(header); err != nil {
 		return fmt.Errorf("uniquify: write frame header: %w", err)
 	}

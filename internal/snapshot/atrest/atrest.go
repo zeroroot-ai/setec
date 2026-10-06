@@ -100,7 +100,7 @@ func NewDEK() ([]byte, error) {
 // does not exist. A keyfile that is group- or world-accessible is
 // rejected rather than silently used.
 func LoadOrCreateKEK(path string) ([]byte, error) {
-	if b, err := os.ReadFile(path); err == nil {
+	if b, err := os.ReadFile(filepath.Clean(path)); err == nil {
 		if len(b) != KeySize {
 			return nil, fmt.Errorf("atrest: keyfile %q has %d bytes, want %d", path, len(b), KeySize)
 		}
@@ -125,7 +125,7 @@ func LoadOrCreateKEK(path string) ([]byte, error) {
 	}
 	// O_EXCL: if two processes race the create, exactly one wins and
 	// the loser re-reads the winner's key.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return LoadOrCreateKEK(path)
@@ -227,7 +227,7 @@ func Encrypt(dst io.Writer, src io.Reader, dek []byte) (int64, error) {
 		}
 
 		ct := aead.Seal(nil, chunkNonce(prefix, counter, final), pt, nil)
-		binary.BigEndian.PutUint32(lenBuf, uint32(len(ct)))
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(ct))) //nolint:gosec // G115: a sealed chunk is one chunk size plus the tag
 		n, err = dst.Write(lenBuf)
 		written += int64(n)
 		if err != nil {

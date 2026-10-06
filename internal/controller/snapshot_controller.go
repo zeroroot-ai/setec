@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -89,9 +90,10 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("compute reference count: %w", err)
 	}
-	if snap.Status.ReferenceCount != int32(count) {
+	refs := int32(min(count, math.MaxInt32)) //nolint:gosec // min bounds count to MaxInt32
+	if snap.Status.ReferenceCount != refs {
 		original := snap.DeepCopy()
-		snap.Status.ReferenceCount = int32(count)
+		snap.Status.ReferenceCount = refs
 		now := metav1.NewTime(time.Now())
 		snap.Status.LastTransitionTime = &now
 		if err := r.Status().Patch(ctx, snap, client.MergeFrom(original)); err != nil {

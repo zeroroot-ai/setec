@@ -91,7 +91,7 @@ func WriteRequest(w io.Writer, payload []byte) error {
 	header := make([]byte, 0, len(reqMagic)+1+2)
 	header = append(header, reqMagic[:]...)
 	header = append(header, ProtocolVersion)
-	header = binary.BigEndian.AppendUint16(header, uint16(len(payload)))
+	header = binary.BigEndian.AppendUint16(header, uint16(len(payload))) //nolint:gosec // G115: the check above bounds the payload to MaxPayloadBytes
 	if _, err := w.Write(header); err != nil {
 		return fmt.Errorf("entropy: write request header: %w", err)
 	}

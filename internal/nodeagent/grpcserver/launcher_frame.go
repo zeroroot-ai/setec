@@ -307,7 +307,7 @@ func scanSparseFiles(paths []string) error {
 
 // writeN copies n bytes of r to a new file at path.
 func writeN(r io.Reader, path string, n int64) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return errwrap.Wrap(err, "os.OpenFile")
 	}

@@ -24,7 +24,7 @@ import (
 // crypto-erases each kept Snapshot.
 const (
 	// TenantKEKSecret names the Secret that holds the key of a tenant.
-	TenantKEKSecret = "setec-tenant-kek"
+	TenantKEKSecret = "setec-tenant-kek" //nolint:gosec // G101: the name of a Secret, not a secret
 	tenantKEKKey    = "kek"
 	// KeptBackend is the store of kept Snapshots: the S3-compatible store
 	// of session checkpoints, which a node that never held a Snapshot can

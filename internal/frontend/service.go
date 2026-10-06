@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -191,7 +192,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 
 	if r := req.GetResources(); r != nil {
 		sb.Spec.Resources = setecv1alpha1.Resources{
-			VCPU: int32(r.GetVcpu()),
+			VCPU: int32Of(r.GetVcpu()),
 		}
 		if mem := r.GetMemory(); mem != "" {
 			q, err := resource.ParseQuantity(mem)
@@ -887,19 +888,29 @@ func grpcCodeFor(err error) codes.Code {
 func networkAllowFromProto(a *setecv1grpc.NetworkAllow) setecv1alpha1.NetworkAllow {
 	out := setecv1alpha1.NetworkAllow{
 		Host: a.GetHost(),
-		Port: int32(a.GetPort()),
+		Port: int32Of(a.GetPort()),
 		CIDR: a.GetCidr(),
 	}
 	for _, p := range a.GetPorts() {
 		port := setecv1alpha1.NetworkAllowPort{
 			Protocol: corev1.Protocol(p.GetProtocol()),
-			Port:     int32(p.GetPort()),
+			Port:     int32Of(p.GetPort()),
 		}
 		if end := p.GetEndPort(); end != 0 {
-			endPort := int32(end)
+			endPort := int32Of(end)
 			port.EndPort = &endPort
 		}
 		out.Ports = append(out.Ports, port)
 	}
 	return out
+}
+
+// int32Of converts a wire value to the int32 of a CRD field. A value above
+// MaxInt32 saturates, and the CRD schema refuses it like any other value
+// out of its range.
+func int32Of(v uint32) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
 }

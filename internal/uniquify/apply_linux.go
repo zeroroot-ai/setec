@@ -97,7 +97,7 @@ func (l *LinuxIdentity) ApplyMachineID(id string) error {
 	if len(id) != 32 {
 		return fmt.Errorf("machine-id must be 32 hex chars, got %d", len(id))
 	}
-	return errwrap.Wrap(os.WriteFile(l.MachineIDPath, []byte(id+"\n"), 0o444), "os.WriteFile")
+	return errwrap.Wrap(os.WriteFile(l.MachineIDPath, []byte(id+"\n"), 0o444), "os.WriteFile") //nolint:gosec // /etc/machine-id is world readable on each Linux system
 }
 
 // ApplyBootID materializes the directed boot-id and bind-mounts it
@@ -106,10 +106,10 @@ func (l *LinuxIdentity) ApplyBootID(id string) error {
 	if id == "" {
 		return errors.New("empty boot-id")
 	}
-	if err := os.MkdirAll(filepath.Dir(l.RunPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(l.RunPath), 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 		return errwrap.Wrap(err, "os.MkdirAll")
 	}
-	if err := os.WriteFile(l.RunPath, []byte(id+"\n"), 0o444); err != nil {
+	if err := os.WriteFile(l.RunPath, []byte(id+"\n"), 0o444); err != nil { //nolint:gosec // the run copy of the machine id is world readable
 		return errwrap.Wrap(err, "os.WriteFile")
 	}
 	return l.BindMount(l.RunPath, l.BootIDProcPath)
@@ -123,7 +123,7 @@ func (l *LinuxIdentity) ApplyHostname(name string) error {
 	if err := l.Sethostname([]byte(name)); err != nil {
 		return fmt.Errorf("sethostname: %w", err)
 	}
-	return errwrap.Wrap(os.WriteFile(l.HostnamePath, []byte(name+"\n"), 0o644), "os.WriteFile")
+	return errwrap.Wrap(os.WriteFile(l.HostnamePath, []byte(name+"\n"), 0o644), "os.WriteFile") //nolint:gosec // /etc/hostname is world readable on each Linux system
 }
 
 // Read returns the identity currently observable in the guest. The

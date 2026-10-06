@@ -141,7 +141,7 @@ func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io
 	statePath := b.statePath(snapshotID)
 	// O_EXCL guards against concurrent Save of the same ID racing
 	// past the os.Stat check above.
-	f, err := os.OpenFile(statePath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(statePath)), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return 0, "", ErrAlreadyExists
@@ -184,7 +184,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 	statePath := b.statePath(storageRef)
 	shaPath := b.sha256Path(storageRef)
 
-	expected, err := os.ReadFile(shaPath)
+	expected, err := os.ReadFile(filepath.Clean(shaPath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
@@ -192,7 +192,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 		return nil, fmt.Errorf("storage: read sha256 sidecar: %w", err)
 	}
 
-	f, err := os.Open(statePath)
+	f, err := os.Open(filepath.Clean(statePath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
@@ -272,7 +272,7 @@ func overwriteWithZeros(path string, size int64) error {
 	if size <= 0 {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_WRONLY, 0o600)
 	if err != nil {
 		return errwrap.Wrap(err, "os.OpenFile")
 	}

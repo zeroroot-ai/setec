@@ -133,7 +133,7 @@ func WriteFrame(w io.Writer, t FrameType, data []byte) error {
 		return fmt.Errorf("guestagent: frame of %d bytes exceeds %d", len(data), MaxFrame)
 	}
 	hdr := [5]byte{byte(t)}
-	binary.BigEndian.PutUint32(hdr[1:], uint32(len(data)))
+	binary.BigEndian.PutUint32(hdr[1:], uint32(len(data))) //nolint:gosec // G115: the check above bounds the data to MaxFrame
 	if _, err := w.Write(hdr[:]); err != nil {
 		return errwrap.Wrap(err, "io.Writer.Write")
 	}

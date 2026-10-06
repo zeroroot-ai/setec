@@ -309,7 +309,7 @@ const ResumedFile = "run/setec/resumed"
 // WriteResumed writes ResumedFile in root.
 func WriteResumed(root string, stateAt, resumedAt time.Time) error {
 	path := filepath.Join(root, ResumedFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // a directory of the guest system, which each guest user must read
 		return errwrap.Wrap(err, "os.MkdirAll")
 	}
 	raw, err := json.Marshal(map[string]string{

@@ -116,6 +116,11 @@ linters:
       - linters:
           - wrapcheck
         path: _test\.go$
+      # A test reads and writes files that it made in its own temp
+      # directory, with the modes that the test needs.
+      - linters:
+          - gosec
+        path: _test\.go$
 
 issues:
   max-issues-per-linter: 0

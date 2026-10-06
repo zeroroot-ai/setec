@@ -198,7 +198,9 @@ func (s *spiffeSource) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("SPIFFE credential source: Workload API client for %s: %w", s.addr, err)
 	}
-	go func() { _ = client.WatchX509Context(context.Background(), s) }()
+	// The watch runs until the client closes, not until the startup
+	// context ends.
+	go func() { _ = client.WatchX509Context(context.WithoutCancel(ctx), s) }()
 
 	select {
 	case <-s.firstSVID:

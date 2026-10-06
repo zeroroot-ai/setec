@@ -66,7 +66,7 @@ func (k *KernelPool) AddEntropy(p []byte) error {
 	if dev == "" {
 		dev = "/dev/urandom"
 	}
-	f, err := os.OpenFile(dev, os.O_RDWR, 0)
+	f, err := os.OpenFile(dev, os.O_RDWR, 0) //nolint:gosec // the random device is a fixed path or a flag of the operator
 	if err != nil {
 		return fmt.Errorf("entropy: open %q: %w", dev, err)
 	}
@@ -76,8 +76,10 @@ func (k *KernelPool) AddEntropy(p []byte) error {
 	// Backed by a []uint32 so the kernel-facing pointer is word-aligned.
 	words := (len(p) + 3) / 4
 	info := make([]uint32, 2+words)
-	info[0] = uint32(len(p) * 8) // entropy_count, in bits
-	info[1] = uint32(len(p))     // buf_size, in bytes
+	// entropy_count in bits, then buf_size in bytes. The check above
+	// bounds p to MaxPayloadBytes.
+	info[0] = uint32(len(p) * 8) //nolint:gosec // G115: bounded above
+	info[1] = uint32(len(p))     //nolint:gosec // G115: bounded above
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(&info[2])), words*4), p)
 
 	doIoctl := k.ioctl
