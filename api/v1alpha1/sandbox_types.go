@@ -228,8 +228,9 @@ type Resources struct {
 	// +required
 	Memory resource.Quantity `json:"memory"`
 
-	// Scratch is the size limit of the writable scratch volume at /tmp.
-	// The Pod also gets an ephemeral-storage limit of Scratch plus 1 GiB.
+	// Scratch is the size of the writable layer of the machine. The Pod
+	// gets an ephemeral-storage limit of Scratch plus 3 GiB: 2 GiB for the
+	// machine files and 1 GiB for logs.
 	// Unset takes the class default (defaultResources.scratch), else
 	// 10 GiB. A Sandbox may ask for less than its class permits
 	// (maxResources.scratch, else 10 GiB), never for more.

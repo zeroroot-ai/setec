@@ -67,7 +67,7 @@ throws away the CR.
 The quota is the second control. The first is the limit of each Sandbox
 ([lifecycles](design/lifecycles.md#limits), [storage](design/storage.md#scratch)): memory at most `64Gi` in the API, a scratch volume of `10Gi`
 by default, and an ephemeral-storage limit of the scratch size plus
-`1Gi`. A SandboxClass changes the scratch values with
+`3Gi`. A SandboxClass changes the scratch values with
 `defaultResources.scratch` and `maxResources.scratch`, and lowers the
 memory ceiling with `maxResources.memory`. The limits stop one Sandbox.
 The quota stops a tenant that starts many. Add

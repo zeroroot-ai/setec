@@ -1,22 +1,11 @@
 # Snapshots, Restore, and Pause/Resume (Phase 3)
 
-> **Status (2026-09-29): not available until after launch.** Snapshot
-> restore (`spec.snapshotRef`), session memory checkpoints
-> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
-> Snapshot creation, pause/resume and TTL expiry work. The API still
-> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
-> instead of restoring, and a checkpointed session cannot resume. The
-> reasons and the open design are in
-> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
-> and checkpoints) and
-> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
-
-Phase 3 adds first-class Firecracker snapshot and restore to Setec,
-exposed as Kubernetes-native primitives. Users capture a running
-microVM's state, restore from that state into a new Sandbox, pause
-and resume Sandboxes without tearing down VM state, and configure
-per-SandboxClass pools of pre-warmed microVMs for sub-100ms cold
-starts.
+Setec captures the state of a running Firecracker machine as a
+`Snapshot`, restores that state into a new Sandbox, forks one Sandbox
+into several, and pauses and resumes a Sandbox. A SandboxClass can keep
+a warm pool: snapshots of a machine that booted the image of the class,
+which a new Sandbox loads instead of a boot. The launcher loads each
+snapshot (docs/design/runtime.md).
 
 All Phase 3 features are opt-in via Helm values. A default install
 renders Phase 2-equivalent manifests.
@@ -30,9 +19,10 @@ renders Phase 2-equivalent manifests.
 - **Pause / Resume**: `Sandbox.spec.desiredState` flips between
   `Running` and `Paused`. A paused microVM consumes near-zero CPU and
   retains memory until resumed.
-- **Pre-warm pool**: a SandboxClass may declare
-  `spec.preWarmPoolSize=N` to keep N paused microVMs per eligible
-  node, ready for on-demand restore.
+- **Warm pool**: a SandboxClass may declare
+  `spec.preWarmPoolSize=N` to keep N warm bases, each on another node.
+  A base is a full snapshot of a machine that booted
+  `spec.preWarmImage` and ran no workload.
 
 ## Enabling Phase 3
 
@@ -227,7 +217,10 @@ gauges show the fill level of each class. Setting `preWarmPoolSize: 0` or deleti
 
 ## Storage backend
 
-Phase 3 ships one backend: local-disk. State files live under
+Snapshots have two backends. The local disk of a node holds a
+snapshot that loads on that node only. The S3-compatible store
+(`snapshots.s3`) holds a kept snapshot and a session checkpoint, which
+load on any node. On the local disk, state files live under
 `/var/lib/setec/snapshots/<namespace>-<snapshot>/state.bin` with
 mode 0600 and a hex SHA256 sidecar at `state.bin.sha256`.
 
@@ -250,10 +243,9 @@ key and are treated as destroyed: restore refuses them, delete still
 reclaims them. Rebuild pools and re-create snapshots after upgrade;
 there is no plaintext read path.
 
-Future backends (object-store, content-addressable) slot in behind
-the `storage.StorageBackend` interface without operator changes; the
-encryption wrapper composes over any of them, and keys stay on the
-node.
+Both backends implement the `storage.StorageBackend` interface
+(`internal/snapshot/storage/interface.go`), and the encryption wrapper
+composes over each one.
 
 ## Session memory checkpoints (S3-compatible backend)
 

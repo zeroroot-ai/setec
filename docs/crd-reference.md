@@ -1,16 +1,5 @@
 # Sandbox CRD Reference
 
-> **Status (2026-09-29): not available until after launch.** Snapshot
-> restore (`spec.snapshotRef`), session memory checkpoints
-> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
-> Snapshot creation, pause/resume and TTL expiry work. The API still
-> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
-> instead of restoring, and a checkpointed session cannot resume. The
-> reasons and the open design are in
-> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
-> and checkpoints) and
-> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
-
 `Sandbox` is the sole custom resource Setec defines. This document is the
 authoritative field reference. It is derived from the generated
 `config/crd/bases/setec.zeroroot.ai_sandboxes.yaml` and the Go types in
@@ -65,7 +54,7 @@ status:
 | `resources` | object | yes | — | CPU and memory budget for the microVM; see [`spec.resources`](#specresources) below. |
 | `resources.vcpu` | int32 (`1`–`32`) | yes | — | Number of virtual CPUs allocated to the microVM. |
 | `resources.memory` | resource.Quantity | yes | — | RAM allocated to the microVM (e.g. `512Mi`, `2Gi`). The API refuses more than `64Gi`. A class can lower the ceiling with `maxResources.memory`. |
-| `resources.scratch` | resource.Quantity | no | class `defaultResources.scratch`, else `10Gi` | Size limit of the scratch volume at `/tmp`. The Pod gets an ephemeral-storage limit of this value plus `1Gi`. The value must not exceed the class `maxResources.scratch`, else `10Gi`. The kubelet stops a Sandbox that writes past the limit. |
+| `resources.scratch` | resource.Quantity | no | class `defaultResources.scratch`, else `10Gi` | Size of the writable layer of the machine. The Pod gets an ephemeral-storage limit of this value plus `3Gi`: `2Gi` for the machine files and `1Gi` for logs. The value must not exceed the class `maxResources.scratch`, else `10Gi`. The kubelet stops a Sandbox that writes past the limit. |
 | `network` | object | no | class default, else `{mode: none}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
 | `network.mode` | enum `external-only` \| `egress-allow-list` \| `none` | yes (when `network` set) | `none` | Egress posture. Every mode is enforced by a generated NetworkPolicy. |
 | `network.allow` | []object | no | `[]` | Permitted egress destinations. Meaningful only when `network.mode: egress-allow-list`. |
