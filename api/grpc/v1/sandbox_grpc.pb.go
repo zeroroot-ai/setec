@@ -34,6 +34,7 @@ const (
 	SandboxService_Suspend_FullMethodName               = "/setec.v1.SandboxService/Suspend"
 	SandboxService_Resume_FullMethodName                = "/setec.v1.SandboxService/Resume"
 	SandboxService_Fork_FullMethodName                  = "/setec.v1.SandboxService/Fork"
+	SandboxService_Snapshot_FullMethodName              = "/setec.v1.SandboxService/Snapshot"
 	SandboxService_Keep_FullMethodName                  = "/setec.v1.SandboxService/Keep"
 	SandboxService_Pin_FullMethodName                   = "/setec.v1.SandboxService/Pin"
 	SandboxService_VerifySandboxIdentity_FullMethodName = "/setec.v1.SandboxService/VerifySandboxIdentity"
@@ -93,6 +94,13 @@ type SandboxServiceClient interface {
 	// the source can fork it. The snapshot is deleted after
 	// snapshot_ttl_seconds once no fork still needs it.
 	Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (*ForkResponse, error)
+	// Snapshot takes a full snapshot of a running launcher sandbox and
+	// returns its name (setec#242). The snapshot belongs to the pair of
+	// client and tenant of the sandbox, outlives the sandbox, and is deleted
+	// ttl_seconds after it is taken, once no sandbox still loads it. A
+	// later Launch with LaunchRequest.from_snapshot starts a normal sandbox
+	// from it. Only the owner of the sandbox can take it.
+	Snapshot(ctx context.Context, in *SnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error)
 	// Keep takes a snapshot of a running launcher sandbox for a later
 	// review (setec#196). The snapshot is sealed with the key of the
 	// tenant, opens only in a review sandbox with no network (see
@@ -186,6 +194,7 @@ type SandboxServiceClient interface {
 	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
+	//
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
@@ -273,6 +282,16 @@ func (c *sandboxServiceClient) Fork(ctx context.Context, in *ForkRequest, opts .
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ForkResponse)
 	err := c.cc.Invoke(ctx, SandboxService_Fork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxServiceClient) Snapshot(ctx context.Context, in *SnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotResponse)
+	err := c.cc.Invoke(ctx, SandboxService_Snapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +403,13 @@ type SandboxServiceServer interface {
 	// the source can fork it. The snapshot is deleted after
 	// snapshot_ttl_seconds once no fork still needs it.
 	Fork(context.Context, *ForkRequest) (*ForkResponse, error)
+	// Snapshot takes a full snapshot of a running launcher sandbox and
+	// returns its name (setec#242). The snapshot belongs to the pair of
+	// client and tenant of the sandbox, outlives the sandbox, and is deleted
+	// ttl_seconds after it is taken, once no sandbox still loads it. A
+	// later Launch with LaunchRequest.from_snapshot starts a normal sandbox
+	// from it. Only the owner of the sandbox can take it.
+	Snapshot(context.Context, *SnapshotRequest) (*SnapshotResponse, error)
 	// Keep takes a snapshot of a running launcher sandbox for a later
 	// review (setec#196). The snapshot is sealed with the key of the
 	// tenant, opens only in a review sandbox with no network (see
@@ -477,6 +503,7 @@ type SandboxServiceServer interface {
 	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
+	//
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
@@ -511,6 +538,9 @@ func (UnimplementedSandboxServiceServer) Resume(context.Context, *ResumeRequest)
 }
 func (UnimplementedSandboxServiceServer) Fork(context.Context, *ForkRequest) (*ForkResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Fork not implemented")
+}
+func (UnimplementedSandboxServiceServer) Snapshot(context.Context, *SnapshotRequest) (*SnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Snapshot not implemented")
 }
 func (UnimplementedSandboxServiceServer) Keep(context.Context, *KeepRequest) (*KeepResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Keep not implemented")
@@ -667,6 +697,24 @@ func _SandboxService_Fork_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_Snapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).Snapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_Snapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).Snapshot(ctx, req.(*SnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxService_Keep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(KeepRequest)
 	if err := dec(in); err != nil {
@@ -776,6 +824,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Fork",
 			Handler:    _SandboxService_Fork_Handler,
+		},
+		{
+			MethodName: "Snapshot",
+			Handler:    _SandboxService_Snapshot_Handler,
 		},
 		{
 			MethodName: "Keep",
