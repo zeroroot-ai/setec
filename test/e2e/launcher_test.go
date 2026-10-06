@@ -231,11 +231,17 @@ func TestLauncher_SnapshotRestore(t *testing.T) {
 	foreign.Namespace = "lr-tenant"
 	foreign.Spec.SandboxClassName = e2eDefaultClassName
 	foreign.Spec.SnapshotRef = &setecv1alpha1.SandboxSnapshotRef{Name: "lr-snap"}
-	createAndCleanup(t, foreign)
-	time.Sleep(20 * time.Second)
-	got, err := getSandboxE2E(client.ObjectKeyFromObject(foreign))
-	if err == nil && got.Status.Phase == setecv1alpha1.SandboxPhaseRunning {
-		t.Errorf("a Sandbox of another tenant loaded lr-snap")
+	// The webhook refuses it at admission. Without the webhook the
+	// operator never finds the snapshot.
+	if err := k8sClient.Create(ctx, foreign); err == nil {
+		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), foreign) })
+		time.Sleep(20 * time.Second)
+		got, err := getSandboxE2E(client.ObjectKeyFromObject(foreign))
+		if err == nil && got.Status.Phase == setecv1alpha1.SandboxPhaseRunning {
+			t.Errorf("a Sandbox of another tenant loaded lr-snap")
+		}
+	} else if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("create lr-foreign: %v", err)
 	}
 
 	// The resume: the same Sandbox, a new machine.
@@ -400,14 +406,19 @@ func TestLauncher_WarmPool(t *testing.T) {
 
 // TestLauncher_ForkIntoThree forks a Running Sandbox into three. Each fork
 // has the state of the source and its own identity, and the forks diverge.
+// The source ends with its snapshot.
 func TestLauncher_ForkIntoThree(t *testing.T) {
 	requireLauncher(t)
 	src := launcherSandbox("fk-src", "echo source-state > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)
 	before := readGuestIdentity(t, sandboxNamespace, src.Name)
+	// The source ends after the snapshot, so the three forks fit on the
+	// node of the snapshot with the CPU of a CI runner.
 	takeSnapshot(t, src, setecv1alpha1.SandboxSnapshotSpec{Name: "fk-snap", Forkable: true,
-		TTL: &metav1.Duration{Duration: 30 * time.Minute}})
+		AfterCreate: setecv1alpha1.SandboxSnapshotAfterCreateTerminated,
+		TTL:         &metav1.Duration{Duration: 30 * time.Minute}})
+	waitGone(t, client.ObjectKeyFromObject(src), defaultWait)
 
 	start := time.Now()
 	names := []string{"fk-1", "fk-2", "fk-3"}
@@ -436,9 +447,6 @@ func TestLauncher_ForkIntoThree(t *testing.T) {
 		if got := mustLauncherExec(t, sandboxNamespace, n, "cat", "/tmp/marker"); got != "source-state" {
 			t.Errorf("a write in fk-1 reached %s: %q", n, got)
 		}
-	}
-	if got := mustLauncherExec(t, sandboxNamespace, src.Name, "cat", "/tmp/marker"); got != "source-state" {
-		t.Errorf("the source changed: %q", got)
 	}
 }
 

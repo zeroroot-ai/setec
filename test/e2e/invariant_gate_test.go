@@ -245,6 +245,12 @@ func TestGate_UnverifiedWarmStartFailsClosed(t *testing.T) {
 			},
 		},
 	}
+	// A launcher base is not consumed: it stays in the pool, and the
+	// refusal comes from the node, not from the base. So the cold boot
+	// asks for another size, which no base serves.
+	if onLauncher() {
+		cold.Spec.Resources.Memory = resource.MustParse("384Mi")
+	}
 	if err := k8sClient.Create(ctx, cold); err != nil {
 		t.Fatalf("create cold-boot sandbox: %v", err)
 	}
