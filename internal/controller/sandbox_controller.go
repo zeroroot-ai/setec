@@ -810,34 +810,9 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	}
 
 	// (10) Derive status and patch when changed.
-	now := time.Now()
-	desired := status.Derive(sb, pod, now)
-
-	// (10a) A launcher Sandbox with a snapshotRef loads the snapshot
-	// before it is Running (setec#105).
-	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
-
-	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
-	// status: a Running session past its per-SandboxClass idle
-	// deadline — no Attach and no client-stream heartbeat within
-	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
-	// sessions keep their last-activity annotation fresh, so they are
-	// never idle-reaped.
-	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
-
-	// (10c) Pause-duration cap (setec#202), same layering: a Paused
-	// Sandbox past the class maxPauseDuration fails with reason
-	// PauseTimeoutExceeded — a paused microVM holds its full memory
-	// reservation, and the class cap bounds that residency. When the
-	// class enables sessionCheckpoint the suspend machinery (11c) owns
-	// the deadline for sessions instead, so the policy passes through.
-	desired = status.ApplyPausePolicy(sb, cls, desired, now)
-	if !statusEqual(sb.Status, desired) {
-		original := sb.DeepCopy()
-		sb.Status = desired
-		if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("patch Sandbox status: %w", err))
-		}
+	desired, stop, err := r.deriveStatus(ctx, sb, cls, pod)
+	if stop != nil || err != nil {
+		return ctrlResult(stop), err
 	}
 
 	// (11) Record phase transition metrics and span status.
@@ -868,32 +843,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	if sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
 		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
 		pod.DeletionTimestamp.IsZero() {
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
-			"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
-		// Degraded-recovery visibility (setec#194): a checkpoint-enabled
-		// session losing its VM with NO live checkpoint can only restart
-		// from the durable workspace — surface that as the distinct
-		// condition before the replacement VM comes up. (With a live
-		// checkpoint the replacement restores from it instead, marked
-		// PendingRestore by handleMissingPod.)
-		if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
-			if ck := sb.Status.Checkpoint; ck == nil || ck.Ref == "" {
-				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
-					"Session VM lost with no checkpoint; restarting from durable workspace — no data lost, process state gone")
-				original := sb.DeepCopy()
-				if sb.Status.Checkpoint == nil {
-					sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
-				}
-				sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryRestartedFromWorkspace, metav1.Now(), nil)
-				if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
-					return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
-				}
-			}
-		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
-		}
-		return ctrl.Result{}, nil
+		return r.restartExitedSession(ctx, sb, cls, pod)
 	}
 
 	// (11a) Phase 3: pause/resume lifecycle.
@@ -908,31 +858,8 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// repeated deletes). The terminal Failed phase is already persisted,
 	// so the session-restart branch (11b) cannot resurrect the VM.
 	if desired.Phase == setecv1alpha1.SandboxPhaseFailed && pod.DeletionTimestamp.IsZero() {
-		switch desired.Reason {
-		case status.ReasonTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonTimeout, actionEnforceTimeout,
-				"Sandbox exceeded lifecycle.timeout; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after timeout: %w", err))
-			}
-		case status.ReasonIdleTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonIdleTimeout, actionEnforceIdleTimeout,
-				"Session idle beyond the class sessionIdleTimeout; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after idle eviction: %w", err))
-			}
-		case status.ReasonPauseTimeout:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonPauseTimeout, actionEnforcePauseTimeout,
-				"Sandbox paused beyond the class maxPauseDuration; deleting Pod %q", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after pause timeout: %w", err))
-			}
-		case status.ReasonInvariantGateViolation:
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonInvariantGateViolation, actionEnforceInvariantGate,
-				"docs/design/isolation.md invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)", pod.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete Pod after invariant-gate refusal: %w", err))
-			}
+		if res, err := r.deleteFailedPod(ctx, sb, pod, desired.Reason); err != nil {
+			return res, err
 		}
 	}
 
@@ -952,6 +879,125 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// Only this path requeues. The creation path also applies the policy,
 	// but there RequeueAfter means "do not create the Pod yet", so
 	// reusing it for a refresh would defer the launch instead.
+	return r.requeueAfter(sb, cls, desired, checkpointRequeue), nil
+}
+
+// deriveStatus derives the status of the Sandbox from its Pod and its
+// policies, and patches it when it changed (steps 10 to 10c). A non-nil
+// result ends the reconcile.
+func (r *SandboxReconciler) deriveStatus(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, pod *corev1.Pod,
+) (setecv1alpha1.SandboxStatus, *ctrl.Result, error) {
+	now := time.Now()
+	desired := status.Derive(sb, pod, now)
+
+	// (10a) A launcher Sandbox with a snapshotRef loads the snapshot
+	// before it is Running (setec#105).
+	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
+
+	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
+	// status: a Running session past its per-SandboxClass idle
+	// deadline — no Attach and no client-stream heartbeat within
+	// spec.sessionIdleTimeout — fails with reason IdleTimeout. Active
+	// sessions keep their last-activity annotation fresh, so they are
+	// never idle-reaped.
+	desired = status.ApplySessionIdlePolicy(sb, cls, desired, now)
+
+	// (10c) Pause-duration cap (setec#202), same layering: a Paused
+	// Sandbox past the class maxPauseDuration fails with reason
+	// PauseTimeoutExceeded — a paused microVM holds its full memory
+	// reservation, and the class cap bounds that residency. When the
+	// class enables sessionCheckpoint the suspend machinery (11c) owns
+	// the deadline for sessions instead, so the policy passes through.
+	desired = status.ApplyPausePolicy(sb, cls, desired, now)
+	if !statusEqual(sb.Status, desired) {
+		original := sb.DeepCopy()
+		sb.Status = desired
+		if err := r.Status().Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			res, rerr := r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("patch Sandbox status: %w", err))
+			return desired, &res, rerr
+		}
+	}
+	return desired, nil, nil
+}
+
+// restartExitedSession deletes the exited Pod of a session, so the next
+// reconcile makes a new VM against the durable workspace (step 11b). A
+// session with checkpoints and no live checkpoint records the degraded
+// recovery first.
+func (r *SandboxReconciler) restartExitedSession(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, pod *corev1.Pod,
+) (ctrl.Result, error) {
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSessionVMRestart, actionRestartSessionVM,
+		"Session VM exited (pod phase %s); restarting against durable workspace", pod.Status.Phase)
+	// Degraded-recovery visibility (setec#194): a checkpoint-enabled
+	// session losing its VM with NO live checkpoint can only restart
+	// from the durable workspace — surface that as the distinct
+	// condition before the replacement VM comes up. (With a live
+	// checkpoint the replacement restores from it instead, marked
+	// PendingRestore by handleMissingPod.)
+	if policy := sessionCheckpointPolicy(sb, cls); policy != nil {
+		if ck := sb.Status.Checkpoint; ck == nil || ck.Ref == "" {
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonRestartedFromWorkspace, actionManageCheckpoint,
+				"Session VM lost with no checkpoint; restarting from durable workspace — no data lost, process state gone")
+			original := sb.DeepCopy()
+			if sb.Status.Checkpoint == nil {
+				sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
+			}
+			sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryRestartedFromWorkspace, metav1.Now(), nil)
+			if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
+				return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
+			}
+		}
+	}
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("delete exited session Pod: %w", err))
+	}
+	return ctrl.Result{}, nil
+}
+
+// failedPodDelete is the event and the error text of the Pod deletion
+// after a policy failed a Sandbox (step 12).
+type failedPodDelete struct {
+	reason, action, note, errText string
+}
+
+// failedPodDeletes maps the reason of a failure to its Pod deletion.
+var failedPodDeletes = map[string]failedPodDelete{
+	status.ReasonTimeout: {eventReasonTimeout, actionEnforceTimeout,
+		"Sandbox exceeded lifecycle.timeout; deleting Pod %q", "delete Pod after timeout"},
+	status.ReasonIdleTimeout: {eventReasonIdleTimeout, actionEnforceIdleTimeout,
+		"Session idle beyond the class sessionIdleTimeout; deleting Pod %q", "delete Pod after idle eviction"},
+	status.ReasonPauseTimeout: {eventReasonPauseTimeout, actionEnforcePauseTimeout,
+		"Sandbox paused beyond the class maxPauseDuration; deleting Pod %q", "delete Pod after pause timeout"},
+	status.ReasonInvariantGateViolation: {eventReasonInvariantGateViolation, actionEnforceInvariantGate,
+		"docs/design/isolation.md invariant gate refused the restore; destroying Pod %q (unverified restored state is never served)",
+		"delete Pod after invariant-gate refusal"},
+}
+
+// deleteFailedPod deletes the Pod of a Sandbox that a wall-clock policy or
+// the invariant gate just failed (step 12). Another reason keeps the Pod.
+func (r *SandboxReconciler) deleteFailedPod(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, pod *corev1.Pod, reason string,
+) (ctrl.Result, error) {
+	d, ok := failedPodDeletes[reason]
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, d.reason, d.action, d.note, pod.Name)
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("%s: %w", d.errText, err))
+	}
+	return ctrl.Result{}, nil
+}
+
+// requeueAfter is the result of a reconcile of an existing Pod: the
+// earliest of the DNS refresh, the next checkpoint and the next lifecycle
+// deadline (steps 13 and 14).
+func (r *SandboxReconciler) requeueAfter(
+	sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+	desired setecv1alpha1.SandboxStatus, checkpointRequeue time.Duration,
+) ctrl.Result {
 	result := ctrl.Result{}
 	if netpol.DependsOnDNS(sb, cls) {
 		result.RequeueAfter = r.NetPol.EffectiveRefreshInterval()
@@ -971,7 +1017,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 		(result.RequeueAfter == 0 || after < result.RequeueAfter) {
 		result.RequeueAfter = after
 	}
-	return result, nil
+	return result
 }
 
 // nextLifecycleDeadline returns how long until the earliest wall-clock
@@ -1881,4 +1927,13 @@ func (r *SandboxReconciler) sandboxesOnCordonedNode(ctx context.Context, obj cli
 		}
 	}
 	return reqs
+}
+
+// ctrlResult dereferences a result that ends a reconcile, or returns the
+// zero result.
+func ctrlResult(res *ctrl.Result) ctrl.Result {
+	if res == nil {
+		return ctrl.Result{}
+	}
+	return *res
 }
