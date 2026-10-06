@@ -6,7 +6,7 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-06: 152 of 1311 declarations across 84 packages and 221 files
+# measured 2026-10-06: 153 of 1312 declarations across 84 packages and 223 files
 
 const metrics.LabelNode	# internal/metrics/collectors.go:46
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
@@ -145,14 +145,15 @@ method frontend.Service.Attach	# internal/frontend/attach.go:47
 method frontend.Service.Exec	# internal/frontend/exec.go:86
 method frontend.Service.Fork	# internal/frontend/fork.go:40
 method frontend.Service.Keep	# internal/frontend/keep.go:26
-method frontend.Service.Kill	# internal/frontend/service.go:359
+method frontend.Service.Kill	# internal/frontend/service.go:362
 method frontend.Service.Launch	# internal/frontend/service.go:145
 method frontend.Service.Pin	# internal/frontend/keep.go:57
 method frontend.Service.Resume	# internal/frontend/suspend.go:29
-method frontend.Service.StreamLogs	# internal/frontend/service.go:409
+method frontend.Service.Snapshot	# internal/frontend/snapshot.go:46
+method frontend.Service.StreamLogs	# internal/frontend/service.go:412
 method frontend.Service.Suspend	# internal/frontend/suspend.go:21
 method frontend.Service.VerifySandboxIdentity	# internal/frontend/identity.go:26
-method frontend.Service.Wait	# internal/frontend/service.go:310
+method frontend.Service.Wait	# internal/frontend/service.go:313
 method frontend.execStreamWriter.Write	# internal/frontend/exec.go:550
 method grpcserver.multiReadCloser.Close	# internal/nodeagent/grpcserver/launcher_frame.go:326
 method grpcserver.multiReadCloser.Read	# internal/nodeagent/grpcserver/launcher_frame.go:324
