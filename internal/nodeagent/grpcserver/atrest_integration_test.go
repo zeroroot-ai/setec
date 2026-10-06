@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -35,7 +34,6 @@ var guestSecret = bytes.Repeat([]byte("INTEGRATION-GUEST-SECRET-"), 128)
 
 // capturingFC writes guestSecret at CreateSnapshot.
 type capturingFC struct {
-	mu sync.Mutex
 	// root is the work volume of the launcher Pod on the host. The fake
 	// maps the paths that Firecracker sees in the Pod to it.
 	root string

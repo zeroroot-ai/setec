@@ -8,7 +8,10 @@
 // message, never run on another isolation.
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // BackendLauncher is the one backend.
 const BackendLauncher = "launcher"
@@ -22,11 +25,9 @@ func ValidateBackend(name string) error {
 	if name == "" || name == BackendLauncher {
 		return nil
 	}
-	for _, removed := range RemovedBackends {
-		if name == removed {
-			return fmt.Errorf("the backend %q was removed: each sandbox is a Firecracker machine in a "+
-				"launcher pod (setec#198); set runtime.backend to %q or leave it empty", name, BackendLauncher)
-		}
+	if slices.Contains(RemovedBackends, name) {
+		return fmt.Errorf("the backend %q was removed: each sandbox is a Firecracker machine in a "+
+			"launcher pod (setec#198); set runtime.backend to %q or leave it empty", name, BackendLauncher)
 	}
 	return fmt.Errorf("%q is not a backend: the one backend is %q", name, BackendLauncher)
 }

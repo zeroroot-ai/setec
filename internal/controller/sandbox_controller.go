@@ -593,8 +593,8 @@ func (r *SandboxReconciler) handleMissingPod(
 			}
 		}
 	}
-	if done, res, err := r.checkBackend(ctx, sb, cls); done {
-		return res, err
+	if done, err := r.checkBackend(ctx, sb, cls); done {
+		return ctrl.Result{}, err
 	}
 	// Namespace baseline first, then the per-Sandbox policy, then the
 	// Pod. The baseline is ordered ahead of both because it is the only
@@ -1068,7 +1068,7 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 // done is true when the reconcile ends here.
 func (r *SandboxReconciler) checkBackend(
 	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
-) (done bool, res ctrl.Result, err error) {
+) (done bool, err error) {
 	if cls != nil && cls.Spec.Runtime != nil {
 		if verr := runtimepkg.ValidateBackend(cls.Spec.Runtime.Backend); verr != nil {
 			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonUnsupportedBackend, actionResolveRuntime,
@@ -1077,9 +1077,9 @@ func (r *SandboxReconciler) checkBackend(
 			sb.Status.Phase = setecv1alpha1.SandboxPhaseFailed
 			sb.Status.Reason = eventReasonUnsupportedBackend
 			if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
-				return true, ctrl.Result{}, fmt.Errorf("patch Failed(UnsupportedBackend) status: %w", perr)
+				return true, fmt.Errorf("patch Failed(UnsupportedBackend) status: %w", perr)
 			}
-			return true, ctrl.Result{}, nil
+			return true, nil
 		}
 	}
 	if sb.Status.Runtime == nil || sb.Status.Runtime.Chosen != runtimepkg.BackendLauncher {
@@ -1090,7 +1090,7 @@ func (r *SandboxReconciler) checkBackend(
 			log.FromContext(ctx).Info("record status.runtime.chosen", "error", perr.Error())
 		}
 	}
-	return false, ctrl.Result{}, nil
+	return false, nil
 }
 
 // resolveTenant returns the tenant ID of the Sandbox's namespace (when
