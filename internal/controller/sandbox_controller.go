@@ -955,7 +955,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 				if sb.Status.Checkpoint == nil {
 					sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: policy.CheckpointBackend()}
 				}
-				sb.Status.Checkpoint.LastRecovery = setecv1alpha1.SessionRecoveryRestartedFromWorkspace
+				sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryRestartedFromWorkspace, metav1.Now(), nil)
 				if perr := r.Status().Patch(ctx, sb, client.MergeFrom(original)); perr != nil {
 					return ctrl.Result{}, fmt.Errorf("stamp degraded recovery: %w", perr)
 				}

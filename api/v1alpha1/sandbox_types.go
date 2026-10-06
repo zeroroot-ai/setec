@@ -639,6 +639,23 @@ type SandboxCheckpointStatus struct {
 	// +optional
 	LastRecovery SessionRecoveryKind `json:"lastRecovery,omitempty"`
 
+	// LastRecoveryAt is when the most recent recovery happened: the time
+	// of the resume or of the restart (setec#237).
+	// +optional
+	LastRecoveryAt *metav1.Time `json:"lastRecoveryAt,omitempty"`
+
+	// LastRecoveryStateTakenAt is the time of the state that the most
+	// recent recovery resumed from: the time of its checkpoint. It is
+	// empty when the session restarted from the workspace, because no
+	// process state survived (setec#237).
+	// +optional
+	LastRecoveryStateTakenAt *metav1.Time `json:"lastRecoveryStateTakenAt,omitempty"`
+
+	// Recoveries counts the recoveries of the session. A caller that saw
+	// a recovery tells a new one by a higher count (setec#237).
+	// +optional
+	Recoveries int64 `json:"recoveries,omitempty"`
+
 	// PodUID is the Pod whose machine wrote the checkpoint. A diff is
 	// only valid on a checkpoint of the same machine (setec#194).
 	// +optional
@@ -743,4 +760,30 @@ type SandboxList struct {
 
 func init() {
 	SchemeBuilder.Register(&Sandbox{}, &SandboxList{})
+}
+
+// RecordRecovery records one recovery of a session on its checkpoint
+// status (setec#237): the kind, the time of the recovery, the time of the
+// state that it resumed from (nil for a restart from the workspace), and a
+// higher count.
+func (s *SandboxCheckpointStatus) RecordRecovery(kind SessionRecoveryKind, at metav1.Time, stateTakenAt *metav1.Time) {
+	s.LastRecovery = kind
+	s.LastRecoveryAt = at.DeepCopy()
+	s.LastRecoveryStateTakenAt = nil
+	if stateTakenAt != nil && kind == SessionRecoveryResumedFromCheckpoint {
+		s.LastRecoveryStateTakenAt = stateTakenAt.DeepCopy()
+	}
+	s.Recoveries++
+}
+
+// CopyRecovery copies the record of the last recovery from prev, so a new
+// checkpoint keeps it.
+func (s *SandboxCheckpointStatus) CopyRecovery(prev *SandboxCheckpointStatus) {
+	if prev == nil {
+		return
+	}
+	s.LastRecovery = prev.LastRecovery
+	s.LastRecoveryAt = prev.LastRecoveryAt.DeepCopy()
+	s.LastRecoveryStateTakenAt = prev.LastRecoveryStateTakenAt.DeepCopy()
+	s.Recoveries = prev.Recoveries
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -248,5 +249,37 @@ func TestAttach_HandleShapeAndTenantScope(t *testing.T) {
 	// and the refusal must not leak whether the session exists.
 	if _, err := s.Attach(context.Background(), &setecv1grpc.AttachRequest{SandboxId: handleOf(sb)}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("cross-tenant attach: code = %s, want PermissionDenied", status.Code(err))
+	}
+}
+
+// TestAttach_ReportsTheLastRecovery pins setec#237: Attach returns the kind,
+// the time of the state, the time of the recovery and the count, and no
+// recovery for a session that has not recovered.
+func TestAttach_ReportsTheLastRecovery(t *testing.T) {
+	t.Parallel()
+	taken := metav1.NewTime(time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC))
+	at := metav1.NewTime(taken.Add(time.Minute))
+	sb := sessionCR("team-a", "sess-rec", "uid-rec", setecv1alpha1.SandboxPhaseRunning)
+	sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{Backend: "s3"}
+	sb.Status.Checkpoint.RecordRecovery(setecv1alpha1.SessionRecoveryResumedFromCheckpoint, at, &taken)
+	fresh := sessionCR("team-a", "sess-new", "uid-new", setecv1alpha1.SandboxPhaseRunning)
+	s := &Service{Client: newClient(t, sb, fresh), AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	resp, err := s.Attach(context.Background(), &setecv1grpc.AttachRequest{SandboxId: handleOf(sb)})
+	if err != nil {
+		t.Fatalf("Attach(): %v", err)
+	}
+	rec := resp.GetLastRecovery()
+	if rec.GetKind() != "ResumedFromCheckpoint" || rec.GetCount() != 1 ||
+		rec.GetStateTakenUnixNano() != taken.UnixNano() || rec.GetRecoveredUnixNano() != at.UnixNano() {
+		t.Fatalf("last_recovery = %+v", rec)
+	}
+
+	resp, err = s.Attach(context.Background(), &setecv1grpc.AttachRequest{SandboxId: handleOf(fresh)})
+	if err != nil {
+		t.Fatalf("Attach(): %v", err)
+	}
+	if resp.GetLastRecovery() != nil {
+		t.Fatalf("a session with no recovery reports %+v", resp.GetLastRecovery())
 	}
 }

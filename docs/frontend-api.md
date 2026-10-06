@@ -98,6 +98,25 @@ eviction (`SandboxClass.spec.sessionIdleTimeout`) reads that
 annotation, so an attached session is never idle-reaped; the idle clock
 starts when the last client disconnects.
 
+### The last recovery of a session (`AttachResponse.last_recovery`)
+
+A session with checkpoints recovers when its machine goes: after a
+suspend, a drain, or the loss of its node. `AttachResponse.last_recovery`
+reports the most recent recovery (setec#237). The operator keeps the same
+record in `status.checkpoint`.
+
+| Field | Meaning |
+|---|---|
+| `kind` | `ResumedFromCheckpoint`: the process continued from a checkpoint. `RestartedFromWorkspace`: the process restarted against the workspace, and no process state survived. |
+| `state_taken_unix_nano` | The time of the state that the session resumed from, the time of its checkpoint. Zero for `RestartedFromWorkspace`. |
+| `recovered_unix_nano` | The time of the recovery. |
+| `count` | The number of recoveries of the session. A caller that saw a recovery tells a new one by a higher count. |
+
+`last_recovery` is unset for a session that has not recovered. A caller
+that follows a session with `StreamLogs` and `Wait` calls `Attach` again
+when the stream breaks, and reports a recovery with a count that it has
+not seen, for example "resumed from the state of time T".
+
 ## Session exec (`Exec`)
 
 `SandboxService.Exec` runs a command **inside** an already-running
