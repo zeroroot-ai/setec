@@ -35,33 +35,21 @@ snapshots:
   localDisk:
     root: /var/lib/setec/snapshots
     fillThreshold: 0.85
-  mTLS:
-    operatorCertSecret: setec-nodeagent-client-tls
-    nodeAgentCertSecret: setec-nodeagent-server-tls
-    caSecret: setec-nodeagent-ca
-    certManager:
-      enabled: true
-      issuerRef:
-        kind: ClusterIssuer
-        name: selfsigned
+credentials:
+  spiffe:
+    authorizedIDs:
+      nodeAgentClients: [spiffe://example.org/ns/setec-system/sa/setec]
+      nodeAgentServers: [spiffe://example.org/ns/setec-system/sa/setec-node-agent]
 ```
 
 The node-agent DaemonSet must also be enabled
 (`nodeAgent.enabled=true`) because snapshot persistence happens on
 the node where the VM lives.
 
-With `certManager.enabled: true` the chart issues the whole mTLS
-channel from one trust root. The `issuerRef` above is the bootstrap
-issuer that signs a CA `Certificate` into `caSecret`. A namespaced
-`Issuer` of kind `ca` reads that Secret and issues both leaves, so the
-operator and the node-agent verify each other against one CA. The
-workloads mount only the `ca.crt` key of `caSecret`. The CA private key
-stays in the Secret.
-
-With `certManager.enabled: false` you create all three Secrets out of
-band from one CA and set `caProvided: true` to confirm the CA exists.
-The chart refuses to render without that confirmation, because a
-missing non-optional Secret wedges the pods with no useful error.
+The operator and the node-agent authenticate each other with SVIDs from
+the SPIFFE Workload API, the one credential source of setec. The two
+allow-lists name the SPIFFE ID of each side. See
+[Operator → node-agent credentials](#operator--node-agent-credentials).
 
 ## Creating a snapshot
 
@@ -328,34 +316,21 @@ checkpoint the session ever wrote, wherever the bucket is replicated.
   a namespace `ResourceQuota` to cap snapshots per tenant. The
   admission webhook enforces the quota at create time.
 - **mTLS**: the operator-to-node-agent channel is always mTLS —
-  mandatory, with no fallback. Both the operator and node-agent
-  refuse to start without their TLS cert/key/client-ca triple, and
-  the Helm chart always renders the corresponding Secret mounts.
+  mandatory, with no fallback. Both the operator and the node-agent
+  refuse to start without their Workload API socket and allow-list.
 
 ## Operator → node-agent credentials
 
 The operator drives snapshots by dialling each node-agent over mTLS.
-It runs in exactly one credential mode, selected the same way and with
-the same failure semantics as every setec server surface — configuring
-both or neither is a startup error naming the cause, and there is no
-fallback between them.
-
-**File mode (default).** `--nodeagent-tls-cert`, `--nodeagent-tls-key`
-and `--nodeagent-ca`. The operator presents a client certificate and
-accepts any node-agent whose certificate the configured CA issued and
-whose name matches the dial target.
-
-**SPIFFE mode.** `--nodeagent-spiffe-socket` plus one or more
-`--nodeagent-spiffe-authorized-id` flags. The operator's identity comes
-from the Workload API and rotates in-process, and — the part that
-differs from a server surface — it authorizes the *node-agent's* SPIFFE
-ID rather than checking a hostname. An X509-SVID carries no DNS name, so
+Its credentials come from the SPIFFE Workload API (setec#175):
+`--nodeagent-spiffe-socket` plus one or more
+`--nodeagent-spiffe-authorized-id` flags. The operator's identity
+rotates in-process, and it authorizes the *node-agent's* SPIFFE ID
+rather than checking a hostname. An X509-SVID carries no DNS name, so
 the identity check replaces the hostname check rather than being added
-alongside it; chaining to the trust bundle is not sufficient on its own.
-An empty allow-list is a startup error.
-
-The selected mode is logged at startup
-(`Resolved node-agent client credentials mode=file`).
+alongside it. Chaining to the trust bundle is not sufficient on its
+own. An empty allow-list is a startup error, and an operator that
+cannot reach its Workload API fails to boot.
 
 ## Snapshot security
 

@@ -5,18 +5,9 @@ package snapshot
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/big"
 	"net"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +22,7 @@ import (
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/credentials"
+	"github.com/zeroroot-ai/setec/internal/credentials/spiffetest"
 )
 
 // The operator-to-node-agent hop is how a snapshot is taken of a
@@ -61,7 +53,7 @@ const (
 
 func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	port, _ := servePool(t, testNodeAgentIP, ca, ca)
 
 	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
@@ -78,8 +70,8 @@ func TestGRPCDialer_ReachesANodeAgentItTrusts(t *testing.T) {
 
 func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
-	foreign := newCA(t)
+	ca := spiffetest.NewCA(t)
+	foreign := spiffetest.NewCA(t)
 
 	// The server's identity comes from a CA the operator does not
 	// trust. It still trusts the operator, so only the direction
@@ -104,8 +96,8 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 // the dialer carries include an identity, not only trust anchors.
 func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
-	foreign := newCA(t)
+	ca := spiffetest.NewCA(t)
+	foreign := spiffetest.NewCA(t)
 	port, _ := servePool(t, testNodeAgentIP, ca, foreign)
 
 	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
@@ -122,7 +114,7 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 
 func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	port, _ := servePlaintextPool(t, testNodeAgentIP)
 
 	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
@@ -159,7 +151,7 @@ func TestGRPCDialer_RefusesToDialWithoutCredentials(t *testing.T) {
 // node-agent Pod must refuse rather than dial nothing.
 func TestGRPCDialer_RequiresAResolver(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	d := NewGRPCDialer(nil, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
@@ -174,7 +166,7 @@ func TestGRPCDialer_RequiresAResolver(t *testing.T) {
 
 func TestGRPCDialer_RejectsAnEmptyNodeName(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	d := NewGRPCDialer(fixedPod(), unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
 
@@ -189,7 +181,7 @@ func TestGRPCDialer_RejectsAnEmptyNodeName(t *testing.T) {
 // must surface that rather than fail some other, more confusing way.
 func TestGRPCDialer_PropagatesResolverFailure(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	resolveErr := errors.New("podresolver: no Running and Ready node-agent pod found on node \"node-1\"")
 	d := NewGRPCDialer(&fakeResolver{err: resolveErr}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
@@ -208,7 +200,7 @@ func TestGRPCDialer_PropagatesResolverFailure(t *testing.T) {
 // not yet something the operator can dial.
 func TestGRPCDialer_RejectsAPodWithNoIP(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 	pod := &corev1.Pod{UID: types.UID("no-ip")}
 	d := NewGRPCDialer(&fakeResolver{pod: pod}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
 	t.Cleanup(func() { _ = d.Close() })
@@ -235,7 +227,7 @@ func TestGRPCDialer_RejectsAPodWithNoIP(t *testing.T) {
 // changed, drops the old connection, and dials the new, live one.
 func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 	t.Parallel()
-	ca := newCA(t)
+	ca := spiffetest.NewCA(t)
 
 	// Two loopback addresses, one port: 127.0.0.x are all loopback on
 	// Linux, so the "old" and "new" node-agent can each bind the same
@@ -336,19 +328,23 @@ func podWithUID(uid, ip string) *corev1.Pod {
 	}
 }
 
+// The SPIFFE IDs of the two ends of the hop.
+const (
+	operatorID  = "spiffe://example.org/ns/setec-system/sa/setec"
+	nodeAgentID = "spiffe://example.org/ns/setec-system/sa/setec-node-agent"
+)
+
 // operatorCredentials builds the operator's client credentials through
-// the credential module, exactly as cmd/main.go does: an identity
-// issued by identityCA, verifying node-agents against trustCA.
-func operatorCredentials(t *testing.T, identityCA, trustCA *testCA) grpccreds.TransportCredentials {
+// the credential module, exactly as cmd/main.go does: an SVID issued by
+// identityCA, verifying node-agents against trustCA, and authorizing
+// the SPIFFE ID of the node-agent.
+func operatorCredentials(t *testing.T, identityCA, trustCA *spiffetest.CA) grpccreds.TransportCredentials {
 	t.Helper()
-	dir := t.TempDir()
-	certPath, keyPath := identityCA.issue(t, dir, "operator", clientLeaf)
-	provider, err := credentials.New(credentials.Config{
-		Files: &credentials.FileSource{
-			CertFile: certPath,
-			KeyFile:  keyPath,
-			CAFile:   trustCA.writeBundle(t, filepath.Join(dir, "trust.pem")),
-		},
+	api := spiffetest.Start(t, identityCA, operatorID, trustCA)
+	provider, err := credentials.New(credentials.SPIFFESource{
+		SocketPath:      api.Addr,
+		AuthorizedIDs:   []string{nodeAgentID},
+		OnRotationError: func(error) {},
 	})
 	if err != nil {
 		t.Fatalf("credentials.New: %v", err)
@@ -372,12 +368,11 @@ func (stubNodeAgent) DeleteSnapshot(context.Context, *setecgrpcv1.DeleteSnapshot
 }
 
 // servePool starts an mTLS NodeAgentService on addr:0, presenting an
-// identity from identityCA and requiring a client certificate issued
-// by trustCA. It mirrors what cmd/node-agent stands up. It returns the
+// SVID from identityCA and requiring a client SVID issued by trustCA. It mirrors what cmd/node-agent stands up. It returns the
 // bound port and the *grpc.Server, so a test can Stop it early (e.g.
 // to simulate a node-agent restart) as well as via the automatic
 // t.Cleanup.
-func servePool(t *testing.T, addr string, identityCA, trustCA *testCA) (int, *grpc.Server) {
+func servePool(t *testing.T, addr string, identityCA, trustCA *spiffetest.CA) (int, *grpc.Server) {
 	t.Helper()
 	return servePoolOnFixedPort(t, addr, 0, identityCA, trustCA)
 }
@@ -385,16 +380,13 @@ func servePool(t *testing.T, addr string, identityCA, trustCA *testCA) (int, *gr
 // servePoolOnFixedPort is servePool with an explicit port (0 means
 // "any"), so two backends can share one logical port across different
 // loopback addresses the way two Pod IPs would share a container port.
-func servePoolOnFixedPort(t *testing.T, addr string, port int, identityCA, trustCA *testCA) (int, *grpc.Server) {
+func servePoolOnFixedPort(t *testing.T, addr string, port int, identityCA, trustCA *spiffetest.CA) (int, *grpc.Server) {
 	t.Helper()
-	dir := t.TempDir()
-	certPath, keyPath := identityCA.issue(t, dir, "node-agent-"+addr, serverLeaf)
-	provider, err := credentials.New(credentials.Config{
-		Files: &credentials.FileSource{
-			CertFile: certPath,
-			KeyFile:  keyPath,
-			CAFile:   trustCA.writeBundle(t, filepath.Join(dir, "trust-"+addr+".pem")),
-		},
+	api := spiffetest.Start(t, identityCA, nodeAgentID, trustCA)
+	provider, err := credentials.New(credentials.SPIFFESource{
+		SocketPath:      api.Addr,
+		AuthorizedIDs:   []string{operatorID},
+		OnRotationError: func(error) {},
 	})
 	if err != nil {
 		t.Fatalf("credentials.New: %v", err)
@@ -445,99 +437,4 @@ func queryPool(t *testing.T, client NodeAgentClient) error {
 	defer cancel()
 	_, err := client.DeleteSnapshot(ctx, &setecgrpcv1.DeleteSnapshotRequest{StorageRef: "probe"})
 	return err
-}
-
-// testCA is a throwaway certificate authority for one test.
-type testCA struct {
-	cert *x509.Certificate
-	key  *ecdsa.PrivateKey
-	der  []byte
-}
-
-func newCA(t *testing.T) *testCA {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("ca key: %v", err)
-	}
-	tpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "setec-snapshot-test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("ca cert: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse ca: %v", err)
-	}
-	return &testCA{cert: cert, key: key, der: der}
-}
-
-type leafKind int
-
-const (
-	serverLeaf leafKind = iota
-	clientLeaf
-)
-
-// issue writes a CA-signed leaf keypair into dir and returns the paths.
-// The server leaf always carries "localhost" as a DNS SAN. That is the
-// authority every test dials, per authorityPattern, regardless of
-// which numeric loopback address it is actually reached on.
-func (ca *testCA) issue(t *testing.T, dir, name string, kind leafKind) (certPath, keyPath string) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("leaf key: %v", err)
-	}
-	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: name},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	switch kind {
-	case serverLeaf:
-		tpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-		tpl.DNSNames = []string{"localhost"}
-	case clientLeaf:
-		tpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatalf("leaf cert: %v", err)
-	}
-
-	certPath = filepath.Join(dir, name+".crt")
-	keyPath = filepath.Join(dir, name+".key")
-	writePEM(t, certPath, "CERTIFICATE", der)
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal leaf key: %v", err)
-	}
-	writePEM(t, keyPath, "EC PRIVATE KEY", keyDER)
-	return certPath, keyPath
-}
-
-// writeBundle writes the CA certificate to path and returns path.
-func (ca *testCA) writeBundle(t *testing.T, path string) string {
-	t.Helper()
-	writePEM(t, path, "CERTIFICATE", ca.der)
-	return path
-}
-
-func writePEM(t *testing.T, path, blockType string, der []byte) {
-	t.Helper()
-	buf := pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der})
-	if err := os.WriteFile(path, buf, 0o600); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
 }

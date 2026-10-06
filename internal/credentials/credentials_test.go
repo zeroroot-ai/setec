@@ -16,180 +16,26 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	grpccreds "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-
-	"github.com/zeroroot-ai/setec/internal/credentials"
 )
 
 // ---------------------------------------------------------------------
-// Configuration errors. These are the silent-failure cases: a component
-// that starts with no credential source, or with half a source, must
-// not reach a listener.
+// Handshake behavior of the server credentials. Each refusal is paired
+// with the acceptance case of spiffe_test.go, which uses the same
+// server, so "nothing connected" cannot satisfy the suite.
 // ---------------------------------------------------------------------
-
-func TestNew_NoSourceConfigured(t *testing.T) {
-	t.Parallel()
-	_, err := credentials.New(credentials.Config{})
-	if err == nil {
-		t.Fatal("New with no source: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no credential source") {
-		t.Fatalf("error = %q, want it to name the missing source", err)
-	}
-}
-
-func TestNew_IncompleteFileSource(t *testing.T) {
-	t.Parallel()
-	tests := map[string]struct {
-		src      credentials.FileSource
-		wantWord string
-	}{
-		"no cert": {credentials.FileSource{KeyFile: "k.pem", CAFile: "ca.pem"}, "certificate"},
-		"no key":  {credentials.FileSource{CertFile: "c.pem", CAFile: "ca.pem"}, "key"},
-		"no ca":   {credentials.FileSource{CertFile: "c.pem", KeyFile: "k.pem"}, "CA"},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			_, err := credentials.New(credentials.Config{Files: &tc.src})
-			if err == nil {
-				t.Fatalf("New(%+v): want error, got nil", tc.src)
-			}
-			if !strings.Contains(err.Error(), tc.wantWord) {
-				t.Fatalf("error = %q, want it to mention %q", err, tc.wantWord)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------
-// File-acquisition errors. Every one names the offending path, because
-// the operator fixing it is looking at a volume mount, not at source.
-// ---------------------------------------------------------------------
-
-func TestServerCredentials_MissingCertFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	ca := newCA(t)
-	ca.writeBundle(t, filepath.Join(dir, "ca.pem"))
-
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: filepath.Join(dir, "absent.crt"),
-		KeyFile:  filepath.Join(dir, "absent.key"),
-		CAFile:   filepath.Join(dir, "ca.pem"),
-	})
-	_, err := p.ServerCredentials(t.Context())
-	if err == nil {
-		t.Fatal("want error for absent keypair, got nil")
-	}
-	if !strings.Contains(err.Error(), "absent.crt") {
-		t.Fatalf("error = %q, want it to name the missing certificate file", err)
-	}
-}
-
-func TestServerCredentials_MissingCAFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	ca := newCA(t)
-	certPath, keyPath := ca.issue(t, dir, "server", serverLeaf)
-
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: certPath,
-		KeyFile:  keyPath,
-		CAFile:   filepath.Join(dir, "absent-ca.pem"),
-	})
-	_, err := p.ServerCredentials(t.Context())
-	if err == nil {
-		t.Fatal("want error for absent CA bundle, got nil")
-	}
-	if !strings.Contains(err.Error(), "absent-ca.pem") {
-		t.Fatalf("error = %q, want it to name the missing CA file", err)
-	}
-}
-
-func TestServerCredentials_CAFileIsNotPEM(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	ca := newCA(t)
-	certPath, keyPath := ca.issue(t, dir, "server", serverLeaf)
-	junk := filepath.Join(dir, "junk-ca.pem")
-	if err := os.WriteFile(junk, []byte("not a certificate\n"), 0o600); err != nil {
-		t.Fatalf("write junk CA: %v", err)
-	}
-
-	p := mustProvider(t, credentials.FileSource{CertFile: certPath, KeyFile: keyPath, CAFile: junk})
-	_, err := p.ServerCredentials(t.Context())
-	if err == nil {
-		t.Fatal("want error for a CA bundle with no certificates, got nil")
-	}
-	if !strings.Contains(err.Error(), "junk-ca.pem") {
-		t.Fatalf("error = %q, want it to name the unusable CA file", err)
-	}
-}
-
-func TestClientCredentials_MissingCertFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	ca := newCA(t)
-	ca.writeBundle(t, filepath.Join(dir, "ca.pem"))
-
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: filepath.Join(dir, "absent.crt"),
-		KeyFile:  filepath.Join(dir, "absent.key"),
-		CAFile:   filepath.Join(dir, "ca.pem"),
-	})
-	_, err := p.ClientCredentials(t.Context())
-	if err == nil {
-		t.Fatal("want error for absent keypair, got nil")
-	}
-	if !strings.Contains(err.Error(), "absent.crt") {
-		t.Fatalf("error = %q, want it to name the missing certificate file", err)
-	}
-}
-
-// ---------------------------------------------------------------------
-// Handshake behavior. These assert what a peer observes — the
-// connection is accepted or refused — not the shape of the tls.Config.
-// Every refusal is paired with the acceptance case it is measured
-// against, so "nothing connected" cannot satisfy the suite.
-// ---------------------------------------------------------------------
-
-func TestServerCredentials_AcceptsPeerFromTrustedCA(t *testing.T) {
-	t.Parallel()
-	ca := newCA(t)
-	addr := serveHealth(t, ca)
-
-	if err := dialHealth(t, addr, clientCredsFor(t, ca, ca)); err != nil {
-		t.Fatalf("handshake with a peer from the trusted CA: %v", err)
-	}
-}
-
-func TestServerCredentials_RefusesPeerFromUntrustedCA(t *testing.T) {
-	t.Parallel()
-	ca := newCA(t)
-	foreign := newCA(t)
-	addr := serveHealth(t, ca)
-
-	// Client identity signed by a CA the server does not trust; the
-	// client still trusts the server's CA, so only the client-auth
-	// direction is under test.
-	if err := dialHealth(t, addr, clientCredsFor(t, foreign, ca)); err == nil {
-		t.Fatal("handshake with a peer from an untrusted CA: want refusal, got success")
-	}
-}
 
 func TestServerCredentials_RefusesPeerWithNoCertificate(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	addr := serveHealth(t, ca)
+	api := startWorkloadAPI(t, ca)
+	addr := serveHealthSPIFFE(t, api.addr, callerID)
 
 	// No client certificate at all. This is the case that separates
 	// RequireAndVerifyClientCert from VerifyClientCertIfGiven.
@@ -205,7 +51,8 @@ func TestServerCredentials_RefusesPeerWithNoCertificate(t *testing.T) {
 func TestServerCredentials_RefusesPlaintextPeer(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	addr := serveHealth(t, ca)
+	api := startWorkloadAPI(t, ca)
+	addr := serveHealthSPIFFE(t, api.addr, callerID)
 
 	if err := dialHealth(t, addr, insecure.NewCredentials()); err == nil {
 		t.Fatal("plaintext dial against an mTLS listener: want refusal, got success")
@@ -215,18 +62,14 @@ func TestServerCredentials_RefusesPlaintextPeer(t *testing.T) {
 func TestServerCredentials_RefusesPeerBelowTLS13(t *testing.T) {
 	t.Parallel()
 	ca := newCA(t)
-	addr := serveHealth(t, ca)
+	api := startWorkloadAPI(t, ca)
+	addr := serveHealthSPIFFE(t, api.addr, callerID)
 
-	dir := t.TempDir()
-	certPath, keyPath := ca.issue(t, dir, "client", clientLeaf)
-	keypair, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		t.Fatalf("load client keypair: %v", err)
-	}
 	// A peer that is otherwise entirely acceptable, capped at TLS 1.2.
 	// It must be refused, which is what pins MinVersion.
+	leaf, key := ca.issueSPIFFE(t, callerID)
 	legacy := grpccreds.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{keypair},
+		Certificates: []tls.Certificate{{Certificate: [][]byte{leaf.Raw}, PrivateKey: key, Leaf: leaf}},
 		MinVersion:   tls.VersionTLS12,
 		MaxVersion:   tls.VersionTLS12,
 		RootCAs:      ca.pool(t),
@@ -236,118 +79,9 @@ func TestServerCredentials_RefusesPeerBelowTLS13(t *testing.T) {
 	}
 }
 
-func TestClientCredentials_RefusesServerFromUntrustedCA(t *testing.T) {
-	t.Parallel()
-	ca := newCA(t)
-	foreign := newCA(t)
-
-	// Server identity from a CA the client does not trust. The server
-	// trusts the client, so only the server-verification direction is
-	// under test.
-	addr := serveHealthWith(t, foreign, ca)
-
-	dir := t.TempDir()
-	certPath, keyPath := ca.issue(t, dir, "client", clientLeaf)
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: certPath,
-		KeyFile:  keyPath,
-		CAFile:   ca.writeBundle(t, filepath.Join(dir, "ca.pem")),
-	})
-	creds, err := p.ClientCredentials(t.Context())
-	if err != nil {
-		t.Fatalf("ClientCredentials: %v", err)
-	}
-	if err := dialHealth(t, addr, creds); err == nil {
-		t.Fatal("dial to a server from an untrusted CA: want refusal, got success")
-	}
-}
-
-func TestClientCredentials_AcceptsServerFromTrustedCA(t *testing.T) {
-	t.Parallel()
-	ca := newCA(t)
-	addr := serveHealth(t, ca)
-
-	dir := t.TempDir()
-	certPath, keyPath := ca.issue(t, dir, "client", clientLeaf)
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: certPath,
-		KeyFile:  keyPath,
-		CAFile:   ca.writeBundle(t, filepath.Join(dir, "ca.pem")),
-	})
-	creds, err := p.ClientCredentials(t.Context())
-	if err != nil {
-		t.Fatalf("ClientCredentials: %v", err)
-	}
-	if err := dialHealth(t, addr, creds); err != nil {
-		t.Fatalf("dial to a server from the trusted CA: %v", err)
-	}
-}
-
 // ---------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------
-
-func mustProvider(t *testing.T, src credentials.FileSource) *credentials.Provider {
-	t.Helper()
-	p, err := credentials.New(credentials.Config{Files: &src})
-	if err != nil {
-		t.Fatalf("New(%+v): %v", src, err)
-	}
-	return p
-}
-
-// serveHealth starts an mTLS gRPC health server whose identity and
-// trust anchors both come from ca.
-func serveHealth(t *testing.T, ca *testCA) string {
-	t.Helper()
-	return serveHealthWith(t, ca, ca)
-}
-
-// serveHealthWith starts an mTLS gRPC health server presenting an
-// identity issued by identityCA and trusting clients issued by trustCA.
-func serveHealthWith(t *testing.T, identityCA, trustCA *testCA) string {
-	t.Helper()
-	dir := t.TempDir()
-	certPath, keyPath := identityCA.issue(t, dir, "server", serverLeaf)
-	p := mustProvider(t, credentials.FileSource{
-		CertFile: certPath,
-		KeyFile:  keyPath,
-		CAFile:   trustCA.writeBundle(t, filepath.Join(dir, "trust.pem")),
-	})
-	creds, err := p.ServerCredentials(t.Context())
-	if err != nil {
-		t.Fatalf("ServerCredentials: %v", err)
-	}
-
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	srv := grpc.NewServer(grpc.Creds(creds))
-	healthpb.RegisterHealthServer(srv, health.NewServer())
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	return lis.Addr().String()
-}
-
-// clientCredsFor builds client credentials presenting an identity from
-// identityCA and trusting servers from trustCA. It deliberately does
-// not go through the Provider: several tests need a peer the Provider
-// would refuse to build.
-func clientCredsFor(t *testing.T, identityCA, trustCA *testCA) grpccreds.TransportCredentials {
-	t.Helper()
-	dir := t.TempDir()
-	certPath, keyPath := identityCA.issue(t, dir, "client", clientLeaf)
-	keypair, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		t.Fatalf("load client keypair: %v", err)
-	}
-	return grpccreds.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{keypair},
-		MinVersion:   tls.VersionTLS13,
-		RootCAs:      trustCA.pool(t),
-	})
-}
 
 // dialHealth performs one Check RPC and returns the resulting error.
 // The handshake is lazy in gRPC, so the RPC is what forces it.

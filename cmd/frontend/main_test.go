@@ -6,90 +6,9 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/zeroroot-ai/setec/internal/credentials"
 )
 
 const daemonID = "spiffe://example.org/ns/gibson/sa/gibson-daemon"
-
-// TestCredentialFlags_SelectsAMode covers what an operator can type.
-// The file flags keep their meaning and remain the default posture, the
-// SPIFFE flags are additive, and the two combinations that must never
-// produce a listener — both modes and neither — are refused with a
-// message naming the cause.
-func TestCredentialFlags_SelectsAMode(t *testing.T) {
-	t.Parallel()
-	fileFlags := credentialFlags{tlsCert: "c.pem", tlsKey: "k.pem", tlsClientCA: "ca.pem"}
-	spiffeFlags := credentialFlags{spiffeSocket: "unix:///run/spire/agent-sockets/api.sock"}
-	enrolled := []string{daemonID}
-
-	tests := map[string]struct {
-		flags    credentialFlags
-		enrolled []string
-		wantMode string
-		wantErr  string
-	}{
-		"file mode": {
-			flags:    fileFlags,
-			wantMode: fileMode,
-		},
-		"spiffe mode": {
-			flags:    spiffeFlags,
-			enrolled: enrolled,
-			wantMode: spiffeMode,
-		},
-		"both modes": {
-			flags: credentialFlags{
-				tlsCert: fileFlags.tlsCert, tlsKey: fileFlags.tlsKey, tlsClientCA: fileFlags.tlsClientCA,
-				spiffeSocket: spiffeFlags.spiffeSocket,
-			},
-			enrolled: enrolled,
-			wantMode: conflictingMode,
-			wantErr:  "exactly one",
-		},
-		"no mode": {
-			flags:    credentialFlags{},
-			wantMode: unsetMode,
-			wantErr:  "no credential source",
-		},
-		// A mistyped flag name leaves its value empty. That must name
-		// the missing piece rather than silently selecting the other
-		// mode or producing a listener with unintended credentials.
-		"file mode with a mistyped client-CA flag": {
-			flags:    credentialFlags{tlsCert: "c.pem", tlsKey: "k.pem"},
-			wantMode: fileMode,
-			wantErr:  "CA path is empty",
-		},
-		// The allow-list is the enrolled clients. ParseEnrollment refuses
-		// an empty list first, and credentials.New refuses it again.
-		"spiffe mode with no enrolled client": {
-			flags:    spiffeFlags,
-			wantMode: spiffeMode,
-			wantErr:  "allow-list is empty",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cfg, mode := tc.flags.config(tc.enrolled)
-			if mode != tc.wantMode {
-				t.Errorf("mode = %q, want %q", mode, tc.wantMode)
-			}
-			_, err := credentials.New(cfg)
-			switch {
-			case tc.wantErr == "" && err != nil:
-				t.Fatalf("credentials.New: %v", err)
-			case tc.wantErr == "":
-				return
-			case err == nil:
-				t.Fatalf("credentials.New: want an error mentioning %q, got nil", tc.wantErr)
-			case !strings.Contains(err.Error(), tc.wantErr):
-				t.Fatalf("error = %q, want it to mention %q", err, tc.wantErr)
-			}
-		})
-	}
-}
 
 // TestRepeatedString_CollectsEveryOccurrence pins the allow-list flag
 // being repeatable. Keeping only the last occurrence would silently

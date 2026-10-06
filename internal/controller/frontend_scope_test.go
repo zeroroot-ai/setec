@@ -38,7 +38,7 @@ func TestFrontendScope_OnlyPairNamespacesAndTheirGrants(t *testing.T) {
 		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "frontend.enabled=true",
-		"--set", "frontend.tlsCertSecretName=x", "--set", "frontend.tlsClientCASecretName=y",
+		"--set", "credentials.spiffe.trustDomain=example.org",
 		"--set", "frontend.clients[0].name=saas",
 		"--set", "frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon",
 		"--show-only", "templates/frontend-scope-policy.yaml")

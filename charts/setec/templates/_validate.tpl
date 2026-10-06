@@ -71,34 +71,24 @@ render instead.
 {{- end -}}
 
 {{/*
-Credential-mode validation (setec#183). The mode is install-wide: it
-covers the frontend server, the node-agent server, and the operator's
-node-agent dialer together, so a mixed file/SPIFFE posture is not
-reachable from a values file. In spiffe mode an empty authorized-ID
+Credential validation (setec#175). setec has one credential source: the
+SPIFFE Workload API. It covers the frontend server, the node-agent
+server, and the operator's node-agent dialer. An empty authorized-ID
 list fails the render rather than deferring to the binary's startup
 error, so the mistake is caught before it reaches a cluster.
 */}}
 {{- define "setec.validateCredentials" -}}
-{{- $c := .Values.credentials -}}
-{{- if not (has $c.mode (list "file" "spiffe")) -}}
-{{- fail (printf "credentials.mode must be \"file\" or \"spiffe\", got %q" $c.mode) -}}
-{{- end -}}
-{{- if eq $c.mode "spiffe" -}}
-{{- $s := $c.spiffe -}}
+{{- $s := .Values.credentials.spiffe -}}
 {{- if not $s.socketPath -}}
-{{- fail "credentials.spiffe.socketPath is required in spiffe mode" -}}
+{{- fail "credentials.spiffe.socketPath is required" -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $s.socketPath) -}}
 {{- fail (printf "credentials.spiffe.socketPath must be a bare absolute filesystem path (no unix:// prefix); got %q" $s.socketPath) -}}
 {{- end -}}
 {{- if and .Values.nodeAgent.enabled .Values.snapshots.enabled (not $s.authorizedIDs.nodeAgentClients) -}}
-{{- fail "credentials.spiffe.authorizedIDs.nodeAgentClients must not be empty in spiffe mode with nodeAgent.enabled=true and snapshots.enabled=true: the node-agent refuses an empty allow-list" -}}
+{{- fail "credentials.spiffe.authorizedIDs.nodeAgentClients must not be empty with nodeAgent.enabled=true and snapshots.enabled=true: the node-agent refuses an empty allow-list" -}}
 {{- end -}}
 {{- if and .Values.snapshots.enabled (not $s.authorizedIDs.nodeAgentServers) -}}
-{{- fail "credentials.spiffe.authorizedIDs.nodeAgentServers must not be empty in spiffe mode with snapshots.enabled=true: the operator's node-agent dialer refuses an empty allow-list" -}}
-{{- end -}}
-{{- if and .Values.snapshots.enabled .Values.snapshots.mTLS.certManager.enabled -}}
-{{- fail "snapshots.mTLS.certManager.enabled has no effect in credentials.mode=spiffe (identities come from the Workload API, not cert-manager); disable it rather than carrying unused Certificate objects" -}}
-{{- end -}}
+{{- fail "credentials.spiffe.authorizedIDs.nodeAgentServers must not be empty with snapshots.enabled=true: the operator's node-agent dialer refuses an empty allow-list" -}}
 {{- end -}}
 {{- end -}}

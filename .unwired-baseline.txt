@@ -181,3 +181,11 @@ var frontend.ErrNoPeerCert	# internal/frontend/auth.go:24
 # tests of the disk builder and the e2e suite read it; the measurer does
 # not count _test.go files.
 func signtest.SignWithNewKey	# internal/diskbuilder/signtest/signtest.go:32
+# spiffetest serves a fake SPIFFE Workload API to the tests of the packages
+# that build credentials (setec#175). Only _test.go files read it, and the
+# measurer does not count them.
+field spiffetest.WorkloadAPI.Addr	# internal/credentials/spiffetest/spiffetest.go:113
+func spiffetest.NewCA	# internal/credentials/spiffetest/spiffetest.go:39
+func spiffetest.Start	# internal/credentials/spiffetest/spiffetest.go:123
+method spiffetest.CA.Pool	# internal/credentials/spiffetest/spiffetest.go:66
+method spiffetest.WorkloadAPI.FetchX509SVID	# internal/credentials/spiffetest/spiffetest.go:175

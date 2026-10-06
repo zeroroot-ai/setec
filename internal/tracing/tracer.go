@@ -165,9 +165,7 @@ func Setup(cfg Config) (trace.Tracer, ShutdownFunc, error) {
 //     stronger statement than "the certificate chains".
 //
 // Configuring both is a startup error rather than a silent precedence
-// rule, for the same reason the credential modes are exclusive
-// everywhere else in setec: an operator must never have to work out
-// which one won.
+// rule: an operator must never have to work out which one won.
 func exporterCredentials(cfg Config) (grpccreds.TransportCredentials, error) {
 	if cfg.SPIFFESocket == "" && len(cfg.SPIFFEServers) == 0 {
 		return credentials.TrustOnlyCredentials(credentials.TrustOnly{CAFile: cfg.CAFile})
@@ -176,10 +174,10 @@ func exporterCredentials(cfg Config) (grpccreds.TransportCredentials, error) {
 		return nil, errors.New(
 			"both --otel-ca-file and the --otel-spiffe-* flags are configured; exactly one must be")
 	}
-	provider, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+	provider, err := credentials.New(credentials.SPIFFESource{
 		SocketPath:    cfg.SPIFFESocket,
 		AuthorizedIDs: cfg.SPIFFEServers,
-	}})
+	})
 	if err != nil {
 		return nil, err
 	}

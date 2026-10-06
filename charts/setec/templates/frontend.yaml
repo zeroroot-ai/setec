@@ -1,12 +1,4 @@
 {{- if .Values.frontend.enabled -}}
-{{- if eq .Values.credentials.mode "file" -}}
-{{- if not .Values.frontend.tlsCertSecretName -}}
-{{- fail "frontend.tlsCertSecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS." -}}
-{{- end -}}
-{{- if not .Values.frontend.tlsClientCASecretName -}}
-{{- fail "frontend.tlsClientCASecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS (client-cert verification)." -}}
-{{- end -}}
-{{- end -}}
 {{- if not .Values.frontend.clients -}}
 {{- fail "frontend.clients must not be empty when frontend.enabled=true: the frontend refuses every caller that is not an enrolled client, so an install with no client serves nobody. Add one {name, spiffeID} entry for each Gibson cluster." -}}
 {{- end -}}
@@ -55,13 +47,7 @@ spec:
             # makes: Pod writes for the operator, exec for the frontend.
             - --pair-namespace-grant={{ include "setec.fullname" . }}-sandbox-namespace={{ .Values.namespace }}/{{ include "setec.serviceAccountName" . }}
             - --pair-namespace-grant={{ include "setec.fullname" . }}-frontend-exec={{ .Values.namespace }}/{{ include "setec.fullname" . }}-frontend
-            {{- if eq .Values.credentials.mode "spiffe" }}
             - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
-            {{- else }}
-            - --tls-cert=/etc/setec/tls/tls.crt
-            - --tls-key=/etc/setec/tls/tls.key
-            - --tls-client-ca=/etc/setec/tls-ca/ca.crt
-            {{- end }}
           ports:
             - name: grpc
               containerPort: 50051
@@ -74,20 +60,10 @@ spec:
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           volumeMounts:
-            {{- if eq .Values.credentials.mode "spiffe" }}
             - name: spiffe-workload-api
               mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
               readOnly: true
-            {{- else }}
-            - name: tls
-              mountPath: /etc/setec/tls
-              readOnly: true
-            - name: tls-ca
-              mountPath: /etc/setec/tls-ca
-              readOnly: true
-            {{- end }}
       volumes:
-        {{- if eq .Values.credentials.mode "spiffe" }}
         {{- /* The socket's directory, not the socket file: the SPIRE agent
         recreates the socket on restart, and a hostPath to the file would
         pin the old inode. Directory (not DirectoryOrCreate) so a node
@@ -97,14 +73,6 @@ spec:
           hostPath:
             path: {{ dir .Values.credentials.spiffe.socketPath }}
             type: Directory
-        {{- else }}
-        - name: tls
-          secret:
-            secretName: {{ .Values.frontend.tlsCertSecretName }}
-        - name: tls-ca
-          secret:
-            secretName: {{ .Values.frontend.tlsClientCASecretName }}
-        {{- end }}
 ---
 apiVersion: v1
 kind: Service

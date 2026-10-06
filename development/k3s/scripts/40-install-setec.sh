@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap namespaces + dev TLS Secrets + helm install Setec on the local
+# Bootstrap namespaces + the disk signing Secret + helm install Setec on the local
 # k3s cluster. Idempotent (helm upgrade --install).
 #
 # After this script:
@@ -21,10 +21,11 @@ export KUBECONFIG="${ROOT}/kubeconfig"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 
-[[ -f "${PKI}/server.crt" && -f "${PKI}/client.crt" ]] || {
-    echo "FAIL: PKI missing — run scripts/30-generate-pki.sh first" >&2
+kubectl -n spire-server get statefulset spire-server >/dev/null 2>&1 || {
+    echo "FAIL: SPIRE missing — run scripts/30-install-spire.sh first" >&2
     exit 1
 }
+mkdir -p "${PKI}"
 [[ -f "${ROOT}/disk-repo" ]] || {
     echo "FAIL: no disk registry — run scripts/20-install-disk-registry.sh first" >&2
     exit 1
@@ -52,21 +53,9 @@ metadata:
     setec.zeroroot.ai/tenant: gibson-dev
 EOF
 
-# Server TLS secret (chart consumes setec-frontend-tls)
-green "Materialising server TLS Secret (setec-frontend-tls)"
-kubectl -n setec-system create secret tls setec-frontend-tls \
-    --cert="${PKI}/server.crt" --key="${PKI}/server.key" \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-# CA secret for client cert verification (chart consumes setec-frontend-ca)
-green "Materialising client CA Secret (setec-frontend-ca)"
-kubectl -n setec-system create secret generic setec-frontend-ca \
-    --from-file=ca.crt="${PKI}/ca.crt" \
-    --dry-run=client -o yaml | kubectl apply -f -
-
 # The disk signing key. The disk builder signs each image disk with the
 # seed, and each launcher checks the signature with the public key. The dev
-# key lives in pki/ beside the dev CA.
+# key lives in pki/ beside the dev client SVID.
 if [[ ! -f "${PKI}/disk-signing.pem" ]]; then
     green "Generating the dev disk signing key"
     openssl genpkey -algorithm ed25519 -out "${PKI}/disk-signing.pem"

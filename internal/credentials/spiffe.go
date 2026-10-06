@@ -35,18 +35,14 @@ const workloadAPITimeout = 30 * time.Second
 // SPIFFESource obtains the component's identity and trust anchors from
 // the SPIFFE Workload API, and authorizes the peer by SPIFFE ID.
 //
-// It differs from FileSource in two ways that matter. The identity is
-// attested rather than possessed — it is issued to this workload by the
-// local SPIRE agent instead of being read from a file anything in the
-// container could read — and it rotates in-process, so a handshake uses
-// the SVID as it stands at that moment rather than the one that existed
-// at boot.
+// The identity is attested rather than possessed: the local SPIRE agent
+// issues it to this workload, and no file in the container holds it. It
+// rotates in-process, so a handshake uses the SVID as it stands at that
+// moment rather than the one that existed at boot.
 //
-// The second difference is authorization. File mode accepts any peer
-// the configured CA issued a certificate to; SPIFFE mode additionally
-// requires the peer's SPIFFE ID to appear in AuthorizedIDs. That is why
-// the allow-list is mandatory: a SPIFFE mode without it would prove
-// exactly what file mode proves while reading like an upgrade.
+// A peer must chain to the trust bundle, and its SPIFFE ID must also be
+// in AuthorizedIDs. That is why the allow-list is mandatory: without it,
+// any certificate of the trust domain would be accepted.
 type SPIFFESource struct {
 	// SocketPath is the Workload API endpoint, either a filesystem
 	// path to the agent's socket ("/run/spire/agent-sockets/api.sock")
@@ -351,22 +347,3 @@ func (s *spiffeSource) authorizePeer(verified [][]*x509.Certificate) error {
 	}
 	return fmt.Errorf("SPIFFE peer authorization: peer %q is not an authorized SPIFFE ID", id)
 }
-
-// rotates reports that this source maintains its material in-process.
-func (s *spiffeSource) rotates() bool { return true }
-
-// namesPeer reports that an X509-SVID carries no name the standard
-// hostname check can use.
-//
-// An SVID identifies its holder by URI SAN and nothing else: there is
-// no DNS SAN for Go to match against the dial target. Saying so here is
-// what makes the Provider replace the hostname check with the SPIFFE-ID
-// check on the client side, rather than skip verification or fail every
-// handshake on a name that was never going to be there.
-//
-// AuthorizedIDs means the same thing in both directions — the peers
-// this component completes a handshake with. On a server that is the
-// set of callers; on a client it is the set of servers worth talking
-// to, which is the check that makes chaining to the trust bundle
-// insufficient.
-func (s *spiffeSource) namesPeer() bool { return false }

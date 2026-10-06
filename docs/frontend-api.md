@@ -209,31 +209,9 @@ existing isolation boundary; it does not widen one.
 
 ## Authentication
 
-mTLS is mandatory, TLS 1.3 is the floor, and every client must present a
-certificate. What that certificate has to prove depends on the
-credential mode.
-
-The frontend runs in exactly one mode. Configuring both or neither is a
-startup error naming the cause, and there is no fallback between them:
-a SPIFFE frontend that cannot reach its Workload API fails to boot
-rather than quietly reverting to files.
-
-### File mode (default)
-
-- `--tls-cert=/etc/setec/tls/tls.crt` and `--tls-key=/etc/setec/tls/tls.key`
-  (server cert + key).
-- `--tls-client-ca=/etc/setec/tls-ca/ca.crt` (client-cert CA bundle).
-
-All three are required; the process refuses to start if any one is
-missing. **A client is accepted if the configured CA issued its
-certificate — any client, not a particular one.** Narrowing that is what
-SPIFFE mode is for.
-
-The Helm chart refuses to render the frontend Deployment when either
-`frontend.tlsCertSecretName` or `frontend.tlsClientCASecretName` is
-unset in file mode. There is no insecure fallback.
-
-### SPIFFE mode
+mTLS is mandatory, TLS 1.3 is the floor, and every client must present an
+X509-SVID. setec has one credential source: the SPIFFE Workload API
+(setec#175). No PEM file credential source exists.
 
 - `--spiffe-socket=unix:///run/spire/agent-sockets/api.sock` — the SPIFFE
   Workload API endpoint. A bare filesystem path is also accepted and
@@ -256,42 +234,23 @@ the bundle of one client domain is missing, the frontend refuses the
 clients of that domain, reports the failure, and keeps serving every
 other domain.
 
-Losing the Workload API is reported immediately rather than becoming
-visible when the last SVID expires.
+A frontend that cannot reach its Workload API fails to boot. Losing the
+Workload API later is reported immediately rather than becoming visible
+when the last SVID expires.
 
-From the Helm chart, SPIFFE mode is selected install-wide with
-`credentials.mode=spiffe` — the switch covers the frontend, the
-node-agent server, and the operator's node-agent dialer together, so a
-mixed file/SPIFFE posture is not reachable from a values file. The
-chart renders `--spiffe-socket` from `credentials.spiffe.socketPath`
-(default `/run/spire/agent-sockets/api.sock`, hostPath-mounted
-read-only by directory) and one `--client` per entry in
-`frontend.clients`; an empty list fails the render rather than deferring
-to the startup error, and a node
-without a Workload API socket directory fails Pod creation rather than
-booting a frontend that can never fetch an SVID. See the chart README
-"Credential modes".
+The SVID of the frontend names it by its SPIFFE ID and carries no
+hostname. A client checks that SPIFFE ID instead of a hostname, as the
+examples do with `--server-spiffe-id`.
 
-SPIFFE mode is server-side only today. The snapshot dialer and tracing
-exporter still use file credentials, and asking for client credentials
-from a SPIFFE-configured frontend is an error rather than a silent
-downgrade.
-
-### Startup log line
-
-The selected mode is stated once at startup, so a pod's logs say which
-posture it is running:
-
-```
-frontend: credential mode: spiffe
-```
-
-### Tenant identity
-
-Independently of the mode, the server derives the *tenant* from the peer
-certificate in precedence order: SPIFFE URI SAN, DNS SAN, Subject CN.
-That is a different question from authorization — it answers which
-tenant a call is for, not whether the caller may make it.
+From the Helm chart, the same source covers the frontend, the node-agent
+server, and the operator's node-agent dialer. The chart renders
+`--spiffe-socket` from `credentials.spiffe.socketPath` (default
+`/run/spire/agent-sockets/api.sock`, hostPath-mounted read-only by
+directory) and one `--client` per entry in `frontend.clients`. An empty
+list fails the render rather than deferring to the startup error, and a
+node without a Workload API socket directory fails Pod creation rather
+than booting a frontend that can never fetch an SVID. See the chart
+README "Credentials".
 
 ## Enrolled clients and tenant resolution
 
@@ -327,38 +286,37 @@ labels on each Sandbox that they create.
 
 ## Example client
 
+A Gibson cluster calls the frontend with the SVID that its SPIRE agent
+serves. go-spiffe builds the credentials, and the client authorizes the
+frontend by its SPIFFE ID:
+
 ```go
 package main
 
 import (
   "context"
-  "crypto/tls"
-  "crypto/x509"
   "log"
-  "os"
 
+  "github.com/spiffe/go-spiffe/v2/spiffeid"
+  "github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
+  "github.com/spiffe/go-spiffe/v2/workloadapi"
   pb "github.com/zeroroot-ai/setec/api/grpc/v1"
   "google.golang.org/grpc"
   "google.golang.org/grpc/credentials"
 )
 
 func main() {
-  cert, err := tls.LoadX509KeyPair("client.crt", "client.key")
+  ctx := context.Background()
+  // The SVID and the bundle come from the Workload API, and rotate.
+  source, err := workloadapi.NewX509Source(ctx,
+    workloadapi.WithClientOptions(workloadapi.WithAddr("unix:///run/spire/agent-sockets/api.sock")))
   if err != nil {
     log.Fatal(err)
   }
-  caPEM, err := os.ReadFile("ca.crt")
-  if err != nil {
-    log.Fatal(err)
-  }
-  pool := x509.NewCertPool()
-  pool.AppendCertsFromPEM(caPEM)
+  defer source.Close()
 
-  creds := credentials.NewTLS(&tls.Config{
-    Certificates: []tls.Certificate{cert},
-    RootCAs:      pool,
-    MinVersion:   tls.VersionTLS13,
-  })
+  frontend := spiffeid.RequireFromString("spiffe://example.org/ns/setec-system/sa/setec-frontend")
+  creds := credentials.NewTLS(tlsconfig.MTLSClientConfig(source, source, tlsconfig.AuthorizeID(frontend)))
   conn, err := grpc.NewClient("setec-frontend.setec-system.svc:50051",
     grpc.WithTransportCredentials(creds))
   if err != nil {

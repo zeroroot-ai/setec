@@ -30,12 +30,8 @@ frontend:
   image:
     tag: "dev"
     pullPolicy: Never
-  # Dev TLS material delivered via Secrets created by 40-install-setec.sh
-  # from the dev PKI under ../pki/. Production delivers via SPIRE.
-  tlsCertSecretName: setec-frontend-tls
-  tlsClientCASecretName: setec-frontend-ca
-  # The one enrolled client of dev. 30-generate-pki.sh writes this SPIFFE
-  # ID into the URI SAN of the dev client certificate.
+  # The one enrolled client of dev. 35-mint-client-svid.sh mints an SVID
+  # for this SPIFFE ID, and the smoke scripts dial with it.
   clients:
     - name: dev
       spiffeID: spiffe://dev.local/ns/gibson/sa/gibson-daemon
@@ -90,3 +86,11 @@ devicePlugin:
   image:
     tag: "dev"
     pullPolicy: Never
+
+# The one credential source of setec is the SPIFFE Workload API
+# (setec#175). 30-install-spire.sh installs SPIRE with the trust domain
+# dev.local. Its agent serves the Workload API at this socket on the node.
+credentials:
+  spiffe:
+    socketPath: /run/spire/agent-sockets/spire-agent.sock
+    trustDomain: dev.local

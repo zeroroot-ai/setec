@@ -103,15 +103,9 @@ spec:
             - --kept-pinned-limit={{ .Values.snapshots.kept.pinnedLimit }}
             - --nodeagent-authority-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052
             - --nodeagent-namespace={{ .Values.namespace }}
-            {{- if eq .Values.credentials.mode "spiffe" }}
             - --nodeagent-spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
             {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentServers }}
             - --nodeagent-spiffe-authorized-id={{ . }}
-            {{- end }}
-            {{- else }}
-            - --nodeagent-tls-cert=/etc/setec/nodeagent-tls/tls.crt
-            - --nodeagent-tls-key=/etc/setec/nodeagent-tls/tls.key
-            - --nodeagent-ca=/etc/setec/nodeagent-ca/ca.crt
             {{- end }}
             {{- end }}
           ports:
@@ -143,18 +137,9 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           volumeMounts:
             {{- if .Values.snapshots.enabled }}
-            {{- if eq .Values.credentials.mode "spiffe" }}
             - name: spiffe-workload-api
               mountPath: {{ dir .Values.credentials.spiffe.socketPath }}
               readOnly: true
-            {{- else }}
-            - name: nodeagent-tls
-              mountPath: /etc/setec/nodeagent-tls
-              readOnly: true
-            - name: nodeagent-ca
-              mountPath: /etc/setec/nodeagent-ca
-              readOnly: true
-            {{- end }}
             {{- end }}
             {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
             - name: otel-ca
@@ -172,24 +157,10 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.snapshots.enabled }}
-        {{- if eq .Values.credentials.mode "spiffe" }}
         - name: spiffe-workload-api
           hostPath:
             path: {{ dir .Values.credentials.spiffe.socketPath }}
             type: Directory
-        {{- else }}
-        - name: nodeagent-tls
-          secret:
-            secretName: {{ .Values.snapshots.mTLS.operatorCertSecret }}
-        - name: nodeagent-ca
-          secret:
-            secretName: {{ .Values.snapshots.mTLS.caSecret }}
-            # The CA Secret cert-manager issues also holds the CA private
-            # key as tls.key. Only the certificate reaches the Pod.
-            items:
-              - key: ca.crt
-                path: ca.crt
-        {{- end }}
         {{- end }}
         {{- if and .Values.observability.enabled .Values.observability.otelTLS.enabled .Values.observability.otelTLS.caSecretName }}
         - name: otel-ca
