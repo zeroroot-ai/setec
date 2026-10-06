@@ -38,7 +38,15 @@
 name: e2e
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      pass:
+        # An on-demand run of one job spares the runners while a change is
+        # under test. The nightly run always runs both.
+        description: 'The scenarios to run: all, suites (the backends of today) or launcher'
+        type: choice
+        options: [all, suites, launcher]
+        default: all
   # Nightly. The suites are too long for the merge gate, but "not on every
   # merge" must not mean "never" (setec#298).
   schedule:
@@ -251,6 +259,7 @@ jobs:
   suites:
     name: suites (${{ matrix.pass }})
     needs: build-images
+    if: github.event_name != 'workflow_dispatch' || inputs.pass != 'launcher'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -948,6 +957,7 @@ jobs:
   launcher:
     name: launcher
     needs: build-images
+    if: github.event_name != 'workflow_dispatch' || inputs.pass != 'suites'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
