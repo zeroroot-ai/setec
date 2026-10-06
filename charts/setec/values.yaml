@@ -803,15 +803,18 @@ nodeAgent:
   # prefetchImages is a space-separated list of OCI references the
   # agent pulls into the containerd content store on startup.
   prefetchImages: ""
-  # resources for the node-agent container. Under-provisioned by
-  # design; the agent is near-idle between samples.
+  # resources for the node-agent container. The agent is near-idle
+  # between snapshots, but a snapshot encrypts the memory of a machine,
+  # and the base of a warm pool is also scanned for secrets. With a limit
+  # of a tenth of a CPU, the base of a 1 GiB machine took more than ten
+  # minutes (setec#103), so the limit lets a snapshot burst.
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
     limits:
-      cpu: 100m
-      memory: 128Mi
+      cpu: "2"
+      memory: 512Mi
 
 # -- frontend installs the gRPC SandboxService Deployment.
 frontend:
