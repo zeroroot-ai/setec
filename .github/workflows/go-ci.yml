@@ -312,9 +312,8 @@ jobs:
 
       - name: x86-substrate assertions (docs/design/runtime.md)
         # The sandbox substrate is x86 only (setec#186): image publishing
-        # must stay single-arch linux/amd64 and the node-facing DaemonSets
-        # and Karpenter NodePool must keep their kubernetes.io/arch=amd64
-        # gating. This fails the build if either is reintroduced.
+        # must stay single-arch linux/amd64, and the node-facing DaemonSets
+        # must keep their kubernetes.io/arch=amd64 gating. This fails the build if either is reintroduced.
         run: ./hack/verify-x86-substrate.sh charts/setec
 
       - name: x86-substrate build-file rule fixture

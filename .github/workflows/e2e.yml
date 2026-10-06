@@ -150,7 +150,7 @@ jobs:
   # Every Sandbox of this job is a Firecracker machine in a launcher Pod. The
   # job runs the whole suite: a sandbox, a session, exec, egress, suspend and
   # resume, a drain, admission, snapshots, and the launcher abilities
-  # (test/e2e/launcher_test.go): a restore with the ADR-0145 invariants, an
+  # (test/e2e/launcher_test.go): a restore with the invariants of docs/design/isolation.md, an
   # unverified restore that fails closed, the warm pool, a fork into three
   # and a kept snapshot. Then it runs the chain-6 exit test and its failing
   # fixture.
