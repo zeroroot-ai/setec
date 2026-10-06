@@ -502,8 +502,7 @@ func TestAPI_MemoryCeiling(t *testing.T) {
 	ns := newNamespace(t, "memceiling")
 	mk := func(name, memory string) *setecv1alpha1.Sandbox {
 		scratch := resource.MustParse("2Gi")
-		return &setecv1alpha1.Sandbox{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		sb := &setecv1alpha1.Sandbox{
 			Spec: setecv1alpha1.SandboxSpec{
 				Image:   "busybox",
 				Command: []string{"true"},
@@ -512,6 +511,8 @@ func TestAPI_MemoryCeiling(t *testing.T) {
 				},
 			},
 		}
+		sb.Name, sb.Namespace = name, ns
+		return sb
 	}
 	atCeiling := mk("at-ceiling", "64Gi")
 	g.Expect(testClient.Create(testCtx, atCeiling)).To(Succeed())

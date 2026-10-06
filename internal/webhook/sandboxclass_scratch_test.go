@@ -47,7 +47,7 @@ func TestSandboxClassWebhook_ValidateScratch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabelled()), baseConfig())
+			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			switch {
 			case tc.wantMsg == "" && err != nil:
