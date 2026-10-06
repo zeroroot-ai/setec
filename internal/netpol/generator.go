@@ -7,7 +7,7 @@
 // all Kubernetes I/O and ownership references; this package only computes
 // shape.
 //
-// The package holds one invariant: for a non-nil Sandbox, Generate always
+// The package holds one invariant: for a non-nil Sandbox, GenerateForClass always
 // returns a policy. There is no input — no mode, no absent network block,
 // no absent class, no unresolvable destination — that yields "no policy",
 // and none that widens a rule as a fallback. A Sandbox the operator cannot
@@ -96,9 +96,9 @@ const AnnotationSuppressed = "setec.zeroroot.ai/suppressed-allow"
 // policy decisions.
 const AnnotationUnresolved = "setec.zeroroot.ai/unresolved-allow"
 
-// Errors returned by Generate for inputs the pure function cannot handle.
+// Errors returned by GenerateForClass for inputs the pure function cannot handle.
 var (
-	// ErrNilSandbox is returned when Generate is invoked with a nil
+	// ErrNilSandbox is returned when GenerateForClass is invoked with a nil
 	// Sandbox pointer.
 	ErrNilSandbox = errors.New("netpol: sandbox is nil")
 
@@ -250,11 +250,11 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Generate translates a Sandbox's declared network policy into a
+// GenerateForClass translates a Sandbox's declared network policy into a
 // networkingv1.NetworkPolicy. Behavior:
 //
-//   - Network unset: treated as mode=none. Callers that want a class
-//     default applied must go through GenerateForClass.
+//   - Network unset: the class default applies. With no class, or a class
+//     with no default, it is treated as mode=none.
 //   - mode=none: a policy selecting the Sandbox Pod with
 //     policyTypes=[Ingress, Egress] and empty rules — denying all traffic
 //     both ways.
@@ -270,20 +270,16 @@ func (c Config) Validate() error {
 //
 // Under both permissive modes the class's EgressAllowSelectors render as
 // one further rule each, a namespaceSelector/podSelector peer with the
-// listed ports (setec#76). GenerateForClass is the entry point that sees
-// the class; Generate renders none.
+// listed ports (setec#76). A nil class renders none.
 //
 // The returned NetworkPolicy is cluster-ready apart from its
 // OwnerReferences, which the controller stamps via
 // controllerutil.SetControllerReference. The controller also decides
 // whether to Create or Patch; this function never mutates anything.
 //
-// Generate never returns a nil policy together with a nil error.
-func (c Config) Generate(ctx context.Context, sb *setecv1alpha1.Sandbox) (*networkingv1.NetworkPolicy, error) {
-	return c.generate(ctx, sb, nil)
-}
-
-// GenerateForClass is the class-aware entry point (docs/design/threat-model.md, setec#66). It
+// GenerateForClass never returns a nil policy together with a nil error.
+//
+// It is the class-aware entry point (docs/design/threat-model.md, setec#66). It
 // resolves the Sandbox's effective network posture, applying the
 // SandboxClass default when the Sandbox does not declare its own
 // spec.network, then produces the policy.

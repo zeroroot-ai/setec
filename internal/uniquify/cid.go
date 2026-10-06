@@ -96,10 +96,3 @@ func (a *CIDAllocator) Owner(cid uint32) (string, bool) {
 	owner, ok := a.inUse[cid]
 	return owner, ok
 }
-
-// Active returns the number of live registrations (metrics/tests).
-func (a *CIDAllocator) Active() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.inUse)
-}

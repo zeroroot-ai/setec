@@ -9,7 +9,6 @@ package controller
 
 // SandboxReconciler actions.
 const (
-	actionReconcileSandbox     = "ReconcileSandbox"
 	actionResolveTenant        = "ResolveTenant"
 	actionResolveSandboxClass  = "ResolveSandboxClass"
 	actionReapOrphanedSandbox  = "ReapOrphanedSandbox"

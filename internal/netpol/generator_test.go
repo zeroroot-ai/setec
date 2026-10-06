@@ -197,12 +197,12 @@ func TestGenerate_NeverReturnsNilPolicy(t *testing.T) {
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().Generate(t.Context(), s)
+			got, err := testCfg().GenerateForClass(t.Context(), s, nil)
 			if err != nil {
-				t.Fatalf("Generate() err: %v", err)
+				t.Fatalf("GenerateForClass() err: %v", err)
 			}
 			if got == nil {
-				t.Fatal("Generate() returned a nil policy; every Sandbox must be policed")
+				t.Fatal("GenerateForClass() returned a nil policy; every Sandbox must be policed")
 			}
 			if !slices.Contains(got.Spec.PolicyTypes, networkingv1.PolicyTypeEgress) {
 				t.Errorf("PolicyTypes %v omits Egress; egress would be unrestricted", got.Spec.PolicyTypes)
@@ -220,9 +220,9 @@ func TestGenerate_NeverReturnsNilPolicy(t *testing.T) {
 func TestGenerate_AbsentNetworkIsDenyAll(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(""))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(""), nil)
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	if len(got.Spec.Egress) != 0 {
 		t.Fatalf("absent network must yield zero egress rules, got %+v", got.Spec.Egress)
@@ -235,9 +235,9 @@ func TestGenerate_AbsentNetworkIsDenyAll(t *testing.T) {
 func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeNone))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeNone), nil)
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	want := &networkingv1.NetworkPolicy{
@@ -257,7 +257,7 @@ func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Fatalf("Generate() diff (-want +got):\n%s", diff)
+		t.Fatalf("GenerateForClass() diff (-want +got):\n%s", diff)
 	}
 }
 
@@ -269,9 +269,9 @@ func TestGenerate_ModeNoneDeniesAll(t *testing.T) {
 func TestGenerate_ExternalOnlyShape(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly), nil)
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	want := &networkingv1.NetworkPolicy{
@@ -302,7 +302,7 @@ func TestGenerate_ExternalOnlyShape(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Fatalf("Generate() diff (-want +got):\n%s", diff)
+		t.Fatalf("GenerateForClass() diff (-want +got):\n%s", diff)
 	}
 }
 
@@ -312,9 +312,9 @@ func TestGenerate_ExternalOnlyShape(t *testing.T) {
 func TestGenerate_ExternalOnlyKeepsArbitraryPortsOpen(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly), nil)
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	var found bool
@@ -340,10 +340,11 @@ func TestGenerate_ExternalOnlyKeepsArbitraryPortsOpen(t *testing.T) {
 func TestGenerate_AllowListDoesNotOpenInClusterCIDRs(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	// An allow-list entry must never name all of public address space.
@@ -387,10 +388,11 @@ func TestGenerate_AllowListDoesNotOpenInClusterCIDRs(t *testing.T) {
 func TestGenerate_AllowListRuleShape(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	want := &networkingv1.NetworkPolicy{
@@ -427,7 +429,7 @@ func TestGenerate_AllowListRuleShape(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Fatalf("Generate() diff (-want +got):\n%s", diff)
+		t.Fatalf("GenerateForClass() diff (-want +got):\n%s", diff)
 	}
 }
 
@@ -437,10 +439,11 @@ func TestGenerate_AllowListRuleShape(t *testing.T) {
 func TestGenerate_AllowListPinnedCIDR(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "vendor.example.com", Port: 443, CIDR: "203.0.113.0/24"}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "vendor.example.com", Port: 443, CIDR: "203.0.113.0/24"}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	rule := got.Spec.Egress[1]
@@ -461,10 +464,11 @@ func TestGenerate_AllowListPinnedCIDR(t *testing.T) {
 func TestGenerate_AllowListReservedTargetIsSuppressed(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "daemon.platform.svc", Port: 50051, CIDR: "10.96.0.0/12"}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "daemon.platform.svc", Port: 50051, CIDR: "10.96.0.0/12"}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	// Only the DNS rule survives.
@@ -515,9 +519,9 @@ func TestGenerate_DNSTargetsOnlyConfiguredResolvers(t *testing.T) {
 	} {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().Generate(t.Context(), sb(mode))
+			got, err := testCfg().GenerateForClass(t.Context(), sb(mode), nil)
 			if err != nil {
-				t.Fatalf("Generate() err: %v", err)
+				t.Fatalf("GenerateForClass() err: %v", err)
 			}
 
 			var dns *networkingv1.NetworkPolicyEgressRule
@@ -578,7 +582,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestGenerate_NilSandbox(t *testing.T) {
 	t.Parallel()
-	_, err := testCfg().Generate(t.Context(), nil)
+	_, err := testCfg().GenerateForClass(t.Context(), nil, nil)
 	if err == nil || !errors.Is(err, ErrNilSandbox) {
 		t.Fatalf("expected ErrNilSandbox, got %v", err)
 	}
@@ -586,7 +590,7 @@ func TestGenerate_NilSandbox(t *testing.T) {
 
 func TestGenerate_UnknownMode(t *testing.T) {
 	t.Parallel()
-	_, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkMode("mystery")))
+	_, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkMode("mystery")), nil)
 	if err == nil || !errors.Is(err, ErrUnknownMode) {
 		t.Fatalf("expected ErrUnknownMode, got %v", err)
 	}
@@ -604,10 +608,11 @@ func TestGenerate_UnknownMode(t *testing.T) {
 func TestGenerate_UnresolvableHostIsDroppedNotWidened(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "private.internal.corp", Port: 8080}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "private.internal.corp", Port: 8080}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	if got.Annotations["setec.zeroroot.ai/allow-8080"] != "private.internal.corp" {
@@ -643,10 +648,11 @@ func TestGenerate_NoResolverConfiguredFailsClosed(t *testing.T) {
 	cfg := testCfg()
 	cfg.Resolver = nil
 
-	got, err := cfg.Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}))
+	got, err := cfg.GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api.example.com", Port: 443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	if len(got.Spec.Egress) != 1 {
 		t.Fatalf("expected only the DNS rule, got %d rules: %+v", len(got.Spec.Egress), got.Spec.Egress)
@@ -665,10 +671,11 @@ func TestGenerate_LiteralAddressHostNeedsNoResolver(t *testing.T) {
 	cfg := testCfg()
 	cfg.Resolver = nil
 
-	got, err := cfg.Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "203.0.113.55", Port: 443}))
+	got, err := cfg.GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "203.0.113.55", Port: 443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	if len(got.Spec.Egress) != 2 {
 		t.Fatalf("expected DNS + 1 allow rule, got %d: %+v", len(got.Spec.Egress), got.Spec.Egress)
@@ -687,10 +694,11 @@ func TestGenerate_LiteralAddressHostNeedsNoResolver(t *testing.T) {
 func TestGenerate_ResolvedIntoReservedRangeIsSuppressed(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "internal.example.com", Port: 8443}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "internal.example.com", Port: 8443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	if len(got.Spec.Egress) != 1 {
 		t.Fatalf("expected only the DNS rule, got %d rules: %+v", len(got.Spec.Egress), got.Spec.Egress)
@@ -749,9 +757,9 @@ func TestGenerate_IPv6HostInsideReservedIsSuppressed(t *testing.T) {
 	for name, allow := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList, allow))
+			got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList, allow), nil)
 			if err != nil {
-				t.Fatalf("Generate() err: %v", err)
+				t.Fatalf("GenerateForClass() err: %v", err)
 			}
 			if len(got.Spec.Egress) != 1 {
 				t.Fatalf("egress rules = %d, want 1 (DNS only); got %+v", len(got.Spec.Egress), got.Spec.Egress)
@@ -769,10 +777,11 @@ func TestGenerate_IPv6HostInsideReservedIsSuppressed(t *testing.T) {
 func TestGenerate_IPv6HostOutsideReservedIsGranted(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
-		setecv1alpha1.NetworkAllow{Host: "api6.example.com", Port: 443}))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+		setecv1alpha1.NetworkAllow{Host: "api6.example.com", Port: 443}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	if len(got.Spec.Egress) != 2 {
 		t.Fatalf("egress rules = %d, want 2 (DNS + entry)", len(got.Spec.Egress))
