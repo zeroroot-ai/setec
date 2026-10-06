@@ -313,7 +313,7 @@ jobs:
 
   setec-launcher:
     needs: kata-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -338,7 +338,7 @@ jobs:
         FIRECRACKER_SHA256=${{ needs.kata-pin.outputs.firecracker_sha256 }}
 
   setec-disk-builder:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@f2ca779edd5461be94bdd0a0762657f85317983e # v0.7.2
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
