@@ -29,6 +29,9 @@ type Supervisor struct {
 
 	mu      sync.Mutex
 	waiters map[int]chan syscall.WaitStatus
+	// chown changes the owner of a path. Nil uses os.Chown; a test
+	// replaces it.
+	chown func(path string, uid, gid int) error
 }
 
 // NewSupervisor starts the reaper of SIGCHLD for the life of the process.
@@ -212,4 +215,44 @@ func lookupGroup(root, name string) (uint32, error) {
 		}
 	}
 	return 0, fmt.Errorf("guestagent: the image has no group %q", name)
+}
+
+// WorkspaceDir is where a session workspace is mounted in the root.
+const WorkspaceDir = "workspace"
+
+// ClaimWorkspace gives a new session workspace to the workload user. A new
+// file system belongs to root and holds only lost+found, so a workload that
+// runs as another user could not write it. A workspace that holds data, or
+// that already belongs to another user, is left as it is.
+func (s *Supervisor) ClaimWorkspace(user string) error {
+	dir := filepath.Join(s.Root, WorkspaceDir)
+	st, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || sys.Uid != 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() != "lost+found" {
+			return nil
+		}
+	}
+	uid, gid, _, err := lookupUser(s.Root, user)
+	if err != nil || uid == 0 {
+		return err
+	}
+	chown := s.chown
+	if chown == nil {
+		chown = os.Chown
+	}
+	return chown(dir, int(uid), int(gid))
 }

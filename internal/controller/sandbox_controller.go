@@ -858,8 +858,12 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// the Suspended phase steady until the Pod is gone (setec#194).
 	// Deriving from the dying Pod here would flip the phase back to
 	// Running and re-trigger the suspend.
+	// The Pod may still show no deletion in the cache while it already
+	// carries the suspend mark: deriving from it then flipped the phase to
+	// Running, the next reconcile made a new Pod, and a session asked to
+	// stay suspended came back at once (found in setec#193).
 	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
-		!pod.DeletionTimestamp.IsZero() {
+		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "") {
 		return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
 	}
 

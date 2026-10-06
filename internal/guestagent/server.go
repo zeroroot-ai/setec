@@ -120,7 +120,11 @@ func (s *Server) startWorkload(p *Process) error {
 			return
 		}
 		defer func() { _ = devnull.Close() }()
-		run, serr := s.Sup.Start(WithImageDefaults(s.Sup.Root, *p), devnull, s.Console, s.Console)
+		proc := WithImageDefaults(s.Sup.Root, *p)
+		if cerr := s.Sup.ClaimWorkspace(proc.User); cerr != nil && s.Logf != nil {
+			s.Logf("setec-guest-agent: give the new workspace to the workload user: %v", cerr)
+		}
+		run, serr := s.Sup.Start(proc, devnull, s.Console, s.Console)
 		if serr != nil {
 			err = serr
 			// The launcher waits for an exit report, so a workload that
