@@ -148,3 +148,45 @@ func TestRestorePendingCheckpoint_RunsOnceOnAStaleCache(t *testing.T) {
 		t.Fatal("a stale cache degraded the session to RestartedFromWorkspace")
 	}
 }
+
+// TestReconcileSessionCheckpoint_NeverRestoresIntoTheWritingPod pins
+// setec#220: after a suspend, a stale cache can show the Pod that wrote
+// the checkpoint as Running while the Sandbox shows the pending restore.
+// The checkpoint must not load into that Pod.
+func TestReconcileSessionCheckpoint_NeverRestoresIntoTheWritingPod(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	na := &fakeNodeAgentClient{RestoreErr: errors.New("no restore into the writing Pod")}
+	r, sb := durableFixture(t, na)
+	// A session that is neither idle nor due for a checkpoint, so only
+	// the restore step can act.
+	now := metav1.Now()
+	sb.Annotations = map[string]string{setecv1alpha1.AnnotationLastActivity: now.UTC().Format(time.RFC3339)}
+	if err := r.Update(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	sb.Status.StartedAt = &now
+	sb.Status.Checkpoint = &setecv1alpha1.SandboxCheckpointStatus{
+		Ref: "ref-1", Backend: "s3", Sequence: 1, PendingRestore: true, PodUID: "pod-1"}
+	if err := r.Status().Update(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "sess-vm"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Phase = corev1.PodRunning
+	cls := &setecv1alpha1.SandboxClass{}
+	cls.Spec.SessionCheckpoint = &setecv1alpha1.SessionCheckpointSpec{Backend: "s3"}
+	desired := setecv1alpha1.SandboxStatus{Phase: setecv1alpha1.SandboxPhaseRunning}
+
+	if _, _, err := r.reconcileSessionCheckpoint(ctx, logr.Discard(), sb, cls, pod, desired); err != nil {
+		t.Fatalf("reconcileSessionCheckpoint: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "sess-vm"}, &corev1.Pod{}); err != nil {
+		t.Fatalf("a restore into the writing Pod deleted it: %v", err)
+	}
+	if !sb.Status.Checkpoint.PendingRestore {
+		t.Fatal("the checkpoint was consumed by a restore into the Pod that wrote it")
+	}
+}

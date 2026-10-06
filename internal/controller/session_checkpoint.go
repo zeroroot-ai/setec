@@ -200,9 +200,14 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// A launcher resume Pod waits for the checkpoint and is Ready only
 	// after the load, so for it the running Pod, not the Running phase,
 	// starts the restore.
+	// The Pod must be a new one: a checkpoint never loads into the Pod
+	// that wrote it. A stale cache can still show that Pod as Running
+	// after the suspend deleted it, while the Sandbox already shows the
+	// pending checkpoint (setec#220).
 	if ck := sb.Status.Checkpoint; ck != nil && ck.PendingRestore &&
 		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || isLauncherSandbox(sb)) &&
-		pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp.IsZero() {
+		pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp.IsZero() &&
+		(ck.PodUID == "" || string(pod.UID) != ck.PodUID) {
 		return r.restorePendingCheckpoint(ctx, logger, sb, policy)
 	}
 
