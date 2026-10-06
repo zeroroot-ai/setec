@@ -132,3 +132,16 @@ func TestDeleteSessionCheckpointNoNodesFails(t *testing.T) {
 		t.Fatal("want error when no node-agent is reachable")
 	}
 }
+
+// TestSessionCheckpointID_HoldsTheUID proves that two Sandboxes with one
+// name never share a checkpoint id, and that the restore binding follows.
+func TestSessionCheckpointID_HoldsTheUID(t *testing.T) {
+	a := &setecv1alpha1.Sandbox{Namespace: "ns", Name: "sess", UID: "uid-a"}
+	b := &setecv1alpha1.Sandbox{Namespace: "ns", Name: "sess", UID: "uid-b"}
+	if SessionCheckpointID(a, 3) == SessionCheckpointID(b, 3) {
+		t.Fatal("two Sandboxes with one name share a checkpoint id")
+	}
+	if SessionCheckpointID(a, 3) != "ns-sess-uid-a-ckpt-3" {
+		t.Fatalf("id = %q", SessionCheckpointID(a, 3))
+	}
+}
