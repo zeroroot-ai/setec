@@ -119,7 +119,7 @@ func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.
 		// stay inside the SessionCheckpointID namespace the invariant
 		// gate's same-session binding checks.
 		return &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: in.GetSnapshotId(), SizeBytes: 1024, Sha256: "cafe",
+			StorageRef: in.GetSnapshotId(), SizeBytes: 1024,
 		}, nil
 	}
 	return f.CreateResp, f.CreateErr

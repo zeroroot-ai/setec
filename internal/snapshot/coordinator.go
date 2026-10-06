@@ -316,7 +316,6 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	original := snap.DeepCopy()
 	snap.Spec.StorageRef = resp.GetStorageRef()
 	snap.Spec.Size = resp.GetSizeBytes()
-	snap.Spec.SHA256 = resp.GetSha256()
 	if err := c.Client.Patch(ctx, snap, client.MergeFrom(original)); err != nil {
 		// The state is on disk but the CR does not say where. Leaving it
 		// Creating would be a lie in the safe direction; Ready without a

@@ -110,7 +110,6 @@ func (c *Coordinator) CreateBase(
 	original := snap.DeepCopy()
 	snap.Spec.StorageRef = resp.GetStorageRef()
 	snap.Spec.Size = resp.GetSizeBytes()
-	snap.Spec.SHA256 = resp.GetSha256()
 	snap.Annotations[CleanBaseAnnotation] = BaseLabelValue
 	if err := c.Client.Patch(ctx, snap, client.MergeFrom(original)); err != nil {
 		c.failSnapshot(ctx, snap, "StorageRefNotRecorded", err)

@@ -759,12 +759,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              observedGeneration:
-                description: |-
-                  ObservedGeneration is the .metadata.generation the operator last
-                  reconciled. Optional; left empty in Phase 2.
-                format: int64
-                type: integer
               warmPool:
                 description: WarmPool reports the warm pool of a launcher class (setec#103).
                 properties:

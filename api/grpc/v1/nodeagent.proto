@@ -114,7 +114,9 @@ message CreateSnapshotRequest {
 message CreateSnapshotResponse {
   string storage_ref = 1;
   int64 size_bytes = 2;
-  string sha256 = 3;
+  // sha256 was always empty: the operator never read it (D77).
+  reserved 3;
+  reserved "sha256";
 
   // clean_base_verified is true only when the request asked for the
   // secret scan and the scan found nothing in any of the files.

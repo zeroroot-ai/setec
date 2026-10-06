@@ -6,9 +6,8 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-06: 153 of 1312 declarations across 84 packages and 223 files
+# measured 2026-10-06: 148 of 1311 declarations across 85 packages and 227 files
 
-const metrics.LabelNode	# internal/metrics/collectors.go:46
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
 # Map keys of the launcher Pod limits; the measurer counts a map key as a write.
 const podspec.KVMResource	# internal/podspec/launcher.go:30
@@ -107,15 +106,12 @@ field sandboxid.Claims.Client	# internal/sandboxid/token.go:43
 field sandboxid.header.Typ	# internal/sandboxid/token.go:55
 field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:72
 field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:621
-field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass_types.go:376
-field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go:405
-field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go:400
-field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:683
-field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:678
-field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:688
-field v1alpha1.SnapshotSpec.KernelVersion	# api/v1alpha1/snapshot_types.go:117
-field v1alpha1.SnapshotSpec.SHA256	# api/v1alpha1/snapshot_types.go:170
-field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:195
+field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go:398
+field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go:393
+field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:700
+field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:695
+field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:705
+field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:183
 func chartname.Fullname	# internal/chartname/chartname.go:29
 func credguard.Check	# internal/credguard/credguard.go:234
 func credguard.Exemptions	# internal/credguard/exemptions.go:30
@@ -167,7 +163,6 @@ method main.repeatedString.Set	# cmd/node-agent/main.go:300
 method main.repeatedString.Set	# cmd/node-agent/main.go:300
 method main.repeatedString.String	# cmd/node-agent/main.go:298
 method main.repeatedString.String	# cmd/node-agent/main.go:298
-method metrics.Collectors.RecordDuration	# internal/metrics/collectors.go:198
 method netpol.Config.Generate	# internal/netpol/generator.go:282
 method snapshot.GRPCDialer.Close	# internal/snapshot/dialer.go:193
 method storage.countingReader.Read	# internal/snapshot/storage/s3.go:600

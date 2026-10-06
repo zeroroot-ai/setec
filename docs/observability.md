@@ -17,7 +17,6 @@ present — an empty-string value means "no tenant / single-tenant mode".
 | Metric | Type | Labels | Notes |
 | --- | --- | --- | --- |
 | `setec_sandbox_total` | Counter | `phase`, `tenant`, `sandbox_class` | Increments once per observed phase transition. |
-| `setec_sandbox_duration_seconds` | Histogram | `phase`, `tenant`, `sandbox_class` | Phase durations. Default Prometheus buckets. |
 | `setec_sandbox_cold_start_seconds` | Histogram | `runtime`, `sandbox_class` | Time from Sandbox creation to Pod Running. Exponential buckets (0.1s–204.8s). `runtime` is always `launcher`. |
 | `setec_snapshot_duration_seconds` | Histogram | `operation`, `sandbox_class` | Snapshot operation durations. |
 | `setec_warmstart_total` | Counter | `outcome`, `sandbox_class` | Warm-start attempts: `restored`, `miss` or `error`. |

@@ -110,12 +110,6 @@ type SnapshotSpec struct {
 	// +required
 	ImageRef string `json:"imageRef"`
 
-	// KernelVersion is the guest kernel version used by the source
-	// sandbox at snapshot time. Mismatches between snapshot and
-	// restore-target kernels cause the Validator to reject the restore.
-	// +optional
-	KernelVersion string `json:"kernelVersion,omitempty"`
-
 	// TTL optionally bounds the lifetime of the snapshot. Once the
 	// snapshot is older than TTL AND no Sandbox references it, the
 	// SnapshotReconciler deletes it. When unset, snapshots live until
@@ -162,12 +156,6 @@ type SnapshotSpec struct {
 	// instance type, which has the same CPU.
 	// +optional
 	InstanceType string `json:"instanceType,omitempty"`
-
-	// SHA256 is the hex-encoded SHA256 digest of the persisted state
-	// file, written alongside the state on disk and verified on
-	// restore. Populated by the operator; must not be edited.
-	// +optional
-	SHA256 string `json:"sha256,omitempty"`
 
 	// Node is the name of the node holding the state files. Sandboxes
 	// restoring from this snapshot are pinned to this node via

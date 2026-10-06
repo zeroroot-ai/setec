@@ -382,12 +382,10 @@ spec:
   sourceSandbox: workload-a
   sandboxClass: standard
   imageRef: ghcr.io/org/app@sha256:<digest>
-  kernelVersion: "6.1.0"
   ttl: 168h
   storageBackend: local-disk
   storageRef: "tenant-a-my-state"
   size: 2147483648
-  sha256: "..."
   node: node-a
 status:
   phase: Ready

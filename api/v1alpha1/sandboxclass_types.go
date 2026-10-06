@@ -365,16 +365,9 @@ type ResourceRequests struct {
 	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
-// SandboxClassStatus reflects the observed state of a SandboxClass. Phase 2
-// does not compute any status fields — the struct exists so future phases
-// can record counts, validation summaries, or image-prefetch state without
-// breaking the CRD schema.
+// SandboxClassStatus reflects the observed state of a SandboxClass: its
+// conditions and its warm pool.
 type SandboxClassStatus struct {
-	// ObservedGeneration is the .metadata.generation the operator last
-	// reconciled. Optional; left empty in Phase 2.
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-
 	// Conditions surface class-level facts the operator wants loudly
 	// visible. Today the only stamped type is
 	// UnverifiedRestoresAllowed: True when the class carries the

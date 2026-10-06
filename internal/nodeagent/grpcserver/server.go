@@ -216,7 +216,6 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		StorageRef:        ref,
 		SizeBytes:         size,
 		CleanBaseVerified: clean,
-		Sha256:            "", // Local-disk backend writes sidecar; operator re-reads if needed.
 	}, nil
 }
 

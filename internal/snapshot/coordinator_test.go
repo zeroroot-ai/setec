@@ -180,7 +180,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{
 		createResp: &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: "t-a-snap-1", SizeBytes: 1024, Sha256: "cafe",
+			StorageRef: "t-a-snap-1", SizeBytes: 1024,
 		},
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
@@ -207,7 +207,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err != nil {
 		t.Fatalf("get Snapshot: %v", err)
 	}
-	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 1024 || got.Spec.SHA256 != "cafe" {
+	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 1024 {
 		t.Fatalf("snapshot fields wrong: %#v", got.Spec)
 	}
 	if got.Spec.Node != "node-a" {
@@ -296,7 +296,7 @@ func TestCreateSnapshot_ReportsCreatingDuringWrite(t *testing.T) {
 	var duringErr error
 	na := &fakeNodeAgentClient{
 		createResp: &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: "t-a-snap-1", SizeBytes: 4096, Sha256: "deadbeef",
+			StorageRef: "t-a-snap-1", SizeBytes: 4096,
 		},
 		onCreate: func() {
 			mid := &setecv1alpha1.Snapshot{}
@@ -328,7 +328,7 @@ func TestCreateSnapshot_ReportsCreatingDuringWrite(t *testing.T) {
 	if got.Status.Phase != setecv1alpha1.SnapshotPhaseReady {
 		t.Fatalf("final phase = %q, want Ready", got.Status.Phase)
 	}
-	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 4096 || got.Spec.SHA256 != "deadbeef" {
+	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 4096 {
 		t.Fatalf("backend result not recorded on the CR: %#v", got.Spec)
 	}
 }

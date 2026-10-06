@@ -40,21 +40,6 @@ func TestRecordPhaseTransition(t *testing.T) {
 	}
 }
 
-func TestRecordDuration(t *testing.T) {
-	t.Parallel()
-	c, _ := newTestCollectors(t)
-
-	c.RecordDuration("tenant-a", "standard", string(setecv1alpha1.SandboxPhaseRunning), 250*time.Millisecond)
-	c.RecordDuration("tenant-a", "standard", string(setecv1alpha1.SandboxPhaseRunning), 500*time.Millisecond)
-
-	// Use CollectAndCount on the metric family to confirm observations
-	// landed. testutil.CollectAndCount reports one series per unique
-	// label combo; we should see exactly one here.
-	if got, want := testutil.CollectAndCount(c.SandboxDuration), 1; got != want {
-		t.Errorf("CollectAndCount = %d, want %d", got, want)
-	}
-}
-
 func TestObserveColdStart(t *testing.T) {
 	t.Parallel()
 	c, _ := newTestCollectors(t)
@@ -118,7 +103,6 @@ func TestNilReceiverNoPanic(t *testing.T) {
 
 	// None of the following must panic.
 	c.RecordPhaseTransition("", "", setecv1alpha1.SandboxPhasePending)
-	c.RecordDuration("", "", "", time.Second)
 	c.ObserveColdStart("", "", time.Second)
 	c.SetActive("", "", 1)
 	c.SetWarmPool("", 0, 0)
@@ -131,7 +115,6 @@ func TestCollectAndLint(t *testing.T) {
 	c, reg := newTestCollectors(t)
 
 	c.RecordPhaseTransition("tenant", "cls", setecv1alpha1.SandboxPhasePending)
-	c.RecordDuration("tenant", "cls", string(setecv1alpha1.SandboxPhasePending), time.Millisecond)
 	c.ObserveColdStart("firecracker", "cls", time.Second)
 	c.SetActive("tenant", "cls", 1)
 
@@ -142,7 +125,6 @@ func TestCollectAndLint(t *testing.T) {
 
 	want := []string{
 		"setec_sandbox_total",
-		"setec_sandbox_duration_seconds",
 		"setec_sandbox_cold_start_seconds",
 		"setec_sandbox_active",
 	}

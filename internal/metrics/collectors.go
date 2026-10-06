@@ -41,9 +41,6 @@ const (
 	// LabelOperation is the Phase 3 snapshot operation label:
 	// "create", "restore", "delete", "pause", "resume".
 	LabelOperation = "operation"
-	// LabelNode is the node name label used for pool-fill gauges so
-	// operators can pinpoint an under-provisioned node.
-	LabelNode = "node"
 )
 
 // Collectors bundles the Phase 2+ metrics. Callers receive this via
@@ -54,10 +51,6 @@ type Collectors struct {
 	// per observed transition — not per reconcile — so it approximates
 	// the total number of sandboxes observed at each phase.
 	SandboxTotal *prometheus.CounterVec
-
-	// SandboxDuration observes the time a sandbox spent in each phase
-	// (or in the whole reconcile, depending on caller semantics).
-	SandboxDuration *prometheus.HistogramVec
 
 	// SandboxColdStart observes the time from Sandbox creation to the
 	// moment its Pod transitioned to Running, labeled by runtime and
@@ -111,14 +104,6 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			},
 			[]string{LabelPhase, LabelTenant, LabelSandboxClass},
 		),
-		SandboxDuration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "setec_sandbox_duration_seconds",
-				Help:    "Time (s) spent in each Sandbox phase.",
-				Buckets: prometheus.DefBuckets,
-			},
-			[]string{LabelPhase, LabelTenant, LabelSandboxClass},
-		),
 		SandboxColdStart: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "setec_sandbox_cold_start_seconds",
@@ -167,7 +152,7 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 
 	if reg != nil {
 		reg.MustRegister(
-			c.SandboxTotal, c.SandboxDuration, c.SandboxColdStart, c.SandboxActive,
+			c.SandboxTotal, c.SandboxColdStart, c.SandboxActive,
 			c.SnapshotDuration, c.WarmStartTotal, c.WarmPoolReady, c.WarmPoolTarget,
 		)
 	}
@@ -190,16 +175,6 @@ func (c *Collectors) RecordPhaseTransition(tenant, class string, phase setecv1al
 		return
 	}
 	c.SandboxTotal.WithLabelValues(string(phase), normalizeTenantLabel(tenant), class).Inc()
-}
-
-// RecordDuration observes the given duration into SandboxDuration.
-// Phase is stringified by the caller so this function stays pure Go
-// without importing the v1alpha1 phase enum at every call site.
-func (c *Collectors) RecordDuration(tenant, class, phase string, d time.Duration) {
-	if c == nil {
-		return
-	}
-	c.SandboxDuration.WithLabelValues(phase, normalizeTenantLabel(tenant), class).Observe(d.Seconds())
 }
 
 // ObserveColdStart observes a Sandbox's time-to-Running into the cold-start
