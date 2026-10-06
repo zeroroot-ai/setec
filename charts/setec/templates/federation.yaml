@@ -23,7 +23,7 @@ same domains under federatesWith. The install owns that registration.
 {{- fail "credentials.spiffe.trustDomain is required in spiffe mode with frontend.enabled=true: it names the trust domain of this fleet, so the chart can tell which enrolled clients need federation (ADR-0164)" }}
 {{- end }}
 {{- range .Values.frontend.clients }}
-{{- $domain := regexReplaceAll "^spiffe://([^/]+).*$" .spiffeID "${1}" }}
+{{- $domain := regexReplaceAll "^spiffe://([^/]+).*$" (include "setec.clientSPIFFEID" (dict "client" . "root" $)) "${1}" }}
 {{- if ne $domain $own }}
 {{- $f := .federation | default dict }}
 {{- if not $f.bundleEndpointURL }}

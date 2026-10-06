@@ -231,6 +231,57 @@ assert_render_fails "the https_spiffe profile with no endpoint ID fails the rend
 	"${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
 	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443'
 
+# ---------------------------------------------------------------------------
+# A client named by its path (setec#233): the chart builds the ID from the
+# trust domain of the install, global.spire.trustDomain first, then
+# credentials.spiffe.trustDomain. Two installs with two trust domains get
+# two IDs from one set of values.
+# ---------------------------------------------------------------------------
+note "client ID from a path and the trust domain of the install"
+PATH_CLIENT=(
+	--set webhook.certManager.enabled=true
+	--set 'sandboxNamespaces={sandbox-workloads}'
+	--set frontend.enabled=true
+	--set 'frontend.clients[0].name=daemon'
+	--set 'frontend.clients[0].spiffePath=platform/daemon'
+	"${FILE_CREDS[@]}"
+)
+for td in alpha.example beta.example; do
+	"$HELM" template setec "$CHART_DIR" "${PATH_CLIENT[@]}" --set "global.spire.trustDomain=${td}" \
+		--show-only templates/frontend.yaml >"$workdir/path-${td}.yaml"
+	assert_contains "$workdir/path-${td}.yaml" "global.spire.trustDomain=${td} builds the client ID in ${td}" \
+		"--client=daemon=spiffe://${td}/platform/daemon"
+done
+assert_absent "$workdir/path-beta.example.yaml" "the second install holds no ID of the first" \
+	"spiffe://alpha.example/"
+"$HELM" template setec "$CHART_DIR" "${PATH_CLIENT[@]}" --set credentials.spiffe.trustDomain=gamma.example \
+	--show-only templates/frontend.yaml >"$workdir/path-own.yaml"
+assert_contains "$workdir/path-own.yaml" "with no global value, the fleet trust domain builds the ID" \
+	"--client=daemon=spiffe://gamma.example/platform/daemon"
+"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" \
+	--set 'frontend.clients[1].name=daemon' \
+	--set 'frontend.clients[1].spiffePath=/platform/daemon' \
+	--set global.spire.trustDomain=example.org >"$workdir/path-federation.yaml"
+assert_contains "$workdir/path-federation.yaml" "the path client in the domain of the fleet is enrolled" \
+	"--client=daemon=spiffe://example.org/platform/daemon"
+assert_absent "$workdir/path-federation.yaml" "a path client in the domain of the fleet needs no federation" \
+	"kind: ClusterFederatedTrustDomain"
+assert_render_fails "a path client with no trust domain fails the render" \
+	"spiffePath needs a trust domain" \
+	"${PATH_CLIENT[@]}"
+assert_render_fails "a client with both spiffeID and spiffePath fails the render" \
+	"set spiffeID or spiffePath, not both" \
+	"${PATH_CLIENT[@]}" --set global.spire.trustDomain=alpha.example \
+	--set 'frontend.clients[0].spiffeID=spiffe://alpha.example/platform/daemon'
+assert_render_fails "a client with neither fails the render" \
+	"set spiffeID or spiffePath" \
+	--set webhook.certManager.enabled=true --set 'sandboxNamespaces={sandbox-workloads}' \
+	--set frontend.enabled=true --set 'frontend.clients[0].name=daemon' "${FILE_CREDS[@]}"
+assert_render_fails "a spiffePath that is a full ID fails the render" \
+	"spiffePath must be a path" \
+	"${PATH_CLIENT[@]}" --set global.spire.trustDomain=alpha.example \
+	--set 'frontend.clients[0].spiffePath=spiffe://alpha.example/platform/daemon'
+
 note "render-time failures"
 assert_render_fails "a frontend with no enrolled client fails the render" \
 	"frontend.clients must not be empty" \
