@@ -156,11 +156,10 @@ func Derive(
 
 	case corev1.PodRunning:
 		// A container that declares a readiness probe is not usable until
-		// the probe passes. A kata-fc session's wrapper mounts the durable
-		// workspace after the container starts, and a turn that runs
-		// before the mount writes into an emptyDir the mount then hides
-		// (setec#91). Such a Pod stays Pending until it is Ready. A Pod
-		// with no probe is unchanged.
+		// the probe passes. The launcher container is Ready once the
+		// guest agent in the machine answers, and a turn that runs
+		// earlier has no machine to run in. Such a Pod stays Pending
+		// until it is Ready. A Pod with no probe is unchanged.
 		if declaresReadiness(pod) && !podReady(pod) {
 			out = setPhase(out, setecv1alpha1.SandboxPhasePending, "", now)
 			return out

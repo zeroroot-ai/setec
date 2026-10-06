@@ -96,9 +96,9 @@ func Verify(spec Spec, rawSpec []byte, report Report) error {
 
 // VsockUniquifier pushes the identity directive over the Firecracker
 // hybrid-vsock Unix socket: it dials udsPath, performs the
-// "CONNECT <port>\n" / "OK <n>\n" handshake Firecracker (and Kata's
-// hybrid vsock) use for host-initiated connections, sends the Spec,
-// and verifies the guest's Report.
+// "CONNECT <port>\n" / "OK <n>\n" handshake that Firecracker uses for
+// host-initiated connections, sends the Spec, and verifies the guest's
+// Report.
 type VsockUniquifier struct {
 	// Port is the guest AF_VSOCK port setec-guest-agent listens on
 	// for uniquification directives.

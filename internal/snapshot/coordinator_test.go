@@ -196,7 +196,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if na.lastCreate.SandboxId != "t-a/s" {
 		t.Fatalf("sandbox_id = %q", na.lastCreate.SandboxId)
 	}
-	// The node-agent resolves the kata socket itself; the operator
+	// The node-agent resolves the Firecracker socket itself. The operator
 	// names the Pod by UID (setec#19).
 	if na.lastCreate.GetSourcePodUid() != string(pod.UID) {
 		t.Fatalf("source_pod_uid = %q, want the Pod UID %q", na.lastCreate.GetSourcePodUid(), pod.UID)

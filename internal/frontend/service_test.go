@@ -24,6 +24,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -253,7 +254,7 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 		Spec: setecv1alpha1.SandboxSpec{SandboxClassName: testSandboxClass},
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:   setecv1alpha1.SandboxPhaseCompleted,
-			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-qemu"},
+			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher},
 		},
 	}
 	c := newClient(t, sb)
@@ -265,8 +266,8 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wait(): %v", err)
 	}
-	if resp.Runtime != "kata-qemu" {
-		t.Fatalf("runtime = %q, want kata-qemu", resp.Runtime)
+	if resp.Runtime != runtimepkg.BackendLauncher {
+		t.Fatalf("runtime = %q, want launcher", resp.Runtime)
 	}
 }
 

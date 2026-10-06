@@ -19,8 +19,9 @@ import (
 // the operator rather than a silent change of its isolation.
 // +kubebuilder:validation:Optional
 type SandboxClassRuntime struct {
-	// Backend is "launcher" or empty. A removed backend name (kata-fc,
-	// kata-qemu, gvisor, runc) is refused.
+	// Backend is "launcher" or empty. The webhook and the operator refuse
+	// each other name, and name the reason for a backend that left in
+	// setec#198.
 	// +optional
 	Backend string `json:"backend,omitempty"`
 }

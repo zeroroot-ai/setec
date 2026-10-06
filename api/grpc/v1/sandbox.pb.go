@@ -187,8 +187,8 @@ type LaunchRequest struct {
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Command executed inside the microVM. Required for the ephemeral
 	// lifecycle. A session (lifecycle.mode = "session") may leave it
-	// empty: the operator then boots the setec keepalive, so the session
-	// outlives every command sent through Exec.
+	// empty: the machine then runs the entry point of the image, and
+	// work arrives through Exec.
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Environment variables exposed to the workload. Optional.
 	Env map[string]string `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
@@ -975,14 +975,11 @@ type WaitResponse struct {
 	Phase    string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"`
 	ExitCode int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	Reason   string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
-	// runtime is the backend actually selected for the Sandbox after
-	// evaluating its SandboxClass's primary backend and any fallback
-	// chain (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor,
-	// runc. Wait returns after the Sandbox is terminal, so this value is
-	// authoritative. Empty means no backend was ever resolved — the
-	// Sandbox reached a terminal phase before selection (for example
-	// ClassNotFound or RuntimeUnavailable) — never "resolved but
-	// unreported".
+	// runtime is the backend of the Sandbox (status.runtime.chosen):
+	// launcher, the one backend. Wait returns after the Sandbox is
+	// terminal, so this value is authoritative. Empty means that the
+	// Sandbox reached a terminal phase before the operator recorded a
+	// backend (for example ClassNotFound or UnsupportedBackend).
 	Runtime       string `protobuf:"bytes,4,opt,name=runtime,proto3" json:"runtime,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1237,7 +1234,7 @@ type AttachResponse struct {
 	// the cluster default.
 	SandboxClass string `protobuf:"bytes,5,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// runtime is the backend selected for the Sandbox
-	// (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor, runc.
+	// (status.runtime.chosen): launcher, the one backend.
 	// Empty means the operator has not yet resolved a backend (the
 	// Sandbox is still Pending), not "resolved but unreported".
 	Runtime string `protobuf:"bytes,6,opt,name=runtime,proto3" json:"runtime,omitempty"`

@@ -218,8 +218,8 @@ func TestDialFailureSurfaced(t *testing.T) {
 }
 
 // TestClientLeavesNoConnectionOpen asserts that each API call closes
-// its connection. Firecracker caps open API connections, and the kata
-// shim holds one; kept-alive idle connections from repeated RPCs made
+// its connection. Firecracker caps open API connections, and the
+// launcher holds one. Kept-alive idle connections from repeated RPCs made
 // Firecracker answer 503 "Too many open connections" (setec#19).
 func TestClientLeavesNoConnectionOpen(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "fc.sock")
@@ -272,8 +272,7 @@ func TestClientLeavesNoConnectionOpen(t *testing.T) {
 	}
 }
 
-// The request fields Firecracker v1.12.1 accepts (the version kata
-// 4.2.0 ships), from its swagger definitions SnapshotCreateParams and
+// The request fields Firecracker v1.12.1 accepts, from its swagger definitions SnapshotCreateParams and
 // SnapshotLoadParams. Firecracker rejects any other field with 400 Bad
 // Request, so the client must never send one (setec#19).
 var (

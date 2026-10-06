@@ -52,9 +52,9 @@ type NodeAgentServiceClient interface {
 	// Sandbox.spec.snapshot.afterCreate).
 	CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*CreateSnapshotResponse, error)
 	// RestoreSandbox loads a previously-persisted snapshot into a new
-	// Firecracker microVM attached to the caller-provided Kata socket.
-	// Called after the Pod has been scheduled and Kata has set up the
-	// surrounding sandbox container.
+	// Firecracker microVM in the launcher Pod of the target Sandbox.
+	// Called after the Pod has been scheduled and the launcher has
+	// started.
 	RestoreSandbox(ctx context.Context, in *RestoreSandboxRequest, opts ...grpc.CallOption) (*RestoreSandboxResponse, error)
 	// PauseSandbox issues the Firecracker PATCH /vm state=Paused call
 	// against the target microVM without persisting state.
@@ -144,9 +144,9 @@ type NodeAgentServiceServer interface {
 	// Sandbox.spec.snapshot.afterCreate).
 	CreateSnapshot(context.Context, *CreateSnapshotRequest) (*CreateSnapshotResponse, error)
 	// RestoreSandbox loads a previously-persisted snapshot into a new
-	// Firecracker microVM attached to the caller-provided Kata socket.
-	// Called after the Pod has been scheduled and Kata has set up the
-	// surrounding sandbox container.
+	// Firecracker microVM in the launcher Pod of the target Sandbox.
+	// Called after the Pod has been scheduled and the launcher has
+	// started.
 	RestoreSandbox(context.Context, *RestoreSandboxRequest) (*RestoreSandboxResponse, error)
 	// PauseSandbox issues the Firecracker PATCH /vm state=Paused call
 	// against the target microVM without persisting state.

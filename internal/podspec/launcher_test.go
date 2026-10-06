@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/launcher"
@@ -381,6 +382,42 @@ func TestBuildLauncher_IdentityKeyStaysWithTheLauncher(t *testing.T) {
 	for _, v := range base.Spec.Volumes {
 		if v.Secret != nil {
 			t.Fatal("a base mounts an identity Secret")
+		}
+	}
+}
+
+// TestBuildLauncher_ClassRequestsLowerTheReservation pins the scheduler
+// reservation of a class on the launcher Pod: a request below its limit
+// replaces the request, a request above its limit keeps the limit, and the
+// device resources keep a request equal to the limit.
+func TestBuildLauncher_ClassRequestsLowerTheReservation(t *testing.T) {
+	t.Parallel()
+	cpu := resource.MustParse("250m")
+	tooMuch := resource.MustParse("1Ti")
+	opts := launcherOpts()
+	opts.Requests = &setecv1alpha1.ResourceRequests{CPU: &cpu, Memory: &tooMuch}
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatalf("BuildLauncher: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got := res.Requests[corev1.ResourceCPU]; got.Cmp(cpu) != 0 {
+		t.Fatalf("cpu request = %s, want %s", got.String(), cpu.String())
+	}
+	if got, limit := res.Requests[corev1.ResourceMemory], res.Limits[corev1.ResourceMemory]; got.Cmp(limit) != 0 {
+		t.Fatalf("memory request = %s, want the limit %s", got.String(), limit.String())
+	}
+	for _, r := range []corev1.ResourceName{KVMResource, TunResource} {
+		if got, limit := res.Requests[r], res.Limits[r]; got.Cmp(limit) != 0 {
+			t.Fatalf("%s request = %s, want the limit %s", r, got.String(), limit.String())
+		}
+	}
+
+	// No class reservation: requests equal limits (Guaranteed QoS).
+	plain := launcherOrFatal(t).Spec.Containers[0].Resources
+	for name, limit := range plain.Limits {
+		if got := plain.Requests[name]; got.Cmp(limit) != 0 {
+			t.Fatalf("%s request = %s, want the limit %s", name, got.String(), limit.String())
 		}
 	}
 }

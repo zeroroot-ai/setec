@@ -77,7 +77,7 @@ func TestLauncherFrame_RoundTripKeepsTheHolesOfTheWritableLayer(t *testing.T) {
 	if st, _ := os.ReadFile(os2); string(st) != "state" {
 		t.Fatalf("state = %q", st)
 	}
-	// A kata snapshot never loads as a launcher snapshot.
+	// A stream with no launcher frame never loads as a launcher snapshot.
 	if err := writeLauncherFramedStream(bytes.NewReader(make([]byte, 64)), os2, om, od, nil); err == nil {
 		t.Fatal("a stream with no launcher magic was accepted")
 	}

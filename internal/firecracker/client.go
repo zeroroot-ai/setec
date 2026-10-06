@@ -80,7 +80,7 @@ func NewClientFromSocket(socketPath string) Client {
 				},
 				// One connection per call, closed when the call ends.
 				// Firecracker's API server caps open connections, and
-				// the kata shim holds one of them. The node-agent builds
+				// the launcher holds one of them. The node-agent builds
 				// a client per RPC and the coordinator retries, so kept-
 				// alive idle connections piled up until Firecracker
 				// answered 503 "Too many open connections" (setec#19).
@@ -159,7 +159,7 @@ func (c *httpClient) Resume(ctx context.Context) error {
 
 // CreateSnapshot issues PUT /snapshot/create with a Full snapshot
 // specification. The fields match SnapshotCreateParams of the
-// Firecracker that kata ships (v1.12.1 for kata 4.2.0). That version
+// Firecracker that firecracker.env pins. Firecracker
 // rejects unknown fields, and it has no "version" field (setec#19: a
 // "version" made every snapshot fail with 400 Bad Request).
 func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath string) error {
@@ -185,7 +185,7 @@ func (c *httpClient) CreateDiffSnapshot(ctx context.Context, statePath, memPath 
 // LoadSnapshotTrackingDirtyPages loads a snapshot into the Firecracker
 // behind socketPath, resumes it, and keeps the tracking of dirty pages on,
 // so a later diff snapshot of the loaded machine works. The launcher uses
-// it; the kata path loads with LoadSnapshot.
+// it.
 func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, memPath string) error {
 	c, ok := NewClientFromSocket(socketPath).(*httpClient)
 	if !ok {

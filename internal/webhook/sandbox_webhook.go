@@ -166,8 +166,8 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 
 	// (0b) An ephemeral Sandbox's one command is its whole life
 	// (docs/design/lifecycles.md), so it must have one. A session may leave it empty:
-	// the operator boots the setec keepalive and work arrives through
-	// Exec (setec#7). The CRD no longer requires the field, so this is
+	// the machine then runs the entry point of the image, and work
+	// arrives through Exec (setec#7). The CRD no longer requires the field, so this is
 	// where the ephemeral rule is enforced at admission.
 	if len(sb.Spec.Command) == 0 && !sb.Spec.IsSession() {
 		errs = append(errs, fmt.Errorf(

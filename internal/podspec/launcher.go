@@ -116,6 +116,11 @@ type LauncherOptions struct {
 	// Scratch is the size limit of the writable layer of the machine.
 	// Zero takes the default scratch size of the Sandbox.
 	Scratch resource.Quantity
+	// Requests is the scheduler reservation of the class
+	// (SandboxClassSpec.Requests). Each set field lowers the request of
+	// its resource, bounded by the limit. Nil keeps requests equal to
+	// limits (Guaranteed QoS).
+	Requests *setecv1alpha1.ResourceRequests
 	// DiskRepo is the repository of the signed image disks
 	// (setec-disk-builder). Required.
 	DiskRepo string
@@ -355,7 +360,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 				Env:   []corev1.EnvVar{{Name: LauncherSpecEnv, Value: string(specJSON)}},
 				Resources: corev1.ResourceRequirements{
 					Limits:   limits,
-					Requests: limits.DeepCopy(),
+					Requests: launcherRequests(limits, opts.Requests),
 				},
 				SecurityContext: &corev1.SecurityContext{
 					RunAsUser:                new(int64(0)),
@@ -443,6 +448,26 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	return pod, nil
 }
 
+// launcherRequests is the request of the launcher container: its limits,
+// with the CPU and memory of the class reservation where the class sets
+// one. A request above its limit makes the Pod invalid, so a reservation
+// only lowers a request. The KVM and tun devices keep a request equal to
+// the limit, as an extended resource needs.
+func launcherRequests(limits corev1.ResourceList, req *setecv1alpha1.ResourceRequests) corev1.ResourceList {
+	requests := limits.DeepCopy()
+	if req == nil {
+		return requests
+	}
+	lower := func(name corev1.ResourceName, q *resource.Quantity) {
+		if limit, ok := limits[name]; ok && q != nil && q.Cmp(limit) < 0 {
+			requests[name] = q.DeepCopy()
+		}
+	}
+	lower(corev1.ResourceCPU, req.CPU)
+	lower(corev1.ResourceMemory, req.Memory)
+	return requests
+}
+
 // RestoreEvidence is what the launcher writes to LauncherRestoreEvidence
 // after a snapshot load. Each field is true only when the guest agent
 // confirmed the step.
@@ -464,6 +489,7 @@ func BuildLauncherBase(name, namespace, image string, res setecv1alpha1.Resource
 	sb.Spec.Image = image
 	sb.Spec.Resources = res
 	opts.Base, opts.Restore, opts.FromBase = true, false, false
+	opts.Requests = nil
 	pod, err := BuildLauncher(sb, opts)
 	if err != nil {
 		return nil, err

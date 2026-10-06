@@ -405,9 +405,9 @@ credentials:
       # Required when snapshots.enabled=true.
       nodeAgentServers: []
 
-# -- nodeAgent installs the DaemonSet that manages the devicemapper
-# thin-pool, samples fill state, and exposes node-level Prometheus
-# metrics.
+# -- nodeAgent installs the DaemonSet that snapshots, restores, pauses and
+# resumes the Firecracker machine of each launcher Pod on its node, and
+# exposes node-level Prometheus metrics (docs/node-agent.md).
 nodeAgent:
   enabled: false
   # serviceAccount carries extra metadata for the node-agent's own

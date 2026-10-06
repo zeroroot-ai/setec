@@ -46,7 +46,7 @@ func newPhase3Sandbox(name, ns string, mutators ...func(*setecv1alpha1.Sandbox))
 	sb := &setecv1alpha1.Sandbox{
 		Name: name, Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "alpine:3.19",
+			Image:   testImage,
 			Command: []string{"sh"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -170,8 +170,7 @@ func TestPhase3_SnapshotCreateHappyPath(t *testing.T) {
 	// the class validator to reject mismatches elsewhere.
 	cls := &setecv1alpha1.SandboxClass{
 		Name: "p3-std-" + ns,
-		Spec: setecv1alpha1.SandboxClassSpec{
-		},
+		Spec: setecv1alpha1.SandboxClassSpec{},
 	}
 	g.Expect(testClient.Create(testCtx, cls)).To(gomega.Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })

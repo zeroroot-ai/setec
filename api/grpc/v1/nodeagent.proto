@@ -29,9 +29,9 @@ service NodeAgentService {
   rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
 
   // RestoreSandbox loads a previously-persisted snapshot into a new
-  // Firecracker microVM attached to the caller-provided Kata socket.
-  // Called after the Pod has been scheduled and Kata has set up the
-  // surrounding sandbox container.
+  // Firecracker microVM in the launcher Pod of the target Sandbox.
+  // Called after the Pod has been scheduled and the launcher has
+  // started.
   rpc RestoreSandbox(RestoreSandboxRequest) returns (RestoreSandboxResponse);
 
   // PauseSandbox issues the Firecracker PATCH /vm state=Paused call
@@ -66,9 +66,8 @@ message CreateSnapshotRequest {
   string storage_backend = 3;
 
   // source_pod_uid is the UID of the source Sandbox's Pod. The
-  // node-agent resolves the kata sandbox's Firecracker API socket from
-  // it on the node (setec#19): kata names the sandbox by its CRI
-  // sandbox id, which the Pod object does not carry.
+  // node-agent resolves the Firecracker API socket of the launcher
+  // Pod from it on the node (setec#19).
   string source_pod_uid = 6;
   reserved 4;
   reserved "source_kata_socket";
@@ -123,14 +122,14 @@ message CreateSnapshotResponse {
 }
 
 // RestoreSandboxRequest identifies a snapshot to load into a fresh
-// Firecracker VM in the target Pod's kata sandbox.
+// Firecracker VM in the launcher Pod of the target Sandbox.
 message RestoreSandboxRequest {
   string snapshot_id = 1;
   string storage_ref = 2;
   string storage_backend = 3;
 
   // target_pod_uid is the UID of the target Pod. The node-agent
-  // resolves that Pod's kata Firecracker socket from it (setec#19).
+  // resolves the Firecracker socket of that Pod from it (setec#19).
   string target_pod_uid = 10;
   reserved 4;
   reserved "kata_socket_target";
@@ -212,7 +211,7 @@ message RestoreSandboxResponse {
 message PauseSandboxRequest {
   string sandbox_id = 1;
   // target_pod_uid is the UID of the Sandbox's Pod. The node-agent
-  // resolves its kata Firecracker socket from it (setec#19).
+  // resolves the Firecracker socket of that Pod from it (setec#19).
   string target_pod_uid = 3;
   reserved 2;
   reserved "kata_socket_target";
@@ -228,7 +227,7 @@ message PauseSandboxResponse {
 message ResumeSandboxRequest {
   string sandbox_id = 1;
   // target_pod_uid is the UID of the Sandbox's Pod. The node-agent
-  // resolves its kata Firecracker socket from it (setec#19).
+  // resolves the Firecracker socket of that Pod from it (setec#19).
   string target_pod_uid = 3;
   reserved 2;
   reserved "kata_socket_target";

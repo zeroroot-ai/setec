@@ -68,8 +68,8 @@ func TestSandboxClassWebhook_DefaultIsTheLauncher(t *testing.T) {
 }
 
 // TestSandboxClassWebhook_RefusesARemovedBackend pins the cutover of
-// setec#198 at admission: a class that names kata-fc, kata-qemu, gvisor or
-// runc is refused with the reason, and the launcher passes on create, on
+// setec#198 at admission: a class that names a removed backend is
+// refused with the reason, and the launcher passes on create, on
 // update and with no runtime.
 func TestSandboxClassWebhook_RefusesARemovedBackend(t *testing.T) {
 	t.Parallel()
@@ -93,7 +93,7 @@ func TestSandboxClassWebhook_RefusesARemovedBackend(t *testing.T) {
 			t.Errorf("%s: %v", ok.Name, err)
 		}
 	}
-	if _, err := w.ValidateDelete(ctx, mkSandboxClass("old", mkRuntime("gvisor"))); err != nil {
+	if _, err := w.ValidateDelete(ctx, mkSandboxClass("old", mkRuntime(setecruntime.RemovedBackends[0]))); err != nil {
 		t.Errorf("delete of a class with a removed backend: %v", err)
 	}
 }

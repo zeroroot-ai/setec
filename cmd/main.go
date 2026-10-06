@@ -53,9 +53,6 @@ var (
 )
 
 func init() {
-	// clientgoscheme already registers node/v1, but we register it
-	// explicitly so the intent of this binary's scheme is obvious and
-	// survives any future change in client-go's default registrations.
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
@@ -89,27 +86,27 @@ func defaultReservedCIDRs() []string {
 // nolint:gocyclo
 func main() {
 	var (
-		metricsBindAddr       string
-		probeBindAddr         string
-		enableLeaderElect     bool
-		multiTenancyEnabled   bool
-		tenantLabelKey        string
-		launcherImage         string
-		diskRepo              string
-		diskBuilderImage      string
-		diskSigningSecret     string
-		diskRegistrySecret    string
-		operatorNamespace     string
-		warmPoolNamespace     string
-		keptPinnedLimit       string
-		diskPublicKeys        []string
-		otlpEndpoint          string
-		otlpInsecure          bool
-		otlpCAFile            string
-		otlpSPIFFESocket      string
-		otlpSPIFFEServerIDs   []string
-		webhookEnabled        bool
-		webhookCertDir        string
+		metricsBindAddr     string
+		probeBindAddr       string
+		enableLeaderElect   bool
+		multiTenancyEnabled bool
+		tenantLabelKey      string
+		launcherImage       string
+		diskRepo            string
+		diskBuilderImage    string
+		diskSigningSecret   string
+		diskRegistrySecret  string
+		operatorNamespace   string
+		warmPoolNamespace   string
+		keptPinnedLimit     string
+		diskPublicKeys      []string
+		otlpEndpoint        string
+		otlpInsecure        bool
+		otlpCAFile          string
+		otlpSPIFFESocket    string
+		otlpSPIFFEServerIDs []string
+		webhookEnabled      bool
+		webhookCertDir      string
 
 		// Sandbox egress posture. Both lists are validated at startup;
 		// there is no runtime path that degrades to unrestricted egress.
@@ -613,8 +610,6 @@ func nodeAgentClientCredentials(
 	return creds, mode, nil
 }
 
-// newProbeServer returns a manager.Runnable that serves /healthz and /readyz
-// on addr. Each is an unconditional 200: the process is up.
 // probeServer serves /healthz and /readyz on EVERY replica, leader or not.
 //
 // It exists as a named type purely to implement
@@ -641,6 +636,8 @@ func (p probeServer) Start(ctx context.Context) error { return p.run(ctx) }
 // immediately rather than after acquiring the lease.
 func (probeServer) NeedLeaderElection() bool { return false }
 
+// newProbeServer returns a manager.Runnable that serves /healthz and /readyz
+// on addr. Each is an unconditional 200: the process is up.
 func newProbeServer(addr string) manager.Runnable {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

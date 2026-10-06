@@ -33,10 +33,9 @@ See `api/grpc/v1/sandbox.proto` for the full message schema.
 
 `LaunchRequest.command` is required for the ephemeral lifecycle and
 optional for `lifecycle.mode = "session"`. A session that omits it
-boots the setec keepalive: a static binary the operator installs into
-the Pod, which reaps orphans and exits only on teardown. The session
-then outlives every command sent through `Exec`. A session that sets a
-command boots that command instead, and ends when it exits.
+runs the entry point and the command of its image in the machine. Work
+then arrives through `Exec`. A session that sets a command runs that
+command instead.
 
 ## Resolved class and runtime reporting
 
@@ -49,11 +48,10 @@ holding any Kubernetes credentials:
   Sandbox was bound to, read back from the created object after
   admission (so admission-time defaulting is reflected, not the
   request value).
-- `WaitResponse.runtime` — the backend actually selected after
-  evaluating the class's primary backend and any `fallback` chain
-  (`status.runtime.chosen`): one of `kata-fc`, `kata-qemu`, `gvisor`,
-  `runc`. `Wait` returns only after the Sandbox is terminal, so this
-  value is authoritative.
+- `WaitResponse.runtime` — the backend of the Sandbox
+  (`status.runtime.chosen`): `launcher`, the one backend
+  (`docs/design/runtime.md`). `Wait` returns only after the Sandbox is
+  terminal, so this value is authoritative.
 - `AttachResponse.sandbox_class` / `AttachResponse.runtime` — the same
   two values for a reattaching caller, which never saw the
   `LaunchResponse`.

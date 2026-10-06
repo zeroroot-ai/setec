@@ -138,7 +138,7 @@ type WarmStartOutcome string
 
 const (
 	// WarmStartRestored: a pool entry was claimed and its state
-	// restored into the Sandbox's kata-fc Pod.
+	// restored into the launcher Pod of the Sandbox.
 	WarmStartRestored WarmStartOutcome = "restored"
 	// WarmStartMiss: no compatible pool entry existed on the
 	// Sandbox's node; the Sandbox continues its cold boot.

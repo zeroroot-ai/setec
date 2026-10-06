@@ -15,6 +15,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -98,7 +99,7 @@ func TestAttach_ReportsClassAndRuntime(t *testing.T) {
 	t.Parallel()
 	sb := sessionCR("team-a", "sess-rt", "uid-rt", setecv1alpha1.SandboxPhaseRunning)
 	sb.Spec.SandboxClassName = testSandboxClass
-	sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-fc"}
+	sb.Status.Runtime = &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher}
 	c := newClient(t, sb)
 	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
 
@@ -109,8 +110,8 @@ func TestAttach_ReportsClassAndRuntime(t *testing.T) {
 	if resp.GetSandboxClass() != testSandboxClass {
 		t.Fatalf("sandbox_class = %q, want standard", resp.GetSandboxClass())
 	}
-	if resp.GetRuntime() != "kata-fc" {
-		t.Fatalf("runtime = %q, want kata-fc", resp.GetRuntime())
+	if resp.GetRuntime() != runtimepkg.BackendLauncher {
+		t.Fatalf("runtime = %q, want launcher", resp.GetRuntime())
 	}
 }
 

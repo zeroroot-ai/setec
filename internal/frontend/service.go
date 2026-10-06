@@ -160,8 +160,8 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 
 	// The lifecycle decides whether a command is required, so it is
 	// mapped first. An ephemeral Sandbox's command is its whole life. A
-	// session may omit it: the operator boots the setec keepalive and
-	// work arrives through Exec (setec#7).
+	// session may omit it: the machine then runs the entry point of the
+	// image, and work arrives through Exec (setec#7).
 	var lifecycle *setecv1alpha1.Lifecycle
 	if lc := req.GetLifecycle(); lc != nil {
 		spec, err := lifecycleFromRequest(lc)
@@ -629,13 +629,11 @@ func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string
 	return rc, nil
 }
 
-// workloadContainerTerminated reports whether the Pod's workload
-
-// container has already exited, so following it would attach to
-// nothing. A Pod can still report Running while its single workload
-// container has terminated, so the container status is authoritative;
-// a terminal Pod phase without container statuses counts as
-// terminated.
+// workloadContainerTerminated reports whether the launcher container of
+// the Pod has already exited, so following it would attach to nothing.
+// A Pod can still report Running while its one container has
+// terminated, so the container status is authoritative. A terminal Pod
+// phase without container statuses counts as terminated.
 func workloadContainerTerminated(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false

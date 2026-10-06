@@ -417,11 +417,9 @@ type SandboxSpec struct {
 	// are passed verbatim; no shell interpretation occurs.
 	//
 	// Required for the ephemeral lifecycle: that one command is the whole
-	// life of the Sandbox (docs/design/lifecycles.md). A session may leave it empty. The
-	// operator then boots the setec keepalive, a process that reaps
-	// orphans and never exits on its own, so the session outlives every
-	// command sent through Exec. The keepalive never depends on a shell
-	// or a sleep binary in the image.
+	// life of the Sandbox (docs/design/lifecycles.md). A session may
+	// leave it empty. The machine then runs the entry point and the
+	// command of the image, and work arrives through Exec.
 	// +optional
 	Command []string `json:"command,omitempty"`
 

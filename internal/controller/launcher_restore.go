@@ -177,6 +177,14 @@ func classCPUTemplate(cls *setecv1alpha1.SandboxClass) string {
 	return cls.Spec.CPUTemplate
 }
 
+// classRequests is the scheduler reservation of the class, or nil.
+func classRequests(cls *setecv1alpha1.SandboxClass) *setecv1alpha1.ResourceRequests {
+	if cls == nil {
+		return nil
+	}
+	return cls.Spec.Requests
+}
+
 // restoreInstanceType returns the instance type that a restore Pod needs:
 // the one of the source node of its snapshot, when the class has no CPU
 // template. A template shows every node the same CPU, so it needs none.

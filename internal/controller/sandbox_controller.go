@@ -628,17 +628,12 @@ func (r *SandboxReconciler) handleMissingPod(
 
 // newWorkspacePVC builds the session Sandbox's durable workspace claim
 // object (docs/design/storage.md: a portable RWO CSI volume; any CSI driver works).
-// It is a pure function — no API calls — so the PVC shape can be
-// asserted per backend without a fake or live apiserver.
+// It is a pure function with no API calls, so the PVC shape can be
+// asserted without a fake or live apiserver.
 //
-// backend is the runtime.Selection.Backend the controller resolved for
-// this Sandbox. On kata-fc the claim is provisioned with
-// volumeMode: Block (setec#91): Kata Containers + Firecracker has no
-// virtio-fs, so a filesystem-mode volume's writes never reach the PVC
-// back on the host, and a raw block device is the one volume type
-// Firecracker can attach to the guest. Every other backend keeps the
-// existing filesystem-mode claim (volumeMode left nil, which the API
-// defaults to Filesystem).
+// The claim has volumeMode: Block (setec#91). Firecracker has no
+// virtio-fs, and a raw block device is the one volume type that
+// Firecracker can attach to the guest.
 func newWorkspacePVC(sb *setecv1alpha1.Sandbox) *corev1.PersistentVolumeClaim {
 	name := podspec.WorkspacePVCName(sb.Name)
 
@@ -1328,11 +1323,10 @@ func (r *SandboxReconciler) recordTransition(
 	if prev != curr.Phase {
 		r.MetricsCollector.RecordPhaseTransition(tenantID, className, curr.Phase)
 
-		// Cold-start: Sandbox creation to the moment the Pod runs. Emits
-		// with both new runtime label and legacy vmm label during the
-		// dual-write transition period.
+		// Cold-start: Sandbox creation to the moment the Pod runs, with
+		// the runtime label of the one backend.
 		//
-		// The Running moment is the workload container's running start.
+		// The Running moment is the running start of the launcher container.
 		// status.startedAt is pod.Status.StartTime, when the kubelet
 		// accepted the Pod: before the image pull and the VM boot, and in
 		// the same second as the Sandbox's creation on any quick cluster.
@@ -1422,8 +1416,9 @@ func (r *SandboxReconciler) createPod(
 		Identity: identity,
 		// The scratch size resolves with the class: the Sandbox's own
 		// value, else the class default, else 10 GiB (setec#172).
-		Scratch: limits.EffectiveScratch(sb, cls),
-		Image:   r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
+		Scratch:  limits.EffectiveScratch(sb, cls),
+		Requests: classRequests(cls),
+		Image:    r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
 		Restore:     (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") || pendingCheckpoint(sb),
 		NodeName:    nodeName,
 		FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
@@ -1458,7 +1453,7 @@ func (r *SandboxReconciler) createPod(
 		pod.Spec.Tolerations = append(pod.Spec.Tolerations, cls.Spec.Tolerations...)
 	}
 
-	// podspec.BuildWithOptions already populates a basic OwnerReference, but UID and
+	// podspec.BuildLauncher already populates a basic OwnerReference, but UID and
 	// APIVersion are authoritative only once the Scheme is consulted.
 	// SetControllerReference overwrites the reference in place, which keeps
 	// responsibility for the canonical form in the controller.

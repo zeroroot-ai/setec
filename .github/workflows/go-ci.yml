@@ -499,6 +499,13 @@ jobs:
       - name: No trust domain literal in the tree
         run: bash scripts/check-no-trust-domain-literal.sh
 
+      # setec#198: the launcher is the one isolation backend (D46).
+      - name: Mutation-test the one backend guard
+        run: bash scripts/check-one-backend.sh --selftest
+
+      - name: No second isolation backend in the tree
+        run: bash scripts/check-one-backend.sh
+
   crd-field-consumers:
     name: Every served CRD field has a consumer
     # Runs on both lanes, like the other tree guards. Each declaration has

@@ -26,9 +26,9 @@ type Reseeder interface {
 
 // VsockReseeder reseeds a restored guest over the Firecracker
 // hybrid-vsock Unix socket: it dials udsPath, performs the
-// "CONNECT <port>\n" / "OK <n>\n" handshake Firecracker (and Kata's
-// hybrid vsock) use for host-initiated connections, sends
-// PayloadBytes of fresh entropy, and verifies the guest's ack digest.
+// "CONNECT <port>\n" / "OK <n>\n" handshake that Firecracker uses for
+// host-initiated connections, sends PayloadBytes of fresh entropy, and
+// verifies the guest's ack digest.
 type VsockReseeder struct {
 	// Port is the guest AF_VSOCK port setec-guest-agent listens on.
 	Port uint32

@@ -570,8 +570,9 @@ spec:
                 properties:
                   backend:
                     description: |-
-                      Backend is "launcher" or empty. A removed backend name (kata-fc,
-                      kata-qemu, gvisor, runc) is refused.
+                      Backend is "launcher" or empty. The webhook and the operator refuse
+                      each other name, and name the reason for a backend that left in
+                      setec#198.
                     type: string
                 type: object
               sessionCheckpoint:

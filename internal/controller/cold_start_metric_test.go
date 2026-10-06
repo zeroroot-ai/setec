@@ -14,6 +14,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/metrics"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // coldStartSamples returns the sample count and sum of
@@ -106,12 +107,12 @@ func TestRecordTransitionKeepsSubSecondColdStart(t *testing.T) {
 	}
 	curr := setecv1alpha1.SandboxStatus{
 		Phase:   setecv1alpha1.SandboxPhaseRunning,
-		Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "gvisor"},
+		Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher},
 	}
 
 	r.recordTransition(sb, nil, setecv1alpha1.SandboxPhasePending, curr, pod, "")
 
-	if count, _ := coldStartSamples(t, reg, "gvisor"); count != 1 {
-		t.Fatalf("cold-start samples for gvisor = %d, want 1", count)
+	if count, _ := coldStartSamples(t, reg, runtimepkg.BackendLauncher); count != 1 {
+		t.Fatalf("cold-start samples for the launcher = %d, want 1", count)
 	}
 }

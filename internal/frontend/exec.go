@@ -60,12 +60,10 @@ var errDuplicateStart = errors.New("exec stream carried a second start message")
 // the exit classification — are unit-testable without a live kubelet.
 //
 // The production implementation is the Kubernetes pods/exec
-// subresource: kubelet hands the request to the CRI runtime, which for
-// a kata-fc Sandbox is the Kata shim, which asks the in-guest
-// kata-agent to spawn the process inside the workload container's
-// namespaces. That IS the in-VM exec channel, and it lands in the same
-// mount namespace as the booted workload — which is why the durable
-// /workspace volume is visible to an exec'd command at all.
+// subresource on the launcher container. The launcher carries the
+// command into the machine, and the guest agent starts it next to the
+// workload, so the command sees the durable /workspace volume
+// (docs/design/runtime.md).
 type containerExecutor interface {
 	ExecInContainer(
 		ctx context.Context,

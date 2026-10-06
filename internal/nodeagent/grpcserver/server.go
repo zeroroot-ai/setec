@@ -131,8 +131,8 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		return nil, status.Errorf(codes.Internal, "firecracker pause: %v", err)
 	}
 
-	// Firecracker writes the pair itself, and kata runs it chrooted
-	// into the VM's jailer root, so the files go under that root and
+	// Firecracker writes the pair itself and sees only the work volume
+	// of the launcher Pod, so the files go under that volume and
 	// Firecracker gets the paths as it sees them (setec#19).
 	dir := filepath.Join(m.FCRoot, snapshotWorkDir, in.GetSnapshotId())
 	if err := os.MkdirAll(dir, 0o700); err != nil {

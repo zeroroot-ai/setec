@@ -8,7 +8,7 @@
 // reaching into global state.
 //
 // Label cardinality note: every metric uses a fixed label set
-// (tenant, sandbox_class, phase, vmm, runtime). "tenant" is always the
+// (tenant, sandbox_class, phase, runtime). "tenant" is always the
 // empty string in single-tenant mode to avoid the Prometheus anti-pattern
 // of sometimes-present labels. Cardinality therefore scales with
 // (tenants x classes x phases) = O(small) for typical deployments.
@@ -60,9 +60,8 @@ type Collectors struct {
 	SandboxDuration *prometheus.HistogramVec
 
 	// SandboxColdStart observes the time from Sandbox creation to the
-	// moment its Pod transitioned to Running. Both runtime and vmm labels
-	// are present during the dual-write transition period so existing
-	// dashboards keep working.
+	// moment its Pod transitioned to Running, labeled by runtime and
+	// class.
 	SandboxColdStart *prometheus.HistogramVec
 
 	// SandboxActive gauges the current number of active Sandboxes per

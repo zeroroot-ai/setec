@@ -190,8 +190,8 @@ message LaunchRequest {
 
   // Command executed inside the microVM. Required for the ephemeral
   // lifecycle. A session (lifecycle.mode = "session") may leave it
-  // empty: the operator then boots the setec keepalive, so the session
-  // outlives every command sent through Exec.
+  // empty: the machine then runs the entry point of the image, and
+  // work arrives through Exec.
   repeated string command = 3;
 
   // Environment variables exposed to the workload. Optional.
@@ -359,14 +359,11 @@ message WaitResponse {
   int32 exit_code = 2;
   string reason = 3;
 
-  // runtime is the backend actually selected for the Sandbox after
-  // evaluating its SandboxClass's primary backend and any fallback
-  // chain (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor,
-  // runc. Wait returns after the Sandbox is terminal, so this value is
-  // authoritative. Empty means no backend was ever resolved — the
-  // Sandbox reached a terminal phase before selection (for example
-  // ClassNotFound or RuntimeUnavailable) — never "resolved but
-  // unreported".
+  // runtime is the backend of the Sandbox (status.runtime.chosen):
+  // launcher, the one backend. Wait returns after the Sandbox is
+  // terminal, so this value is authoritative. Empty means that the
+  // Sandbox reached a terminal phase before the operator recorded a
+  // backend (for example ClassNotFound or UnsupportedBackend).
   string runtime = 4;
 }
 
@@ -429,7 +426,7 @@ message AttachResponse {
   string sandbox_class = 5;
 
   // runtime is the backend selected for the Sandbox
-  // (status.runtime.chosen): one of kata-fc, kata-qemu, gvisor, runc.
+  // (status.runtime.chosen): launcher, the one backend.
   // Empty means the operator has not yet resolved a backend (the
   // Sandbox is still Pending), not "resolved but unreported".
   string runtime = 6;

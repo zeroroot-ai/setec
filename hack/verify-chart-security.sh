@@ -572,12 +572,12 @@ sandboxClasses:
   classes:
     - name: tool
       spec:
-        runtime: {backend: kata-fc}
+        runtime: {backend: launcher}
         defaultNetworkMode: external-only
         default: true
     - name: agent
       spec:
-        runtime: {backend: kata-fc}
+        runtime: {backend: launcher}
         defaultNetworkMode: external-only
         egressAllowSelectors:
           - namespaceSelector:

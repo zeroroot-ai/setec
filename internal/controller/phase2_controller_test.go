@@ -24,6 +24,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // newSandboxClass is the Phase 2 analogue of newSandbox. Kept local so
@@ -725,8 +726,8 @@ func TestPhase2_RemovedBackendFailsTheSandbox(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "p2-removed")
 
-	cls := newSandboxClass("p2-kata-class", func(c *setecv1alpha1.SandboxClass) {
-		c.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"}
+	cls := newSandboxClass("p2-removed-class", func(c *setecv1alpha1.SandboxClass) {
+		c.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: runtimepkg.RemovedBackends[0]}
 	})
 	g.Expect(testClient.Create(testCtx, cls)).To(Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })

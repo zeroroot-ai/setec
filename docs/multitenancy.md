@@ -267,16 +267,10 @@ rather than against the manifests.
 `SandboxClass` is a cluster-scoped resource administrators author once
 and tenants reference by name. A class carries:
 
-- `runtime.backend`, `runtime.fallback`, `runtime.params`: runtime backend
-  selection — `kata-fc`, `kata-qemu`, `gvisor`, or `runc` (dev-only) —
-  plus an optional fallback chain. `runtime.params` is backend-specific
-  tuning that only `kata-qemu` consumes (`vcpus` and `memory`); the
-  webhook refuses params named for a backend that reads none. The
-  legacy `vmm` + `runtimeClassName` fields are accepted for
-  back-compat and translated by the defaulting webhook. See
+- `runtime.backend`: `launcher` or empty. setec has one backend: each
+  Sandbox is a Firecracker machine in a launcher Pod
+  (`docs/design/runtime.md`). The webhook refuses each other name. See
   [`crd-reference.md`](./crd-reference.md#sandboxclass) for the full schema.
-- `kernelImage`, `rootfsImage`: image overrides for kata-fc / kata-qemu
-  backends (ignored for gvisor and runc).
 - `defaultResources`, `maxResources`: per-Sandbox resource ceilings.
 - `allowedNetworkModes`: the subset of `Network.mode` values the
   class permits. Checked against the *effective* mode, so a Sandbox that
@@ -304,7 +298,7 @@ metadata:
   name: standard
 spec:
   runtime:
-    backend: kata-fc
+    backend: launcher
   maxResources:
     vcpu: 4
     memory: 8Gi

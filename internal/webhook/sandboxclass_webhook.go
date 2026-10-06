@@ -64,7 +64,7 @@ func (w *SandboxClassWebhook) ValidateCreate(ctx context.Context, class *setecv1
 
 // ValidateUpdate implements admission.Validator[*SandboxClass] for updates.
 // The same rules that apply to creation apply to mutation: a class cannot be
-// updated to reference a disabled or ungated backend.
+// updated to name a removed backend.
 func (w *SandboxClassWebhook) ValidateUpdate(ctx context.Context, _, newClass *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
 	return w.validate(ctx, newClass)
 }
@@ -97,9 +97,8 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		))
 	}
 
-	// Pre-warm pool knobs (docs/design/lifecycles.md, setec#188). The three fields are one
-	// declarative surface: a pool needs an image to bake, and a TTL of zero
-	// or less would recycle entries in a hot loop.
+	// Warm pool fields (docs/design/lifecycles.md, setec#103): a pool needs
+	// an image with a digest and the resources that its bases boot with.
 	allErrs = append(allErrs, validatePreWarm(class)...)
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)

@@ -45,9 +45,8 @@ type CreateSnapshotRequest struct {
 	// to. Phase 3 ships only "local-disk".
 	StorageBackend string `protobuf:"bytes,3,opt,name=storage_backend,json=storageBackend,proto3" json:"storage_backend,omitempty"`
 	// source_pod_uid is the UID of the source Sandbox's Pod. The
-	// node-agent resolves the kata sandbox's Firecracker API socket from
-	// it on the node (setec#19): kata names the sandbox by its CRI
-	// sandbox id, which the Pod object does not carry.
+	// node-agent resolves the Firecracker API socket of the launcher
+	// Pod from it on the node (setec#19).
 	SourcePodUid string `protobuf:"bytes,6,opt,name=source_pod_uid,json=sourcePodUid,proto3" json:"source_pod_uid,omitempty"`
 	// session_kek is the per-session key-encryption key session
 	// checkpoints seal their DEKs with (setec#194, docs/design/storage.md). The
@@ -250,14 +249,14 @@ func (x *CreateSnapshotResponse) GetCleanBaseVerified() bool {
 }
 
 // RestoreSandboxRequest identifies a snapshot to load into a fresh
-// Firecracker VM in the target Pod's kata sandbox.
+// Firecracker VM in the launcher Pod of the target Sandbox.
 type RestoreSandboxRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SnapshotId     string                 `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
 	StorageRef     string                 `protobuf:"bytes,2,opt,name=storage_ref,json=storageRef,proto3" json:"storage_ref,omitempty"`
 	StorageBackend string                 `protobuf:"bytes,3,opt,name=storage_backend,json=storageBackend,proto3" json:"storage_backend,omitempty"`
 	// target_pod_uid is the UID of the target Pod. The node-agent
-	// resolves that Pod's kata Firecracker socket from it (setec#19).
+	// resolves the Firecracker socket of that Pod from it (setec#19).
 	TargetPodUid string `protobuf:"bytes,10,opt,name=target_pod_uid,json=targetPodUid,proto3" json:"target_pod_uid,omitempty"`
 	// resources optionally overrides the VM resource shape during
 	// restore. When zero-valued the shape baked into the snapshot is
@@ -499,7 +498,7 @@ type PauseSandboxRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	// target_pod_uid is the UID of the Sandbox's Pod. The node-agent
-	// resolves its kata Firecracker socket from it (setec#19).
+	// resolves the Firecracker socket of that Pod from it (setec#19).
 	TargetPodUid  string `protobuf:"bytes,3,opt,name=target_pod_uid,json=targetPodUid,proto3" json:"target_pod_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -607,7 +606,7 @@ type ResumeSandboxRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	// target_pod_uid is the UID of the Sandbox's Pod. The node-agent
-	// resolves its kata Firecracker socket from it (setec#19).
+	// resolves the Firecracker socket of that Pod from it (setec#19).
 	TargetPodUid  string `protobuf:"bytes,3,opt,name=target_pod_uid,json=targetPodUid,proto3" json:"target_pod_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

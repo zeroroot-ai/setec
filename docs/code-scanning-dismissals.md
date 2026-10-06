@@ -13,20 +13,20 @@ document is the substantive record; the API comment is the pointer.
 the GitHub UI is invisible to review, invisible to `git log`, and impossible to
 re-audit when the threat model changes.
 
-## Six images, one surface with findings
+## Six images
 
 | SARIF category | Dockerfile | What it is |
 |---|---|---|
 | `trivy-setec` | `Dockerfile` | The operator (controller-manager). Reconciles `Sandbox`/`SandboxClass`; serves the admission webhooks. |
 | `trivy-setec-frontend` | `Dockerfile` | The API frontend. |
-| `trivy-setec-node-agent` | `Dockerfile` | Per-node pool/snapshot agent. |
-| `trivy-setec-runtime-agent` | `Dockerfile` | Per-node runtime prober. |
-| `trivy-setec-guest-agent` | `Dockerfile` | Static in-guest binary; not a runnable service image. |
-| `trivy-setec-installer` | `Dockerfile.installer` | The node installer. **Additionally carries the stock kata-containers static release as an immutable payload** (docs/design/runtime.md). |
+| `trivy-setec-node-agent` | `Dockerfile` | Per-node snapshot agent. |
+| `trivy-setec-device-plugin` | `Dockerfile` | Per-node KVM device plugin. |
+| `trivy-setec-launcher` | `Dockerfile.launcher` | The launcher of each Sandbox Pod. **Also carries the Firecracker release that `firecracker.env` pins**, the guest kernel and the initrd with the guest agent. |
+| `trivy-setec-disk-builder` | `Dockerfile.disk-builder` | The Job that turns an image digest into a signed disk. |
 
-Five of the six scan clean. **Every finding this repo has ever carried belongs
-to `trivy-setec-installer`, and every one of them is inside the kata payload —
-not in any binary setec compiles.**
+The node installer image and its Kata payload left in the cutover of
+setec#198. Every finding that this repo carried before the cutover was in that
+payload, not in a binary that setec compiles.
 
 ## Reachability classes
 
@@ -34,221 +34,50 @@ Every alert is assigned to exactly one class before any dismissal decision.
 
 | Class | Scope | Dismissal policy |
 |---|---|---|
-| **A — setec's own compiled code** | `/manager`, `/frontend`, `/node-agent`, `/runtime-agent`, `/setec-guest-agent`, `/entrypoint` (the installer binary) — everything built from `cmd/` and `internal/` in this repo | **Never dismissed.** This is the operator's and frontend's own request-handling path. These get fixed. |
-| **B — kata payload, host-side control plane** | `/opt/kata/bin/containerd-shim-kata-v2` — the process containerd launches to create and supervise the microVM | Dismissable **only** on symbol-level evidence that the vulnerable code is not linked into the binary. Never on a narrative argument. |
-| **C — kata payload, guest-side artifacts** | The guest kernel (`vmlinux.container`) and rootfs image (`kata-containers.img`) laid inside the microVM | Contained by the microVM boundary. Dismissable with a stated containment argument. *(No entry has ever fallen in this class — Trivy does not unpack these.)* |
+| **A — setec's own compiled code** | `/manager`, `/frontend`, `/node-agent`, `/device-plugin`, `setec-launcher`, `setec-guest-agent`, `setec-disk-builder`: everything built from `cmd/` and `internal/` in this repo | **Never dismissed.** These get fixed. |
+| **B — Firecracker, host side** | `/usr/local/bin/firecracker` in the launcher image: the VMM that the launcher starts in the Pod | Dismissable **only** on symbol-level evidence that the vulnerable code is not linked into the binary. Never on a narrative argument. |
+| **C — guest-side artifacts** | The guest kernel and the initrd that boot inside the machine | Contained by the machine boundary. Dismissable with a stated containment argument. |
 
 ### Class B is not "sandbox contained" — read this before triaging one
 
 The tempting shortcut is: *setec runs untrusted workloads in microVMs, therefore
-a CVE in the kata payload is contained by the microVM.* **That is wrong for the
-shim, and getting it wrong is the main way triage fails on this repo.**
+a CVE in Firecracker is contained by the microVM.* **That is wrong, and getting
+it wrong is the main way triage fails on this repo.**
 
-`containerd-shim-kata-v2` runs **on the host**, outside the guest. It is not a
-thing the microVM contains — it is the process that *implements* the microVM
-boundary. It sits between two inputs:
-
-- **containerd/kubelet side** — OCI spec, image config, annotations, partly
-  derived from a tenant-supplied `Sandbox` spec.
-- **guest side** — ttrpc over vsock to `kata-agent`, inside a VM that is
-  running **untrusted code by design**. A workload that compromises its guest
-  agent is then speaking directly to the shim's parser.
+Firecracker runs **in the launcher Pod**, outside the guest. It is not a thing
+the microVM contains. It is the process that *implements* the microVM boundary,
+and its device emulation parses input from a guest that runs **untrusted code by
+design**.
 
 Per docs/design/threat-model.md the split is: a cross-tenant leak is a `gibson` bug, **a sandbox
-escape is a `setec` bug.** The shim is on setec's side of that line. A
-remote-code-execution or memory-safety defect in the shim's guest-facing path is
-a sandbox-escape primitive, not a contained finding.
-
-So Class B gets the *strictest* dismissal bar in this ledger, not the loosest:
-**linked-and-unproven stays open.**
+escape is a `setec` bug.** Firecracker is on setec's side of that line. A
+memory-safety defect in its guest-facing path is a sandbox-escape primitive,
+not a contained finding.
 
 ## `FixedVersion: NONE` and "it's upstream" are not verdicts
 
-Two orders of question, in order, before reachability is even considered:
+Ask three questions, in order, before reachability is even considered:
 
 1. **Does the artifact need to be in the image at all?** The distro or upstream
-   shipping no patch says nothing about whether the file needs to ship. Entry 1
-   removed 47 findings — half of everything this repo had — by deleting two
-   binaries nothing executed.
-2. **Has upstream since published a build that fixes it?** A pinned payload is
-   only as fresh as the last time someone moved the pin. The kata bump in
-   Entry 2 removed a further 29.
+   shipping no patch says nothing about whether the file needs to ship.
+2. **Has upstream since published a build that fixes it?** A pinned release is
+   only as fresh as the last time someone moved the pin. Move the pin in
+   `firecracker.env` or `kernel/kernel.env` first.
 3. **Only then**: is the vulnerable code provably not linked?
 
-## Current status of Class A
-
-**Class A is clean, and no Class-A alert has ever been dismissed.**
-
-Verified locally on images built from `main` (`trivy image`, all scanners):
-
-| Image | Binary | HIGH/CRITICAL | Total |
-|---|---|---|---|
-| `setec` | `/manager` | 0 | 0 |
-| `setec-frontend` | `/frontend` | 0 | 0 |
-| `setec-node-agent` | `/node-agent` | 0 | 0 |
-| `setec-runtime-agent` | `/runtime-agent` | 0 | 0 |
-| `setec-guest-agent` | `/setec-guest-agent` | 0 | 0 |
-| `setec-installer` | `/entrypoint` | 0 | 0 |
-
-OS package layer is also 0 in every image (distroless-static-debian12).
+A dismissal without a symbol count from a real symbol dump, plus a non-zero
+control symbol that proves the dump resolved, does not go in this file.
 
 ## Dismissals
 
-### Entry 1 — 47 findings removed by deletion, not dismissal
+### History: the Kata payload (Entries 1 to 6 and 9 to 13)
 
-Not a dismissal. Recorded because it is the largest single reduction and sets
-the precedent for how this repo triages.
-
-`Dockerfile.installer` extracted `/opt/kata/bin/kata-runtime` and
-`/opt/kata/bin/kata-collect-data.sh` from the kata tarball. `kata-runtime` is a
-Go binary of the same vintage as the shim and carried an **identical 47-CVE
-set** — the same stdlib and the same vendored dependency graph.
-
-Nothing in setec ever executed either file. containerd resolves
-`runtime_type = "io.containerd.kata-fc.v2"` directly to
-`containerd-shim-kata-v2`; `requiredKataArtifacts` in `internal/installer/kata.go`
-never listed `kata-runtime`; and `internal/runtimeagent/probe/kata_fc.go`
-performs no binary lookup at all. The only consumer was a cosmetic
-kata-deploy-parity symlink at `/usr/local/bin/kata-runtime`.
-
-Both are now excluded from the extract list, the parity symlink is gone, and the
-payload gate carries a **negative** assertion (`test ! -e .../kata-runtime`) so
-re-adding either fails the image build rather than silently re-importing 47 CVEs.
-
-**Reverses if** any setec code path acquires a genuine need to exec the kata CLI
-on a node. The AMI bake path (`packer/`) extracts the full tarball independently
-and is unaffected.
-
-### Entry 2 — kata payload bumped 3.28.0 → 3.32.0
-
-Not a dismissal. The pin had drifted three releases behind. Moving it to the
-newest 3.x release took the shim from **47 findings (1 CRITICAL, 29 HIGH) to
-18 (0 CRITICAL, 12 HIGH)**, clearing the CRITICAL and 29 others outright.
-
-Pins moved in lockstep, as `packer/eks-kata-fc-ami/README.md` requires:
-`Dockerfile.installer`, `packer/eks-kata-fc-ami/eks-kata-fc.pkr.hcl`,
-`packer/eks-kata-fc-ami/README.md`, `development/k3s/scripts/20-install-kata.sh`.
-
-**4.0.0 was evaluated and deliberately not taken.** It would reach 12 findings,
-but it rewrites the runtime in Rust ("runtime-rs"), makes that the default, and
-**runtime-rs does not list Firecracker among its supported hypervisors** (QEMU,
-Cloud Hypervisor, Dragonball). The Go runtime setec depends on is *deprecated*
-in 4.0.0. Adopting it for a 6-finding delta would move setec's entire substrate
-onto a deprecated upstream path, and no e2e microVM boot validation is currently
-available to prove the FC path still works.
-
-### Entry 3 — CVE-2026-39822, `os.Root` symlink traversal (stdlib)
-
-**Class B. Dismissed: vulnerable code not linked.**
-
-GO-2026-4970 names exactly twelve affected symbols, all on the `os.Root` API:
-`os.OpenInRoot`, `os.(*Root).Create`, `.Open`, `.OpenFile`, `.OpenRoot`,
-`.ReadFile`, `.WriteFile`, `os.openRootInRoot`, `os.(*rootFS).Open`,
-`.ReadDir`, `.ReadFile`, `os.rootOpenFileNolog`.
-
-`go tool nm` on the shipped `containerd-shim-kata-v2` (kata 3.32.0) resolves
-**173,331 symbols** and returns **0 matches for every one of the twelve**. The
-`os.Root` API is not linked into the binary; the Go linker eliminated it. Control
-symbols in the same dump — `os.OpenFile` (2), `golang.org/x/mod/semver` (12),
-`html/template.(*Template).Execute` (4) — are present, confirming the dump
-resolves real symbols and the zeros are genuine absences rather than a tooling
-artifact.
-
-**Reverses if** a future kata build links `os.Root`. Re-check with:
-`go tool nm /opt/kata/bin/containerd-shim-kata-v2 | grep -F 'os.(*Root)'`
-
-**On kata 4.2.0 (2026-10-05):** the alert is closed as fixed, because the shim
-is built with Go 1.26.7. The symbols are still absent: `os.(*Root)` resolves 0
-and `os.OpenInRoot` resolves 0.
-
-### Entry 4 — CVE-2026-56864, `x/mod/sumdb` unauthenticated hash acceptance
-
-**Class B. Dismissed: vulnerable code not linked.**
-
-GO-2026-6180 names a single affected symbol:
-`golang.org/x/mod/sumdb.(*Client).Lookup`. Zero matches in the shim's symbol
-table. The only `golang.org/x/mod` subpackage linked is
-`golang.org/x/mod/semver` (12 symbols) — version-string comparison, which shares
-no code with the checksum-database client.
-
-The vulnerability is additionally reachable only when fetching Go modules
-through a malicious `GOPROXY`/`GOSUMDB`. The shim is a compiled artifact; it
-resolves no modules at runtime.
-
-**Reverses if** `golang.org/x/mod/sumdb` appears in the shim's symbol table.
-
-**On kata 4.2.0 (2026-10-05):** the alert is closed as fixed (`x/mod` v0.40.0).
-The `golang.org/x/mod/sumdb` prefix still resolves 0 symbols. This is also true
-for Entry 5.
-
-### Entry 5 — CVE-2026-56865, `x/mod/sumdb/tlog` tile verification bypass
-
-**Class B. Dismissed: vulnerable code not linked.**
-
-GO-2026-6179 names `golang.org/x/mod/sumdb/tlog.tileHashReader.ReadHashes`.
-Zero matches for the `golang.org/x/mod/sumdb/tlog` package prefix in the shim's
-symbol table. Same evidence and same reversal condition as Entry 4.
-
-## Residual open findings — NOT dismissed
-
-**1 finding stays open on `trivy-setec-installer`. It is in
-`/opt/kata/bin/containerd-shim-kata-v2`, and it is Class B.**
-
-This is the set for the payload that `kata.env` pins: kata 4.2.0, `KATA_SHA256`
-`7dda31ca54b397cbf8165f620d6041872d3c45b7a77383ce0e86f76a06e103d0`. It was
-measured on 2026-10-05. Entry 12 has the symbol record.
-
-| Alert | CVE | Sev | Package | Installed | Fixed in | Linked? |
-|---|---|---|---|---|---|---|
-| 54 | CVE-2026-53493 | MEDIUM | `github.com/containerd/containerd` | v1.7.35 | 1.7.36 | yes (Entry 12) |
-
-The alert is **deliberately left open**. `go tool nm` confirms that the package
-is linked into the shipped binary. Linked is not the same as reachable from
-untrusted input. Under the Class-B bar above, "I could not prove it reachable"
-is not a dismissal reason.
-
-**setec cannot fix it directly.** The package is in the vendored dependency
-graph of upstream kata. kata 4.2.0 (2026-09-15) is the newest kata release, and
-its `src/runtime/go.mod` at that tag pins `github.com/containerd/containerd
-v1.7.35`. The only levers are:
-
-1. Bump `KATA_VERSION` and `KATA_SHA256` in `kata.env` when upstream publishes
-   a release that pins containerd 1.7.36 or later. This is the expected path.
-   `zeroroot-ai/.github` `version-links.yaml` watches kata releases, so a new
-   one shows in the org version-drift tracker (Entry 10).
-2. Build the shim from source against patched deps, which would abandon the
-   stock-static-release property docs/design/runtime.md exists to preserve. That is an
-   architecture decision, not a triage decision.
-
-Re-audit on every kata pin bump, with the procedure below. The kata payload
-leaves the repo at the launcher cutover, and this section leaves with it.
-
-### Entry 6 — kata 4.1.0 evaluated on 2026-09-07, not taken (setec#21)
-
-Not a dismissal. The 20 open Trivy findings on the shim on 2026-09-07 all have
-a fixed version, and kata 4.1.0 (2026-08-21) clears 18 of them: it builds
-with Go 1.25.13 and pins containerd v1.7.33, runc v1.3.6, x/mod v0.40.0,
-x/net v0.56.0, x/text v0.39.0 and mongo-driver v1.17.7. Two would remain
-(grpc wants v1.83.1, 4.1.0 pins v1.82.1; cilium/ebpf wants v0.22.0, 4.1.0
-pins v0.17.3).
-
-The pin still stays on 3.32.0, for the reason Entry 2 gives and one new
-fact. In 4.x the release tarballs are split. `kata-static-4.1.0-amd64.tar.zst`
-carries only `shim-v2-rust` and no Firecracker. The Go shim
-(`containerd-shim-kata-v2`) and the Firecracker and jailer binaries live in
-a second tarball, `kata-go-static-4.1.0-amd64.tar.zst` (1.2 GB), which is
-the deprecated Go runtime. Moving to it is a substrate decision: it changes
-the payload contract in `Dockerfile.installer`, the packer bake, and the k3s
-dev path (the 4.x kata-deploy chart installs runtime-rs, which has no
-Firecracker hypervisor, so `kata-fc` would not appear). No 3.x release newer
-than 3.32.0 exists. **These 20 alerts stay open on purpose**: they have a fix
-and must not be dismissed, and the fix is an owner decision.
-
-**Reverses if** the owner accepts the deprecated Go runtime tarball, or
-upstream ships Firecracker support in runtime-rs.
-
-**Reversed on 2026-09-07 by Entry 9.** The owner accepted the go-static
-tarball the same day.
+These entries recorded the Kata payload of the installer image: removed
+binaries, pin bumps, and symbol evidence for findings in
+`containerd-shim-kata-v2`. The installer image and the payload left in
+setec#198, so no shipped image holds those findings. `git log -p` of this file
+holds the full text. The entry numbers stay retired, so a dismissal comment on
+GitHub that cites one still points at its record in the history.
 
 ### Entry 7 — CodeQL alerts #23 and #24, dismissed as false positives (setec#21)
 
@@ -286,175 +115,3 @@ Dismissal reasons: `security-events: write` as false positive (the SARIF
 upload exists, one workflow_call away), the rest as won't fix.
 
 **Reverses if** the reusable workflow needs fewer permissions.
-
-### Entry 9 — kata payload moved to 4.1.0 go-static (owner decision 2026-09-07)
-
-Not a dismissal. Owner decision 2026-09-07, option 2 of three: take the
-`kata-go-static-4.1.0-amd64.tar.zst` payload, which still carries the Go
-shim (`containerd-shim-kata-v2`), Firecracker and the jailer, so the
-`kata-fc` path is unchanged. Alternatives declined: stay on 3.32.0 with the
-20 findings open, or build the 3.32.0 shim from source (a kata fork to
-maintain, and the docs/design/runtime.md stock-release property lost).
-
-What moved, in lockstep as before: `Dockerfile.installer` (tarball name and
-pin), `packer/eks-kata-fc-ami/*` (same), `development/k3s/scripts/20-install-kata.sh`
-(chart tag; the 4.x chart vendors node-feature-discovery, so the script no
-longer runs `helm dependency build`), the installer unit-test fixture.
-
-What 4.1.0 clears, verified against upstream `src/runtime/go.mod` at the
-4.1.0 tag: the shim is built with Go 1.25.13 and pins containerd v1.7.33,
-runc v1.3.6, x/mod v0.40.0, x/net v0.56.0, x/text v0.39.0 and mongo-driver
-v1.17.7. That covers 18 of the 20 findings open on 2026-09-07, including
-CVE-2026-53488 and CVE-2026-41579, the two that involve malicious images.
-
-What it does not clear, same source: grpc stays at v1.82.1 (GHSA-hrxh-6v49-42gf
-wants v1.83.1) and cilium/ebpf stays at v0.17.3 (wants v0.22.0). Both remain
-Class B findings and stay open, not dismissed, until upstream moves them.
-
-The go-static tarball is 1.2 GB against 924 MB for kata-static. The installer
-image still extracts only the kata-fc set, so the image size is unchanged in
-kind. Upstream calls the Go runtime deprecated; it still receives fixes, and
-this entry is the record that the substrate now sits on that path.
-
-**Reverses if** upstream ships Firecracker support in runtime-rs, or stops
-publishing the go-static tarball.
-
-**Not verified here:** no kind or k3s run in this change. The installer image
-build asserts the payload shape on the PR, and the e2e suite on `main` is the
-runtime proof. The k3s dev path is bumped on the chart's own evidence (the
-4.1.0 chart still defines the `fc` shim with the devmapper snapshotter) and
-has not been exercised.
-
-## Re-audit procedure
-
-```sh
-# Ground truth for the payload, without building the image:
-curl -fsSL -o kata.tar.zst \
-  "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-go-static-${VER}-amd64.tar.zst"
-mkdir -p x && tar --zstd -xf kata.tar.zst -C x ./opt/kata/bin/containerd-shim-kata-v2
-trivy rootfs --scanners vuln x
-
-# Linkage evidence for any candidate dismissal:
-go tool nm x/opt/kata/bin/containerd-shim-kata-v2 | awk '{print $NF}' > syms.txt
-grep -cF '<exact symbol from the GO-YYYY-NNNN advisory>' syms.txt
-```
-
-A dismissal without a symbol count from a real `nm` dump, plus a non-zero
-control symbol proving the dump resolved, does not go in this file.
-
-### Entry 10 — kata.env is the only kata pin (setec#26, epic zeroroot-ai/.github#20)
-
-Not a dismissal. Recorded because every earlier kata entry names "the
-`Dockerfile.installer` pin" and "the packer pin" as two things to keep in
-lockstep by hand. Since this entry there is one pin: `KATA_VERSION` and
-`KATA_SHA256` in `kata.env` at the repo root. `images.yml` reads it and passes
-both as build args (the Dockerfile ARGs have no default), the dev k3s script
-sources it, and `packer/eks-kata-fc-ami/bake.sh` passes it as `-var`.
-`scripts/check-runtime-pins.sh` runs on every PR and in the merge queue and fails
-when any of the three names a literal again; its `--selftest` proves each
-rule fires. `zeroroot-ai/.github` `version-links.yaml` declares the link with
-kata-containers/kata-containers as the upstream to watch, so a new kata
-release shows up in the org's version-drift tracker instead of in a Trivy
-digest months later.
-
-### Entry 11 — the two residual shim findings re-audited on kata 4.1.0 (setec#35)
-
-**History. Entry 12 replaces this entry.** kata 4.2.0 fixed both alerts.
-
-Not a dismissal. This is the symbol record behind the two findings the
-"Residual open findings" section lists. It exists because that section was
-written for the kata 3.32.0 payload, and Entry 9 cleared 18 of those 20
-findings without restating what was left.
-
-Re-audit run on 2026-09-08 with the procedure above, against the pinned tarball
-`kata-go-static-4.1.0-amd64.tar.zst` (sha256
-`8b32080424c884238ee8d52060fdfd060fbe2b5fdfa4eb9ff2772b382b432b55`, the
-`KATA_SHA256` in `kata.env`). `go tool nm` on the extracted
-`/opt/kata/bin/containerd-shim-kata-v2` resolves **50,693 symbols**.
-
-**Alert 34, CVE-2026-84304, HIGH. `google.golang.org/grpc` v1.82.1, fixed in
-1.83.1.** A peer that fragments HTTP/2 DATA frames can exhaust the memory of a
-gRPC **server**. The vulnerable server transport is linked:
-
-| Symbol | Count |
-|---|---|
-| `google.golang.org/grpc/internal/transport.(*recvBuffer).put` | 1 |
-| `google.golang.org/grpc/internal/transport.NewServerTransport` | 6 |
-| `google.golang.org/grpc/internal/transport.(*http2Server)` | 59 |
-| `google.golang.org/grpc.(*Server).Serve` | 6 |
-| `google.golang.org/grpc.NewServer` | 0 |
-| `google.golang.org/grpc.NewClient` | 3 |
-| `google.golang.org/grpc/internal/transport.(*http2Client)` | 54 |
-
-`(*recvBuffer).put` is the accumulation point the advisory names, and it is
-present. `grpc.NewServer` resolves 0 because the shim reaches the server
-transport through a different constructor, not because the server half is
-absent: `NewServerTransport`, `(*http2Server)` and `(*Server).Serve` all
-resolve. Control symbol `github.com/containerd/ttrpc.(*Server).Serve` resolves
-**3**, which proves the dump reads real symbols and the one zero is a genuine
-absence.
-
-**Alert 25, CVE-2026-10722, LOW. `github.com/cilium/ebpf` v0.17.3, fixed in
-0.22.0.** An integer overflow in `btf.loadRawSpec` while it parses BTF data.
-The package is linked: the `github.com/cilium/ebpf` prefix resolves **1,156
-symbols**, and the exact symbol the advisory names,
-`github.com/cilium/ebpf/btf.loadRawSpec`, resolves **1**. The advisory scopes
-the input to local BTF data, so the untrusted-input path is much weaker than
-alert 34. The Class-B bar is linkage, not narrative, so it stays open too.
-
-**Neither alert is dismissed on GitHub.** kata 4.1.0 (2026-08-21) is the newest
-kata release. Its `src/runtime/go.mod` at the 4.1.0 tag pins
-`google.golang.org/grpc v1.82.1` and `github.com/cilium/ebpf v0.17.3`, the
-exact versions both advisories name. No kata release fixes either finding, so
-there is nothing to bump to.
-
-**Reverses if** upstream kata publishes a release that pins
-`google.golang.org/grpc` 1.83.1 or later, or `github.com/cilium/ebpf` 0.22.0 or
-later. Move the pin in `kata.env` and re-run the procedure above.
-
-### Entry 12 — kata payload moved to 4.2.0, and the shim re-audited (setec#50, setec#174)
-
-Not a dismissal. `kata.env` moved to kata 4.2.0 on 2026-09-15. Its
-`src/runtime/go.mod` pins `google.golang.org/grpc v1.83.2` and
-`github.com/cilium/ebpf v0.22.0`. GitHub closed four alerts as fixed on that
-day: 34 (CVE-2026-84304), 48 (CVE-2026-84445), 49 (CVE-2026-84303) and 25
-(CVE-2026-10722). The two findings of Entry 11 are gone.
-
-Re-audit run on 2026-10-05 with the procedure above, against the pinned tarball
-`kata-go-static-4.2.0-amd64.tar.zst` (sha256
-`7dda31ca54b397cbf8165f620d6041872d3c45b7a77383ce0e86f76a06e103d0`, the
-`KATA_SHA256` in `kata.env`). `go version -m` on the extracted
-`/opt/kata/bin/containerd-shim-kata-v2` reports Go 1.26.7, grpc v1.83.2,
-cilium/ebpf v0.22.0, x/mod v0.40.0 and containerd v1.7.35. `go tool nm`
-resolves **51,862 symbols**. Control symbol
-`github.com/containerd/ttrpc.(*Server).Serve` resolves **3**.
-
-**Alert 54, CVE-2026-53493, MEDIUM. `github.com/containerd/containerd`
-v1.7.35, fixed in 1.7.36.** A crafted OCI index can make an image pull use
-very high CPU and memory. The package is linked: the
-`github.com/containerd/containerd/` prefix resolves **3,376 symbols**. The shim
-does not pull an image, and this record has no symbol list from the advisory
-that proves the pull path absent. The Class-B bar is linkage, so the alert
-stays open.
-
-**Reverses if** upstream kata publishes a release that pins containerd 1.7.36
-or later. Move the pin in `kata.env` and re-run the procedure above.
-
-### Entry 13 — CVE-2026-81870, OpenTelemetry SDK diagnostic log (alert 51)
-
-**Class B. Dismissed on 2026-09-21 as won't fix. The symbol evidence was added
-on 2026-10-05.**
-
-`go.opentelemetry.io/otel/sdk` v1.44.0, fixed in 1.45.0, LOW.
-`sdk/trace.NewTracerProvider` writes a diagnostic event that can hold collector
-addresses. The advisory states the condition: the application must call
-`otel.SetLogger` to enable the internal Info log. The default logger does not
-write the event.
-
-On the kata 4.2.0 shim, `go.opentelemetry.io/otel.SetLogger` resolves **0**
-symbols, and `go.opentelemetry.io/otel/internal/global.SetLogger` resolves
-**0**. `go.opentelemetry.io/otel/sdk/trace.NewTracerProvider` resolves **1**,
-so the dump reads the package and the zeros are real. The call that enables
-the log is not linked into the binary.
-
-**Reverses if** `otel.SetLogger` appears in the symbol table of the shim.

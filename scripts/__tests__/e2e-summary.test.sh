@@ -46,8 +46,8 @@ assert "every scenario passed" pass 0 "=== RUN   TestA
 PASS"
 
 assert "subtests passed" pass 0 "=== RUN   TestA
-=== RUN   TestA/backend=kata-fc
-    --- PASS: TestA/backend=kata-fc (1.00s)
+=== RUN   TestA/ability=fork
+    --- PASS: TestA/ability=fork (1.00s)
 --- PASS: TestA (1.00s)
 PASS"
 
@@ -64,7 +64,7 @@ assert "a scenario skipped, go test exited 0" fail 0 "--- PASS: TestA (1.00s)
 PASS"
 
 assert "a subtest skipped, go test exited 0" fail 0 "=== RUN   TestA
-    --- SKIP: TestA/backend=kata-fc (0.00s)
+    --- SKIP: TestA/ability=fork (0.00s)
 --- PASS: TestA (1.00s)
 PASS"
 
@@ -75,7 +75,7 @@ PASS"
 assert "the -run pattern matched nothing" fail 0 "testing: warning: no tests to run
 PASS"
 
-assert "the suite died in TestMain" fail 1 "e2e: preflight failed: RuntimeClass \"kata-fc\" not found
+assert "the suite died in TestMain" fail 1 "e2e: preflight failed: no node offers setec.zeroroot.ai/kvm
 FAIL"
 
 # A missing log is a failure, not a pass.
