@@ -229,9 +229,9 @@ func TestGenerate_ModeNoneIgnoresSelectorAllowance(t *testing.T) {
 func TestGenerate_NoClassRendersNoSelectorRule(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly))
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeExternalOnly), nil)
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 	for _, r := range got.Spec.Egress {
 		for _, p := range r.To {

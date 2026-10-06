@@ -24,7 +24,7 @@ func rangeRule(proto corev1.Protocol, port, endPort int32) networkingv1.NetworkP
 func TestGenerate_AllowListPortsForm(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{
 			Host: "api.example.com",
 			Ports: []setecv1alpha1.NetworkAllowPort{
@@ -33,9 +33,10 @@ func TestGenerate_AllowListPortsForm(t *testing.T) {
 				{Protocol: corev1.ProtocolUDP, Port: 161},
 				{Protocol: corev1.ProtocolUDP, Port: 5000, EndPort: new(int32(5100))},
 			},
-		}))
+		}), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	if n := len(got.Spec.Egress); n != 2 {
@@ -111,12 +112,12 @@ func TestGenerate_AllowListRefusesMalformedPorts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList, allow))
+			got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList, allow), nil)
 			if !errors.Is(err, ErrInvalidPorts) {
-				t.Fatalf("Generate() err = %v, want ErrInvalidPorts", err)
+				t.Fatalf("GenerateForClass() err = %v, want ErrInvalidPorts", err)
 			}
 			if got != nil {
-				t.Fatalf("Generate() returned a policy with an error: %+v", got.Spec.Egress)
+				t.Fatalf("GenerateForClass() returned a policy with an error: %+v", got.Spec.Egress)
 			}
 		})
 	}
@@ -128,7 +129,7 @@ func TestGenerate_AllowListRefusesMalformedPorts(t *testing.T) {
 func TestGenerate_AllowListDroppedEntryNamesEachPort(t *testing.T) {
 	t.Parallel()
 
-	got, err := testCfg().Generate(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
+	got, err := testCfg().GenerateForClass(t.Context(), sb(setecv1alpha1.NetworkModeEgressAllowList,
 		setecv1alpha1.NetworkAllow{
 			Host: "daemon.platform.svc", CIDR: "10.96.0.0/12",
 			Ports: []setecv1alpha1.NetworkAllowPort{
@@ -137,9 +138,10 @@ func TestGenerate_AllowListDroppedEntryNamesEachPort(t *testing.T) {
 			},
 		},
 		setecv1alpha1.NetworkAllow{Host: "internal.example.com", CIDR: "10.96.0.0/12", Port: 50051},
-	))
+	), nil)
+
 	if err != nil {
-		t.Fatalf("Generate() err: %v", err)
+		t.Fatalf("GenerateForClass() err: %v", err)
 	}
 
 	if n := len(got.Spec.Egress); n != 1 {
