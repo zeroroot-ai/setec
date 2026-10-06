@@ -2,6 +2,10 @@
 # The disk builder image (docs/design/storage.md): setec-disk-builder and
 # mksquashfs 4.6, which reads the image as a tar stream (-tar).
 FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
+# GOTOOLCHAIN=local makes a toolchain mismatch fail the build instead of
+# downloading a toolchain.
+ARG GOTOOLCHAIN=local
+ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
