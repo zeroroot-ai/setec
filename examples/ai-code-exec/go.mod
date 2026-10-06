@@ -3,7 +3,7 @@ module github.com/zeroroot-ai/setec/examples/ai-code-exec
 go 1.27.1
 
 require (
-	github.com/zeroroot-ai/setec v0.115.0
+	github.com/zeroroot-ai/setec v0.118.0
 	google.golang.org/grpc v1.83.2
 )
 
