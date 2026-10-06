@@ -260,3 +260,37 @@ func TestBuildLauncher_CPUTemplateAndInstanceType(t *testing.T) {
 		t.Fatal("the Pod is not kept on the instance type of the source")
 	}
 }
+
+// TestBuildLauncherBase_BootsWithNoWorkloadAndNoOwner pins the base Pod of
+// the warm pool: a boot, no workload, no owner Sandbox, the base label.
+func TestBuildLauncherBase_BootsWithNoWorkloadAndNoOwner(t *testing.T) {
+	sb := launcherSandbox()
+	pod, err := BuildLauncherBase("base-tools-0", "setec-system", sb.Spec.Image, sb.Spec.Resources, launcherOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod.Name != "base-tools-0" || len(pod.OwnerReferences) != 0 || pod.Labels[BaseLabel] != "true" {
+		t.Fatalf("base Pod = %s %v %v", pod.Name, pod.OwnerReferences, pod.Labels)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil || !s.Base || s.Workload != nil || s.Source.Boot == nil {
+		t.Fatalf("base spec = %+v, %v", s, err)
+	}
+}
+
+// TestBuildLauncher_FromBaseLoadsTheBaseAndStartsTheWorkload pins the Pod
+// of a warm start: the staged snapshot source and the Sandbox workload.
+func TestBuildLauncher_FromBaseLoadsTheBaseAndStartsTheWorkload(t *testing.T) {
+	opts := launcherOpts()
+	opts.FromBase = true
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil || s.Source.Snapshot == nil || s.Workload == nil || s.Workload.Argv[0] != "nmap" || s.Base {
+		t.Fatalf("warm start spec = %+v, %v", s, err)
+	}
+}

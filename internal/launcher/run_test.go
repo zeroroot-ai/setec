@@ -358,3 +358,20 @@ func TestRun_BootConfigCarriesTheCPUTemplate(t *testing.T) {
 		t.Fatalf("cpu-config = %q, %v", cfg.CPUConfig, err)
 	}
 }
+
+func TestSpec_BaseBootsWithNoWorkload(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	s.Workload = nil
+	if err := s.Validate(); err == nil {
+		t.Fatal("a boot with no workload and no base was accepted")
+	}
+	s.Base = true
+	if err := s.Validate(); err != nil {
+		t.Fatalf("a base boot: %v", err)
+	}
+	s.Workload = &guestagent.Process{Argv: []string{"true"}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("a base with a workload was accepted")
+	}
+}

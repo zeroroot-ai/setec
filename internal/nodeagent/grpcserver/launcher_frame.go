@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 )
 
 // The stored form of a launcher snapshot: the Firecracker state, the
@@ -265,4 +268,39 @@ func writeExtents(r io.Reader, path string, fresh bool) error {
 		return err
 	}
 	return f.Close()
+}
+
+// scanSparseFiles scans the data extents of each file for secret-shaped
+// material. A hole holds no data, so a sparse writable layer of 10 GiB
+// costs only its data. Any finding is an error.
+func scanSparseFiles(paths []string) error {
+	for _, p := range paths {
+		f, err := os.Open(p) //nolint:gosec // a path of the node agent
+		if err != nil {
+			return err
+		}
+		st, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		exts, err := dataExtents(f, st.Size())
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		readers := make([]io.Reader, 0, len(exts))
+		for _, e := range exts {
+			readers = append(readers, io.NewSectionReader(f, e.off, e.n))
+		}
+		findings, err := secretscan.New().Scan(io.MultiReader(readers...))
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(p), err)
+		}
+		if len(findings) > 0 {
+			return fmt.Errorf("%s: %w (%d findings)", filepath.Base(p), secretscan.ErrSecretsFound, len(findings))
+		}
+	}
+	return nil
 }

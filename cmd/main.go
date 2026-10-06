@@ -136,6 +136,7 @@ func main() {
 		diskSigningSecret     string
 		diskRegistrySecret    string
 		operatorNamespace     string
+		warmPoolNamespace     string
 		diskPublicKeys        []string
 		otlpEndpoint          string
 		otlpInsecure          bool
@@ -193,6 +194,9 @@ func main() {
 		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
 	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"Namespace of the operator, where the disk builder Jobs run.")
+	pflag.StringVar(&warmPoolNamespace, "warm-pool-namespace", "",
+		"Sandbox namespace that holds the warm pool bases of launcher classes. No tenant may use it. "+
+			"Empty turns the launcher warm pool off.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
@@ -480,10 +484,16 @@ func main() {
 			// docs/design/isolation.md invariant gate: enforcement is unconditional
 			// inside the Coordinator; this only wires the dev-mode
 			// opt-out lookup (class annotation + gate-namespace label).
-			Gate: &gate.Gate{Reader: mgr.GetClient()},
+			Gate:          &gate.Gate{Reader: mgr.GetClient()},
+			PoolNamespace: warmPoolNamespace,
 		}
 	}
 
+	diskBuilderCfg := controller.DiskBuilderConfig{
+		Image: diskBuilderImage, Namespace: operatorNamespace,
+		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
+		Reader: mgr.GetAPIReader(),
+	}
 	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{
 		Client:                mgr.GetClient(),
@@ -504,14 +514,29 @@ func main() {
 		LauncherImage:         launcherImage,
 		DiskRepo:              diskRepo,
 		DiskKeys:              diskPublicKeys,
-		DiskBuilder: controller.DiskBuilderConfig{
-			Image: diskBuilderImage, Namespace: operatorNamespace,
-			SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
-			Reader: mgr.GetAPIReader(),
-		},
+		DiskBuilder:           diskBuilderCfg,
+		WarmPoolNamespace:     warmPoolNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)
+	}
+
+	// The warm pool of launcher classes (setec#103): bases in the pool
+	// namespace, built with the snapshot coordinator.
+	if coordinator != nil && warmPoolNamespace != "" && launcherImage != "" {
+		if err := (&controller.WarmPoolReconciler{
+			Client:        mgr.GetClient(),
+			Coordinator:   coordinator,
+			Namespace:     warmPoolNamespace,
+			LauncherImage: launcherImage,
+			DiskRepo:      diskRepo,
+			DiskKeys:      diskPublicKeys,
+			DiskBuilder:   diskBuilderCfg,
+			Metrics:       collectors,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to set up WarmPoolReconciler")
+			os.Exit(1)
+		}
 	}
 
 	// Phase 3: register the SnapshotReconciler when enabled.

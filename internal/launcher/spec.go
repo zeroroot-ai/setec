@@ -57,6 +57,11 @@ type Spec struct {
 	// WorkDir holds the API socket, the vsock socket and the config.
 	WorkDir string `json:"workDir"`
 
+	// Base makes the machine of a warm pool base: it boots, its guest
+	// agent answers, and no workload starts. The node agent snapshots it
+	// (setec#103).
+	Base bool `json:"base,omitempty"`
+
 	// Workload is the process that the guest agent starts after a boot:
 	// the entry point, user, directory and environment of the image, with
 	// the command and environment of the Sandbox applied by the operator.
@@ -144,7 +149,9 @@ func (s *Spec) Validate() error {
 	case s.Source.Snapshot != nil && (s.Source.Snapshot.Staged != "" && !filepath.IsAbs(s.Source.Snapshot.Staged) ||
 		s.Source.Snapshot.Evidence != "" && !filepath.IsAbs(s.Source.Snapshot.Evidence)):
 		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
-	case s.Source.Boot != nil && s.Workload == nil:
+	case s.Base && (s.Workload != nil || s.Source.Boot == nil):
+		return errors.New("launcher: a base boots and runs no workload")
+	case s.Source.Boot != nil && s.Workload == nil && !s.Base:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
 	}
 	return nil

@@ -22,6 +22,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
@@ -640,4 +641,18 @@ func (f *fakeFirecracker) CreateDiffSnapshot(ctx context.Context, state, mem str
 // CreateDiffSnapshot takes the path of a full snapshot here.
 func (i *instrumentedFC) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
 	return i.CreateSnapshot(ctx, state, mem)
+}
+
+// TestReconcile_SkipsALauncherClass proves that the node-local pool boots
+// no entry for a launcher class: the operator keeps its bases (setec#103).
+func TestReconcile_SkipsALauncherClass(t *testing.T) {
+	m := newTestManager(newFakeStorage(), &countingPrefetcher{}, &fakeFirecracker{}, 4)
+	cls := newClass("ghcr.io/org/app:v1", 3, 0)
+	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: runtime.BackendLauncher}
+	if err := m.ReconcilePools(context.Background(), []setecv1alpha1.SandboxClass{cls}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := m.CountClass("std"); got != 0 {
+		t.Fatalf("entries of a launcher class = %d, want 0", got)
+	}
 }

@@ -31,6 +31,13 @@ spec:
       name: Max-Memory
       priority: 1
       type: string
+    - jsonPath: .status.warmPool.ready
+      name: Pool-Ready
+      type: integer
+    - jsonPath: .status.warmPool.key
+      name: Pool-Key
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -835,6 +842,26 @@ spec:
                   reconciled. Optional; left empty in Phase 2.
                 format: int64
                 type: integer
+              warmPool:
+                description: WarmPool reports the warm pool of a launcher class (setec#103).
+                properties:
+                  key:
+                    description: |-
+                      Key is the hash of the inputs of the current base: the image
+                      digest, the launcher image, the CPU template and the machine size.
+                    type: string
+                  lastUsed:
+                    description: |-
+                      LastUsed is the last time a Sandbox of the class asked for the pool
+                      image. A pool whose image nobody ran for 7 days keeps no base.
+                    format: date-time
+                    type: string
+                  ready:
+                    description: Ready is the number of Ready bases with the current
+                      key.
+                    format: int32
+                    type: integer
+                type: object
             type: object
         required:
         - spec

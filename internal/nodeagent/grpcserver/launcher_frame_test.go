@@ -6,10 +6,13 @@ package grpcserver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 )
 
 // sparseFile makes a sparse file of size with data at the given offsets.
@@ -133,5 +136,22 @@ func TestLauncherFrame_DiffGoesOnTheMemoryOfItsParent(t *testing.T) {
 	rc2, _ := be.Open(context.Background(), "diff1")
 	if err := writeLauncherFramedStream(rc2, os2, om, od, nil); err == nil {
 		t.Fatal("a diff with no parent opener was accepted")
+	}
+}
+
+// TestScanSparseFiles_FindsASecretInADataExtent proves that the base scan
+// reads the data of a sparse writable layer and refuses a secret in it.
+func TestScanSparseFiles_FindsASecretInADataExtent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	clean := filepath.Join(dir, "clean")
+	sparseFile(t, clean, 256<<20, map[int64][]byte{4096: []byte("nothing to see")})
+	if err := scanSparseFiles([]string{clean}); err != nil {
+		t.Fatalf("a clean file: %v", err)
+	}
+	dirty := filepath.Join(dir, "dirty")
+	sparseFile(t, dirty, 256<<20, map[int64][]byte{200 << 20: []byte("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n")})
+	if err := scanSparseFiles([]string{clean, dirty}); !errors.Is(err, secretscan.ErrSecretsFound) {
+		t.Fatalf("a key in a data extent = %v, want ErrSecretsFound", err)
 	}
 }

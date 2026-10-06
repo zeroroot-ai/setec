@@ -44,6 +44,7 @@ func testutil.NewFakeEventsRecorder	# internal/controller/testutil/fake_events_r
 method atrest.decryptingReader.Read	# internal/snapshot/atrest/atrest.go:285
 method controller.SandboxClassReconciler.Reconcile	# internal/controller/sandboxclass_controller.go:64
 method controller.SandboxReconciler.Reconcile	# internal/controller/sandbox_controller.go:371
+method controller.WarmPoolReconciler.Reconcile	# internal/controller/warm_pool.go
 method controller.SnapshotReconciler.Reconcile	# internal/controller/snapshot_controller.go:72
 method credentials.spiffeSource.OnX509ContextUpdate	# internal/credentials/spiffe.go:227
 method credentials.spiffeSource.OnX509ContextWatchError	# internal/credentials/spiffe.go:250
@@ -175,3 +176,8 @@ field podspec.launcherSnapshot.State	# internal/podspec/launcher.go
 field podspec.launcherSource.Snapshot	# internal/podspec/launcher.go
 field launcher.vmConfig.CPUConfig	# internal/launcher/vmconfig.go
 field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go
+# The warm pool of a launcher class (setec#103): a wire field of the
+# launcher spec, and two status fields whose reader is a print column.
+field podspec.launcherSpec.Base	# internal/podspec/launcher.go
+field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go
+field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go

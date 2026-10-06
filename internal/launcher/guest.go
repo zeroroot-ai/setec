@@ -103,7 +103,7 @@ func (g *Guest) WaitReady(ctx context.Context) error {
 // before anything else (proof 4, setec#183). It always gives the guest the
 // address of this Pod. After a load it then gives the guest a new identity
 // and checks that the guest sees the Pod address. It starts the workload
-// only after a boot: a loaded snapshot already runs its workload.
+// when there is one: after a boot, and after the load of a warm pool base.
 func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, PodNet, bool) error {
 	return func(ctx context.Context, pn PodNet, fromSnapshot bool) error {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -134,8 +134,13 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 			return err
 		}
 		if fromSnapshot {
-			return g.uniquify(rctx, pn)
+			if err := g.uniquify(rctx, pn); err != nil {
+				return err
+			}
 		}
+		// A loaded Sandbox snapshot already runs its workload and gets
+		// none. A loaded base runs none yet and gets the workload of the
+		// Sandbox (setec#103).
 		if workload == nil {
 			return nil
 		}

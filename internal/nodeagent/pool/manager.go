@@ -24,6 +24,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/runtime"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 	"github.com/zeroroot-ai/setec/internal/uniquify"
@@ -234,6 +235,11 @@ func (m *Manager) ReconcilePools(ctx context.Context, classes []setecv1alpha1.Sa
 // recycling entries older than PreWarmTTL along the way.
 func (m *Manager) reconcileClass(ctx context.Context, cls *setecv1alpha1.SandboxClass) error {
 	target := max(int(cls.Spec.PreWarmPoolSize), 0)
+	// The operator keeps the warm pool of a launcher class as base
+	// snapshots (setec#103). This node-local pool is the kata one.
+	if cls.Spec.Runtime != nil && cls.Spec.Runtime.Backend == runtime.BackendLauncher {
+		target = 0
+	}
 	if target > 0 && cls.Spec.PreWarmImage == "" {
 		return fmt.Errorf("pool: class %q has PreWarmPoolSize=%d but no PreWarmImage", cls.Name, target)
 	}

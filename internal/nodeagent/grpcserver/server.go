@@ -254,6 +254,21 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// Storage.Save (the persisted snapshot is still valid).
 	_ = fc.Resume(ctx)
 
+	// A base for the warm pool holds no tenant data. The scan runs on the
+	// plaintext files before the store sees them, and a finding stops the
+	// snapshot (ADR-0145 invariant 1, setec#103).
+	clean := false
+	if in.GetScanForSecrets() {
+		files := []string{statePath, memPath}
+		if kata.Launcher {
+			files = append(files, diskPath)
+		}
+		if err := scanSparseFiles(files); err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "secret scan: %v", err)
+		}
+		clean = true
+	}
+
 	var combined io.ReadCloser
 	if kata.Launcher {
 		combined, err = makeLauncherFramedReader(parent, statePath, memPath, diskPath)
@@ -274,9 +289,10 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	}
 
 	return &setecgrpcv1.CreateSnapshotResponse{
-		StorageRef: ref,
-		SizeBytes:  size,
-		Sha256:     "", // Local-disk backend writes sidecar; operator re-reads if needed.
+		StorageRef:        ref,
+		SizeBytes:         size,
+		CleanBaseVerified: clean,
+		Sha256:            "", // Local-disk backend writes sidecar; operator re-reads if needed.
 	}, nil
 }
 

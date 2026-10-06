@@ -390,14 +390,28 @@ func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
 			class.Spec.PreWarmTTL.Duration.String(),
 			"preWarmTTL must be a positive duration"))
 	}
-	if poolActive && class.Spec.Runtime != nil &&
-		class.Spec.Runtime.Backend != "" &&
-		class.Spec.Runtime.Backend != runtime.BackendKataFC {
+	backend := ""
+	if class.Spec.Runtime != nil {
+		backend = class.Spec.Runtime.Backend
+	}
+	if poolActive && backend != "" && backend != runtime.BackendKataFC && backend != runtime.BackendLauncher {
 		errs = append(errs, field.Invalid(
 			specPath.Child("runtime", "backend"),
-			class.Spec.Runtime.Backend,
-			fmt.Sprintf("pre-warm pools require the %q backend: pool restore drives the Kata VM's Firecracker socket",
-				runtime.BackendKataFC)))
+			backend,
+			fmt.Sprintf("pre-warm pools require the %q or the %q backend: a pool entry is a Firecracker snapshot",
+				runtime.BackendKataFC, runtime.BackendLauncher)))
+	}
+	// A launcher pool keeps bases of one machine: the image needs a digest
+	// and the class a default size (setec#103).
+	if poolActive && backend == runtime.BackendLauncher {
+		if class.Spec.PreWarmImage != "" && !strings.Contains(class.Spec.PreWarmImage, "@sha256:") {
+			errs = append(errs, field.Invalid(specPath.Child("preWarmImage"), class.Spec.PreWarmImage,
+				"a launcher pool needs an image with a digest: a base belongs to one digest"))
+		}
+		if class.Spec.DefaultResources == nil {
+			errs = append(errs, field.Required(specPath.Child("defaultResources"),
+				"a launcher pool boots its bases with the default resources of the class"))
+		}
 	}
 	return errs
 }

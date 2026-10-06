@@ -84,6 +84,10 @@ type Collectors struct {
 	// the only process that knows it.
 	WarmStartTotal *prometheus.CounterVec
 
+	// WarmPoolReady gauges the Ready bases of the launcher warm pool of
+	// each SandboxClass (setec#103).
+	WarmPoolReady *prometheus.GaugeVec
+
 	// FallbackTotal counts runtime fallback events. Labels:
 	//   from — the runtime that was attempted (bounded: see LabelRuntime)
 	//   to   — the runtime that was substituted (bounded: see LabelRuntime)
@@ -165,6 +169,13 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			},
 			[]string{"outcome", LabelSandboxClass},
 		),
+		WarmPoolReady: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "setec_warm_pool_ready_bases",
+				Help: "Ready bases of the launcher warm pool of each SandboxClass.",
+			},
+			[]string{LabelSandboxClass},
+		),
 		FallbackTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "setec_sandbox_fallback_total",
@@ -191,7 +202,7 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 	if reg != nil {
 		reg.MustRegister(
 			c.SandboxTotal, c.SandboxDuration, c.SandboxColdStart, c.SandboxActive,
-			c.SnapshotDuration, c.WarmStartTotal,
+			c.SnapshotDuration, c.WarmStartTotal, c.WarmPoolReady,
 			c.FallbackTotal, c.NodeRuntimeAvailable, c.NodeRuntimeProbeErrors,
 		)
 	}
@@ -267,6 +278,14 @@ func (c *Collectors) IncWarmStart(outcome, class string) {
 		return
 	}
 	c.WarmStartTotal.WithLabelValues(outcome, class).Inc()
+}
+
+// SetWarmPoolReady sets the Ready bases of the warm pool of a class.
+func (c *Collectors) SetWarmPoolReady(class string, n int) {
+	if c == nil {
+		return
+	}
+	c.WarmPoolReady.WithLabelValues(class).Set(float64(n))
 }
 
 // IncFallback increments FallbackTotal for the given from/to runtime pair.
