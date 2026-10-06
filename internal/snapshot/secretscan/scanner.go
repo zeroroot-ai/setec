@@ -77,7 +77,7 @@ type rule struct {
 var builtinRules = []rule{
 	{
 		name:      "pem-private-key",
-		re:        regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----`),
+		re:        regexp.MustCompile(`-{5}BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-{5}`),
 		maskGroup: 0,
 	},
 	{
@@ -194,7 +194,8 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	for {
 		n, err := io.ReadFull(br, buf)
 		if n > 0 {
-			window := append(carry[:0:0], carry...)
+			window := make([]byte, 0, len(carry)+n)
+			window = append(window, carry...)
 			window = append(window, buf[:n]...)
 			// base is the stream offset of window[0].
 			base := offset - int64(len(carry))

@@ -131,7 +131,10 @@ func ReadSpec(path string) (*Spec, error) {
 	if err := json.Unmarshal(raw, s); err != nil {
 		return nil, fmt.Errorf("launcher: parse spec: %w", err)
 	}
-	return s, s.Validate()
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // Validate reports the first problem of s.

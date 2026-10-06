@@ -131,7 +131,7 @@ var LauncherExecCommand = []string{"/usr/local/bin/setec-launcher", "exec", "--"
 
 // execTarget is the container and the command of an exec: the launcher
 // container, which carries the command into the machine of the Sandbox.
-func execTarget(command []string) (string, []string) {
+func execTarget(command []string) (container string, argv []string) {
 	return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
 }
 
@@ -292,7 +292,7 @@ func (s *Service) classifyExecOutcome(
 // place a command could still be running, and why. A read failure is
 // deliberately NOT treated as gone: the frontend must not upgrade its
 // own API hiccup into "your sandbox died".
-func (s *Service) sessionGone(ctx context.Context, ns, name string) (bool, string) {
+func (s *Service) sessionGone(ctx context.Context, ns, name string) (gone bool, why string) {
 	sb := &setecv1alpha1.Sandbox{}
 	err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sb)
 	switch {

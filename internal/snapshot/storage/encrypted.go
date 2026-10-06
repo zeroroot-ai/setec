@@ -201,7 +201,7 @@ func dekAAD(snapshotID string) string {
 // streams the encrypted payload into the inner backend. On any inner
 // failure the sealed DEK is destroyed so no orphan key material
 // remains.
-func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
@@ -314,7 +314,7 @@ func (b *EncryptedBackend) Delete(ctx context.Context, storageRef string) error 
 
 // Stat delegates to the inner backend; the reported size is the
 // stored (ciphertext) size, consistent with what Save returned.
-func (b *EncryptedBackend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *EncryptedBackend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	return b.Inner.Stat(ctx, storageRef)
 }
 
@@ -331,6 +331,6 @@ func (d *decryptReadCloser) Close() error { return d.closer.Close() } //nolint:w
 var (
 	_ StorageBackend = (*EncryptedBackend)(nil)
 	_ KEKSource      = (*FileKEKSource)(nil)
-	_ KEKSource      = (StaticKEKSource)(nil)
+	_ KEKSource      = StaticKEKSource(nil)
 	_ SealedDEKStore = (*DirDEKStore)(nil)
 )

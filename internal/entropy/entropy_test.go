@@ -228,7 +228,7 @@ type fakeVsockMux struct {
 	handler *GuestHandler
 }
 
-func startFakeVsockMux(t *testing.T, dir string, mode string, h *GuestHandler) string {
+func startFakeVsockMux(t *testing.T, dir, mode string, h *GuestHandler) string {
 	t.Helper()
 	path := filepath.Join(dir, "fc-vsock.sock")
 	ln, err := net.Listen("unix", path)

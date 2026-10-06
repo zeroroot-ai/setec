@@ -329,7 +329,7 @@ type stubBackend struct {
 	openErr error
 }
 
-func (s *stubBackend) Save(_ context.Context, id string, r io.Reader) (int64, string, error) {
+func (s *stubBackend) Save(_ context.Context, id string, r io.Reader) (size int64, storageRef string, err error) {
 	if s.saveErr != nil {
 		return 0, "", s.saveErr
 	}
@@ -342,8 +342,10 @@ func (s *stubBackend) Open(_ context.Context, _ string) (io.ReadCloser, error) {
 	}
 	return io.NopCloser(bytes.NewReader(nil)), nil
 }
-func (s *stubBackend) Delete(_ context.Context, _ string) error              { return nil }
-func (s *stubBackend) Stat(_ context.Context, _ string) (int64, bool, error) { return 0, false, nil }
+func (s *stubBackend) Delete(_ context.Context, _ string) error { return nil }
+func (s *stubBackend) Stat(_ context.Context, _ string) (size int64, exists bool, err error) {
+	return 0, false, nil
+}
 
 // traversalFCRoot points srv and fc at a Firecracker root nested four
 // levels under a fresh test directory. Snapshot files are written under

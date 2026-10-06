@@ -232,7 +232,7 @@ func (f *fakeIdentity) ApplyHostname(name string) error {
 	return nil
 }
 
-func (f *fakeIdentity) Read() (string, string, string, error) {
+func (f *fakeIdentity) Read() (machineID, bootID, hostname string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.machineID, f.bootID, f.hostname, nil

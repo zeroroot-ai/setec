@@ -19,7 +19,7 @@ import (
 
 // coldStartSamples returns the sample count and sum of
 // setec_sandbox_cold_start_seconds for the runtime label.
-func coldStartSamples(t *testing.T, reg *prometheus.Registry, runtime string) (uint64, float64) {
+func coldStartSamples(t *testing.T, reg *prometheus.Registry, runtime string) (count uint64, sum float64) {
 	t.Helper()
 	families, err := reg.Gather()
 	if err != nil {

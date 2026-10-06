@@ -182,8 +182,6 @@ func Derive(
 		out = setPhase(out, setecv1alpha1.SandboxPhaseRunning, "", now)
 		return out
 
-	case corev1.PodPending, corev1.PodUnknown:
-		fallthrough
 	default:
 		// PodPending, PodUnknown, or an empty Phase. Check for a stuck
 		// image pull first; otherwise remain Pending.
@@ -241,7 +239,7 @@ func setPhase(
 // terminatedExitAndReason walks the Pod's container statuses looking for a
 // terminated state. It returns the first terminated exit code and reason it
 // finds, or (0, "") if no terminated state is available.
-func terminatedExitAndReason(pod *corev1.Pod) (int32, string) {
+func terminatedExitAndReason(pod *corev1.Pod) (exitCode int32, reason string) {
 	if pod == nil {
 		return 0, ""
 	}

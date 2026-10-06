@@ -1102,7 +1102,7 @@ func (r *SandboxReconciler) checkBackend(
 // multi-tenancy is enabled). ok is false when the namespace has no tenant
 // label; err is non-nil only for unexpected API errors. The Phase 1 path
 // (multi-tenancy disabled) returns ("", true, nil) unconditionally.
-func (r *SandboxReconciler) resolveTenant(ctx context.Context, sb *setecv1alpha1.Sandbox) (string, bool, error) {
+func (r *SandboxReconciler) resolveTenant(ctx context.Context, sb *setecv1alpha1.Sandbox) (tenant string, ok bool, err error) {
 	if !r.MultiTenancyEnabled || r.TenantLabelKey == "" {
 		return "", true, nil
 	}
@@ -1586,7 +1586,7 @@ func (r *SandboxReconciler) reapExpiredEphemeral(
 	ctx context.Context,
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, reaped bool, err error) {
 	if !sb.Spec.IsEphemeral() || !isTerminalPhase(sb.Status.Phase) {
 		return ctrl.Result{}, false, nil
 	}
@@ -1720,8 +1720,6 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 					"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
 					existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
 				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
-			case setecv1alpha1.SnapshotPhaseReady, setecv1alpha1.SnapshotPhaseTerminating:
-				fallthrough
 			default:
 				// Ready, Terminating, or a phase this version does not
 				// know. Honor the AfterCreate intent without
@@ -1760,8 +1758,6 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 				return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
 			}
 			return ctrl.Result{}, nil
-		case setecv1alpha1.SandboxSnapshotAfterCreateRunning:
-			fallthrough
 		default:
 			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
 		}

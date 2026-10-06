@@ -40,6 +40,12 @@ const requireMode = "require"
 const kvmDevicePath = "/dev/kvm"
 
 func main() {
+	os.Exit(runMain())
+}
+
+// runMain is the body of main. It returns the exit code, so that each
+// deferred call runs before the process exits.
+func runMain() int {
 	var (
 		metricsAddr    string
 		kubeletPodsDir string
@@ -120,12 +126,12 @@ func main() {
 
 	if entropyReseedMode != requireMode && entropyReseedMode != "off" {
 		fmt.Fprintf(os.Stderr, "node-agent: invalid --entropy-reseed %q (want \"require\" or \"off\")\n", entropyReseedMode)
-		os.Exit(1)
+		return 1
 	}
 	fmt.Fprintf(os.Stderr, "setec node-agent starting on node=%q\n", nodeName)
 	if _, err := os.Stat(kvmDevicePath); errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "KVM device %q is missing; node cannot host Sandboxes. Exiting.\n", kvmDevicePath)
-		os.Exit(1)
+		return 1
 	}
 
 	reg := prometheus.NewRegistry()
@@ -137,12 +143,12 @@ func main() {
 	if grpcListenAddr == "" {
 		fmt.Fprintln(os.Stderr, "node-agent: gRPC server disabled (--grpc-listen-addr empty)")
 		<-ctx.Done()
-		return
+		return 0
 	}
 	for _, dir := range []string{snapshotRoot, snapshotDEKDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			fmt.Fprintf(os.Stderr, "node-agent: mkdir %q: %v\n", dir, err)
-			os.Exit(1)
+			return 1
 		}
 	}
 	// Encryption at rest is unconditional (docs/design/isolation.md invariant 5):
@@ -159,7 +165,7 @@ func main() {
 	srv := &grpcserver.Server{
 		Storage:            backend,
 		SessionStorage:     sessionStorage,
-		FirecrackerFactory: func(sock string) firecracker.Client { return firecracker.NewClientFromSocket(sock) },
+		FirecrackerFactory: firecracker.NewClientFromSocket,
 		Machines:           launchersandbox.Resolver{PodsDir: kubeletPodsDir},
 		EntropyReseedOff:   entropyReseedMode != requireMode,
 	}
@@ -170,6 +176,7 @@ func main() {
 	go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
 	<-ctx.Done()
 	fmt.Fprintln(os.Stderr, "node-agent: shutdown signal received, exiting cleanly")
+	return 0
 }
 
 // s3Config is the S3-compatible store of session checkpoints.
@@ -263,11 +270,8 @@ type credentialFlags struct {
 // able to end up with the frontend on SPIFFE and the node-agent
 // silently still on files, and the way to guarantee that is for
 // neither component to hold an opinion of its own.
-func (f credentialFlags) config() (credentials.Config, string) {
-	var (
-		cfg  credentials.Config
-		mode = unsetMode
-	)
+func (f credentialFlags) config() (cfg credentials.Config, mode string) {
+	mode = unsetMode
 	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
 		cfg.Files = &credentials.FileSource{
 			CertFile: f.tlsCert,

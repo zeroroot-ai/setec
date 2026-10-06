@@ -167,7 +167,7 @@ type memBackend struct {
 	blobs     map[string][]byte
 }
 
-func (m memBackend) Save(_ context.Context, id string, r io.Reader) (int64, string, error) {
+func (m memBackend) Save(_ context.Context, id string, r io.Reader) (size int64, storageRef string, err error) {
 	b, err := io.ReadAll(r)
 	m.blobs[id] = b
 	return int64(len(b)), id, err
@@ -180,7 +180,7 @@ func (m memBackend) Open(_ context.Context, ref string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 func (m memBackend) Delete(context.Context, string) error { return nil }
-func (m memBackend) Stat(_ context.Context, ref string) (int64, bool, error) {
+func (m memBackend) Stat(_ context.Context, ref string) (size int64, exists bool, err error) {
 	return int64(len(m.blobs[ref])), true, nil
 }
 func (m memBackend) EncryptedAtRest() bool { return m.encrypted }

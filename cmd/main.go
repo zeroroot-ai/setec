@@ -84,8 +84,15 @@ func defaultReservedCIDRs() []string {
 	}
 }
 
-// nolint:gocyclo
 func main() {
+	os.Exit(runMain())
+}
+
+// runMain is the body of main. It returns the exit code, so that each
+// deferred call runs before the process exits.
+//
+//nolint:gocyclo // the setup of the operator is one flat sequence of flags and steps
+func runMain() int {
 	var (
 		metricsBindAddr     string
 		probeBindAddr       string
@@ -256,7 +263,7 @@ func main() {
 		len(diskPublicKeys) == 0 {
 		setupLog.Error(nil, "--launcher-image, --disk-repo, --disk-builder-image, --disk-signing-secret, "+
 			"--disk-public-key and --operator-namespace are required")
-		os.Exit(1)
+		return 1
 	}
 
 	// --- Sandbox egress posture ---
@@ -282,7 +289,7 @@ func main() {
 	if err := netpolCfg.Validate(); err != nil {
 		setupLog.Error(err, "invalid sandbox egress configuration; "+
 			"check --reserved-cidrs and --sandbox-resolvers")
-		os.Exit(1)
+		return 1
 	}
 	setupLog.Info("sandbox egress posture configured",
 		"reservedCIDRs", netpolCfg.ReservedCIDRs,
@@ -345,7 +352,7 @@ func main() {
 	mgr, err := ctrl.NewManager(restCfg, mgrOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return 1
 	}
 
 	// Phase 2: init tracing (no-op when otlpEndpoint is empty).
@@ -358,7 +365,7 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to initialize tracing")
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -381,7 +388,7 @@ func main() {
 		creds, credMode, err := nodeAgentClientCredentials(context.Background(), nodeAgentCreds)
 		if err != nil {
 			setupLog.Error(err, "unable to load node-agent client credentials", "mode", credMode)
-			os.Exit(1)
+			return 1
 		}
 		setupLog.Info("Resolved node-agent client credentials", "mode", credMode)
 		nodeAgentPodResolver := &snapshot.PodResolver{
@@ -430,7 +437,7 @@ func main() {
 		WarmPoolNamespace:     warmPoolNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
-		os.Exit(1)
+		return 1
 	}
 
 	// The warm pool of launcher classes (setec#103): bases in the pool
@@ -447,7 +454,7 @@ func main() {
 			Metrics:       collectors,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up WarmPoolReconciler")
-			os.Exit(1)
+			return 1
 		}
 	}
 
@@ -461,7 +468,7 @@ func main() {
 			Coordinator: coordinator,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up SnapshotReconciler")
-			os.Exit(1)
+			return 1
 		}
 	}
 
@@ -473,7 +480,7 @@ func main() {
 		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxClassReconciler")
-		os.Exit(1)
+		return 1
 	}
 
 	// Phase 2: register the validating webhook when enabled.
@@ -487,25 +494,25 @@ func main() {
 		}
 		if err := validator.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up webhook")
-			os.Exit(1)
+			return 1
 		}
 		if snapshotsEnabled {
 			pinLimit, err := resource.ParseQuantity(keptPinnedLimit)
 			if err != nil {
 				setupLog.Error(err, "invalid --kept-pinned-limit")
-				os.Exit(1)
+				return 1
 			}
 			snapVal := &webhook.SnapshotValidator{Client: mgr.GetClient(), PinnedLimitBytes: pinLimit.Value()}
 			if err := snapVal.SetupWebhookWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to set up snapshot webhook")
-				os.Exit(1)
+				return 1
 			}
 		}
 		// SandboxClass defaulting + validating webhook: one backend.
 		scWebhook := &webhook.SandboxClassWebhook{}
 		if err := scWebhook.SetupWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to set up SandboxClass webhook")
-			os.Exit(1)
+			return 1
 		}
 	}
 	// +kubebuilder:scaffold:builder
@@ -515,7 +522,7 @@ func main() {
 	// context and gets a graceful shutdown on SIGTERM.
 	if err := mgr.Add(newProbeServer(probeBindAddr)); err != nil {
 		setupLog.Error(err, "unable to register health probe server")
-		os.Exit(1)
+		return 1
 	}
 
 	setupLog.Info("starting manager",
@@ -525,8 +532,9 @@ func main() {
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "manager exited with error")
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // Credential mode names, used only in log and error output so an
@@ -559,11 +567,8 @@ type nodeAgentCredentialFlags struct {
 // by any of its flags being set, not by all of them; whether the
 // selection is coherent is credentials.New's decision, so every setec
 // component gives the same answer and the same message.
-func (f nodeAgentCredentialFlags) config() (credentials.Config, string) {
-	var (
-		cfg  credentials.Config
-		mode = unsetMode
-	)
+func (f nodeAgentCredentialFlags) config() (cfg credentials.Config, mode string) {
+	mode = unsetMode
 	if f.certPath != "" || f.keyPath != "" || f.caPath != "" {
 		cfg.Files = &credentials.FileSource{
 			CertFile: f.certPath,

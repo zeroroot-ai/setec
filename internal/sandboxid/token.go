@@ -149,13 +149,11 @@ func Verify(token string, want Expect) (Claims, error) {
 	return c, nil
 }
 
-func split(token string) (header, Claims, string, []byte, error) {
+func split(token string) (h header, c Claims, signingInput string, sig []byte, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return header{}, Claims{}, "", nil, fmt.Errorf("%w: it is not a compact JWS", ErrInvalid)
 	}
-	var h header
-	var c Claims
 	hb, err1 := b64.DecodeString(parts[0])
 	pb, err2 := b64.DecodeString(parts[1])
 	sig, err3 := b64.DecodeString(parts[2])

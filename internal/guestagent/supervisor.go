@@ -212,7 +212,7 @@ func lookupUser(root, user string) (uid, gid uint32, home string, err error) {
 		return uint32(os.Getuid()), uint32(os.Getgid()), "/root", nil //nolint:gosec // ids fit
 	}
 	name, group, hasGroup := strings.Cut(user, ":")
-	raw, _ := os.ReadFile(filepath.Join(root, "/etc/passwd")) //nolint:gosec // the passwd of the image
+	raw, _ := os.ReadFile(filepath.Join(root, "etc", "passwd")) //nolint:gosec // the passwd of the image
 	found := false
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		f := strings.Split(line, ":")
@@ -249,7 +249,7 @@ func lookupUser(root, user string) (uid, gid uint32, home string, err error) {
 }
 
 func lookupGroup(root, name string) (uint32, error) {
-	raw, _ := os.ReadFile(filepath.Join(root, "/etc/group")) //nolint:gosec // the group file of the image
+	raw, _ := os.ReadFile(filepath.Join(root, "etc", "group")) //nolint:gosec // the group file of the image
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		f := strings.Split(line, ":")
 		if len(f) >= 3 && f[0] == name {

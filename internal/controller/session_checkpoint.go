@@ -177,7 +177,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	cls *setecv1alpha1.SandboxClass,
 	pod *corev1.Pod,
 	desired setecv1alpha1.SandboxStatus,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, handled bool, err error) {
 	policy := sessionCheckpointPolicy(sb, cls)
 	if policy == nil || r.Coordinator == nil {
 		return ctrl.Result{}, false, nil
@@ -464,7 +464,7 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
 	policy *setecv1alpha1.SessionCheckpointSpec,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, handled bool, err error) {
 	ck := sb.Status.Checkpoint
 	recovery := setecv1alpha1.SessionRecoveryResumedFromCheckpoint
 

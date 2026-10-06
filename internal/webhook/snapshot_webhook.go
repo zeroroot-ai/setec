@@ -179,8 +179,8 @@ func (v *SnapshotValidator) checkQuota(ctx context.Context, snap *setecv1alpha1.
 		}
 		// Quantity.Value() rounds up for counts — exact conversion is
 		// fine because count/* values are required to be whole numbers.
-		max := limit.Value()
-		if current+1 > max {
+		maxCount := limit.Value()
+		if current+1 > maxCount {
 			return fmt.Errorf(
 				"ResourceQuota %q in namespace %q caps %q at %s; current=%d",
 				q.Name, snap.Namespace, SnapshotResourceName, quantityString(limit), current)

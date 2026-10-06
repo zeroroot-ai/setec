@@ -133,7 +133,7 @@ func (b *S3Backend) dekKey(snapshotID string) string {
 // on the way through, then writes the sha256 sidecar. A snapshot that
 // already exists returns ErrAlreadyExists without touching the
 // object.
-func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
@@ -254,7 +254,7 @@ func (b *S3Backend) Delete(ctx context.Context, storageRef string) error {
 }
 
 // Stat reports the payload's size via HeadObject.
-func (b *S3Backend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *S3Backend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, errwrap.Wrap(err, "context.Context.Err")
 	}

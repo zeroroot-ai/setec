@@ -201,11 +201,8 @@ type credentialFlags struct {
 // same answer and the same message. Selecting on "any flag set" is what
 // makes a typo in one flag name a startup error naming the missing
 // piece rather than a silent switch to the other mode.
-func (f credentialFlags) config(enrolledIDs []string) (credentials.Config, string) {
-	var (
-		cfg  credentials.Config
-		mode = unsetMode
-	)
+func (f credentialFlags) config(enrolledIDs []string) (cfg credentials.Config, mode string) {
+	mode = unsetMode
 	if f.tlsCert != "" || f.tlsKey != "" || f.tlsClientCA != "" {
 		cfg.Files = &credentials.FileSource{
 			CertFile: f.tlsCert,

@@ -97,10 +97,16 @@ func runUniquify(
 }
 
 func main() {
+	os.Exit(runMain())
+}
+
+// runMain is the body of main. It returns the exit code, so that each
+// deferred call runs before the process exits.
+func runMain() int {
 	opts, err := parseFlags(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return 2
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -110,19 +116,19 @@ func main() {
 	if pid1 {
 		if err := prepareMachine(); err != nil {
 			log.Printf("setec-guest-agent: %v", err)
-			os.Exit(1)
+			return 1
 		}
 	}
 
 	ln, err := listenVsock(opts.Port)
 	if err != nil {
 		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.Port, err)
-		os.Exit(1)
+		return 1
 	}
 	uln, err := listenVsock(opts.UniquifyPort)
 	if err != nil {
 		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.UniquifyPort, err)
-		os.Exit(1)
+		return 1
 	}
 	log.Printf("setec-guest-agent: listening on vsock ports %d (entropy) and %d (uniquify), random device %s",
 		opts.Port, opts.UniquifyPort, opts.RandomDevice)
@@ -154,6 +160,7 @@ func main() {
 		endMachine()
 	}
 	if runErr != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

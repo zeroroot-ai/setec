@@ -123,7 +123,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		switch {
 		case b.Annotations[snapshot.BaseKeyAnnotation] != key, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
 			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && len(ready) >= want:
-			if err := r.Delete(ctx, b); client.IgnoreNotFound(err) != nil {
+			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
 				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
@@ -133,7 +133,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			r.now().Sub(b.CreationTimestamp.Time) > baseWriteTimeout:
 			// The write of this base stopped with its Pod, for example
 			// at a restart of the operator. It never becomes Ready.
-			if err := r.Delete(ctx, b); client.IgnoreNotFound(err) != nil {
+			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
 				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		default:
@@ -274,12 +274,12 @@ func (r *WarmPoolReconciler) deleteAll(ctx context.Context, class string, bases 
 		}
 	}
 	for i := range bases {
-		if err := r.Delete(ctx, &bases[i]); client.IgnoreNotFound(err) != nil {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &bases[i])); err != nil {
 			return errwrap.Wrap(err, "client.Writer.Delete")
 		}
 	}
 	for i := range pods {
-		if err := r.Delete(ctx, &pods[i]); client.IgnoreNotFound(err) != nil {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &pods[i])); err != nil {
 			return errwrap.Wrap(err, "client.Writer.Delete")
 		}
 	}

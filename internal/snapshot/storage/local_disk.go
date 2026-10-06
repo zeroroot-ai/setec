@@ -116,7 +116,7 @@ func (b *LocalDiskBackend) checkFillThreshold() error {
 // Save consumes state, streams it to ROOT/<snapshotID>/state.bin with
 // mode 0600, and writes a hex SHA256 digest alongside. Double-save
 // against an existing snapshotID returns ErrAlreadyExists.
-func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
@@ -293,7 +293,7 @@ func overwriteWithZeros(path string, size int64) error {
 
 // Stat returns the size and existence of the persisted state.
 // A non-existent snapshot returns (0, false, nil).
-func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, errwrap.Wrap(err, "context.Context.Err")
 	}

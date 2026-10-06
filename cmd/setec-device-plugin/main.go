@@ -27,6 +27,12 @@ import (
 )
 
 func main() {
+	os.Exit(runMain())
+}
+
+// runMain is the body of main. It returns the exit code, so that each
+// deferred call runs before the process exits.
+func runMain() int {
 	var (
 		pluginDir = flag.String("plugin-dir", pluginapi.DevicePluginPath,
 			"the kubelet device plugin directory, mounted from the node")
@@ -51,12 +57,13 @@ func main() {
 		p, err := deviceplugin.New(d, statPath, *health)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "setec-device-plugin: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		socket := filepath.Join(*pluginDir, "setec-"+filepath.Base(d.HostPath)+".sock")
 		wg.Go(func() { run(ctx, p, d.Resource, socket, filepath.Join(*pluginDir, "kubelet.sock")) })
 	}
 	wg.Wait()
+	return 0
 }
 
 // run serves one plugin and serves it again when the kubelet restarts. A

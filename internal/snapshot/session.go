@@ -59,7 +59,7 @@ func (c *Coordinator) CheckpointSession(
 	sessionKEK []byte,
 	leavePaused bool,
 	parentRef string,
-) (string, int64, error) {
+) (storageRef string, size int64, err error) {
 	ctx, span := c.startSpan(ctx, "snapshot.CheckpointSession")
 	defer span.End()
 	span.SetAttributes(

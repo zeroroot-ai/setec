@@ -38,7 +38,7 @@ func NewLinuxIdentity() *LinuxIdentity { return &LinuxIdentity{} }
 func (*LinuxIdentity) ApplyMachineID(string) error { return errLinuxOnly }
 func (*LinuxIdentity) ApplyBootID(string) error    { return errLinuxOnly }
 func (*LinuxIdentity) ApplyHostname(string) error  { return errLinuxOnly }
-func (*LinuxIdentity) Read() (string, string, string, error) {
+func (*LinuxIdentity) Read() (machineID, bootID, hostname string, err error) {
 	return "", "", "", errLinuxOnly
 }
 

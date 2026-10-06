@@ -75,7 +75,8 @@ linters:
       ignore-package-globs:
         - github.com/zeroroot-ai/setec/*
     exhaustive:
-      default-signifies-exhaustive: false
+      # A default case handles the values that it does not name.
+      default-signifies-exhaustive: true
       check: [switch]
     gocyclo:
       min-complexity: 20
