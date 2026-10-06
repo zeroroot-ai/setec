@@ -172,7 +172,7 @@ func sandboxCapableNodes(t *testing.T, backend string) []string {
 	}
 	var capable []string
 	for _, n := range nodes.Items {
-		if n.Spec.Unschedulable {
+		if n.Spec.Unschedulable || hasUntoleratedTaint(n) {
 			continue
 		}
 		if backend == backendLauncher {
@@ -215,4 +215,25 @@ func sandboxPod(t *testing.T, ns, sandbox string) *corev1.Pod {
 		t.Fatalf("get the Pod of %s/%s: %v", ns, sandbox, err)
 	}
 	return pod
+}
+
+// hasUntoleratedTaint reports whether a node has a NoSchedule or NoExecute
+// taint that the classes of the suite do not tolerate, such as the taint
+// of a control-plane node.
+func hasUntoleratedTaint(n corev1.Node) bool {
+	for _, taint := range n.Spec.Taints {
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		tolerated := false
+		for _, tol := range sandboxHostTolerations() {
+			if tol.Key == taint.Key && (tol.Effect == "" || tol.Effect == taint.Effect) {
+				tolerated = true
+			}
+		}
+		if !tolerated {
+			return true
+		}
+	}
+	return false
 }

@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -91,11 +93,17 @@ func readGuestIdentity(t *testing.T, ns, name string) guestIdentity {
 	return id
 }
 
-// sandboxEventReasons returns the reasons of the Events of a Sandbox.
+// sandboxEventReasons returns the reasons of the Events of a Sandbox. It
+// reads the Events of this object only, by UID: an earlier Sandbox of the
+// same name has its own Events.
 func sandboxEventReasons(t *testing.T, ns, name string) []string {
 	t.Helper()
+	sb, err := getSandboxE2E(types.NamespacedName{Namespace: ns, Name: name})
+	if err != nil {
+		t.Fatalf("get %s/%s: %v", ns, name, err)
+	}
 	out, err := exec.Command("kubectl", "-n", ns, "get", "events",
-		"--field-selector", "involvedObject.kind=Sandbox,involvedObject.name="+name,
+		"--field-selector", "involvedObject.kind=Sandbox,involvedObject.uid="+string(sb.UID),
 		"-o", "jsonpath={.items[*].reason}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("events of %s/%s: %v (%s)", ns, name, err, out)
@@ -258,17 +266,21 @@ func TestLauncher_SnapshotRestore(t *testing.T) {
 	assertRestoredGuest(t, sandboxNamespace, "lr-src", before)
 }
 
-// waitGone waits until a Sandbox no longer exists.
+// waitGone waits until a Sandbox and its Pod no longer exist. A new
+// Sandbox of the same name must not find the old Pod.
 func waitGone(t *testing.T, key client.ObjectKey, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	podKey := client.ObjectKey{Namespace: key.Namespace, Name: key.Name + "-vm"}
 	for time.Now().Before(deadline) {
-		if _, err := getSandboxE2E(key); err != nil {
+		_, sbErr := getSandboxE2E(key)
+		podErr := k8sClient.Get(context.Background(), podKey, &corev1.Pod{})
+		if apierrors.IsNotFound(sbErr) && apierrors.IsNotFound(podErr) {
 			return
 		}
 		time.Sleep(defaultPoll)
 	}
-	t.Fatalf("sandbox %s still exists after %s", key, timeout)
+	t.Fatalf("sandbox %s or its Pod still exists after %s", key, timeout)
 }
 
 // waitForWarmPoolReady waits until the warm pool of a class has a Ready
