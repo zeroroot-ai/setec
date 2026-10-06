@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.125.0](https://github.com/zeroroot-ai/setec/compare/v0.124.0...v0.125.0) (2026-10-06)
+
+
+### Features
+
+* **launch:** report the runtime on the launch response ([#247](https://github.com/zeroroot-ai/setec/issues/247)) ([61bd7bf](https://github.com/zeroroot-ai/setec/commit/61bd7bfb508a7c710de2c3e27ed186e56d5c5c9e))
+
 ## [0.124.0](https://github.com/zeroroot-ai/setec/compare/v0.123.0...v0.124.0) (2026-10-06)
 
 
