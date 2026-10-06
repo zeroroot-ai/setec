@@ -60,14 +60,8 @@ func (s *Service) Fork(ctx context.Context, req *setecv1grpc.ForkRequest) (*sete
 	if err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, src); err != nil {
 		return nil, status.Errorf(grpcCodeFor(err), "get Sandbox: %v", err)
 	}
-	switch {
-	case src.Status.Runtime == nil || src.Status.Runtime.Chosen != runtimepkg.BackendLauncher:
-		return nil, status.Error(codes.FailedPrecondition, "only a launcher sandbox forks")
-	case src.Spec.IsSession():
-		return nil, status.Error(codes.FailedPrecondition,
-			"a session does not fork: its workspace belongs to one sandbox")
-	case src.Status.Phase != setecv1alpha1.SandboxPhaseRunning:
-		return nil, status.Errorf(codes.FailedPrecondition, "the sandbox is %s, not Running", src.Status.Phase)
+	if err := forkableSource(src); err != nil {
+		return nil, err
 	}
 
 	snapName, err := s.forkSnapshot(ctx, src, ttl)
@@ -83,6 +77,22 @@ func (s *Service) Fork(ctx context.Context, req *setecv1grpc.ForkRequest) (*sete
 		resp.SandboxIds = append(resp.SandboxIds, fmt.Sprintf("%s/%s/%s", fork.Namespace, fork.Name, fork.UID))
 	}
 	return resp, nil
+}
+
+// forkableSource refuses a source that a fork or a snapshot of the Snapshot
+// call cannot start from: a sandbox that is not a running launcher
+// sandbox, or a session, whose workspace belongs to one sandbox.
+func forkableSource(src *setecv1alpha1.Sandbox) error {
+	switch {
+	case src.Status.Runtime == nil || src.Status.Runtime.Chosen != runtimepkg.BackendLauncher:
+		return status.Error(codes.FailedPrecondition, "only a launcher sandbox forks or is snapshotted")
+	case src.Spec.IsSession():
+		return status.Error(codes.FailedPrecondition,
+			"a session does not fork and is not snapshotted: its workspace belongs to one sandbox")
+	case src.Status.Phase != setecv1alpha1.SandboxPhaseRunning:
+		return status.Errorf(codes.FailedPrecondition, "the sandbox is %s, not Running", src.Status.Phase)
+	}
+	return nil
 }
 
 // forkSnapshot asks the operator for a forkable snapshot of src and waits

@@ -149,6 +149,9 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		return nil, err
 	}
 
+	if req.GetFromSnapshot() != "" {
+		return s.launchFromSnapshot(ctx, ns, pair, req)
+	}
 	if rs := req.GetReviewSnapshot(); rs != "" {
 		return s.launchReview(ctx, ns, pair, rs)
 	}

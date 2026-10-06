@@ -67,6 +67,14 @@ service SandboxService {
   // snapshot_ttl_seconds once no fork still needs it.
   rpc Fork(ForkRequest) returns (ForkResponse);
 
+  // Snapshot takes a full snapshot of a running launcher sandbox and
+  // returns its name (setec#242). The snapshot belongs to the pair of
+  // client and tenant of the sandbox, outlives the sandbox, and is deleted
+  // ttl_seconds after it is taken, once no sandbox still loads it. A
+  // later Launch with LaunchRequest.from_snapshot starts a normal sandbox
+  // from it. Only the owner of the sandbox can take it.
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+
   // Keep takes a snapshot of a running launcher sandbox for a later
   // review (setec#196). The snapshot is sealed with the key of the
   // tenant, opens only in a review sandbox with no network (see
@@ -208,6 +216,16 @@ message LaunchRequest {
   // is then a review sandbox: it loads the snapshot, has no network, and
   // ignores image, command and network of this request (setec#196).
   string review_snapshot = 9;
+  // from_snapshot names a snapshot that the Snapshot call took for the
+  // tenant (setec#242). The new sandbox is a normal sandbox that loads the
+  // snapshot: it gets a new identity and new randomness, as a fork does,
+  // and the network of this request, never the network of the source.
+  // The class, the image and the machine size come from the snapshot, so
+  // sandbox_class, image and resources must be empty or equal to them. A
+  // command, when set, replaces the command of the source in the record of
+  // the sandbox; the loaded machine already runs its workload. A session
+  // lifecycle is refused. It cannot be combined with review_snapshot.
+  string from_snapshot = 10;
 }
 
 // LaunchResponse identifies the Sandbox created for the caller.
@@ -608,6 +626,21 @@ message ForkRequest {
 message ForkResponse {
   string snapshot = 1;
   repeated string sandbox_ids = 2;
+}
+
+// SnapshotRequest names the sandbox to snapshot.
+message SnapshotRequest {
+  string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox, as in KillRequest.
+  string tenant = 2;
+  // ttl_seconds is the lifetime of the snapshot. Zero takes 7 days.
+  int64 ttl_seconds = 3;
+}
+
+// SnapshotResponse names the snapshot, for LaunchRequest.from_snapshot.
+message SnapshotResponse {
+  string snapshot = 1;
 }
 
 // KeepRequest names the sandbox whose state is kept.

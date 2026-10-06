@@ -61,6 +61,7 @@ method frontend.Service.Kill	# internal/frontend/service.go:350
 method frontend.Service.Launch	# internal/frontend/service.go:160
 method frontend.Service.Pin	# internal/frontend/keep.go
 method frontend.Service.Resume	# internal/frontend/suspend.go
+method frontend.Service.Snapshot	# internal/frontend/snapshot.go
 method frontend.Service.StreamLogs	# internal/frontend/service.go:400
 method frontend.Service.Suspend	# internal/frontend/suspend.go
 method frontend.Service.Wait	# internal/frontend/service.go:301

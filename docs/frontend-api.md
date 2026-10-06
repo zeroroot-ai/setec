@@ -19,6 +19,7 @@ service SandboxService {
   rpc Suspend(SuspendRequest) returns (SuspendResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
   rpc Fork(ForkRequest) returns (ForkResponse);
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
   rpc Keep(KeepRequest) returns (KeepResponse);
   rpc Pin(PinRequest) returns (PinResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
@@ -430,6 +431,30 @@ another fork.
 - The snapshot is deleted `snapshot_ttl_seconds` after the fork (one hour
   by default), once no fork still needs it.
 - A session does not fork: its workspace belongs to one sandbox.
+
+## Snapshot a sandbox and launch from it later (`Snapshot`, `from_snapshot`)
+
+`Snapshot` takes a full snapshot of a running launcher sandbox and returns
+its name. The snapshot outlives the sandbox, so a caller can start a new
+sandbox from it after the run ends, for example to rewind a run.
+
+- `Launch` with `from_snapshot` set to the snapshot name starts a normal
+  sandbox that loads the snapshot. It gets a new identity and new
+  randomness, as a fork does, so a token of the source does not verify
+  for it.
+- The new sandbox gets the `network` of the request, or the default of
+  the class. It never gets the network of the source.
+- The class, the image and the machine size come from the snapshot.
+  `sandbox_class`, `image` and `resources` must be empty or equal to them.
+  The command of the source is recorded on the snapshot. A `command` in
+  the request replaces it in the record of the new sandbox.
+- Only the owner pair of the source takes the snapshot and launches from
+  it: the snapshot lives in the namespace of that pair.
+- The snapshot is deleted `ttl_seconds` after it is taken (7 days by
+  default), once no sandbox still loads it.
+- A session is not snapshotted, and a session does not start from a
+  snapshot: its workspace belongs to one sandbox. `from_snapshot` and
+  `review_snapshot` are not combined.
 
 ## Keep a sandbox for review (`Keep`, `Pin`)
 
