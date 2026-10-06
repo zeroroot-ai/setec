@@ -55,11 +55,18 @@ type Paths struct {
 	// HybridVsock is the Firecracker hybrid vsock the guest agent
 	// listens behind.
 	HybridVsock string
-	// FCRoot is the host directory Firecracker sees as "/". kata runs
+	// FCRoot is the host directory Firecracker sees as FCMount. kata runs
 	// Firecracker under the jailer, chrooted into <vm>/root, so a file
 	// path handed to the Firecracker API resolves inside that
 	// directory. It is "/" for an unjailed Firecracker.
 	FCRoot string
+	// FCMount is the path at which Firecracker sees FCRoot. Empty means
+	// "/". A launcher Pod sees its work volume at /work.
+	FCMount string
+	// Launcher is true for the Firecracker machine of a launcher Pod. The
+	// launcher loads a snapshot itself, so a restore stages the files for
+	// it instead of calling the Firecracker API.
+	Launcher bool
 }
 
 // FCPath returns the path Firecracker sees for hostPath, which must lie
@@ -73,7 +80,11 @@ func (p Paths) FCPath(hostPath string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return "", fmt.Errorf("katasandbox: %s is outside the Firecracker root %s", hostPath, root)
 	}
-	return filepath.Join("/", rel), nil
+	mount := p.FCMount
+	if mount == "" {
+		mount = "/"
+	}
+	return filepath.Join(mount, rel), nil
 }
 
 // fcRootFrom derives Firecracker's root on the host from the host path

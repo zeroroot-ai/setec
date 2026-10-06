@@ -75,6 +75,22 @@ type BootSource struct {
 type SnapshotSource struct {
 	State  string `json:"state"`
 	Memory string `json:"memory"`
+	// Staged, when set, is the marker that the node agent writes after it
+	// staged State and Memory. The launcher waits for it before the load.
+	Staged string `json:"staged,omitempty"`
+	// Evidence, when set, is where the launcher writes RestoreEvidence
+	// after the load. The node agent reads it.
+	Evidence string `json:"evidence,omitempty"`
+}
+
+// RestoreEvidence is what the launcher reports after a snapshot load. Each
+// field is true only when the guest agent confirmed the step. The JSON is
+// podspec.RestoreEvidence, and a test keeps the two equal.
+type RestoreEvidence struct {
+	EntropyReseeded bool   `json:"entropyReseeded"`
+	Uniquified      bool   `json:"uniquified"`
+	ClockSet        bool   `json:"clockSet"`
+	Error           string `json:"error,omitempty"`
 }
 
 // SpecEnv is the environment variable through which the operator passes
@@ -118,6 +134,9 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: the boot kernel must be an absolute path")
 	case s.Source.Snapshot != nil && (!filepath.IsAbs(s.Source.Snapshot.State) || !filepath.IsAbs(s.Source.Snapshot.Memory)):
 		return errors.New("launcher: the snapshot state and memory must be absolute paths")
+	case s.Source.Snapshot != nil && (s.Source.Snapshot.Staged != "" && !filepath.IsAbs(s.Source.Snapshot.Staged) ||
+		s.Source.Snapshot.Evidence != "" && !filepath.IsAbs(s.Source.Snapshot.Evidence)):
+		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
 	case s.Source.Boot != nil && s.Workload == nil:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
 	}

@@ -29,10 +29,39 @@ const (
 	KVMResource corev1.ResourceName = "setec.zeroroot.ai/kvm"
 	TunResource corev1.ResourceName = "setec.zeroroot.ai/tun"
 
-	// launcherWorkVolume holds the machine files: the API socket, the
-	// writable layer and snapshot files.
-	launcherWorkVolume    = "work"
-	launcherWorkMountPath = "/work"
+	// LauncherWorkVolume holds the machine files: the API socket, the
+	// writable layer and snapshot files. The node agent finds it on the
+	// node by this name.
+	LauncherWorkVolume    = "work"
+	LauncherWorkMountPath = "/work"
+	// LauncherVMDir is the work directory of Firecracker inside the Pod.
+	// The node agent reaches the API socket and the vsock socket here.
+	LauncherVMDir = LauncherWorkMountPath + "/vm"
+	// LauncherRestoreDir holds the snapshot files that the node agent
+	// stages for a restore.
+	LauncherRestoreDir = LauncherVMDir + "/restore"
+)
+
+// The files of a launcher Pod that the node agent and the launcher share,
+// as the Pod sees them. internal/launcher holds the same socket names, and
+// a test keeps the two equal.
+const (
+	LauncherAPISocket   = "api.sock"
+	LauncherVsockSocket = "v.sock"
+	// LauncherWritableDisk is the writable layer of the machine. A
+	// snapshot holds it with the memory.
+	LauncherWritableDisk = LauncherWorkMountPath + "/writable.ext4"
+	// A restore: the node agent writes the state, the memory and the
+	// writable layer, then the staged marker. The launcher loads them,
+	// confirms the guest, and writes the evidence file, which the node
+	// agent reads.
+	LauncherRestoreState    = LauncherRestoreDir + "/state.bin"
+	LauncherRestoreMemory   = LauncherRestoreDir + "/memory.bin"
+	LauncherRestoreStaged   = LauncherRestoreDir + "/staged"
+	LauncherRestoreEvidence = LauncherRestoreDir + "/evidence.json"
+)
+
+const (
 
 	// launcherDiskVolume is the image volume of the signed disk of the
 	// image digest. The kubelet pulls it on the node, so the launcher
@@ -65,6 +94,12 @@ type LauncherOptions struct {
 	// ResolverIPs are the DNS servers of the Pod. The launcher gives the
 	// resolv.conf of the Pod to the machine.
 	ResolverIPs []string
+	// Restore makes a Pod whose launcher loads a snapshot that the node
+	// agent stages in the work volume, instead of a boot (setec#105).
+	Restore bool
+	// NodeName, when set, pins the Pod to that node: the node that holds a
+	// snapshot on its local disk.
+	NodeName string
 }
 
 // LauncherSpecEnv is the environment variable that carries the launcher
@@ -82,21 +117,29 @@ const (
 // launcherSpec is the JSON of internal/launcher.Spec. It is written here
 // rather than imported, so the operator does not link the launcher.
 type launcherSpec struct {
-	VCPU          int             `json:"vcpu"`
-	MemoryMiB     int64           `json:"memoryMiB"`
-	ImageRef      string          `json:"imageRef"`
-	DiskKeys      []string        `json:"diskKeys"`
-	ImageDisk     string          `json:"imageDisk"`
-	DiskSignature string          `json:"diskSignature"`
-	WritableDisk  string          `json:"writableDisk"`
-	WritableBytes int64           `json:"writableBytes"`
-	WorkDir       string          `json:"workDir"`
-	Source        launcherSource  `json:"source"`
-	Workload      launcherProcess `json:"workload"`
+	VCPU          int              `json:"vcpu"`
+	MemoryMiB     int64            `json:"memoryMiB"`
+	ImageRef      string           `json:"imageRef"`
+	DiskKeys      []string         `json:"diskKeys"`
+	ImageDisk     string           `json:"imageDisk"`
+	DiskSignature string           `json:"diskSignature"`
+	WritableDisk  string           `json:"writableDisk"`
+	WritableBytes int64            `json:"writableBytes"`
+	WorkDir       string           `json:"workDir"`
+	Source        launcherSource   `json:"source"`
+	Workload      *launcherProcess `json:"workload,omitempty"`
 }
 
 type launcherSource struct {
-	Boot launcherBoot `json:"boot"`
+	Boot     *launcherBoot     `json:"boot,omitempty"`
+	Snapshot *launcherSnapshot `json:"snapshot,omitempty"`
+}
+
+type launcherSnapshot struct {
+	State    string `json:"state"`
+	Memory   string `json:"memory"`
+	Staged   string `json:"staged"`
+	Evidence string `json:"evidence"`
 }
 
 type launcherBoot struct {
@@ -163,15 +206,25 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		DiskKeys:      opts.DiskKeys,
 		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
 		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
-		WritableDisk:  launcherWorkMountPath + "/writable.ext4",
+		WritableDisk:  LauncherWritableDisk,
 		WritableBytes: work.Value(),
-		WorkDir:       launcherWorkMountPath + "/vm",
-		Source:        launcherSource{Boot: launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}},
-		Workload:      launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)},
+		WorkDir:       LauncherVMDir,
 	}
-	for _, e := range sb.Spec.Env {
-		if e.ValueFrom == nil {
-			spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
+	if opts.Restore {
+		// A loaded snapshot already runs its workload.
+		spec.Source.Snapshot = &launcherSnapshot{
+			State:    LauncherRestoreState,
+			Memory:   LauncherRestoreMemory,
+			Staged:   LauncherRestoreStaged,
+			Evidence: LauncherRestoreEvidence,
+		}
+	} else {
+		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
+		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
+		for _, e := range sb.Spec.Env {
+			if e.ValueFrom == nil {
+				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
+			}
 		}
 	}
 	specJSON, err := json.Marshal(spec)
@@ -217,13 +270,13 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 					},
 				},
 				VolumeMounts: []corev1.VolumeMount{
-					{Name: launcherWorkVolume, MountPath: launcherWorkMountPath},
+					{Name: LauncherWorkVolume, MountPath: LauncherWorkMountPath},
 					{Name: launcherDiskVolume, MountPath: launcherDiskMountPath, ReadOnly: true},
 				},
 			}},
 			Volumes: []corev1.Volume{
 				{
-					Name:     launcherWorkVolume,
+					Name:     LauncherWorkVolume,
 					EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir},
 				},
 				{
@@ -242,9 +295,25 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			}},
 		},
 	}
+	if opts.NodeName != "" {
+		term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
+		term.MatchFields = []corev1.NodeSelectorRequirement{{
+			Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{opts.NodeName},
+		}}
+	}
 	if len(opts.ResolverIPs) > 0 {
 		pod.Spec.DNSPolicy = corev1.DNSNone
 		pod.Spec.DNSConfig = &corev1.PodDNSConfig{Nameservers: append([]string(nil), opts.ResolverIPs...)}
 	}
 	return pod, nil
+}
+
+// RestoreEvidence is what the launcher writes to LauncherRestoreEvidence
+// after a snapshot load. Each field is true only when the guest agent
+// confirmed the step.
+type RestoreEvidence struct {
+	EntropyReseeded bool   `json:"entropyReseeded"`
+	Uniquified      bool   `json:"uniquified"`
+	ClockSet        bool   `json:"clockSet"`
+	Error           string `json:"error,omitempty"`
 }

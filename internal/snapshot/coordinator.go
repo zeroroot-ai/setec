@@ -439,7 +439,10 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		setSpanErr(span, "pod not scheduled")
 		return fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
 	}
-	if pod.Spec.NodeName != snap.Spec.Node {
+	// A snapshot on the local disk of a node loads on that node only. A
+	// snapshot in the S3-compatible store loads on any node.
+	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
+	if local && pod.Spec.NodeName != snap.Spec.Node {
 		setSpanErr(span, "node mismatch")
 		return fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
 			snap.Spec.Node, pod.Spec.NodeName)

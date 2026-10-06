@@ -55,6 +55,15 @@ func TestTCNetwork_JoinAndLeave(t *testing.T) {
 	if err != nil || tap.Attrs().MTU != 1450 {
 		t.Fatalf("tap: %v %v", tap, err)
 	}
+	// Before Connect the machine has no network: no filter exists.
+	for _, l := range []netlink.Link{link, tap} {
+		if fs, _ := netlink.FilterList(l, netlink.MakeHandle(0xffff, 0)); len(fs) != 0 {
+			t.Fatalf("filters of %s before Connect = %v; want none", l.Attrs().Name, fs)
+		}
+	}
+	if err := (TCNetwork{}).Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
 	for _, l := range []netlink.Link{link, tap} {
 		fs, err := netlink.FilterList(l, netlink.MakeHandle(0xffff, 0))
 		if err != nil || len(fs) != 1 || fs[0].Type() != "matchall" {

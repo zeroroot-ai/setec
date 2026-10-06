@@ -72,13 +72,23 @@ func (TCNetwork) Join() (PodNet, error) {
 	if err := netlink.LinkSetUp(tapLink); err != nil {
 		return PodNet{}, fmt.Errorf("set %s up: %w", TapDevice, err)
 	}
-	if err := redirect(eth, tapLink); err != nil {
-		return PodNet{}, err
-	}
-	if err := redirect(tapLink, eth); err != nil {
-		return PodNet{}, err
-	}
 	return pn, nil
+}
+
+// Connect implements Network.
+func (TCNetwork) Connect() error {
+	eth, err := netlink.LinkByName(PodInterface)
+	if err != nil {
+		return fmt.Errorf("the Pod interface %s: %w", PodInterface, err)
+	}
+	tapLink, err := netlink.LinkByName(TapDevice)
+	if err != nil {
+		return fmt.Errorf("the tap device %s: %w", TapDevice, err)
+	}
+	if err := redirect(eth, tapLink); err != nil {
+		return err
+	}
+	return redirect(tapLink, eth)
 }
 
 // redirect sends each frame that arrives on from out of to.

@@ -175,3 +175,58 @@ func TestBuildLauncher_SpecIsTheLauncherSpec(t *testing.T) {
 		t.Fatalf("the launcher read %+v", s)
 	}
 }
+
+// TestLauncherFileNamesMatchTheLauncher keeps the file names that the node
+// agent uses equal to the names of the launcher, and the two evidence types
+// equal on the wire.
+func TestLauncherFileNamesMatchTheLauncher(t *testing.T) {
+	t.Parallel()
+	if LauncherAPISocket != launcher.APISocket || LauncherVsockSocket != launcher.VsockSocket {
+		t.Fatalf("socket names differ: %s %s and %s %s",
+			LauncherAPISocket, LauncherVsockSocket, launcher.APISocket, launcher.VsockSocket)
+	}
+	pod := launcherOrFatal(t)
+	var s launcherSpec
+	if err := json.Unmarshal([]byte(pod.Spec.Containers[0].Env[0].Value), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.WorkDir != LauncherVMDir {
+		t.Fatalf("work dir = %s, want %s", s.WorkDir, LauncherVMDir)
+	}
+	in := launcher.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true, Error: "x"}
+	raw, _ := json.Marshal(in)
+	var out RestoreEvidence
+	if err := json.Unmarshal(raw, &out); err != nil || out != (RestoreEvidence{true, true, true, "x"}) {
+		t.Fatalf("evidence on the wire: %s -> %+v, %v", raw, out, err)
+	}
+}
+
+// TestBuildLauncher_RestoreLoadsTheStagedSnapshot proves that a restore Pod
+// asks the launcher to wait for the files of the node agent and to load
+// them, and that the launcher accepts that spec.
+func TestBuildLauncher_RestoreLoadsTheStagedSnapshot(t *testing.T) {
+	opts := launcherOpts()
+	opts.Restore = true
+	opts.NodeName = "node-a"
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchFields
+	if len(mf) != 1 || mf[0].Key != "metadata.name" || mf[0].Values[0] != "node-a" {
+		t.Fatalf("the restore Pod is not pinned to the node of the snapshot: %+v", mf)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil {
+		t.Fatalf("the launcher refuses the restore spec: %v", err)
+	}
+	snap := s.Source.Snapshot
+	if s.Source.Boot != nil || snap == nil || s.Workload != nil {
+		t.Fatalf("source = %+v, workload = %+v; want a snapshot and no workload", s.Source, s.Workload)
+	}
+	if snap.State != "/work/vm/restore/state.bin" || snap.Memory != "/work/vm/restore/memory.bin" ||
+		snap.Staged != "/work/vm/restore/staged" || snap.Evidence != "/work/vm/restore/evidence.json" {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+}

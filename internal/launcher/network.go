@@ -18,9 +18,12 @@ type PodNet struct {
 
 // Network joins the machine to the Pod interface and removes the join.
 type Network interface {
-	// Join reads the identity of the Pod interface, makes the tap device
-	// and the two filters between them, and returns the identity.
+	// Join reads the identity of the Pod interface, makes the tap device,
+	// and returns the identity. The machine has no network yet.
 	Join() (PodNet, error)
+	// Connect adds the two filters between the Pod interface and the tap
+	// device. From then on each frame of the Pod goes to the machine.
+	Connect() error
 	// Leave removes the tap device and the filters. It is safe to call
 	// after a failed or partial Join.
 	Leave() error
