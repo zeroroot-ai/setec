@@ -177,7 +177,7 @@ build: manifests generate fmt vet build-guest-agent ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: build-guest-agent
-build-guest-agent: ## Build the static in-guest setec-guest-agent (bundle into microVM rootfs images).
+build-guest-agent: ## Build the static setec-guest-agent, the /init of the launcher machine (Dockerfile.launcher builds the published one).
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o bin/setec-guest-agent ./cmd/setec-guest-agent
 
 .PHONY: run
@@ -279,30 +279,6 @@ helm-lint: ## Lint the Setec Helm chart (requires helm CLI on PATH).
 		exit 1; \
 	}
 	$(HELM) lint $(HELM_CHART_DIR)
-
-.PHONY: helm-verify
-helm-verify: ## Render the chart and assert its containment controls are present.
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-chart-security.sh $(HELM_CHART_DIR)
-
-.PHONY: helm-verify-credentials
-helm-verify-credentials: ## Render both credential modes and assert the install-wide switch (setec#183).
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-chart-credentials.sh $(HELM_CHART_DIR)
-
-.PHONY: verify-x86-substrate
-verify-x86-substrate: ## Assert the x86-only substrate (docs/design/runtime.md): amd64-only images + arch selectors.
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-x86-substrate.sh $(HELM_CHART_DIR)
 
 # check: org-contract CI-equivalent gate (gibson#171 slice 1.4 /
 # zeroroot-ai/.github#87). Runs the same targets CI executes on every PR.

@@ -288,8 +288,8 @@ jobs:
         # actually there and still say what they are supposed to say --
         # the regression it catches is a chart that installs cleanly and
         # enforces nothing.
-        # Invoked directly rather than via `make helm-verify`: this job has
-        # no Go toolchain, and the Makefile shells out to `go env` while it
+        # Invoked directly, not through make: this job has no Go
+        # toolchain, and the Makefile shells out to `go env` while it
         # parses.
         run: ./hack/verify-chart-security.sh charts/setec
 
