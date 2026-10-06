@@ -44,6 +44,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/reaper"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -76,6 +77,7 @@ func main() {
 		metaDev             string
 		fillThreshold       int
 		metricsAddr         string
+		kubeletPodsDir      string
 		containerdSocket    string
 		containerdNamespace string
 		containerdAuthFile  string
@@ -118,6 +120,8 @@ func main() {
 		"Name of the Kubernetes Node this agent runs on (defaults to $NODE_NAME).")
 	flag.StringVar(&prefetchImages, "prefetch-images", "",
 		"Space-separated OCI references to prefetch into the containerd content store.")
+	flag.StringVar(&kubeletPodsDir, "kubelet-pods-dir", launchersandbox.DefaultPodsDir,
+		"the Pod directory of the kubelet; the agent finds the work volume of a launcher Pod under it")
 	flag.StringVar(&containerdSocket, "containerd-socket", "/run/containerd/containerd.sock",
 		"Path to the containerd Unix socket used by the image puller.")
 	flag.StringVar(&containerdNamespace, "containerd-namespace", "k8s.io",
@@ -440,10 +444,13 @@ func main() {
 			Storage:            backend,
 			SessionStorage:     sessionStorage,
 			FirecrackerFactory: ffactory,
-			KataSandboxes:      kataSandboxes,
-			Pool:               poolMgr,
-			PoolKEKPath:        snapshotKeyFile,
-			CIDs:               cids,
+			KataSandboxes: grpcserver.ResolverChain{
+				launchersandbox.Resolver{PodsDir: kubeletPodsDir},
+				kataSandboxes,
+			},
+			Pool:        poolMgr,
+			PoolKEKPath: snapshotKeyFile,
+			CIDs:        cids,
 			ReseedObserver: func(outcome string) {
 				entropyReseeds.WithLabelValues(outcome).Inc()
 			},

@@ -52,6 +52,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -420,8 +422,11 @@ func DecryptFile(src, dst string, dek []byte) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Shred zero-overwrites the file at path (single pass), fsyncs, and
-// unlinks it. Missing files return os.ErrNotExist so callers can treat
+// Shred zero-overwrites the data of the file at path (single pass),
+// fsyncs, and unlinks it. Only the data extents are overwritten: a hole of
+// a sparse file holds no data, and overwriting it would write the whole
+// apparent size (a 10 GiB writable layer of a launcher machine took a
+// minute). Missing files return os.ErrNotExist so callers can treat
 // "already gone" as idempotent success. Like the storage backend's
 // secure erase this is pragmatic, not cryptographic, erasure — but for
 // sealed-DEK files it IS the cryptographic erasure of the artifact the
@@ -436,16 +441,9 @@ func Shred(path string) error {
 		if err != nil {
 			return err
 		}
-		buf := make([]byte, 64*1024)
-		var written int64
-		for written < size {
-			chunk := min(size-written, int64(len(buf)))
-			n, werr := f.Write(buf[:chunk])
-			if werr != nil {
-				_ = f.Close()
-				return werr
-			}
-			written += int64(n)
+		if err := zeroData(f, size); err != nil {
+			_ = f.Close()
+			return err
 		}
 		if err := f.Sync(); err != nil {
 			_ = f.Close()
@@ -456,6 +454,42 @@ func Shred(path string) error {
 		}
 	}
 	return os.Remove(path)
+}
+
+// zeroData writes zeros over each data extent of f. A file system with no
+// SEEK_DATA support is overwritten whole.
+func zeroData(f *os.File, size int64) error {
+	buf := make([]byte, 64*1024)
+	zero := func(off, end int64) error {
+		for off < end {
+			n, err := f.WriteAt(buf[:min(end-off, int64(len(buf)))], off)
+			if err != nil {
+				return err
+			}
+			off += int64(n)
+		}
+		return nil
+	}
+	fd := int(f.Fd()) //nolint:gosec // a file descriptor fits in an int
+	for off := int64(0); off < size; {
+		start, err := unix.Seek(fd, off, unix.SEEK_DATA)
+		if errors.Is(err, unix.ENXIO) {
+			return nil
+		}
+		if err != nil {
+			return zero(off, size)
+		}
+		end, err := unix.Seek(fd, start, unix.SEEK_HOLE)
+		if err != nil {
+			return zero(start, size)
+		}
+		end = min(end, size)
+		if err := zero(start, end); err != nil {
+			return err
+		}
+		off = end
+	}
+	return nil
 }
 
 // readFull reads as much of buf as possible, returning io.EOF only

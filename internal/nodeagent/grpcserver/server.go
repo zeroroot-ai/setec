@@ -30,8 +30,10 @@ import (
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/pool"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/poolentry"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 	"github.com/zeroroot-ai/setec/internal/uniquify"
@@ -61,9 +63,10 @@ type Server struct {
 	// firecracker.NewClientFromSocket.
 	FirecrackerFactory func(sockPath string) firecracker.Client
 
-	// KataSandboxes finds a Pod's kata Firecracker socket and hybrid
-	// vsock on this node from the Pod UID (setec#19). Production wires
-	// a katasandbox.Resolver backed by containerd.
+	// KataSandboxes finds the Firecracker socket and hybrid vsock of a
+	// Pod on this node from the Pod UID: a kata sandbox (setec#19) or the
+	// machine of a launcher Pod. Production wires a ResolverChain of the
+	// launcher resolver and the kata resolver backed by containerd.
 	KataSandboxes KataSandboxResolver
 
 	// Pool is the pre-warm pool manager. When nil, QueryPool returns
@@ -223,8 +226,27 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// treatment the storage backend applies before unlinking.
 	defer func() { shredDir(dir) }()
 
-	if err := fc.CreateSnapshot(ctx, fcState, fcMem); err != nil {
+	parent := in.GetParentStorageRef()
+	if parent != "" && !kata.Launcher {
+		_ = fc.Resume(ctx)
+		return nil, status.Error(codes.InvalidArgument, "a diff snapshot needs the machine of a launcher Pod")
+	}
+	if parent != "" {
+		err = fc.CreateDiffSnapshot(ctx, fcState, fcMem)
+	} else {
+		err = fc.CreateSnapshot(ctx, fcState, fcMem)
+	}
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker createSnapshot: %v", err)
+	}
+	// A launcher machine keeps its writable layer in the work volume. The
+	// copy is taken while the machine is paused, so it matches the memory.
+	diskPath := filepath.Join(dir, "writable.ext4")
+	if kata.Launcher {
+		if err := copySparse(launchersandbox.HostPath(kata, podspec.LauncherWritableDisk), diskPath); err != nil {
+			_ = fc.Resume(ctx)
+			return nil, status.Errorf(codes.Internal, "copy the writable layer: %v", err)
+		}
 	}
 
 	// Resume the source VM now that the state+memory pair is on
@@ -232,7 +254,12 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// Storage.Save (the persisted snapshot is still valid).
 	_ = fc.Resume(ctx)
 
-	combined, err := makeFramedReader(statePath, memPath)
+	var combined io.ReadCloser
+	if kata.Launcher {
+		combined, err = makeLauncherFramedReader(parent, statePath, memPath, diskPath)
+	} else {
+		combined, err = makeFramedReader(statePath, memPath)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "assemble framed stream: %v", err)
 	}
@@ -288,6 +315,10 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 		return nil, status.Errorf(codes.Internal, "open snapshot: %v", err)
 	}
 	defer func() { _ = rc.Close() }()
+
+	if kata.Launcher {
+		return s.restoreLauncher(ctx, kata, rc, backend)
+	}
 
 	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -466,6 +497,24 @@ func fcPaths(kata katasandbox.Paths, statePath, memPath string) (fcState, fcMem 
 // node from the Pod UID.
 type KataSandboxResolver interface {
 	Resolve(ctx context.Context, podUID string) (katasandbox.Paths, error)
+}
+
+// ResolverChain asks each resolver in order and returns the first answer
+// that is not katasandbox.ErrNotFound. The node agent asks the launcher
+// resolver first and the kata resolver second, until the cutover deletes
+// the kata path (setec#198).
+type ResolverChain []KataSandboxResolver
+
+// Resolve implements KataSandboxResolver.
+func (c ResolverChain) Resolve(ctx context.Context, podUID string) (katasandbox.Paths, error) {
+	for _, r := range c {
+		p, err := r.Resolve(ctx, podUID)
+		if errors.Is(err, katasandbox.ErrNotFound) {
+			continue
+		}
+		return p, err
+	}
+	return katasandbox.Paths{}, katasandbox.ErrNotFound
 }
 
 // kataPaths resolves the kata sandbox of the Pod with podUID, mapping

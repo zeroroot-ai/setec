@@ -241,7 +241,15 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	//
 	// spec.storageRef is empty here. The backend chooses the reference
 	// and returns it with the response, so it is filled in at step 5.
+	parentRef, err := c.diffParent(ctx, sb, string(pod.UID))
+	if err != nil {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotCreateFailed, err.Error())
+		setSpanErr(span, err.Error())
+		return err
+	}
 	snap := c.newSnapshotCR(ctx, sb, pod.Spec.NodeName)
+	snap.Annotations = map[string]string{setecv1alpha1.SnapshotSourcePodUIDAnnotation: string(pod.UID)}
+	snap.Spec.Parent = sb.Spec.Snapshot.Parent
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Someone raced us. Return the sentinel so the reconciler
@@ -270,10 +278,11 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		SnapshotId:     sb.Namespace + "-" + sb.Spec.Snapshot.Name,
-		StorageBackend: c.backendName(),
-		SourcePodUid:   string(pod.UID),
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+		SnapshotId:       sb.Namespace + "-" + sb.Spec.Snapshot.Name,
+		StorageBackend:   c.backendName(),
+		SourcePodUid:     string(pod.UID),
+		ParentStorageRef: parentRef,
 	})
 	if rpcErr != nil {
 		reason := EventReasonSnapshotCreateFailed
@@ -316,6 +325,36 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	return nil
 }
 
+// ErrInvalidParent is returned when the parent of a diff snapshot cannot
+// carry it.
+var ErrInvalidParent = errors.New("coordinator: the parent snapshot cannot carry a diff")
+
+// diffParent returns the storage reference of the parent of a diff
+// snapshot, or "" for a full snapshot. The parent must be a Ready Snapshot
+// of the same Sandbox, taken from the same Pod, in the same store: the
+// memory of a diff holds only the pages that changed in that one machine.
+func (c *Coordinator) diffParent(ctx context.Context, sb *setecv1alpha1.Sandbox, podUID string) (string, error) {
+	name := sb.Spec.Snapshot.Parent
+	if name == "" {
+		return "", nil
+	}
+	parent := &setecv1alpha1.Snapshot{}
+	if err := c.Client.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: name}, parent); err != nil {
+		return "", fmt.Errorf("%w: get %q: %w", ErrInvalidParent, name, err)
+	}
+	switch {
+	case parent.Status.Phase != setecv1alpha1.SnapshotPhaseReady || parent.Spec.StorageRef == "":
+		return "", fmt.Errorf("%w: %q is not Ready", ErrInvalidParent, name)
+	case parent.Spec.SourceSandbox != sb.Name:
+		return "", fmt.Errorf("%w: %q is a snapshot of %q, not of %q", ErrInvalidParent, name, parent.Spec.SourceSandbox, sb.Name)
+	case parent.Annotations[setecv1alpha1.SnapshotSourcePodUIDAnnotation] != podUID:
+		return "", fmt.Errorf("%w: %q was taken from another Pod; take a full snapshot first", ErrInvalidParent, name)
+	case parent.Spec.StorageBackend != c.backendName():
+		return "", fmt.Errorf("%w: %q is in the store %q, not %q", ErrInvalidParent, name, parent.Spec.StorageBackend, c.backendName())
+	}
+	return parent.Spec.StorageRef, nil
+}
+
 // newSnapshotCR builds the Snapshot CR for a sandbox snapshot request.
 // Everything it fills is knowable before the storage write: the node is
 // the Pod's node, and the VMM comes from the resolved class.
@@ -325,10 +364,14 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 // fall back to Firecracker, matching Phase 3's supported-VMM default.
 func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandbox, nodeName string) *setecv1alpha1.Snapshot {
 	vmm := setecv1alpha1.VMMFirecracker
+	cpuTemplate := ""
 	if sb.Spec.SandboxClassName != "" {
 		cls := &setecv1alpha1.SandboxClass{}
-		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil && cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
-			vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
+		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil {
+			if cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
+				vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
+			}
+			cpuTemplate = cls.Spec.CPUTemplate
 		}
 	}
 	className := sb.Spec.SandboxClassName
@@ -349,8 +392,20 @@ func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandb
 			TTL:            ttlFrom(sb.Spec.Snapshot.TTL),
 			StorageBackend: c.backendName(),
 			Node:           nodeName,
+			CPUTemplate:    cpuTemplate,
+			InstanceType:   c.instanceType(ctx, nodeName),
 		},
 	}
+}
+
+// instanceType returns the node.kubernetes.io/instance-type of a node, or
+// "" when the node or the label is missing.
+func (c *Coordinator) instanceType(ctx context.Context, nodeName string) string {
+	node := &corev1.Node{}
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+		return ""
+	}
+	return node.Labels[corev1.LabelInstanceTypeStable]
 }
 
 // markPhase writes one phase/reason pair to the Snapshot status
@@ -439,7 +494,10 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		setSpanErr(span, "pod not scheduled")
 		return fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
 	}
-	if pod.Spec.NodeName != snap.Spec.Node {
+	// A snapshot on the local disk of a node loads on that node only. A
+	// snapshot in the S3-compatible store loads on any node.
+	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
+	if local && pod.Spec.NodeName != snap.Spec.Node {
 		setSpanErr(span, "node mismatch")
 		return fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
 			snap.Spec.Node, pod.Spec.NodeName)
@@ -706,6 +764,13 @@ func (c *Coordinator) DeleteSnapshot(ctx context.Context, snap *setecv1alpha1.Sn
 	defer span.End()
 	start := time.Now()
 
+	// A snapshot whose write failed has no storage reference: nothing was
+	// stored, so nothing is erased. Asking the node agent kept the
+	// finalizer on and the Snapshot undeletable.
+	if snap.Spec.StorageRef == "" {
+		c.recordDelete(snap, time.Since(start))
+		return nil
+	}
 	if snap.Spec.Node == "" {
 		return errors.New("coordinator: Snapshot has no node; cannot delete without a routing target")
 	}

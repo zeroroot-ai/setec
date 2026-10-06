@@ -22,8 +22,8 @@ import (
 )
 
 type fakeNet struct {
-	joinErr      error
-	joined, left int
+	joinErr                 error
+	joined, connected, left int
 }
 
 func (f *fakeNet) Join() (PodNet, error) {
@@ -36,7 +36,8 @@ func (f *fakeNet) Join() (PodNet, error) {
 		MTU: 1500, Gateway: netip.MustParseAddr("10.42.0.1"),
 	}, nil
 }
-func (f *fakeNet) Leave() error { f.left++; return nil }
+func (f *fakeNet) Leave() error   { f.left++; return nil }
+func (f *fakeNet) Connect() error { f.connected++; return nil }
 
 // fakeVMM acts as Firecracker and a guest. After start it reports exit code
 // report on the exit port, unless report is negative; then it ends alone.
@@ -142,7 +143,7 @@ func TestRun_BootConfigTakesTheSandboxLimitsAndThePodMAC(t *testing.T) {
 	if err := json.Unmarshal([]byte(vmm.config), &cfg); err != nil {
 		t.Fatalf("config: %v", err)
 	}
-	if cfg.MachineConfig.VCPUCount != 2 || cfg.MachineConfig.MemSizeMiB != 512 {
+	if cfg.MachineConfig.VCPUCount != 2 || cfg.MachineConfig.MemSizeMiB != 512 || !cfg.MachineConfig.TrackDirtyPages {
 		t.Fatalf("machine = %+v", cfg.MachineConfig)
 	}
 	if cfg.NetworkInterfaces[0].HostDevName != TapDevice || cfg.NetworkInterfaces[0].GuestMAC != "02:00:00:00:00:07" {
@@ -150,6 +151,9 @@ func TestRun_BootConfigTakesTheSandboxLimitsAndThePodMAC(t *testing.T) {
 	}
 	if len(cfg.Drives) != 2 || !cfg.Drives[0].IsReadOnly || cfg.Drives[1].IsReadOnly {
 		t.Fatalf("drives = %+v; want a read-only image and a writable layer", cfg.Drives)
+	}
+	if cfg.CPUConfig != "" {
+		t.Fatalf("cpu-config = %q with no template", cfg.CPUConfig)
 	}
 	if cfg.BootSource.BootArgs != defaultBootArgs {
 		t.Fatalf("boot args = %q", cfg.BootSource.BootArgs)
@@ -273,5 +277,84 @@ func TestReadSpec_FromTheEnvironment(t *testing.T) {
 	got, err := ReadSpec("/no/such/file")
 	if err != nil || got.VCPU != 2 || got.ImageDisk != s.ImageDisk {
 		t.Fatalf("ReadSpec = %+v, %v", got, err)
+	}
+}
+
+// TestRun_RestoreWaitsForTheStagedFilesAndConnectsLast proves the restore
+// order: no load before the node agent staged the files, no network before
+// the guest is confirmed, and evidence for the node agent at the end.
+func TestRun_RestoreWaitsForTheStagedFilesAndConnectsLast(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	dir := t.TempDir()
+	s.Source = Source{Snapshot: &SnapshotSource{
+		State: filepath.Join(dir, "state.bin"), Memory: filepath.Join(dir, "memory.bin"),
+		Staged: filepath.Join(dir, "staged"), Evidence: filepath.Join(dir, "evidence.json"),
+	}}
+	nw := &fakeNet{}
+	vmm := &fakeVMM{report: 0}
+	connectedAtAfterStart := -1
+	l := &Launcher{Spec: s, Net: nw, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		AfterStart: func(context.Context, PodNet, bool) error {
+			connectedAtAfterStart = nw.connected
+			return nil
+		}}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_ = os.WriteFile(s.Source.Snapshot.Staged, nil, 0o600)
+	}()
+	start := time.Now()
+	if _, err := l.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 150*time.Millisecond {
+		t.Fatal("the launcher did not wait for the staged marker")
+	}
+	if connectedAtAfterStart != 0 || nw.connected != 1 {
+		t.Fatalf("connected at AfterStart = %d, total = %d; want 0 then 1", connectedAtAfterStart, nw.connected)
+	}
+	var ev RestoreEvidence
+	raw, err := os.ReadFile(s.Source.Snapshot.Evidence)
+	if err != nil || json.Unmarshal(raw, &ev) != nil || !ev.EntropyReseeded || !ev.Uniquified || !ev.ClockSet {
+		t.Fatalf("evidence = %s, %v", raw, err)
+	}
+}
+
+// TestRun_RestoreFailureWritesTheErrorAndNeverConnects proves that a guest
+// that is not confirmed never reaches the Pod network.
+func TestRun_RestoreFailureWritesTheErrorAndNeverConnects(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	dir := t.TempDir()
+	s.Source = Source{Snapshot: &SnapshotSource{
+		State: filepath.Join(dir, "state.bin"), Memory: filepath.Join(dir, "memory.bin"),
+		Evidence: filepath.Join(dir, "evidence.json"),
+	}}
+	nw := &fakeNet{}
+	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{report: 0}, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		AfterStart: func(context.Context, PodNet, bool) error { return errors.New("no fresh entropy") }}
+	code, err := l.Run(t.Context())
+	if err == nil || code != LaunchFailedExit || nw.connected != 0 {
+		t.Fatalf("Run = %d, %v, connected %d", code, err, nw.connected)
+	}
+	var ev RestoreEvidence
+	raw, _ := os.ReadFile(s.Source.Snapshot.Evidence)
+	if json.Unmarshal(raw, &ev) != nil || ev.Error == "" || ev.EntropyReseeded {
+		t.Fatalf("evidence = %s", raw)
+	}
+}
+
+func TestRun_BootConfigCarriesTheCPUTemplate(t *testing.T) {
+	t.Parallel()
+	s := testSpec(t)
+	s.CPUTemplate = "/opt/setec/cpu-templates/fleet-v1.json"
+	vmm := &fakeVMM{}
+	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat}
+	if _, err := l.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var cfg vmConfig
+	if err := json.Unmarshal([]byte(vmm.config), &cfg); err != nil || cfg.CPUConfig != s.CPUTemplate {
+		t.Fatalf("cpu-config = %q, %v", cfg.CPUConfig, err)
 	}
 }

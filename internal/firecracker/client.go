@@ -25,6 +25,10 @@ import (
 	"time"
 )
 
+// keySnapshotPath is the JSON key of the state file in the snapshot calls
+// of the Firecracker API.
+const keySnapshotPath = "snapshot_path"
+
 // Client is the narrow surface Phase 3 uses. Implementations speak to
 // a single Firecracker API socket; callers construct a Client per
 // microVM via NewClientFromSocket.
@@ -41,6 +45,12 @@ type Client interface {
 	// host paths. The VM MUST be Paused first (Firecracker enforces);
 	// the node-agent pauses before calling this.
 	CreateSnapshot(ctx context.Context, statePath, memPath string) error
+
+	// CreateDiffSnapshot writes a Diff-type snapshot: the memory file
+	// holds only the pages that changed since the last snapshot, as a
+	// sparse file. The machine must track dirty pages, and it MUST be
+	// Paused first.
+	CreateDiffSnapshot(ctx context.Context, statePath, memPath string) error
 
 	// LoadSnapshot restores a VM from the provided host paths. Called
 	// on a freshly-started Firecracker process whose API is ready
@@ -155,10 +165,38 @@ func (c *httpClient) Resume(ctx context.Context) error {
 func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
 		"snapshot_type": "Full",
-		"snapshot_path": statePath,
+		keySnapshotPath: statePath,
 		"mem_file_path": memPath,
 	}
 	return c.do(ctx, http.MethodPut, "/snapshot/create", body)
+}
+
+// CreateDiffSnapshot issues PUT /snapshot/create with a Diff snapshot
+// specification.
+func (c *httpClient) CreateDiffSnapshot(ctx context.Context, statePath, memPath string) error {
+	body := map[string]any{
+		"snapshot_type": "Diff",
+		keySnapshotPath: statePath,
+		"mem_file_path": memPath,
+	}
+	return c.do(ctx, http.MethodPut, "/snapshot/create", body)
+}
+
+// LoadSnapshotTrackingDirtyPages loads a snapshot into the Firecracker
+// behind socketPath, resumes it, and keeps the tracking of dirty pages on,
+// so a later diff snapshot of the loaded machine works. The launcher uses
+// it; the kata path loads with LoadSnapshot.
+func LoadSnapshotTrackingDirtyPages(ctx context.Context, socketPath, statePath, memPath string) error {
+	c, ok := NewClientFromSocket(socketPath).(*httpClient)
+	if !ok {
+		return fmt.Errorf("firecracker: unexpected client type")
+	}
+	return c.do(ctx, http.MethodPut, "/snapshot/load", map[string]any{
+		keySnapshotPath:     statePath,
+		"mem_backend":       map[string]string{"backend_type": "File", "backend_path": memPath},
+		"track_dirty_pages": true,
+		"resume_vm":         true,
+	})
 }
 
 // LoadSnapshot issues PUT /snapshot/load and asks Firecracker to
@@ -167,7 +205,7 @@ func (c *httpClient) CreateSnapshot(ctx context.Context, statePath, memPath stri
 // mem_backend: Firecracker v1.12.1 deprecates mem_file_path for loads.
 func (c *httpClient) LoadSnapshot(ctx context.Context, statePath, memPath string) error {
 	body := map[string]any{
-		"snapshot_path": statePath,
+		keySnapshotPath: statePath,
 		"mem_backend": map[string]string{
 			"backend_type": "File",
 			"backend_path": memPath,

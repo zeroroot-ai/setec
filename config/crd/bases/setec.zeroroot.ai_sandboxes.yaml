@@ -517,6 +517,13 @@ spec:
                       Name is the name given to the resulting Snapshot CR. Must be a
                       valid DNS-1123 label and unique within the Sandbox's namespace.
                     type: string
+                  parent:
+                    description: |-
+                      Parent names an earlier Ready Snapshot of this Sandbox, taken from
+                      its current Pod. The new Snapshot is then a diff: it holds only the
+                      memory that changed since the parent. Only a launcher Sandbox takes
+                      a diff. Empty takes a full snapshot.
+                    type: string
                   ttl:
                     description: |-
                       TTL is forwarded to the resulting Snapshot CR's spec.ttl. When

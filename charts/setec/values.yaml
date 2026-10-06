@@ -778,6 +778,10 @@ nodeAgent:
   # prefetch and for the orphan-sandbox reaper's CRI calls. k3s uses
   # /run/k3s/containerd/containerd.sock; stock containerd uses the default.
   containerdSocket: /run/containerd/containerd.sock
+  # -- kubeletPodsDir is the Pod directory of the kubelet. The agent finds
+  # the work volume of each launcher Pod under it to stage a restore and to
+  # take a snapshot.
+  kubeletPodsDir: /var/lib/kubelet/pods
   # orphanReaper force-removes NotReady kata sandboxes whose microVM leaked on
   # a failed teardown ("Agent did not stop sandbox") and still holds a
   # containerd name reservation — otherwise the replacement Pod hangs in

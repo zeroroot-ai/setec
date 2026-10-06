@@ -14,6 +14,11 @@ import (
 // state files.
 const SnapshotInUseFinalizer = "setec.zeroroot.ai/snapshot-in-use"
 
+// SnapshotSourcePodUIDAnnotation records the UID of the Pod whose machine
+// the Snapshot was taken from. A diff snapshot is only valid on top of a
+// parent from the same machine, so the operator compares the two.
+const SnapshotSourcePodUIDAnnotation = "setec.zeroroot.ai/source-pod-uid"
+
 // SnapshotPhase is the high-level lifecycle state of a Snapshot.
 //
 // All four values are written by the operator. Ready was once the only
@@ -52,6 +57,12 @@ const (
 // Snapshot CRs are accepted but uncommon (the usual entry point is
 // Sandbox.spec.snapshot.create=true).
 type SnapshotSpec struct {
+	// Parent is the Snapshot that this diff snapshot builds on. A restore
+	// loads the parent first, and a parent is not deleted while a diff
+	// names it. Empty for a full snapshot.
+	// +optional
+	Parent string `json:"parent,omitempty"`
+
 	// SourceSandbox is the name of the Sandbox the snapshot was taken
 	// from. May be empty for pool-origin snapshots that were never tied
 	// to a user Sandbox.
@@ -120,6 +131,17 @@ type SnapshotSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Size int64 `json:"size,omitempty"`
+
+	// CPUTemplate is the CPU template of the class at the time of the
+	// snapshot. A restore needs a class with the same template.
+	// +optional
+	CPUTemplate string `json:"cpuTemplate,omitempty"`
+
+	// InstanceType is the node.kubernetes.io/instance-type of the source
+	// node. With no CPU template, a restore runs only on a node of this
+	// instance type, which has the same CPU.
+	// +optional
+	InstanceType string `json:"instanceType,omitempty"`
 
 	// SHA256 is the hex-encoded SHA256 digest of the persisted state
 	// file, written alongside the state on disk and verified on

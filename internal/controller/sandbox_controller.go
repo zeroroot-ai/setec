@@ -869,6 +869,10 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// recorded ColdBoot — a restore failure never fails the Sandbox.
 	desired = r.maybeWarmStart(ctx, sb, cls, desired, prevPhase)
 
+	// (10a') A launcher Sandbox with a snapshotRef loads the snapshot
+	// before it is Running (setec#105).
+	desired = holdUntilRestored(sb, r.maybeRestoreLauncher(ctx, sb, pod, desired))
+
 	// (10b) Session idle eviction (docs/design/lifecycles.md), layered on the derived
 	// status: a Running session past its per-SandboxClass idle
 	// deadline — no Attach and no client-stream heartbeat within
@@ -1191,6 +1195,10 @@ func (r *SandboxReconciler) resolveSnapshotRef(
 			return "", ctrl.Result{}, fmt.Errorf("patch SnapshotIncompatible status: %w", perr)
 		}
 		return "", ctrl.Result{RequeueAfter: runtimeUnavailableRequeue}, nil
+	}
+	if !isLocalSnapshot(snap) {
+		// The store serves the snapshot on any node of the class.
+		return "", ctrl.Result{}, nil
 	}
 	return snap.Spec.Node, ctrl.Result{}, nil
 }
@@ -1681,6 +1689,8 @@ func (r *SandboxReconciler) createPod(
 			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
 			// Scratch here once both are on main; until then the default holds.
 			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
+			Restore: sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "", NodeName: nodeName,
+			CPUTemplate: classCPUTemplate(cls), InstanceType: r.restoreInstanceType(ctx, sb, cls),
 		})
 	} else {
 		pod, err = podspec.BuildWithOptions(sb, rcName, opts)

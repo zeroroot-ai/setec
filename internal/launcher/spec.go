@@ -49,6 +49,11 @@ type Spec struct {
 	// Source is the boot or the snapshot that the machine starts from.
 	Source Source `json:"source"`
 
+	// CPUTemplate, when set, is the path of a Firecracker custom CPU
+	// template. The guest sees the CPU features of the template, so a
+	// snapshot of it loads on each node of the class.
+	CPUTemplate string `json:"cpuTemplate,omitempty"`
+
 	// WorkDir holds the API socket, the vsock socket and the config.
 	WorkDir string `json:"workDir"`
 
@@ -75,6 +80,22 @@ type BootSource struct {
 type SnapshotSource struct {
 	State  string `json:"state"`
 	Memory string `json:"memory"`
+	// Staged, when set, is the marker that the node agent writes after it
+	// staged State and Memory. The launcher waits for it before the load.
+	Staged string `json:"staged,omitempty"`
+	// Evidence, when set, is where the launcher writes RestoreEvidence
+	// after the load. The node agent reads it.
+	Evidence string `json:"evidence,omitempty"`
+}
+
+// RestoreEvidence is what the launcher reports after a snapshot load. Each
+// field is true only when the guest agent confirmed the step. The JSON is
+// podspec.RestoreEvidence, and a test keeps the two equal.
+type RestoreEvidence struct {
+	EntropyReseeded bool   `json:"entropyReseeded"`
+	Uniquified      bool   `json:"uniquified"`
+	ClockSet        bool   `json:"clockSet"`
+	Error           string `json:"error,omitempty"`
 }
 
 // SpecEnv is the environment variable through which the operator passes
@@ -108,6 +129,8 @@ func (s *Spec) Validate() error {
 		return fmt.Errorf("launcher: memory must be at least 128 MiB, got %d", s.MemoryMiB)
 	case !filepath.IsAbs(s.ImageDisk), !filepath.IsAbs(s.WritableDisk), !filepath.IsAbs(s.WorkDir):
 		return errors.New("launcher: imageDisk, writableDisk and workDir must be absolute paths")
+	case s.CPUTemplate != "" && !filepath.IsAbs(s.CPUTemplate):
+		return errors.New("launcher: cpuTemplate must be an absolute path")
 	case s.WritableBytes <= 0:
 		return errors.New("launcher: writableBytes must be positive")
 	case s.WorkspaceDevice != "" && !filepath.IsAbs(s.WorkspaceDevice):
@@ -118,6 +141,9 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: the boot kernel must be an absolute path")
 	case s.Source.Snapshot != nil && (!filepath.IsAbs(s.Source.Snapshot.State) || !filepath.IsAbs(s.Source.Snapshot.Memory)):
 		return errors.New("launcher: the snapshot state and memory must be absolute paths")
+	case s.Source.Snapshot != nil && (s.Source.Snapshot.Staged != "" && !filepath.IsAbs(s.Source.Snapshot.Staged) ||
+		s.Source.Snapshot.Evidence != "" && !filepath.IsAbs(s.Source.Snapshot.Evidence)):
+		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
 	case s.Source.Boot != nil && s.Workload == nil:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
 	}

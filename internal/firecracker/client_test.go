@@ -297,3 +297,38 @@ func assertOnlyFields(t *testing.T, body map[string]any, allowed []string) {
 		}
 	}
 }
+
+func TestCreateDiffSnapshotAndTrackedLoad(t *testing.T) {
+	sock := startUnixServer(t, []handler{
+		{
+			method: http.MethodPut, path: "/snapshot/create", status: http.StatusNoContent,
+			assertBody: func(t *testing.T, raw []byte) {
+				var m map[string]any
+				_ = json.Unmarshal(raw, &m)
+				if m["snapshot_type"] != "Diff" || m["mem_file_path"] != "/tmp/d.mem" {
+					t.Fatalf("diff create body = %v", m)
+				}
+				assertOnlyFields(t, m, snapshotCreateFields)
+			},
+		},
+		{
+			method: http.MethodPut, path: "/snapshot/load", status: http.StatusNoContent,
+			assertBody: func(t *testing.T, raw []byte) {
+				var m map[string]any
+				_ = json.Unmarshal(raw, &m)
+				if m["track_dirty_pages"] != true || m["resume_vm"] != true {
+					t.Fatalf("tracked load body = %v", m)
+				}
+				if _, old := m["enable_diff_snapshots"]; old {
+					t.Fatal("the tracked load sent the deprecated enable_diff_snapshots")
+				}
+			},
+		},
+	})
+	if err := NewClientFromSocket(sock).CreateDiffSnapshot(context.Background(), "/tmp/d.state", "/tmp/d.mem"); err != nil {
+		t.Fatalf("CreateDiffSnapshot: %v", err)
+	}
+	if err := LoadSnapshotTrackingDirtyPages(context.Background(), sock, "/tmp/s", "/tmp/m"); err != nil {
+		t.Fatalf("LoadSnapshotTrackingDirtyPages: %v", err)
+	}
+}

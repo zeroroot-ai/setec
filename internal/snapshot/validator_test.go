@@ -59,6 +59,29 @@ func TestValidate(t *testing.T) {
 			want:  nil,
 		},
 		{
+			// A launcher class names no VMM. The Coordinator records
+			// Firecracker on its Snapshot, and the restore must accept it.
+			name:  "class with no VMM matches a Firecracker snapshot",
+			sb:    newSandbox("ghcr.io/org/app:v1"),
+			snap:  newSnapshot("t-a", "snap-1", "standard", "ghcr.io/org/app:v1", setecv1alpha1.VMMFirecracker),
+			class: func() *setecv1alpha1.SandboxClass { c := newClass("standard"); c.Spec.VMM = ""; return c }(), //nolint:staticcheck // back-compat: VMM retained until v2
+			want:  nil,
+		},
+		{
+			name: "cpu template mismatch",
+			sb:   newSandbox(""),
+			snap: func() *setecv1alpha1.Snapshot {
+				s := newSnapshot("t-a", "snap-1", "standard", "ghcr.io/org/app:v1", setecv1alpha1.VMMFirecracker)
+				s.Spec.CPUTemplate = "fleet-v1"
+				return s
+			}(),
+			class: newClass("standard"),
+			want: []ConstraintViolation{{
+				Field:   "spec.sandboxClassName",
+				Message: `Snapshot "snap-1" was captured with CPU template "fleet-v1" but the resolved class uses ""`,
+			}},
+		},
+		{
 			name:  "sandbox image empty is accepted",
 			sb:    newSandbox(""),
 			snap:  newSnapshot("t-a", "snap-1", "standard", "ghcr.io/org/app:v1", setecv1alpha1.VMMFirecracker),

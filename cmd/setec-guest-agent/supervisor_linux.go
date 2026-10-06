@@ -11,13 +11,29 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"github.com/mdlayher/vsock"
 
 	"github.com/zeroroot-ai/setec/internal/guestagent"
 	"github.com/zeroroot-ai/setec/internal/launcher"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
+
+// workloadIdentity is where a new identity goes after a snapshot load. In
+// a launcher machine the workload runs in the root of the image, so the
+// machine-id, the hostname and the boot-id go there. Elsewhere the agent
+// and the workload share one root.
+func workloadIdentity(pid1 bool) *uniquify.LinuxIdentity {
+	id := uniquify.NewLinuxIdentity()
+	if pid1 {
+		id.MachineIDPath = filepath.Join(guestagent.NewRoot, id.MachineIDPath)
+		id.HostnamePath = filepath.Join(guestagent.NewRoot, id.HostnamePath)
+		id.BootIDProcPath = filepath.Join(guestagent.NewRoot, id.BootIDProcPath)
+	}
+	return id
+}
 
 // runSupervisor is the launcher machine mode (docs/design/runtime.md). As
 // PID 1 the agent prepares the root of the image, reaps orphans, and serves

@@ -43,6 +43,7 @@ spec:
             - --fill-threshold={{ .Values.nodeAgent.fillThreshold }}
             - --metrics-addr=:9090
             - --containerd-socket={{ .Values.nodeAgent.containerdSocket }}
+            - --kubelet-pods-dir={{ .Values.nodeAgent.kubeletPodsDir }}
             {{- if .Values.nodeAgent.orphanReaper.enabled }}
             - --orphan-reap-interval={{ .Values.nodeAgent.orphanReaper.interval }}
             {{- else }}
@@ -128,6 +129,10 @@ spec:
             - name: run
               mountPath: /run
             {{- if .Values.snapshots.enabled }}
+            # The work volumes of launcher Pods: the agent stages a
+            # restore and takes a snapshot there (setec#105).
+            - name: kubelet-pods
+              mountPath: {{ .Values.nodeAgent.kubeletPodsDir }}
             - name: snapshot-root
               mountPath: {{ .Values.snapshots.localDisk.root }}
             - name: snapshot-keys
@@ -167,6 +172,10 @@ spec:
           hostPath:
             path: /run
         {{- if .Values.snapshots.enabled }}
+        - name: kubelet-pods
+          hostPath:
+            path: {{ .Values.nodeAgent.kubeletPodsDir }}
+            type: Directory
         - name: snapshot-root
           hostPath:
             path: {{ .Values.snapshots.localDisk.root }}

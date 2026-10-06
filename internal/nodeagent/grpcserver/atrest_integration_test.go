@@ -180,3 +180,8 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 		t.Fatalf("repeat DeleteSnapshot: %v / %+v", err, dresp)
 	}
 }
+
+// CreateDiffSnapshot takes the path of a full snapshot here.
+func (f *capturingFC) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
+	return f.CreateSnapshot(ctx, state, mem)
+}

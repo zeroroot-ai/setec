@@ -96,6 +96,17 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("check the image disk: %w", err))
 		}
 	}
+	// A restore waits for the node agent: it stages the state, the memory
+	// and the writable layer, so the disks are ready only after that.
+	snap := l.Spec.Source.Snapshot
+	if snap != nil && snap.Staged != "" {
+		wctx, cancel := context.WithTimeout(ctx, stagedWait)
+		err := waitFile(wctx, snap.Staged)
+		cancel()
+		if err != nil {
+			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("wait for the staged snapshot: %w", err)))
+		}
+	}
 	defer func() {
 		if lerr := l.Net.Leave(); lerr != nil && err == nil {
 			err = fmt.Errorf("remove the network join: %w", lerr)
@@ -141,13 +152,28 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	}
 	defer stop()
 
-	if s := l.Spec.Source.Snapshot; s != nil {
-		if err := l.VMM.LoadSnapshot(ctx, l.Spec.WorkDir, s.State, s.Memory); err != nil {
-			return LaunchFailedExit, fail(ReasonSourceFailed, err)
+	if snap == nil {
+		// A booted machine has nothing to hide: it joins the Pod network
+		// before the guest agent configures it.
+		if err := l.Net.Connect(); err != nil {
+			return LaunchFailedExit, fail(ReasonNetwork, err)
 		}
+	} else if err := l.VMM.LoadSnapshot(ctx, l.Spec.WorkDir, snap.State, snap.Memory); err != nil {
+		return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
 	}
 	if l.AfterStart != nil {
-		if err := l.AfterStart(ctx, pn, l.Spec.Source.Snapshot != nil); err != nil {
+		if err := l.AfterStart(ctx, pn, snap != nil); err != nil {
+			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
+		}
+	}
+	if snap != nil {
+		// A loaded machine joins the Pod network only after the guest
+		// agent confirmed fresh randomness, the clock and a new identity.
+		// Until then its frames reach nothing (setec#105).
+		if err := l.Net.Connect(); err != nil {
+			return LaunchFailedExit, l.failRestore(fail(ReasonNetwork, err))
+		}
+		if err := writeEvidence(snap.Evidence, RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true}); err != nil {
 			return LaunchFailedExit, fail(ReasonSourceFailed, err)
 		}
 	}
@@ -187,5 +213,55 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	case err := <-errC:
 		stop()
 		return LaunchFailedExit, fail(ReasonVMMExited, err)
+	}
+}
+
+// failRestore writes the failure of a restore to the evidence file, so the
+// node agent ends its wait at once, and returns err.
+func (l *Launcher) failRestore(err error) error {
+	if snap := l.Spec.Source.Snapshot; snap != nil {
+		_ = writeEvidence(snap.Evidence, RestoreEvidence{Error: err.Error()})
+	}
+	return err
+}
+
+// writeEvidence writes ev to path through a temporary file, so the node
+// agent never reads a partial file. An empty path writes nothing.
+func writeEvidence(path string, ev RestoreEvidence) error {
+	if path == "" {
+		return nil
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// stagedPoll is the interval at which the launcher looks for the staged
+// marker of a snapshot, and stagedWait the longest wait. A restore that the
+// node agent never stages ends the Pod.
+const (
+	stagedPoll = 50 * time.Millisecond
+	stagedWait = 5 * time.Minute
+)
+
+// waitFile waits until path exists or ctx ends.
+func waitFile(ctx context.Context, path string) error {
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(stagedPoll):
+		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
 	"github.com/zeroroot-ai/setec/internal/guestagent"
+	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
 // Guest talks to the guest agent through the vsock socket of Firecracker.
@@ -26,6 +27,13 @@ type Guest struct {
 	// Reseeder reseeds the guest after a snapshot load. Nil uses the
 	// entropy client of the node agent.
 	Reseeder entropy.Reseeder
+	// Uniquifier gives the guest a new machine-id, boot-id and hostname
+	// after a snapshot load, and checks that it sees the Pod address. Nil
+	// uses the uniquify client of the node agent.
+	Uniquifier uniquify.Uniquifier
+	// Hostname is the hostname that a loaded guest takes: the name of the
+	// Pod.
+	Hostname string
 	// ResolvConf is the resolv.conf of the Pod that the guest takes.
 	ResolvConf string
 }
@@ -93,8 +101,9 @@ func (g *Guest) WaitReady(ctx context.Context) error {
 // AfterStart is the Launcher.AfterStart of a launcher machine. After a
 // snapshot load it reseeds the guest and sets its clock to the node time
 // before anything else (proof 4, setec#183). It always gives the guest the
-// identity of this Pod. It starts the workload only after a boot: a loaded
-// snapshot already runs its workload.
+// address of this Pod. After a load it then gives the guest a new identity
+// and checks that the guest sees the Pod address. It starts the workload
+// only after a boot: a loaded snapshot already runs its workload.
 func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, PodNet, bool) error {
 	return func(ctx context.Context, pn PodNet, fromSnapshot bool) error {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -120,11 +129,14 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 		}
 		if _, err := g.Call(rctx, guestagent.Request{
 			Op: guestagent.OpConfigureNet, Address: pn.Address.String(), MAC: pn.MAC,
-			MTU: pn.MTU, Gateway: pn.Gateway.String(), DNS: dns,
+			MTU: pn.MTU, Gateway: pn.Gateway.String(), DNS: dns, Hostname: g.Hostname,
 		}); err != nil {
 			return err
 		}
-		if fromSnapshot || workload == nil {
+		if fromSnapshot {
+			return g.uniquify(rctx, pn)
+		}
+		if workload == nil {
 			return nil
 		}
 		_, err := g.Call(rctx, guestagent.Request{Op: guestagent.OpStart, Process: workload})
@@ -132,9 +144,27 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 	}
 }
 
-// NewGuest returns the Guest of s.
+// uniquify gives a loaded guest a new identity (ADR-0145 invariant 2).
+func (g *Guest) uniquify(ctx context.Context, pn PodNet) error {
+	u := g.Uniquifier
+	if u == nil {
+		u = uniquify.NewVsockUniquifier()
+	}
+	spec, err := uniquify.NewSpec(g.Hostname, pn.Address.Addr().String())
+	if err != nil {
+		return err
+	}
+	if _, err := u.Uniquify(ctx, g.UDS, spec); err != nil {
+		return fmt.Errorf("a new identity after the snapshot load: %w", err)
+	}
+	return nil
+}
+
+// NewGuest returns the Guest of s. A loaded guest takes the hostname of
+// the Pod.
 func NewGuest(s *Spec) *Guest {
-	return &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf"}
+	host, _ := os.Hostname()
+	return &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf", Hostname: host}
 }
 
 // Exec runs p in the machine through the guest agent: stdin goes in as
