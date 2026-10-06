@@ -42,6 +42,9 @@ const (
 	// lastUsedStep is the smallest step of the LastUsed stamp, so a busy
 	// class is not written on each Sandbox.
 	lastUsedStep = time.Hour
+	// baseWriteTimeout is how long a base may stay in Creating after its
+	// Pod is gone before the pool drops it.
+	baseWriteTimeout = 15 * time.Minute
 	// WarmBaseAnnotation records on a Sandbox the base that its launcher
 	// loads, as <namespace>/<name>.
 	WarmBaseAnnotation = "setec.zeroroot.ai/warm-base"
@@ -125,6 +128,13 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
 			ready = append(ready, *b)
 			nodes[b.Spec.Node] = true
+		case !slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == b.Name }) &&
+			r.now().Sub(b.CreationTimestamp.Time) > baseWriteTimeout:
+			// The write of this base stopped with its Pod, for example
+			// at a restart of the operator. It never becomes Ready.
+			if err := r.Delete(ctx, b); client.IgnoreNotFound(err) != nil {
+				return ctrl.Result{}, err
+			}
 		default:
 			nodes[b.Spec.Node] = true
 		}
