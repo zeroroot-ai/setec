@@ -179,7 +179,7 @@ kubectl logs hello-vm
 
 ## Security
 
-- The operator image is built from `gcr.io/distroless/static-debian12:nonroot`
+- The operator image is built from `gcr.io/distroless/static:nonroot` (Debian 13)
   and contains no shell or package manager.
 - The Pod runs as UID 65532 with a read-only root filesystem and drops every
   Linux capability.
