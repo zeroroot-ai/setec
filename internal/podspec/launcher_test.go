@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/launcher"
@@ -156,6 +157,26 @@ func TestBuildLauncher_CarriesTheSpec(t *testing.T) {
 	}
 	if pod.Spec.DNSPolicy != corev1.DNSNone || pod.Spec.DNSConfig.Nameservers[0] != "1.1.1.1" {
 		t.Fatalf("dns = %v %v", pod.Spec.DNSPolicy, pod.Spec.DNSConfig)
+	}
+}
+
+// TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM pins the memory of the
+// Pod above the memory of the machine. A Pod limit equal to the machine
+// memory was killed by the kernel during each snapshot of a small machine.
+func TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM(t *testing.T) {
+	t.Parallel()
+	pod := launcherOrFatal(t)
+	res := pod.Spec.Containers[0].Resources
+	want := resource.MustParse("2Gi")
+	want.Add(LauncherMemoryOverhead)
+	for name, list := range map[string]corev1.ResourceList{"limit": res.Limits, "request": res.Requests} {
+		got := list[corev1.ResourceMemory]
+		if got.Cmp(want) != 0 {
+			t.Errorf("memory %s = %s, want %s (the machine and the overhead)", name, got.String(), want.String())
+		}
+	}
+	if LauncherMemoryOverhead.Sign() <= 0 {
+		t.Fatal("the launcher Pod has no memory for the VMM")
 	}
 }
 
