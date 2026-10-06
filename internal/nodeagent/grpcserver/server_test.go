@@ -723,3 +723,8 @@ func TestRestoreSandbox_TraversalSnapshotIDRejected(t *testing.T) {
 	}
 	assertNoDirCreated(t, root, workDir)
 }
+
+// CreateDiffSnapshot takes the path of a full snapshot here.
+func (f *fakeFirecracker) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
+	return f.CreateSnapshot(ctx, state, mem)
+}

@@ -89,6 +89,12 @@ spec:
                   Pod.Spec.NodeName.
                 minLength: 1
                 type: string
+              parent:
+                description: |-
+                  Parent is the Snapshot that this diff snapshot builds on. A restore
+                  loads the parent first, and a parent is not deleted while a diff
+                  names it. Empty for a full snapshot.
+                type: string
               sandboxClass:
                 description: |-
                   SandboxClass is the name of the SandboxClass this snapshot is

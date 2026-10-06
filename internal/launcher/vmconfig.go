@@ -54,6 +54,9 @@ type machine struct {
 	VCPUCount  int  `json:"vcpu_count"`
 	MemSizeMiB int  `json:"mem_size_mib"`
 	SMT        bool `json:"smt"`
+	// TrackDirtyPages lets the node agent take a diff snapshot, which
+	// holds only the pages that changed since the last snapshot.
+	TrackDirtyPages bool `json:"track_dirty_pages"`
 }
 
 type netIface struct {
@@ -94,7 +97,7 @@ func (s *Spec) bootConfig(guestMAC string) vmConfig {
 			BootArgs:   args,
 		},
 		Drives:            s.drives(),
-		MachineConfig:     machine{VCPUCount: s.VCPU, MemSizeMiB: s.MemoryMiB},
+		MachineConfig:     machine{VCPUCount: s.VCPU, MemSizeMiB: s.MemoryMiB, TrackDirtyPages: true},
 		NetworkInterfaces: []netIface{{IfaceID: "eth0", HostDevName: TapDevice, GuestMAC: guestMAC}},
 		Vsock:             vsockDevice{GuestCID: GuestCID, UDSPath: VsockSocket},
 	}

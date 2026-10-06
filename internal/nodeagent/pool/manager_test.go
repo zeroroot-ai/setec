@@ -631,3 +631,13 @@ func TestEntryPathsStayUnderTestRoot(t *testing.T) {
 		}
 	}
 }
+
+// CreateDiffSnapshot takes the path of a full snapshot here.
+func (f *fakeFirecracker) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
+	return f.CreateSnapshot(ctx, state, mem)
+}
+
+// CreateDiffSnapshot takes the path of a full snapshot here.
+func (i *instrumentedFC) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
+	return i.CreateSnapshot(ctx, state, mem)
+}

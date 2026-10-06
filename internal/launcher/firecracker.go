@@ -70,7 +70,7 @@ func (f *FirecrackerVMM) Start(ctx context.Context, workDir, configFile string, 
 
 // LoadSnapshot implements VMM.
 func (f *FirecrackerVMM) LoadSnapshot(ctx context.Context, _, state, memory string) error {
-	return firecracker.NewClientFromSocket(f.socket).LoadSnapshot(ctx, state, memory)
+	return firecracker.LoadSnapshotTrackingDirtyPages(ctx, f.socket, state, memory)
 }
 
 // Wait implements VMM.

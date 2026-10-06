@@ -143,7 +143,7 @@ func TestRun_BootConfigTakesTheSandboxLimitsAndThePodMAC(t *testing.T) {
 	if err := json.Unmarshal([]byte(vmm.config), &cfg); err != nil {
 		t.Fatalf("config: %v", err)
 	}
-	if cfg.MachineConfig.VCPUCount != 2 || cfg.MachineConfig.MemSizeMiB != 512 {
+	if cfg.MachineConfig.VCPUCount != 2 || cfg.MachineConfig.MemSizeMiB != 512 || !cfg.MachineConfig.TrackDirtyPages {
 		t.Fatalf("machine = %+v", cfg.MachineConfig)
 	}
 	if cfg.NetworkInterfaces[0].HostDevName != TapDevice || cfg.NetworkInterfaces[0].GuestMAC != "02:00:00:00:00:07" {

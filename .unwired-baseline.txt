@@ -75,7 +75,6 @@ method pool.Manager.Release	# internal/nodeagent/pool/manager.go:453
 method pool.Manager.SetClock	# internal/nodeagent/pool/manager.go:166
 method pool.Manager.Size	# internal/nodeagent/pool/manager.go:505
 method runtime.ConfigValidationError.Error	# internal/runtime/config.go:124
-method snapshot.Coordinator.RestoreSandbox	# internal/snapshot/coordinator.go:398
 method snapshot.GRPCDialer.Close	# internal/snapshot/dialer.go:199
 method snapshot.grpcShim.QueryPool	# internal/snapshot/dialer.go:187
 method storage.countingReader.Read	# internal/snapshot/storage/s3.go:600
@@ -152,7 +151,6 @@ field podspec.launcherSpec.DiskSignature	# internal/podspec/launcher.go
 field podspec.launcherSpec.ImageDisk	# internal/podspec/launcher.go
 field podspec.launcherSpec.ImageRef	# internal/podspec/launcher.go
 field podspec.launcherSpec.MemoryMiB	# internal/podspec/launcher.go
-field podspec.launcherSpec.Source	# internal/podspec/launcher.go
 field podspec.launcherSpec.VCPU	# internal/podspec/launcher.go
 field podspec.launcherSpec.WorkDir	# internal/podspec/launcher.go
 field podspec.launcherSpec.WritableBytes	# internal/podspec/launcher.go
@@ -162,3 +160,16 @@ const podspec.KVMResource	# internal/podspec/launcher.go
 const podspec.TunResource	# internal/podspec/launcher.go
 # Called through the error interface when the controller logs the failure.
 method controller.diskBuildError.Error	# internal/controller/launcher_disk.go
+# Wire fields of the launcher restore (setec#105): JSON that the operator
+# writes for the launcher, that the launcher writes for the node agent, and
+# that the launcher writes for Firecracker. Their readers decode JSON.
+field launcher.RestoreEvidence.ClockSet	# internal/launcher/spec.go
+field launcher.RestoreEvidence.EntropyReseeded	# internal/launcher/spec.go
+field launcher.RestoreEvidence.Error	# internal/launcher/spec.go
+field launcher.RestoreEvidence.Uniquified	# internal/launcher/spec.go
+field launcher.machine.TrackDirtyPages	# internal/launcher/vmconfig.go
+field podspec.launcherSnapshot.Evidence	# internal/podspec/launcher.go
+field podspec.launcherSnapshot.Memory	# internal/podspec/launcher.go
+field podspec.launcherSnapshot.Staged	# internal/podspec/launcher.go
+field podspec.launcherSnapshot.State	# internal/podspec/launcher.go
+field podspec.launcherSource.Snapshot	# internal/podspec/launcher.go

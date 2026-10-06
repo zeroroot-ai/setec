@@ -226,7 +226,17 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	// treatment the storage backend applies before unlinking.
 	defer func() { shredDir(dir) }()
 
-	if err := fc.CreateSnapshot(ctx, fcState, fcMem); err != nil {
+	parent := in.GetParentStorageRef()
+	if parent != "" && !kata.Launcher {
+		_ = fc.Resume(ctx)
+		return nil, status.Error(codes.InvalidArgument, "a diff snapshot needs the machine of a launcher Pod")
+	}
+	if parent != "" {
+		err = fc.CreateDiffSnapshot(ctx, fcState, fcMem)
+	} else {
+		err = fc.CreateSnapshot(ctx, fcState, fcMem)
+	}
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "firecracker createSnapshot: %v", err)
 	}
 	// A launcher machine keeps its writable layer in the work volume. The
@@ -246,7 +256,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 
 	var combined io.ReadCloser
 	if kata.Launcher {
-		combined, err = makeLauncherFramedReader(statePath, memPath, diskPath)
+		combined, err = makeLauncherFramedReader(parent, statePath, memPath, diskPath)
 	} else {
 		combined, err = makeFramedReader(statePath, memPath)
 	}
@@ -307,7 +317,7 @@ func (s *Server) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSand
 	defer func() { _ = rc.Close() }()
 
 	if kata.Launcher {
-		return s.restoreLauncher(ctx, kata, rc, storage.IsEncryptedAtRest(backend))
+		return s.restoreLauncher(ctx, kata, rc, backend)
 	}
 
 	dir := filepath.Join(kata.FCRoot, snapshotWorkDir, in.GetSnapshotId()+"-restore-"+fmt.Sprintf("%d", time.Now().UnixNano()))

@@ -19,6 +19,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
 // defaultLauncherRestoreWait bounds the wait for the evidence of the
@@ -36,7 +37,7 @@ const launcherEvidencePoll = 100 * time.Millisecond
 // then joins it to the Pod network. A missing or negative piece of
 // evidence is a failed restore: the operator gate refuses it.
 func (s *Server) restoreLauncher(
-	ctx context.Context, p katasandbox.Paths, rc io.Reader, encrypted bool,
+	ctx context.Context, p katasandbox.Paths, rc io.Reader, backend storage.StorageBackend,
 ) (*setecgrpcv1.RestoreSandboxResponse, error) {
 	statePath := launchersandbox.HostPath(p, podspec.LauncherRestoreState)
 	memPath := launchersandbox.HostPath(p, podspec.LauncherRestoreMemory)
@@ -53,7 +54,8 @@ func (s *Server) restoreLauncher(
 		_ = os.Remove(memPath)
 	}()
 	diskPath := launchersandbox.HostPath(p, podspec.LauncherWritableDisk)
-	if err := writeLauncherFramedStream(rc, statePath, memPath, diskPath); err != nil {
+	openParent := func(ref string) (io.ReadCloser, error) { return backend.Open(ctx, ref) }
+	if err := writeLauncherFramedStream(rc, statePath, memPath, diskPath, openParent); err != nil {
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
 	}
 	if err := os.WriteFile(staged, nil, 0o600); err != nil {
@@ -73,7 +75,7 @@ func (s *Server) restoreLauncher(
 		Success:         true,
 		EntropyReseeded: ev.EntropyReseeded,
 		Uniquified:      ev.Uniquified,
-		EncryptedAtRest: encrypted,
+		EncryptedAtRest: storage.IsEncryptedAtRest(backend),
 	}, nil
 }
 

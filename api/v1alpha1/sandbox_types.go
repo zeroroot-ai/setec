@@ -177,6 +177,13 @@ type SandboxSnapshotSpec struct {
 	// references it.
 	// +optional
 	TTL *metav1.Duration `json:"ttl,omitempty"`
+
+	// Parent names an earlier Ready Snapshot of this Sandbox, taken from
+	// its current Pod. The new Snapshot is then a diff: it holds only the
+	// memory that changed since the parent. Only a launcher Sandbox takes
+	// a diff. Empty takes a full snapshot.
+	// +optional
+	Parent string `json:"parent,omitempty"`
 }
 
 // SandboxSnapshotRef references a Snapshot CR in the same namespace

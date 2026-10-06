@@ -4,8 +4,11 @@
 package grpcserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +47,7 @@ func framed(t *testing.T, state, memory string) *os.File {
 	_ = os.WriteFile(sp, []byte(state), 0o600)
 	_ = os.WriteFile(mp, []byte(memory), 0o600)
 	_ = os.WriteFile(dp, []byte("DISK"), 0o600)
-	rc, err := makeLauncherFramedReader(sp, mp, dp)
+	rc, err := makeLauncherFramedReader("", sp, mp, dp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +93,7 @@ func TestRestoreLauncher_StagesTheFilesAndReturnsTheEvidence(t *testing.T) {
 	saw := fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "STATE", "MEMORY"), true)
+	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "STATE", "MEMORY"), memBackend{encrypted: true})
 	if err != nil || !resp.GetSuccess() || !resp.GetEntropyReseeded() || !resp.GetUniquified() || !resp.GetEncryptedAtRest() {
 		t.Fatalf("restoreLauncher = %+v, %v", resp, err)
 	}
@@ -113,7 +116,7 @@ func TestRestoreLauncher_FailsClosedOnMissingEvidence(t *testing.T) {
 	fakeLauncher(t, p, podspec.RestoreEvidence{EntropyReseeded: true, ClockSet: true})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "S", "M"), true)
+	resp, err := (&Server{}).restoreLauncher(ctx, p, framed(t, "S", "M"), memBackend{encrypted: true})
 	if err == nil || resp.GetSuccess() {
 		t.Fatalf("a restore with no identity confirmation succeeded: %+v", resp)
 	}
@@ -121,7 +124,31 @@ func TestRestoreLauncher_FailsClosedOnMissingEvidence(t *testing.T) {
 	q := launcherPaths(t)
 	ctx2, cancel2 := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel2()
-	if resp, err := (&Server{}).restoreLauncher(ctx2, q, framed(t, "S", "M"), true); err == nil || resp.GetSuccess() {
+	if resp, err := (&Server{}).restoreLauncher(ctx2, q, framed(t, "S", "M"), memBackend{encrypted: true}); err == nil || resp.GetSuccess() {
 		t.Fatalf("a restore with no launcher succeeded: %+v", resp)
 	}
 }
+
+// memBackend is a storage backend in memory for the launcher tests.
+type memBackend struct {
+	encrypted bool
+	blobs     map[string][]byte
+}
+
+func (m memBackend) Save(_ context.Context, id string, r io.Reader) (int64, string, error) {
+	b, err := io.ReadAll(r)
+	m.blobs[id] = b
+	return int64(len(b)), id, err
+}
+func (m memBackend) Open(_ context.Context, ref string) (io.ReadCloser, error) {
+	b, ok := m.blobs[ref]
+	if !ok {
+		return nil, errors.New("no such snapshot")
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
+func (m memBackend) Delete(context.Context, string) error { return nil }
+func (m memBackend) Stat(_ context.Context, ref string) (int64, bool, error) {
+	return int64(len(m.blobs[ref])), true, nil
+}
+func (m memBackend) EncryptedAtRest() bool { return m.encrypted }

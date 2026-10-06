@@ -100,6 +100,12 @@ message CreateSnapshotRequest {
   // Only valid with storage_backend "s3"; empty for every other
   // backend.
   bytes session_kek = 5;
+
+  // parent_storage_ref, when set, asks for a diff snapshot: the memory
+  // holds only the pages that changed since the snapshot at this storage
+  // reference, which the same machine took. A restore loads the parent
+  // first. Only the machine of a launcher Pod supports it (setec#105).
+  string parent_storage_ref = 7;
 }
 
 // CreateSnapshotResponse carries the backend ref for the persisted

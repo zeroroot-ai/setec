@@ -10,20 +10,32 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-// The stored form of a launcher snapshot: the Firecracker state and memory
-// files and the writable layer of the machine. The writable layer is a
-// sparse file of the scratch size, so only its data extents are stored.
+// The stored form of a launcher snapshot: the Firecracker state, the
+// memory and the writable layer of the machine. The memory and the
+// writable layer are sparse, so only their data extents are stored. A diff
+// snapshot names its parent: its memory holds only the pages that changed
+// since the parent, and a restore puts them on the memory of the parent.
 //
-//	magic(8) stateSize(8) memSize(8) state mem
+//	magic(8) parentLen(8) parent
+//	stateSize(8) state
+//	memSize(8) extentCount(8) { offset(8) length(8) data }...
 //	diskSize(8) extentCount(8) { offset(8) length(8) data }...
 //
 // A kata snapshot has another form (makeFramedReader), and the magic keeps
 // one from loading as the other.
 var launcherFrameMagic = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '1', '\n'}
+
+// maxParentChain bounds the parents that one restore follows, and
+// maxParentRef the length of a parent reference.
+const (
+	maxParentChain = 64
+	maxParentRef   = 4096
+)
 
 // maxExtents bounds the extent count that a restore accepts.
 const maxExtents = 1 << 20
@@ -92,8 +104,8 @@ func copySparse(src, dst string) (err error) {
 }
 
 // makeLauncherFramedReader frames the state, the memory and the writable
-// layer of a launcher snapshot.
-func makeLauncherFramedReader(statePath, memPath, diskPath string) (io.ReadCloser, error) {
+// layer of a launcher snapshot. parentRef is empty for a full snapshot.
+func makeLauncherFramedReader(parentRef, statePath, memPath, diskPath string) (io.ReadCloser, error) {
 	var files []*os.File
 	closeAll := func() {
 		for _, f := range files {
@@ -112,38 +124,35 @@ func makeLauncherFramedReader(statePath, memPath, diskPath string) (io.ReadClose
 		}
 		return f, st.Size(), nil
 	}
+	u64 := func(v ...int64) io.Reader {
+		var b bytes.Buffer
+		for _, x := range v {
+			_ = binary.Write(&b, binary.BigEndian, uint64(x)) //nolint:gosec // sizes and offsets are not negative
+		}
+		return &b
+	}
+	readers := []io.Reader{bytes.NewReader(launcherFrameMagic[:]), u64(int64(len(parentRef))), strings.NewReader(parentRef)}
 	state, stateSize, err := open(statePath)
 	if err != nil {
 		closeAll()
 		return nil, err
 	}
-	mem, memSize, err := open(memPath)
-	if err != nil {
-		closeAll()
-		return nil, err
-	}
-	disk, diskSize, err := open(diskPath)
-	if err != nil {
-		closeAll()
-		return nil, err
-	}
-	exts, err := dataExtents(disk, diskSize)
-	if err != nil {
-		closeAll()
-		return nil, err
-	}
-
-	var head bytes.Buffer
-	head.Write(launcherFrameMagic[:])
-	_ = binary.Write(&head, binary.BigEndian, [2]uint64{uint64(stateSize), uint64(memSize)}) //nolint:gosec // sizes are not negative
-	readers := []io.Reader{&head, state, mem}
-	var dh bytes.Buffer
-	_ = binary.Write(&dh, binary.BigEndian, [2]uint64{uint64(diskSize), uint64(len(exts))}) //nolint:gosec // sizes are not negative
-	readers = append(readers, &dh)
-	for _, e := range exts {
-		var eh bytes.Buffer
-		_ = binary.Write(&eh, binary.BigEndian, [2]uint64{uint64(e.off), uint64(e.n)}) //nolint:gosec // extents are not negative
-		readers = append(readers, &eh, io.NewSectionReader(disk, e.off, e.n))
+	readers = append(readers, u64(stateSize), state)
+	for _, p := range []string{memPath, diskPath} {
+		f, size, err := open(p)
+		if err != nil {
+			closeAll()
+			return nil, err
+		}
+		exts, err := dataExtents(f, size)
+		if err != nil {
+			closeAll()
+			return nil, err
+		}
+		readers = append(readers, u64(size, int64(len(exts))))
+		for _, e := range exts {
+			readers = append(readers, u64(e.off, e.n), io.NewSectionReader(f, e.off, e.n))
+		}
 	}
 	closers := make([]io.Closer, 0, len(files))
 	for _, f := range files {
@@ -152,8 +161,17 @@ func makeLauncherFramedReader(statePath, memPath, diskPath string) (io.ReadClose
 	return &multiReadCloser{reader: io.MultiReader(readers...), closers: closers}, nil
 }
 
-// writeLauncherFramedStream reverses makeLauncherFramedReader.
-func writeLauncherFramedStream(r io.Reader, statePath, memPath, diskPath string) error {
+// openParentFunc opens the stored stream of a parent snapshot.
+type openParentFunc func(ref string) (io.ReadCloser, error)
+
+// writeLauncherFramedStream reverses makeLauncherFramedReader. A diff
+// snapshot loads its parents first, with openParent, and then puts its
+// changed pages on their memory.
+func writeLauncherFramedStream(r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc) error {
+	return writeLauncherFrame(r, statePath, memPath, diskPath, openParent, 0)
+}
+
+func writeLauncherFrame(r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc, depth int) error {
 	var magic [8]byte
 	if _, err := io.ReadFull(r, magic[:]); err != nil {
 		return fmt.Errorf("read the frame magic: %w", err)
@@ -161,43 +179,88 @@ func writeLauncherFramedStream(r io.Reader, statePath, memPath, diskPath string)
 	if magic != launcherFrameMagic {
 		return errors.New("the snapshot is not a launcher snapshot")
 	}
-	var sizes [2]uint64
-	if err := binary.Read(r, binary.BigEndian, &sizes); err != nil {
-		return fmt.Errorf("read the frame header: %w", err)
+	var n uint64
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return fmt.Errorf("read the parent length: %w", err)
 	}
-	if err := writeN(r, statePath, int64(sizes[0])); err != nil { //nolint:gosec // a size of the stored stream
+	if n > maxParentRef {
+		return fmt.Errorf("the parent reference is %d bytes, more than %d", n, maxParentRef)
+	}
+	parent := make([]byte, n)
+	if _, err := io.ReadFull(r, parent); err != nil {
+		return fmt.Errorf("read the parent reference: %w", err)
+	}
+	if n > 0 {
+		if depth >= maxParentChain {
+			return fmt.Errorf("the snapshot has more than %d parents", maxParentChain)
+		}
+		if openParent == nil {
+			return errors.New("the snapshot is a diff and no parent can be opened")
+		}
+		prc, err := openParent(string(parent))
+		if err != nil {
+			return fmt.Errorf("open the parent %s: %w", parent, err)
+		}
+		err = writeLauncherFrame(prc, statePath, memPath, diskPath, openParent, depth+1)
+		_ = prc.Close()
+		if err != nil {
+			return fmt.Errorf("parent %s: %w", parent, err)
+		}
+	}
+	var stateSize uint64
+	if err := binary.Read(r, binary.BigEndian, &stateSize); err != nil {
+		return fmt.Errorf("read the state size: %w", err)
+	}
+	if err := writeN(r, statePath, int64(stateSize)); err != nil { //nolint:gosec // a size of the stored stream
 		return fmt.Errorf("state: %w", err)
 	}
-	if err := writeN(r, memPath, int64(sizes[1])); err != nil { //nolint:gosec // a size of the stored stream
+	// The memory of a diff goes on the memory of its parent. The writable
+	// layer is always whole.
+	if err := writeExtents(r, memPath, n == 0); err != nil {
 		return fmt.Errorf("memory: %w", err)
 	}
-	var dh [2]uint64
-	if err := binary.Read(r, binary.BigEndian, &dh); err != nil {
-		return fmt.Errorf("read the disk header: %w", err)
+	if err := writeExtents(r, diskPath, true); err != nil {
+		return fmt.Errorf("writable layer: %w", err)
 	}
-	if dh[1] > maxExtents {
-		return fmt.Errorf("the disk has %d extents, more than %d", dh[1], maxExtents)
+	return nil
+}
+
+// writeExtents reads a size, an extent count and the extents, and writes
+// them into path. fresh starts from an empty file; otherwise the extents go
+// on the bytes that are there.
+func writeExtents(r io.Reader, path string, fresh bool) error {
+	var h [2]uint64
+	if err := binary.Read(r, binary.BigEndian, &h); err != nil {
+		return fmt.Errorf("read the header: %w", err)
 	}
-	f, err := os.OpenFile(diskPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // a path of the node agent
+	size, count := h[0], h[1]
+	if count > maxExtents {
+		return fmt.Errorf("%d extents, more than %d", count, maxExtents)
+	}
+	flags := os.O_CREATE | os.O_WRONLY
+	if fresh {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o600) //nolint:gosec // a path of the node agent
 	if err != nil {
 		return err
 	}
-	for range dh[1] {
+	for range count {
 		var e [2]uint64
 		if err := binary.Read(r, binary.BigEndian, &e); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("read an extent header: %w", err)
 		}
-		if e[0]+e[1] > dh[0] || e[0]+e[1] < e[0] {
+		if e[0]+e[1] > size || e[0]+e[1] < e[0] {
 			_ = f.Close()
-			return errors.New("an extent of the disk is outside the disk")
+			return errors.New("an extent is outside the file")
 		}
-		if _, err := io.CopyN(io.NewOffsetWriter(f, int64(e[0])), r, int64(e[1])); err != nil { //nolint:gosec // checked against the disk size
+		if _, err := io.CopyN(io.NewOffsetWriter(f, int64(e[0])), r, int64(e[1])); err != nil { //nolint:gosec // checked against the size
 			_ = f.Close()
 			return fmt.Errorf("write an extent: %w", err)
 		}
 	}
-	if err := f.Truncate(int64(dh[0])); err != nil { //nolint:gosec // a size of the stored stream
+	if err := f.Truncate(int64(size)); err != nil { //nolint:gosec // a size of the stored stream
 		_ = f.Close()
 		return err
 	}

@@ -32,6 +32,9 @@ const (
 	// SnapshotReconciler uses it to compute Status.ReferenceCount in
 	// O(references) time.
 	SnapshotSandboxRefIndex = "spec.snapshotRef.name"
+	// SnapshotParentIndex keys each Snapshot by the parent that its diff
+	// builds on. A parent with a diff is in use.
+	SnapshotParentIndex = "spec.parent"
 
 	snapshotTTLRequeue     = 60 * time.Second
 	snapshotErrorRequeue   = 30 * time.Second
@@ -175,10 +178,9 @@ func (r *SnapshotReconciler) markPhase(ctx context.Context, snap *setecv1alpha1.
 }
 
 // referenceCount returns the number of Sandboxes in the Snapshot's
-// namespace whose spec.snapshotRef.name equals the Snapshot's name.
-// Relies on the field indexer registered in SetupWithManager; the
-// indexer keeps the lookup cheap even for namespaces with many
-// Sandboxes.
+// namespace whose spec.snapshotRef.name equals the Snapshot's name, plus
+// the number of diff Snapshots whose spec.parent names it. Relies on the
+// field indexers registered in SetupWithManager.
 func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1alpha1.Snapshot) (int, error) {
 	sbs := &setecv1alpha1.SandboxList{}
 	if err := r.List(ctx, sbs,
@@ -187,7 +189,14 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 	); err != nil {
 		return 0, err
 	}
-	return len(sbs.Items), nil
+	diffs := &setecv1alpha1.SnapshotList{}
+	if err := r.List(ctx, diffs,
+		client.InNamespace(snap.Namespace),
+		client.MatchingFields{SnapshotParentIndex: snap.Name},
+	); err != nil {
+		return 0, err
+	}
+	return len(sbs.Items) + len(diffs.Items), nil
 }
 
 // SetupWithManager registers the reconciler and installs the field
@@ -208,6 +217,20 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("index snapshotRef: %w", err)
+	}
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&setecv1alpha1.Snapshot{},
+		SnapshotParentIndex,
+		func(obj client.Object) []string {
+			s, ok := obj.(*setecv1alpha1.Snapshot)
+			if !ok || s.Spec.Parent == "" {
+				return nil
+			}
+			return []string{s.Spec.Parent}
+		},
+	); err != nil {
+		return fmt.Errorf("index parent: %w", err)
 	}
 
 	// Enqueue the referenced Snapshot whenever a Sandbox changes so

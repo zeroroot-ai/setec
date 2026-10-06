@@ -241,7 +241,15 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	//
 	// spec.storageRef is empty here. The backend chooses the reference
 	// and returns it with the response, so it is filled in at step 5.
+	parentRef, err := c.diffParent(ctx, sb, string(pod.UID))
+	if err != nil {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotCreateFailed, err.Error())
+		setSpanErr(span, err.Error())
+		return err
+	}
 	snap := c.newSnapshotCR(ctx, sb, pod.Spec.NodeName)
+	snap.Annotations = map[string]string{setecv1alpha1.SnapshotSourcePodUIDAnnotation: string(pod.UID)}
+	snap.Spec.Parent = sb.Spec.Snapshot.Parent
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Someone raced us. Return the sentinel so the reconciler
@@ -270,10 +278,11 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		SnapshotId:     sb.Namespace + "-" + sb.Spec.Snapshot.Name,
-		StorageBackend: c.backendName(),
-		SourcePodUid:   string(pod.UID),
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+		SnapshotId:       sb.Namespace + "-" + sb.Spec.Snapshot.Name,
+		StorageBackend:   c.backendName(),
+		SourcePodUid:     string(pod.UID),
+		ParentStorageRef: parentRef,
 	})
 	if rpcErr != nil {
 		reason := EventReasonSnapshotCreateFailed
@@ -314,6 +323,36 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 
 	c.recordDuration("create", sb, time.Since(start))
 	return nil
+}
+
+// ErrInvalidParent is returned when the parent of a diff snapshot cannot
+// carry it.
+var ErrInvalidParent = errors.New("coordinator: the parent snapshot cannot carry a diff")
+
+// diffParent returns the storage reference of the parent of a diff
+// snapshot, or "" for a full snapshot. The parent must be a Ready Snapshot
+// of the same Sandbox, taken from the same Pod, in the same store: the
+// memory of a diff holds only the pages that changed in that one machine.
+func (c *Coordinator) diffParent(ctx context.Context, sb *setecv1alpha1.Sandbox, podUID string) (string, error) {
+	name := sb.Spec.Snapshot.Parent
+	if name == "" {
+		return "", nil
+	}
+	parent := &setecv1alpha1.Snapshot{}
+	if err := c.Client.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: name}, parent); err != nil {
+		return "", fmt.Errorf("%w: get %q: %w", ErrInvalidParent, name, err)
+	}
+	switch {
+	case parent.Status.Phase != setecv1alpha1.SnapshotPhaseReady || parent.Spec.StorageRef == "":
+		return "", fmt.Errorf("%w: %q is not Ready", ErrInvalidParent, name)
+	case parent.Spec.SourceSandbox != sb.Name:
+		return "", fmt.Errorf("%w: %q is a snapshot of %q, not of %q", ErrInvalidParent, name, parent.Spec.SourceSandbox, sb.Name)
+	case parent.Annotations[setecv1alpha1.SnapshotSourcePodUIDAnnotation] != podUID:
+		return "", fmt.Errorf("%w: %q was taken from another Pod; take a full snapshot first", ErrInvalidParent, name)
+	case parent.Spec.StorageBackend != c.backendName():
+		return "", fmt.Errorf("%w: %q is in the store %q, not %q", ErrInvalidParent, name, parent.Spec.StorageBackend, c.backendName())
+	}
+	return parent.Spec.StorageRef, nil
 }
 
 // newSnapshotCR builds the Snapshot CR for a sandbox snapshot request.

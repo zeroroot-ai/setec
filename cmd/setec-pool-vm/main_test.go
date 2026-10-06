@@ -563,3 +563,8 @@ func TestParseFlags_GuestCID(t *testing.T) {
 		t.Fatal("reserved guest CID (0-2) must be rejected")
 	}
 }
+
+// CreateDiffSnapshot takes the path of a full snapshot here.
+func (f *fakeFC) CreateDiffSnapshot(ctx context.Context, state, mem string) error {
+	return f.CreateSnapshot(ctx, state, mem)
+}
