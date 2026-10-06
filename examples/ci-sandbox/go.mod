@@ -3,7 +3,7 @@ module github.com/zeroroot-ai/setec/examples/ci-sandbox
 go 1.27.1
 
 require (
-	github.com/zeroroot-ai/setec v0.114.4
+	github.com/zeroroot-ai/setec v0.118.0
 	google.golang.org/grpc v1.83.2
 )
 
