@@ -76,11 +76,6 @@ jobs:
       installer_image: ${{ steps.tags.outputs.installer_image }}
       keepalive_image_repo: ${{ steps.tags.outputs.keepalive_image_repo }}
       sha_tag: ${{ steps.tags.outputs.sha_tag }}
-      # The kata pin, so the out-of-band kata-qemu prep in `suites` fetches the
-      # same release the installer image was built from. Two different kata
-      # releases on one node is the shape where a handler loads and then fails
-      # at launch (setec#93).
-      kata_version: ${{ steps.pins.outputs.kata_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -174,7 +169,6 @@ jobs:
             echo "build_args<<EOF_ARGS"
             scripts/runtime-build-args.sh
             echo "EOF_ARGS"
-            echo "kata_version=${KATA_VERSION}"
             echo "firecracker_version=${FIRECRACKER_VERSION}"
             echo "firecracker_sha256=${FIRECRACKER_SHA256}"
           } >> "$GITHUB_OUTPUT"
@@ -269,10 +263,9 @@ jobs:
           - pass: suites
             snapshots: "0"
             run: '^(TestSandbox_.*|TestSandboxClasses_.*|TestNodeAgentMTLS_.*|TestPhase2_.*|TestPhase3_UpgradeFromPhase2|TestEgress_.*|TestRuntimeBackends_.*|TestSession_(WorkspaceSurvivesPodKill|ReattachByHandle)|TestSessionExec_.*)$'
-            # No skip. kata-qemu is prepared out of band by the step above,
-            # the way a customer running runtimes.kata-qemu.install=false does,
-            # so TestRuntimeBackends_Smoke/backend=kata-qemu runs for real
-            # rather than self-skipping on a missing capability label (setec#93).
+            # No skip. kata-qemu is not in the smoke scenario any more: it
+            # leaves setec at the cutover (setec#198, D46), and it only
+            # failed here (setec#219).
             skip: ''
           # Not in this pass, by owner decision 2026-09-28 (both post-launch):
           #   - TestPhase3_PoolWarmStartLifecycle and
@@ -602,139 +595,6 @@ jobs:
             --set runtimes.gvisor.install=true \
             | kubectl apply -f -
           kubectl get runtimeclass
-
-      - name: Lay the kata-qemu handler out of band
-        # setec#93. The installer image carries the kata-fc payload only:
-        # Dockerfile.installer prunes the QEMU/CLH/TDX/SNP/NVIDIA variants
-        # because they "would quintuple the image for nothing", and setec#284
-        # pruned kata-runtime out for the same reason — image weight shipped to
-        # every sandbox host.
-        #
-        # So this job prepares kata-qemu the way a CUSTOMER does, out of band,
-        # which is the documented `runtimes.kata-qemu.install=false` path. That
-        # gives the README's four-backend claim a real test without putting
-        # ~200 MB of QEMU into an image every node pulls.
-        #
-        # The full upstream tarball is fetched here (not the pruned payload) and
-        # only the qemu pieces are kept. Same pin as the installer, from
-        # kata.env, so the two can never test different kata releases.
-        env:
-          KATA_VERSION: ${{ needs.build-images.outputs.kata_version }}
-        run: |
-          set -euo pipefail
-          test -n "${KATA_VERSION}" || { echo "::error::KATA_VERSION is empty; the kata pin did not reach this job"; exit 1; }
-
-          work="$(mktemp -d)"
-          curl -fsSL --retry 3 -o "$work/kata.tar.zst" \
-            "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.zst"
-
-          # runtime-rs (kata-static) ships the QEMU hypervisor; the go-static
-          # tarball the installer uses does not. Extract into the node at the
-          # same /opt/kata root the kata-fc payload already occupies, so one
-          # configuration tree serves both handlers.
-          # The drop-in is written here, on the runner, and copied in. Composing
-          # it inside the `docker exec ... bash -c` string below would nest
-          # single quotes inside single quotes and silently terminate the outer
-          # one (actionlint SC1012 caught exactly that in the first draft).
-          #
-          # containerd 2.x plugin path. The 1.x io.containerd.grpc.v1.cri table
-          # is SILENTLY IGNORED by a 2.x containerd: the stanza is present,
-          # containerd starts clean, and kubelet then fails the pod with no
-          # runtime configured. The installer gets this right for kata-fc.
-          cat >"$work/20-kata-qemu.toml" <<'TOML'
-          [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-qemu]
-            runtime_type = "io.containerd.kata-qemu.v2"
-            privileged_without_host_devices = true
-            pod_annotations = ["io.katacontainers.*"]
-            [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.kata-qemu.options]
-              ConfigPath = "/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml"
-          TOML
-          sed -i 's/^          //' "$work/20-kata-qemu.toml"
-
-          # Not /tmp. A kind node mounts a tmpfs on /tmp, and `docker cp`
-          # writes to the container filesystem under that mount, so the copy
-          # succeeds and the file is not there for anything that runs inside
-          # the node. The first run that reached this step failed on exactly
-          # that: "tar: /tmp/kata-qemu.tar.zst: Cannot open".
-          prep=/var/lib/setec-e2e
-          docker exec "${KIND_CLUSTER}-worker" mkdir -p "$prep"
-          docker cp "$work/kata.tar.zst" "${KIND_CLUSTER}-worker:$prep/kata-qemu.tar.zst"
-          docker cp "$work/20-kata-qemu.toml" "${KIND_CLUSTER}-worker:$prep/20-kata-qemu.toml"
-          docker exec "${KIND_CLUSTER}-worker" bash -euo pipefail -c '
-            prep=/var/lib/setec-e2e
-            test -s "$prep/kata-qemu.tar.zst" && test -s "$prep/20-kata-qemu.toml" \
-              || { echo "the kata archive or the containerd drop-in did not reach the node" >&2; exit 1; }
-            command -v zstd >/dev/null || { apt-get update -qq && apt-get install -y -qq zstd; }
-            # The kata 4.x kata-static archive is runtime-rs only. Its QEMU
-            # configuration is runtime-rs/configuration-qemu-runtime-rs.toml and
-            # its shim is /opt/kata/runtime-rs/bin/containerd-shim-kata-v2. The
-            # first draft of this step asked for configuration-qemu.toml and
-            # linked the Go shim of the kata-fc payload, a layout this archive
-            # never had. It also fell back to extracting all of ./opt/kata with
-            # the error output discarded, which hid that.
-            #
-            # Named members only, no fallback: a member this archive does not
-            # have fails here with tar naming it. The kernel and the guest
-            # image are the same files the kata-fc payload ships, from the same
-            # pin, so writing them again changes nothing.
-            cfg=/opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml
-            shim=/opt/kata/runtime-rs/bin/containerd-shim-kata-v2
-            share=/opt/kata/share/kata-containers
-            tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / \
-              ./opt/kata/bin/qemu-system-x86_64 \
-              ./opt/kata/share/kata-qemu \
-              ./opt/kata/libexec/virtiofsd \
-              ./opt/kata/runtime-rs/bin/containerd-shim-kata-v2 \
-              ./opt/kata/share/defaults/kata-containers/runtime-rs/configuration-qemu-runtime-rs.toml \
-              ./opt/kata/share/kata-containers/vmlinux.container \
-              ./opt/kata/share/kata-containers/kata-containers.img
-            # The kernel and the image are symlinks to versioned files. Their
-            # targets are read from the node, so no file name of one kata
-            # release is written here.
-            tar --zstd -xf "$prep/kata-qemu.tar.zst" -C / \
-              "./opt/kata/share/kata-containers/$(readlink "$share/vmlinux.container")" \
-              "./opt/kata/share/kata-containers/$(readlink "$share/kata-containers.img")"
-            # Every path the configuration names must exist on the node. A
-            # handler that loads and then fails at launch is the failure this
-            # step exists to prevent (setec#93).
-            for f in "$cfg" "$shim" /opt/kata/bin/qemu-system-x86_64 /opt/kata/libexec/virtiofsd \
-                "$share/vmlinux.container" "$share/kata-containers.img"; do
-              test -s "$f" || { echo "kata-qemu prep: $f is missing on the node" >&2; exit 1; }
-            done
-            grep -q "^path = \"/opt/kata/bin/qemu-system-x86_64\"" "$cfg" \
-              || { echo "kata-qemu prep: $cfg does not name the QEMU binary this step laid" >&2; exit 1; }
-
-            mkdir -p /etc/containerd/config.d
-            cp "$prep/20-kata-qemu.toml" /etc/containerd/config.d/20-kata-qemu.toml
-            rm -f "$prep/kata-qemu.tar.zst"
-            ln -sf "$shim" /usr/local/bin/containerd-shim-kata-qemu-v2
-            systemctl restart containerd
-          '
-
-          # Prove containerd actually loaded it. A drop-in that containerd
-          # ignored is the failure this whole step exists to avoid, and it is
-          # invisible until a Sandbox fails to schedule.
-          for i in $(seq 1 30); do
-            if docker exec "${KIND_CLUSTER}-worker" crictl info 2>/dev/null | grep -q '"kata-qemu"'; then
-              echo "containerd loaded the kata-qemu runtime handler"
-              break
-            fi
-            [ "$i" = "30" ] && { echo "::error::containerd never reported a kata-qemu runtime handler"; docker exec "${KIND_CLUSTER}-worker" crictl info | head -40; exit 1; }
-            sleep 2
-          done
-
-          # The RuntimeClass, from the chart's own template so it matches a
-          # real install, and the capability label the operator requires before
-          # it will place a Sandbox on the backend.
-          helm template rc ./charts/setec \
-            --show-only templates/runtime-classes.yaml \
-            --set webhook.enabled=false \
-            --set 'sandboxNamespaces={render-only}' \
-            --set runtimes.kata-qemu.enabled=true \
-            --set runtimes.kata-qemu.install=true \
-            | kubectl apply -f -
-          kubectl label node "${KIND_CLUSTER}-worker" setec.zeroroot.ai/runtime.kata-qemu=true --overwrite
-          kubectl get runtimeclass kata-qemu
 
       - name: The KVM guard
         env:
