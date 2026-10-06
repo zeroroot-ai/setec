@@ -13,12 +13,12 @@
 # The gate is on by default from Kubernetes 1.35. The line below keeps it on
 # for an older node image.
 #
-# Calico replaces kindnet. The egress scenarios assert that a Sandbox
-# cannot reach what its NetworkPolicy denies, so the CNI has to enforce
-# policy the way the production CNIs do. With kindnet, a Sandbox under
-# mode=none still reached 1.1.1.1:443 (setec#22). The workflow installs
-# Calico from a pinned manifest. Its default IP pool is 192.168.0.0/16, so
-# the pod subnet matches it.
+# Cilium replaces kindnet. It is the network plugin of every cluster that
+# runs setec (D76): the chart renders CiliumNetworkPolicy objects for its own
+# namespace, and the egress scenarios assert that a Sandbox cannot reach what
+# its NetworkPolicy denies. With kindnet, a Sandbox under mode=none still
+# reached 1.1.1.1:443 (setec#22). The workflow installs Cilium from the pinned
+# chart, with the pod CIDRs of the nodes (ipam mode kubernetes).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 featureGates:

@@ -1,0 +1,239 @@
+{{- /*
+The network policy of the setec namespace (values.yaml systemPolicy). Cilium
+enforces it.
+
+  1. default deny  One CiliumClusterwideNetworkPolicy selects each Pod of the
+                   namespace. It allows DNS to kube-dns and nothing else, in
+                   both directions.
+  2. operator      the API server out, the webhook port from the API server
+                   and the nodes, the node agent gRPC out when snapshots are
+                   on, and its metrics port from the scrapers.
+  3. frontend      its gRPC port from systemPolicy.frontendCallers only, the
+                   API server out (Sandbox CRs, exec through the API server),
+                   and its metrics port from the scrapers.
+  4. node-agent    its gRPC port from the operator when snapshots are on, the
+                   snapshot store out, and its metrics port from the scrapers.
+
+The device plugin gets no allow: it talks to the kubelet over a unix socket.
+
+The policy always renders. Cilium is the network plugin of every cluster that
+runs setec (D76); development/k3s installs it too.
+hack/verify-chart-security.sh renders this file and fails when a Pod of the
+namespace has no allow it needs, or when the default deny is missing.
+*/}}
+{{- $ns := .Values.namespace }}
+{{- $fn := include "setec.fullname" . }}
+{{- $sp := .Values.systemPolicy }}
+{{- if and .Values.frontend.enabled .Values.frontend.clients (not $sp.frontendCallers) }}
+{{- fail "systemPolicy.frontendCallers must not be empty when frontend.enabled=true: the namespace policy allows the frontend gRPC port only from these Pods. Name the namespace and the Pod labels of each caller (the Gibson daemon)." }}
+{{- end }}
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ $fn }}-{{ $ns }}-default-deny
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  description: "Each Pod of the namespace {{ $ns }} denies all traffic, except DNS."
+  endpointSelector:
+    matchLabels:
+      k8s:io.kubernetes.pod.namespace: {{ $ns }}
+  enableDefaultDeny:
+    ingress: true
+    egress: true
+  ingress:
+    - {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-operator
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  description: "The operator reaches the API server and the node agents, and takes webhook calls and scrapes."
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "setec.name" . }}
+      app.kubernetes.io/component: operator
+  egress:
+    - toEntities:
+        - kube-apiserver
+    {{- if .Values.snapshots.enabled }}
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: {{ include "setec.name" . }}
+            app.kubernetes.io/component: node-agent
+      toPorts:
+        - ports:
+            - port: "50052"
+              protocol: TCP
+    {{- end }}
+  ingress:
+    - fromEntities:
+        - kube-apiserver
+        - remote-node
+        - host
+      toPorts:
+        - ports:
+            - port: "9443"
+              protocol: TCP
+    - fromEndpoints:
+        {{- range $l := $sp.metricsScrapers }}
+        - matchLabels:
+            {{- toYaml $l | nindent 12 }}
+          matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: Exists
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.metricsPort | quote }}
+              protocol: TCP
+{{- if .Values.frontend.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-frontend
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  description: "The frontend takes gRPC from its callers only and reaches the API server."
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "setec.name" . }}
+      app.kubernetes.io/component: frontend
+  egress:
+    - toEntities:
+        - kube-apiserver
+  {{- $grpcPort := regexReplaceAll "^.*:" (toString .Values.frontend.listenAddr) "" }}
+  {{- $pods := list }}
+  {{- $cidrs := list }}
+  {{- range $c := $sp.frontendCallers }}
+  {{- if $c.cidr }}
+  {{- $cidrs = append $cidrs $c.cidr }}
+  {{- else }}
+  {{- $pods = append $pods $c }}
+  {{- end }}
+  {{- end }}
+  ingress:
+    {{- if $pods }}
+    - fromEndpoints:
+        {{- range $c := $pods }}
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ required "each systemPolicy.frontendCallers entry needs a namespace or a cidr" $c.namespace }}
+            {{- toYaml (required "each systemPolicy.frontendCallers entry with a namespace needs podLabels" $c.podLabels) | nindent 12 }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ $grpcPort | quote }}
+              protocol: TCP
+    {{- end }}
+    {{- if $cidrs }}
+    - fromCIDR:
+        {{- range $cidrs }}
+        - {{ . }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ $grpcPort | quote }}
+              protocol: TCP
+    {{- end }}
+    - fromEndpoints:
+        {{- range $l := $sp.metricsScrapers }}
+        - matchLabels:
+            {{- toYaml $l | nindent 12 }}
+          matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: Exists
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ .Values.frontend.metricsPort | quote }}
+              protocol: TCP
+{{- end }}
+{{- if .Values.nodeAgent.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-node-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  description: "The node agent takes gRPC from the operator and scrapes, and reaches the snapshot store."
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "setec.name" . }}
+      app.kubernetes.io/component: node-agent
+  ingress:
+    {{- if .Values.snapshots.enabled }}
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: {{ include "setec.name" . }}
+            app.kubernetes.io/component: operator
+      toPorts:
+        - ports:
+            - port: "50052"
+              protocol: TCP
+    {{- end }}
+    - fromEndpoints:
+        {{- range $l := $sp.metricsScrapers }}
+        - matchLabels:
+            {{- toYaml $l | nindent 12 }}
+          matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: Exists
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  {{- if .Values.snapshots.enabled }}
+  {{- $s3 := .Values.snapshots.s3 }}
+  egress:
+    {{- if $s3.endpoint }}
+    {{- $u := urlParse $s3.endpoint }}
+    {{- $parts := splitList ":" $u.host }}
+    {{- $host := first $parts }}
+    {{- $port := ternary (last $parts) (ternary "80" "443" (eq $u.scheme "http")) (gt (len $parts) 1) }}
+    {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
+    - toCIDR:
+        - {{ printf "%s/32" $host }}
+    {{- else }}
+    - toFQDNs:
+        - matchName: {{ $host | quote }}
+    {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ $port | quote }}
+              protocol: TCP
+    {{- else }}
+    - toFQDNs:
+        - matchName: {{ printf "s3.%s.amazonaws.com" $s3.region | quote }}
+        - matchName: {{ printf "%s.s3.%s.amazonaws.com" $s3.bucket $s3.region | quote }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    {{- end }}
+  {{- end }}
+{{- end }}

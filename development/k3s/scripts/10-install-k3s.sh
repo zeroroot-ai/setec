@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install k3s as a single-node systemd unit (Traefik disabled), export a
+# Install k3s as a single-node systemd unit (Traefik disabled) with Cilium as
+# its network plugin, export a
 # kubeconfig with the API server URL rewritten to the host LAN IP so the
 # kubeconfig is usable from inside the Kind 'gibson' cluster's network.
 #
@@ -25,6 +26,15 @@ K3S_VERSION="${K3S_VERSION:-v1.35.9+k3s1}"
 # new sha256 below.
 K3S_INSTALLER_COMMIT="${K3S_INSTALLER_COMMIT:-58877f27435fe86ee292859db3d0df2ca5423991}"
 K3S_INSTALLER_SHA256="${K3S_INSTALLER_SHA256:-8598e002e61d658fed7b7542fc6d2c66d8da6eae69e088830105d2ee1ffb6d91}"
+
+# Cilium is the network plugin of every cluster that runs setec (D76): the
+# chart renders CiliumNetworkPolicy objects for its own namespace, so a
+# cluster with no Cilium cannot install it. k3s starts with no flannel, no
+# network policy controller and no kube-proxy, and Cilium takes all three
+# roles. The version equals the pin of the Gibson clusters (hosted
+# bootstrap/cilium/VERSION) and the values are its shared values.
+CILIUM_VERSION="${CILIUM_VERSION:-1.20.2}"
+CILIUM_CHART="${CILIUM_CHART:-oci://quay.io/cilium/charts/cilium}"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[0;33m%s\033[0m\n' "$*"; }
@@ -52,7 +62,7 @@ else
         exit 1
     }
     INSTALL_K3S_VERSION="${K3S_VERSION}" \
-        INSTALL_K3S_EXEC="server --disable=traefik --write-kubeconfig-mode=0644 --node-name=setec-dev" \
+        INSTALL_K3S_EXEC="server --disable=traefik --flannel-backend=none --disable-network-policy --disable-kube-proxy --write-kubeconfig-mode=0644 --node-name=setec-dev" \
         sh "${installer}"
 fi
 
@@ -69,6 +79,24 @@ wait_ready() {
         sleep 2
     done
     return 0
+}
+
+# The node is not Ready until a network plugin runs. Install Cilium first.
+# Idempotent: helm upgrade --install converges on a second run.
+green "Installing Cilium ${CILIUM_VERSION}"
+helm --kubeconfig /etc/rancher/k3s/k3s.yaml upgrade --install cilium "${CILIUM_CHART}" \
+    --version "${CILIUM_VERSION}" --namespace kube-system \
+    --set kubeProxyReplacement=true \
+    --set k8sServiceHost="${host_ip}" --set k8sServicePort=6443 \
+    --set ipam.mode=kubernetes \
+    --set policyCIDRMatchMode=nodes \
+    --set operator.replicas=1 \
+    --set envoy.enabled=false \
+    --set hubble.enabled=false \
+    --wait --timeout 10m
+sudo k3s kubectl get crd ciliumnetworkpolicies.cilium.io >/dev/null || {
+    echo "FAIL: the CiliumNetworkPolicy CRD is absent after the Cilium install" >&2
+    exit 1
 }
 
 if ! wait_ready 60; then

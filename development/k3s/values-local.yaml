@@ -36,6 +36,7 @@ frontend:
     - name: dev
       spiffeID: spiffe://dev.local/ns/gibson/sa/gibson-daemon
 
+
   # Single-node dev sizing — keep memory low so the node has headroom for
   # operator + sandbox workloads on the same host.
   replicas: 1
@@ -94,3 +95,11 @@ credentials:
   spiffe:
     socketPath: /run/spire/agent-sockets/spire-agent.sock
     trustDomain: dev.local
+
+# The dev frontend takes calls from the Kind gibson cluster on the same host,
+# through a NodePort on the host LAN address. Those calls come from outside
+# this cluster, so the caller is an address range, not a Pod. mTLS with the
+# enrolled dev client still gates each call.
+systemPolicy:
+  frontendCallers:
+    - cidr: 0.0.0.0/0

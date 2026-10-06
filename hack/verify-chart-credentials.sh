@@ -126,6 +126,8 @@ BASE=(
 	--set frontend.enabled=true
 	--set 'frontend.clients[0].name=saas'
 	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon'
+	--set 'systemPolicy.frontendCallers[0].namespace=gibson'
+	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
 	--set nodeAgent.enabled=true
 	--set snapshots.enabled=true
 )

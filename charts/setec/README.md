@@ -254,6 +254,17 @@ verify the expected new manifests appear via `helm template`.
   Every class must state a `defaultNetworkMode` or the chart refuses to
   render.
 
+### The network policy of the setec namespace
+
+The chart denies all traffic of each Pod in its own namespace by default, with DNS to kube-dns allowed (`templates/system-namespace-policy.yaml`). One policy for each component then allows only the traffic setec uses:
+
+- The operator reaches the API server, takes webhook calls on 9443, and reaches the node agent gRPC port when snapshots are on.
+- The frontend takes gRPC only from `systemPolicy.frontendCallers` and reaches the API server. The list is required when the frontend is on.
+- The node agent takes gRPC from the operator and reaches the snapshot store.
+- Each metrics port admits the Pods of `systemPolicy.metricsScrapers`.
+
+The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. Cilium is the network plugin of every cluster that runs setec, so the chart always renders these objects. `development/k3s` installs Cilium for the local cluster.
+
 ### Sandbox egress posture
 
 `netpol.reservedCIDRs` is the address space no Sandbox may reach. It is

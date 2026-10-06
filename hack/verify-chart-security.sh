@@ -317,7 +317,10 @@ FE=(--set frontend.enabled=true
 	--set 'frontend.clients[1].name=onprem'
 	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
 	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443'
-	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server')
+	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server'
+	--set 'systemPolicy.frontendCallers[0].namespace=gibson'
+	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
+	--set 'systemPolicy.frontendCallers[1].cidr=203.0.113.0/24')
 
 render "$workdir/fe-default.yaml" "${FE[@]}" \
 	--show-only templates/frontend.yaml
@@ -571,6 +574,59 @@ allowance_refused "a port with no port value fails the render" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"TCP"}]}]'
 allowance_refused "a port with an unknown protocol fails the render" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"ICMP","port":53}]}]'
+
+# ---------------------------------------------------------------------------
+# The setec namespace has its own network policy (D76): a default deny with
+# DNS, and one allow for each component (templates/system-namespace-policy.yaml).
+# hack/check-system-policy.py checks the render. Each fixture below is a
+# render with one piece removed, and the checker must refuse it.
+# ---------------------------------------------------------------------------
+note "the setec namespace network policy"
+SP_ALL=("${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
+	--set snapshots.mTLS.caProvided=true --set snapshots.s3.bucket=setec-snapshots)
+render "$workdir/sp-all.yaml" "${SP_ALL[@]}"
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec-system >"$workdir/sp-all.out"; then
+	pass "each component of the setec namespace has an allow, under a default deny with DNS"
+else
+	fail "the setec namespace policy is incomplete: $(cat "$workdir/sp-all.out")"
+fi
+render "$workdir/sp-default.yaml"
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-default.yaml" setec-system >"$workdir/sp-default.out"; then
+	pass "the default install has the default deny and the operator allow"
+else
+	fail "the default install policy is incomplete: $(cat "$workdir/sp-default.out")"
+fi
+python3 - "$workdir/sp-all.yaml" "$workdir" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+def drop(pred, name):
+    yaml.safe_dump_all([d for d in docs if not pred(d)], open(f"{sys.argv[2]}/sp-{name}.yaml", "w"))
+drop(lambda d: d.get("kind") == "CiliumClusterwideNetworkPolicy", "no-deny")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-node-agent"), "no-node-agent")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-frontend"), "no-frontend")
+PY
+for fx in no-deny no-node-agent no-frontend; do
+	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-$fx.yaml" setec-system >/dev/null; then
+		fail "fixture $fx: the checker passed a render with a missing policy"
+	else
+		pass "fixture $fx: the checker refuses it"
+	fi
+done
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set frontend.enabled=true --set frontend.tlsCertSecretName=fe-tls --set frontend.tlsClientCASecretName=fe-ca \
+	--set 'frontend.clients[0].name=saas' \
+	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
+	>/dev/null 2>"$workdir/sp-nocaller.err"; then
+	fail "a frontend with no systemPolicy.frontendCallers must fail the render"
+elif grep -qF "systemPolicy.frontendCallers" "$workdir/sp-nocaller.err"; then
+	pass "a frontend with no systemPolicy.frontendCallers fails the render"
+else
+	fail "a frontend with no callers failed for another reason: $(tail -n1 "$workdir/sp-nocaller.err")"
+fi
+grep -q "port: \"50051\"" "$workdir/sp-all.yaml" && grep -q "k8s:io.kubernetes.pod.namespace: gibson" "$workdir/sp-all.yaml" \
+	&& grep -q -- "- 203.0.113.0/24" "$workdir/sp-all.yaml" \
+	&& pass "the frontend gRPC port admits the named caller and the named range" \
+	|| fail "the frontend gRPC port does not admit the named caller and range"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
