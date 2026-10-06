@@ -1404,9 +1404,7 @@ func (x *SessionRecovery) GetCount() int64 {
 }
 
 // SandboxServiceExecRequest is one message of the client half of an
-// Exec stream. The verbose name is buf's collision-safe form: this
-// package already has a LeaseService.Exec with its own ExecRequest,
-// and the two verbs must never be mistaken for each other.
+// Exec stream.
 // The first message MUST carry `start`; every later message carries
 // stdin bytes or the stdin half-close. A second `start`, or any other
 // message before the first `start`, is INVALID_ARGUMENT.

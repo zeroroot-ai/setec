@@ -123,9 +123,6 @@ session more than an observable one-shot: successive commands enter the
 same live microVM and see each other's effects on the durable
 `/workspace` volume.
 
-It is not `LeaseService.Exec`, which launches a fresh throwaway Sandbox
-per call and shares nothing between calls.
-
 ### Wire protocol
 
 The client sends exactly one `SessionExecStart` as the **first** message,
@@ -325,8 +322,8 @@ refuses any other namespace or binding that the frontend tries to write.
 Every call on an existing Sandbox checks that the namespace in the
 sandbox id is the namespace of the pair of the caller. A different
 client with the same tenant, or the same client with a different
-tenant, gets `PERMISSION_DENIED`. `Launch` and the lease service write
-the two labels on each Sandbox that they create.
+tenant, gets `PERMISSION_DENIED`. `Launch` and `Fork` write the two
+labels on each Sandbox that they create.
 
 ## Example client
 
@@ -582,67 +579,6 @@ for {
     os.Stdout.Write(chunk.Data)
 }
 ```
-
-## Warm-pool lease layer (`setec.v1.LeaseService`)
-
-> **Not available yet.** The pre-warm pool is being redesigned ([setec#103](https://github.com/zeroroot-ai/setec/issues/103)).
-
-`SandboxService.Launch` cold-boots a fresh microVM per call. For latency-
-sensitive callers the frontend also serves `setec.v1.LeaseService`, a
-warm-pool lease layer over the same isolation ABI. It keeps a pool of
-pre-warmed Sandboxes per `SandboxClass` (restored from a `Snapshot` when
-the class declares one) so a caller can claim one without paying the
-cold-boot cost.
-
-```proto
-service LeaseService {
-  rpc Lease(LeaseRequest) returns (LeaseResponse);
-  rpc Exec(ExecRequest) returns (stream ExecResponse);
-  rpc Release(ReleaseRequest) returns (ReleaseResponse);
-  rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
-}
-```
-
-The contract is **Lease → Exec → Release**:
-
-- **Lease** claims a ready (warm) Sandbox for a `SandboxClass`. The pool is
-  keyed by class and sized from the class's `spec.preWarmPoolSize`, booting
-  the class's `spec.preWarmImage`. When the pool has a ready entry the call
-  is fast (`warm=true`); when empty it cold-launches on demand
-  (`warm=false`) unless `fail_if_empty` is set, in which case it returns
-  `RESOURCE_EXHAUSTED`. A class with no `preWarmImage` is rejected with
-  `FAILED_PRECONDITION`.
-- **Exec** runs the caller's command in the leased Sandbox and streams its
-  output to a terminal `done` message carrying the exit code. Exactly one
-  Exec is permitted per lease.
-- **Release** destroys the leased Sandbox — **destroy-on-release**: a dirty
-  sandbox is never reused — and replenishes the pool back to its warm
-  target. Releasing an unknown (but well-formed) lease token is an
-  idempotent no-op so cleanup paths are safe to retry.
-
-Lease tokens are tenant-scoped: a token minted for one tenant's namespace
-is rejected (`PERMISSION_DENIED`) on any other tenant's RPCs, mirroring
-`SandboxService`'s per-call namespace scoping. Pools are maintained per
-resolved tenant namespace and never cross tenant boundaries.
-
-`PoolStatus` reports the `ready` / `target` / `leased` counts for a class.
-The frontend also exports `setec_lease_pool_ready{namespace,sandbox_class}`
-and `setec_lease_pool_leased{namespace,sandbox_class}` gauges.
-
-> **Note on the runtime model.** A leased Sandbox is *ephemeral*: the
-> microVM runs its immutable `spec.command` then terminates.
-> `LeaseService.Exec` therefore launches the caller's command as a fresh
-> workload Sandbox in the leased entry's class (snapshot-restored from the
-> class snapshot when one is configured, so it inherits the warm base)
-> rather than injecting a command into an already-running VM. The
-> warm-pool benefit is that image prefetch, scheduling, and (with a
-> snapshot) restore are already paid down.
->
-> To run successive commands *inside one live microVM* — sharing a durable
-> `/workspace` across turns — use `SandboxService.Exec` against a session
-> Sandbox instead (see [Session exec](#session-exec-exec) above and docs/design/lifecycles.md). Leases are a
-> fast-start mechanism; sessions are a state mechanism. The two verbs
-> share a name and nothing else.
 
 ## Rate limiting and concurrency
 

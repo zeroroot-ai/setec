@@ -127,9 +127,7 @@ service SandboxService {
   // across many turns instead of being limited to the single
   // immutable spec.command it booted with (docs/design/lifecycles.md).
   //
-  // This is not LeaseService.Exec: that verb launches a fresh
-  // one-shot Sandbox per call and shares nothing between calls. This
-  // one enters a VM that is already up, so successive commands see
+  // It enters a VM that is already up, so successive commands see
   // each other's effects on the durable /workspace volume.
   //
   // Protocol: the client sends exactly one SessionExecStart as the
@@ -455,9 +453,7 @@ message SessionRecovery {
 }
 
 // SandboxServiceExecRequest is one message of the client half of an
-// Exec stream. The verbose name is buf's collision-safe form: this
-// package already has a LeaseService.Exec with its own ExecRequest,
-// and the two verbs must never be mistaken for each other.
+// Exec stream.
 // The first message MUST carry `start`; every later message carries
 // stdin bytes or the stdin half-close. A second `start`, or any other
 // message before the first `start`, is INVALID_ARGUMENT.

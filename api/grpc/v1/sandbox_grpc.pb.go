@@ -149,9 +149,7 @@ type SandboxServiceClient interface {
 	// across many turns instead of being limited to the single
 	// immutable spec.command it booted with (docs/design/lifecycles.md).
 	//
-	// This is not LeaseService.Exec: that verb launches a fresh
-	// one-shot Sandbox per call and shares nothing between calls. This
-	// one enters a VM that is already up, so successive commands see
+	// It enters a VM that is already up, so successive commands see
 	// each other's effects on the durable /workspace volume.
 	//
 	// Protocol: the client sends exactly one SessionExecStart as the
@@ -457,9 +455,7 @@ type SandboxServiceServer interface {
 	// across many turns instead of being limited to the single
 	// immutable spec.command it booted with (docs/design/lifecycles.md).
 	//
-	// This is not LeaseService.Exec: that verb launches a fresh
-	// one-shot Sandbox per call and shares nothing between calls. This
-	// one enters a VM that is already up, so successive commands see
+	// It enters a VM that is already up, so successive commands see
 	// each other's effects on the durable /workspace volume.
 	//
 	// Protocol: the client sends exactly one SessionExecStart as the

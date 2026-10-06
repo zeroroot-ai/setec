@@ -8,7 +8,7 @@ This page describes how `setec` works on `main` today. Each statement names the 
 | Part | What it does | Code |
 |---|---|---|
 | Operator | Turns each `Sandbox` object into one launcher Pod, a NetworkPolicy and, for a session, a workspace volume. Runs a disk builder Job for each new image digest. Serves the admission webhooks. | `cmd/main.go`, `internal/controller/`, `internal/webhook/` |
-| Frontend | The gRPC API (`SandboxService`, `LeaseService`). It creates and reads `Sandbox` objects for an enrolled client. | `cmd/frontend/`, `internal/frontend/`, `api/grpc/v1/` |
+| Frontend | The gRPC API (`SandboxService`). It creates and reads `Sandbox` objects for an enrolled client. | `cmd/frontend/`, `internal/frontend/`, `api/grpc/v1/` |
 | Node agent | One per node. Takes and stores the snapshots of the machines on its node, and stages a snapshot for a restore. | `cmd/node-agent/`, `internal/nodeagent/` |
 | KVM device plugin | One per node. Offers `/dev/kvm` and `/dev/net/tun` to the launcher Pods. | `cmd/setec-device-plugin/`, `internal/deviceplugin/` |
 | Disk builder | A Job for each image digest. Makes a squashfs disk of the image, signs it, and pushes it. | `cmd/setec-disk-builder/`, `internal/diskbuilder/` |
