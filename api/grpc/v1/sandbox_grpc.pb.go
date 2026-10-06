@@ -194,7 +194,6 @@ type SandboxServiceClient interface {
 	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
-	//
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
@@ -503,7 +502,6 @@ type SandboxServiceServer interface {
 	//     ephemeral; its one command is its whole life (docs/design/lifecycles.md).
 	//   - FAILED_PRECONDITION + SESSION_NOT_RUNNING: the session could
 	//     not be brought to a running microVM in time.
-	//
 	// These are RPC-level errors raised before the command starts, so
 	// no SessionExecExit is sent and no command ran. Once the stream is
 	// established, every outcome is reported as a SessionExecExit instead.
