@@ -92,12 +92,20 @@ func (c *Coordinator) CheckpointSession(
 		SessionKek:       sessionKEK,
 		LeavePaused:      leavePaused,
 		ParentStorageRef: parentRef,
+		// A checkpoint is a snapshot too: its tokens must fail after it
+		// (setec#235).
+		IdentityGeneration: nextIdentityGeneration(sb),
 	})
 	if rpcErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonCheckpointCreateFailed, rpcErr.Error())
 		setSpanErr(span, rpcErr.Error())
 		c.recordDuration("checkpoint", sb, time.Since(start))
 		return "", 0, fmt.Errorf("coordinator: CreateSnapshot (checkpoint) RPC: %w", rpcErr)
+	}
+	if err := c.recordIdentityGeneration(ctx, sb, nextIdentityGeneration(sb)); err != nil {
+		setSpanErr(span, err.Error())
+		c.recordDuration("checkpoint", sb, time.Since(start))
+		return "", 0, err
 	}
 	c.emit(sb, corev1.EventTypeNormal, EventReasonCheckpointCreated,
 		fmt.Sprintf("session checkpoint #%d persisted to %q (%d bytes)", sequence, backendName, resp.GetSizeBytes()))

@@ -315,6 +315,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		SourcePodUid:     string(pod.UID),
 		ParentStorageRef: parentRef,
 		SessionKek:       kek,
+		// The tokens after the snapshot carry the next generation, and
+		// no token in the snapshot does (setec#235).
+		IdentityGeneration: nextIdentityGeneration(sb),
 	})
 	if rpcErr != nil {
 		reason := EventReasonSnapshotCreateFailed
@@ -328,7 +331,17 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: CreateSnapshot RPC: %w", rpcErr)
 	}
 
-	// 5. Record what the backend wrote, then mark Ready.
+	// 5. Record the identity generation before the Snapshot is Ready: a
+	// Sandbox can load the Snapshot only once it is Ready, and from then
+	// on a token from before the snapshot must fail.
+	if err := c.recordIdentityGeneration(ctx, sb, nextIdentityGeneration(sb)); err != nil {
+		c.failSnapshot(ctx, snap, "IdentityGenerationNotRecorded", err)
+		setSpanErr(span, err.Error())
+		c.recordDuration("create", sb, time.Since(start))
+		return err
+	}
+
+	// 6. Record what the backend wrote, then mark Ready.
 	original := snap.DeepCopy()
 	snap.Spec.StorageRef = resp.GetStorageRef()
 	snap.Spec.Size = resp.GetSizeBytes()
@@ -1049,4 +1062,37 @@ func ttlFrom(ttl *metav1.Duration) *metav1.Duration {
 // stays with its owner, and each fork gets a new identity and randomness.
 func isOwnFork(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot) bool {
 	return snap.Spec.Forkable && snap.Namespace == sb.Namespace && snap.Spec.SourceSandbox != ""
+}
+
+// nextIdentityGeneration is the identity generation of a Sandbox after a
+// snapshot (setec#235), or 0 for a Sandbox with no identity.
+func nextIdentityGeneration(sb *setecv1alpha1.Sandbox) int64 {
+	if sb.Status.Identity == nil {
+		return 0
+	}
+	return sb.Status.Identity.Generation + 1
+}
+
+// recordIdentityGeneration raises the identity generation in the status of
+// the live Sandbox to gen. A token of an earlier generation then fails.
+func (c *Coordinator) recordIdentityGeneration(ctx context.Context, sb *setecv1alpha1.Sandbox, gen int64) error {
+	if gen == 0 {
+		return nil
+	}
+	live := &setecv1alpha1.Sandbox{}
+	if err := c.Client.Get(ctx, client.ObjectKeyFromObject(sb), live); err != nil {
+		return fmt.Errorf("coordinator: get the Sandbox to raise its identity generation: %w", err)
+	}
+	if live.Status.Identity == nil || live.Status.Identity.Generation >= gen {
+		return nil
+	}
+	original := live.DeepCopy()
+	live.Status.Identity.Generation = gen
+	if err := c.Client.Status().Patch(ctx, live, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("coordinator: raise the identity generation: %w", err)
+	}
+	if sb.Status.Identity != nil {
+		sb.Status.Identity.Generation = gen
+	}
+	return nil
 }

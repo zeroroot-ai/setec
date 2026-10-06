@@ -119,3 +119,13 @@ func waitLauncherEvidence(ctx context.Context, path string) (podspec.RestoreEvid
 		}
 	}
 }
+
+// writeIdentityGeneration writes the identity generation for the launcher
+// through a temporary file, so the launcher never reads a partial value.
+func writeIdentityGeneration(path string, gen int64) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(gen, 10)+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}

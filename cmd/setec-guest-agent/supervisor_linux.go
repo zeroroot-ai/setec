@@ -63,6 +63,17 @@ func endMachine() {
 
 func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
 	sup := guestagent.NewSupervisor(guestagent.NewRoot)
+	// The identity socket of the Sandbox (setec#235). Each process learns
+	// its path from the environment.
+	sup.Env = []string{guestagent.IdentitySocketEnv + "=" + guestagent.IdentitySocket}
+	go func() {
+		proxy := &guestagent.IdentityProxy{Dial: func() (net.Conn, error) {
+			return vsock.Dial(guestagent.HostCID, launcher.IdentityPort, nil)
+		}}
+		if err := guestagent.ServeIdentity(ctx, guestagent.NewRoot, proxy); err != nil {
+			logf("setec-guest-agent: identity socket: %v", err)
+		}
+	}()
 	ln, err := vsock.Listen(guestagent.ControlPort, nil)
 	if err != nil {
 		return fmt.Errorf("listen on vsock port %d: %w", guestagent.ControlPort, err)

@@ -190,3 +190,24 @@ field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_type
 # The session workspace of a launcher Pod (setec#193): a wire field of the
 # launcher spec.
 field podspec.launcherSpec.WorkspaceDevice	# internal/podspec/launcher.go
+# The sandbox identity (setec#235). These are JSON fields on the wire:
+# the launcher writes IdentityResponse, the guest agent reads it as
+# TokenResponse and hands it to the workload, and the launcher reads
+# launcherIdentitySpec as its IdentitySpec. Claims.Client and header.Typ
+# are claims of the token for a verifier outside setec. The two methods
+# are reached through the gRPC and HTTP interfaces.
+field guestagent.TokenResponse.Expires	# internal/guestagent/identity.go
+field guestagent.TokenResponse.Token	# internal/guestagent/identity.go
+field launcher.IdentityResponse.Error	# internal/launcher/identity.go
+field launcher.IdentityResponse.Expires	# internal/launcher/identity.go
+field launcher.IdentityResponse.Token	# internal/launcher/identity.go
+field podspec.launcherIdentitySpec.Client	# internal/podspec/launcher.go
+field podspec.launcherIdentitySpec.Generation	# internal/podspec/launcher.go
+field podspec.launcherIdentitySpec.GenerationFile	# internal/podspec/launcher.go
+field podspec.launcherIdentitySpec.KeyFile	# internal/podspec/launcher.go
+field podspec.launcherIdentitySpec.SandboxID	# internal/podspec/launcher.go
+field podspec.launcherIdentitySpec.Tenant	# internal/podspec/launcher.go
+field sandboxid.Claims.Client	# internal/sandboxid/token.go
+field sandboxid.header.Typ	# internal/sandboxid/token.go
+method frontend.Service.VerifySandboxIdentity	# internal/frontend/identity.go
+method guestagent.IdentityProxy.ServeHTTP	# internal/guestagent/identity.go

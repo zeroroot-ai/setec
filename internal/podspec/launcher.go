@@ -66,7 +66,27 @@ const (
 	// LauncherRestoreTakenAt holds the time of the state, in Unix
 	// nanoseconds, when the node agent knows it (setec#194).
 	LauncherRestoreTakenAt = LauncherRestoreDir + "/taken-at"
+	// LauncherIdentityGeneration holds the identity generation of the
+	// Sandbox after its last snapshot (setec#235). The node agent writes
+	// it while the machine is paused for the snapshot.
+	LauncherIdentityGeneration = LauncherWorkMountPath + "/identity-generation"
 )
+
+// The identity of a launcher Sandbox (setec#235). The operator keeps the
+// signing seed in the Secret <name>-identity, and only the launcher
+// container mounts it. No process in the machine can read it.
+const (
+	// IdentitySecretKey is the key of the base64 ed25519 seed.
+	IdentitySecretKey = "seed"
+	// LauncherIdentityKey is where the launcher reads the seed.
+	LauncherIdentityKey = launcherIdentityMountPath + "/" + IdentitySecretKey
+
+	launcherIdentityVolume    = "identity"
+	launcherIdentityMountPath = "/etc/setec/identity"
+)
+
+// IdentitySecretName is the name of the identity Secret of a Sandbox.
+func IdentitySecretName(sandbox string) string { return sandbox + "-identity" }
 
 const (
 
@@ -87,6 +107,10 @@ const dropAllCapabilities corev1.Capability = "ALL"
 
 // LauncherOptions carries what a launcher Pod needs beyond the Sandbox.
 type LauncherOptions struct {
+	// Identity, when set, gives the Sandbox its identity (setec#235): the
+	// launcher signs its tokens with the seed of the identity Secret.
+	Identity *LauncherIdentity
+
 	// Image is the launcher image. Required.
 	Image string
 	// Scratch is the size limit of the writable layer of the machine.
@@ -146,21 +170,41 @@ const (
 
 // launcherSpec is the JSON of internal/launcher.Spec. It is written here
 // rather than imported, so the operator does not link the launcher.
+// LauncherIdentity is the identity of a Sandbox, as the launcher signs it.
+type LauncherIdentity struct {
+	// SandboxID is the <namespace>/<name>/<uid> of the Sandbox.
+	SandboxID string
+	// Client and Tenant are the owner pair of the namespace.
+	Client, Tenant string
+	// Generation is the identity generation when the Pod starts.
+	Generation int64
+}
+
+type launcherIdentitySpec struct {
+	SandboxID      string `json:"sandboxID"`
+	Client         string `json:"client,omitempty"`
+	Tenant         string `json:"tenant,omitempty"`
+	KeyFile        string `json:"keyFile"`
+	Generation     int64  `json:"generation"`
+	GenerationFile string `json:"generationFile"`
+}
+
 type launcherSpec struct {
-	VCPU            int              `json:"vcpu"`
-	MemoryMiB       int64            `json:"memoryMiB"`
-	ImageRef        string           `json:"imageRef"`
-	DiskKeys        []string         `json:"diskKeys"`
-	ImageDisk       string           `json:"imageDisk"`
-	DiskSignature   string           `json:"diskSignature"`
-	CPUTemplate     string           `json:"cpuTemplate,omitempty"`
-	WorkspaceDevice string           `json:"workspaceDevice,omitempty"`
-	Base            bool             `json:"base,omitempty"`
-	WritableDisk    string           `json:"writableDisk"`
-	WritableBytes   int64            `json:"writableBytes"`
-	WorkDir         string           `json:"workDir"`
-	Source          launcherSource   `json:"source"`
-	Workload        *launcherProcess `json:"workload,omitempty"`
+	Identity        *launcherIdentitySpec `json:"identity,omitempty"`
+	VCPU            int                   `json:"vcpu"`
+	MemoryMiB       int64                 `json:"memoryMiB"`
+	ImageRef        string                `json:"imageRef"`
+	DiskKeys        []string              `json:"diskKeys"`
+	ImageDisk       string                `json:"imageDisk"`
+	DiskSignature   string                `json:"diskSignature"`
+	CPUTemplate     string                `json:"cpuTemplate,omitempty"`
+	WorkspaceDevice string                `json:"workspaceDevice,omitempty"`
+	Base            bool                  `json:"base,omitempty"`
+	WritableDisk    string                `json:"writableDisk"`
+	WritableBytes   int64                 `json:"writableBytes"`
+	WorkDir         string                `json:"workDir"`
+	Source          launcherSource        `json:"source"`
+	Workload        *launcherProcess      `json:"workload,omitempty"`
 }
 
 type launcherSource struct {
@@ -274,6 +318,13 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		}
 	}
 	spec.Base = opts.Base
+	if opts.Identity != nil && !opts.Base {
+		spec.Identity = &launcherIdentitySpec{
+			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,
+			KeyFile: LauncherIdentityKey, Generation: opts.Identity.Generation,
+			GenerationFile: LauncherIdentityGeneration,
+		}
+	}
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return nil, err
@@ -352,6 +403,18 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		},
 	}
 	term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
+	if spec.Identity != nil {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: launcherIdentityVolume,
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: IdentitySecretName(sb.Name), DefaultMode: new(int32(0o400)),
+			},
+		})
+		c := &pod.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name: launcherIdentityVolume, MountPath: launcherIdentityMountPath, ReadOnly: true,
+		})
+	}
 	if sb.Spec.IsSession() {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: WorkspaceVolumeName,

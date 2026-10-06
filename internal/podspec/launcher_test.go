@@ -330,3 +330,57 @@ func TestBuildLauncher_SessionGetsItsWorkspaceDevice(t *testing.T) {
 		t.Fatalf("spec workspace = %q, %v", s.WorkspaceDevice, err)
 	}
 }
+
+// TestBuildLauncher_IdentityKeyStaysWithTheLauncher pins setec#235 in the
+// Pod: the identity Secret of the Sandbox is mounted read-only into the
+// launcher container, the launcher spec names it, and a warm pool base,
+// which belongs to no Sandbox, gets no identity.
+func TestBuildLauncher_IdentityKeyStaysWithTheLauncher(t *testing.T) {
+	opts := launcherOpts()
+	opts.Identity = &LauncherIdentity{SandboxID: "ns/sb/uid", Tenant: "acme", Generation: 3}
+	sb := launcherSandbox()
+	pod, err := BuildLauncher(sb, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secretVol string
+	for _, v := range pod.Spec.Volumes {
+		if v.Secret != nil {
+			secretVol = v.Secret.SecretName
+			if v.Secret.DefaultMode == nil || *v.Secret.DefaultMode != 0o400 {
+				t.Fatalf("the identity Secret mode = %v", v.Secret.DefaultMode)
+			}
+		}
+	}
+	if secretVol != IdentitySecretName(sb.Name) {
+		t.Fatalf("the identity Secret volume = %q", secretVol)
+	}
+	mounted := false
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == launcherIdentityVolume {
+			mounted = m.ReadOnly && m.MountPath == launcherIdentityMountPath
+		}
+	}
+	if !mounted {
+		t.Fatal("the identity Secret is not mounted read-only in the launcher container")
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil {
+		t.Fatalf("the launcher refuses the spec: %v", err)
+	}
+	if s.Identity == nil || s.Identity.SandboxID != "ns/sb/uid" || s.Identity.Generation != 3 ||
+		s.Identity.KeyFile != LauncherIdentityKey || s.Identity.GenerationFile != LauncherIdentityGeneration {
+		t.Fatalf("the launcher identity = %+v", s.Identity)
+	}
+
+	base, err := BuildLauncherBase("base-1", "pool", sb.Spec.Image, sb.Spec.Resources, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range base.Spec.Volumes {
+		if v.Secret != nil {
+			t.Fatal("a base mounts an identity Secret")
+		}
+	}
+}

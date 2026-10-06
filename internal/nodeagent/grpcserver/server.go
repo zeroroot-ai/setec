@@ -249,6 +249,16 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		}
 	}
 
+	// The identity generation rises while the machine is paused: each
+	// token after the snapshot carries the new generation, and no token
+	// in the snapshot does (setec#235).
+	if gen := in.GetIdentityGeneration(); gen > 0 && kata.Launcher {
+		if err := writeIdentityGeneration(launchersandbox.HostPath(kata, podspec.LauncherIdentityGeneration), gen); err != nil {
+			_ = fc.Resume(ctx)
+			return nil, status.Errorf(codes.Internal, "raise the identity generation: %v", err)
+		}
+	}
+
 	// Resume the source VM now that the state+memory pair is on
 	// disk. A resume failure is reported but does not prevent
 	// Storage.Save (the persisted snapshot is still valid). A suspend

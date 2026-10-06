@@ -66,6 +66,11 @@ type Spec struct {
 	// the entry point, user, directory and environment of the image, with
 	// the command and environment of the Sandbox applied by the operator.
 	Workload *guestagent.Process `json:"workload,omitempty"`
+
+	// Identity, when set, makes the launcher sign the identity tokens of
+	// the Sandbox (setec#235). Nil for a warm pool base, which belongs to
+	// no Sandbox.
+	Identity *IdentitySpec `json:"identity,omitempty"`
 }
 
 // Source is exactly one of a boot and a snapshot.
@@ -157,6 +162,9 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: a base boots and runs no workload")
 	case s.Source.Boot != nil && s.Workload == nil && !s.Base:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
+	case s.Identity != nil && (s.Identity.SandboxID == "" || !filepath.IsAbs(s.Identity.KeyFile) ||
+		s.Identity.GenerationFile != "" && !filepath.IsAbs(s.Identity.GenerationFile)):
+		return errors.New("launcher: the identity needs a sandbox id and absolute key and generation paths")
 	}
 	return nil
 }
