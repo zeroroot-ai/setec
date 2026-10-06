@@ -175,6 +175,11 @@ message RestoreSandboxRequest {
   // is "s3". This is what lets a checkpoint written by a drained or
   // dead node restore on a different node (setec#194).
   bytes session_kek = 9;
+
+  // state_taken_unix_nano is the time of the state: when the snapshot or
+  // checkpoint was taken. The launcher tells the workload that it resumed
+  // from the state of that time (setec#194). Zero says nothing.
+  int64 state_taken_unix_nano = 11;
 }
 
 // RestoreSandboxResponse reports success/failure of the restore.

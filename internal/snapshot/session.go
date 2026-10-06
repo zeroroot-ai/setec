@@ -31,7 +31,18 @@ const (
 // checkpoint of a session Sandbox. The sequence namespaces successive
 // checkpoints so a new one never collides with the one it replaces.
 func SessionCheckpointID(sb *setecv1alpha1.Sandbox, sequence int64) string {
-	return fmt.Sprintf("%s-%s-ckpt-%d", sb.Namespace, sb.Name, sequence)
+	return fmt.Sprintf("%s%d", sessionCheckpointPrefix(sb), sequence)
+}
+
+// sessionCheckpointPrefix is the start of each checkpoint id of one
+// Sandbox. It holds the UID, so a new Sandbox with the name of a deleted
+// one never shares a checkpoint id with it: the teardown of the old one
+// deleted the checkpoints of the new one (found in setec#194).
+func sessionCheckpointPrefix(sb *setecv1alpha1.Sandbox) string {
+	if sb.UID == "" {
+		return fmt.Sprintf("%s-%s-ckpt-", sb.Namespace, sb.Name)
+	}
+	return fmt.Sprintf("%s-%s-%s-ckpt-", sb.Namespace, sb.Name, sb.UID)
 }
 
 // CheckpointSession pauses the session VM just long enough for
@@ -47,6 +58,7 @@ func (c *Coordinator) CheckpointSession(
 	sequence int64,
 	sessionKEK []byte,
 	leavePaused bool,
+	parentRef string,
 ) (string, int64, error) {
 	ctx, span := c.startSpan(ctx, "snapshot.CheckpointSession")
 	defer span.End()
@@ -73,12 +85,13 @@ func (c *Coordinator) CheckpointSession(
 	}
 
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		SnapshotId:     SessionCheckpointID(sb, sequence),
-		StorageBackend: backendName,
-		SourcePodUid:   string(pod.UID),
-		SessionKek:     sessionKEK,
-		LeavePaused:    leavePaused,
+		SandboxId:        sb.Namespace + "/" + sb.Name,
+		SnapshotId:       SessionCheckpointID(sb, sequence),
+		StorageBackend:   backendName,
+		SourcePodUid:     string(pod.UID),
+		SessionKek:       sessionKEK,
+		LeavePaused:      leavePaused,
+		ParentStorageRef: parentRef,
 	})
 	if rpcErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonCheckpointCreateFailed, rpcErr.Error())
@@ -108,6 +121,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	ref string,
 	backendName string,
 	sessionKEK []byte,
+	takenAt time.Time,
 ) error {
 	ctx, span := c.startSpan(ctx, "snapshot.RestoreSessionCheckpoint")
 	defer span.End()
@@ -123,7 +137,7 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	// (invariants 1/3/4), so outside dev-mode it is refused BEFORE
 	// any state is loaded.
 	cls := c.classOf(ctx, sb)
-	bound := strings.HasPrefix(ref, sb.Namespace+"-"+sb.Name+"-ckpt-")
+	bound := strings.HasPrefix(ref, sessionCheckpointPrefix(sb))
 	preflight := gate.Evidence{
 		CleanBase:          bound,
 		EntropyReseeded:    true, // verified post-RPC
@@ -161,14 +175,15 @@ func (c *Coordinator) RestoreSessionCheckpoint(
 	// fresh machine identity, reconciles to its new Pod IP, and takes
 	// a node-unique vsock CID — fail-closed like the E10 path.
 	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:     ref,
-		StorageRef:     ref,
-		StorageBackend: backendName,
-		TargetPodUid:   string(pod.UID),
-		SessionKek:     sessionKEK,
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		PodIp:          pod.Status.PodIP,
-		Hostname:       sb.Name,
+		SnapshotId:         ref,
+		StorageRef:         ref,
+		StorageBackend:     backendName,
+		TargetPodUid:       string(pod.UID),
+		SessionKek:         sessionKEK,
+		SandboxId:          sb.Namespace + "/" + sb.Name,
+		PodIp:              pod.Status.PodIP,
+		Hostname:           sb.Name,
+		StateTakenUnixNano: unixNanoOrZero(takenAt),
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)
@@ -315,4 +330,12 @@ func nodeIsReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// unixNanoOrZero returns t in Unix nanoseconds, or 0 for the zero time.
+func unixNanoOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }

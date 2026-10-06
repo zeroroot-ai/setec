@@ -36,10 +36,13 @@ const (
 	OpPing         Op = "ping"
 	OpConfigureNet Op = "configure-net"
 	OpSetTime      Op = "set-time"
-	OpStart        Op = "start"
-	OpExec         Op = "exec"
-	OpCopyIn       Op = "copy-in"
-	OpCopyOut      Op = "copy-out"
+	// OpResumed tells the workload that it resumed from a snapshot of the
+	// time UnixNano (setec#194).
+	OpResumed Op = "resumed"
+	OpStart   Op = "start"
+	OpExec    Op = "exec"
+	OpCopyIn  Op = "copy-in"
+	OpCopyOut Op = "copy-out"
 )
 
 // Process is what to run: argv, user, directory and environment.

@@ -91,6 +91,10 @@ type SnapshotSource struct {
 	// Evidence, when set, is where the launcher writes RestoreEvidence
 	// after the load. The node agent reads it.
 	Evidence string `json:"evidence,omitempty"`
+	// TakenAt, when set, is the file in which the node agent writes the
+	// time of the state in Unix nanoseconds. The workload learns that it
+	// resumed from the state of that time (setec#194).
+	TakenAt string `json:"takenAt,omitempty"`
 }
 
 // RestoreEvidence is what the launcher reports after a snapshot load. Each

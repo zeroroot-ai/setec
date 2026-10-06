@@ -516,13 +516,14 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	}
 
 	resp, rpcErr := na.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
-		SnapshotId:     snap.Namespace + "-" + snap.Name,
-		StorageRef:     snap.Spec.StorageRef,
-		StorageBackend: snap.Spec.StorageBackend,
-		TargetPodUid:   string(pod.UID),
-		SandboxId:      sb.Namespace + "/" + sb.Name,
-		PodIp:          pod.Status.PodIP,
-		Hostname:       sb.Name,
+		SnapshotId:         snap.Namespace + "-" + snap.Name,
+		StorageRef:         snap.Spec.StorageRef,
+		StorageBackend:     snap.Spec.StorageBackend,
+		TargetPodUid:       string(pod.UID),
+		SandboxId:          sb.Namespace + "/" + sb.Name,
+		PodIp:              pod.Status.PodIP,
+		Hostname:           sb.Name,
+		StateTakenUnixNano: snap.CreationTimestamp.UnixNano(),
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)

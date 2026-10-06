@@ -109,6 +109,22 @@ func TestGuest_AfterStartSnapshotConfirmsTheGuestInOrder(t *testing.T) {
 	if got := s.list(); !slices.Equal(got, want) {
 		t.Fatalf("steps = %v, want %v", got, want)
 	}
+	// With the time of the state, the guest hears that it resumed
+	// (setec#194), after its new identity.
+	s.mu.Lock()
+	s.got = nil
+	s.mu.Unlock()
+	takenAt := filepath.Join(dir, "taken-at")
+	_ = os.WriteFile(takenAt, []byte("1759712523000000000\n"), 0o600)
+	g.TakenAtFile = takenAt
+	if err := g.AfterStart(nil)(ctx, pn, true); err != nil {
+		t.Fatalf("AfterStart with a state time: %v", err)
+	}
+	if got := s.list(); len(got) != 5 || got[4] != string(guestagent.OpResumed) {
+		t.Fatalf("steps = %v, want resumed last", got)
+	}
+	g.TakenAtFile = ""
+
 	// The load of a warm pool base: the workload of the Sandbox starts
 	// last, after the new identity (setec#103).
 	s.mu.Lock()

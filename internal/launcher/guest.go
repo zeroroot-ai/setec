@@ -6,11 +6,13 @@ package launcher
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +36,10 @@ type Guest struct {
 	// Hostname is the hostname that a loaded guest takes: the name of the
 	// Pod.
 	Hostname string
+	// TakenAtFile holds the time of a loaded state in Unix nanoseconds.
+	// The guest tells the workload about it. Empty or missing says
+	// nothing.
+	TakenAtFile string
 	// ResolvConf is the resolv.conf of the Pod that the guest takes.
 	ResolvConf string
 }
@@ -137,6 +143,9 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 			if err := g.uniquify(rctx, pn); err != nil {
 				return err
 			}
+			if err := g.tellResumed(rctx); err != nil {
+				return err
+			}
 		}
 		// A loaded Sandbox snapshot already runs its workload and gets
 		// none. A loaded base runs none yet and gets the workload of the
@@ -165,11 +174,36 @@ func (g *Guest) uniquify(ctx context.Context, pn PodNet) error {
 	return nil
 }
 
+// tellResumed gives the guest the time of the loaded state, when the node
+// agent wrote it.
+func (g *Guest) tellResumed(ctx context.Context) error {
+	if g.TakenAtFile == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(g.TakenAtFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ns, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		return fmt.Errorf("the time of the state: %w", err)
+	}
+	_, err = g.Call(ctx, guestagent.Request{Op: guestagent.OpResumed, UnixNano: ns})
+	return err
+}
+
 // NewGuest returns the Guest of s. A loaded guest takes the hostname of
 // the Pod.
 func NewGuest(s *Spec) *Guest {
 	host, _ := os.Hostname()
-	return &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf", Hostname: host}
+	g := &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf", Hostname: host}
+	if s.Source.Snapshot != nil {
+		g.TakenAtFile = s.Source.Snapshot.TakenAt
+	}
+	return g
 }
 
 // Exec runs p in the machine through the guest agent: stdin goes in as

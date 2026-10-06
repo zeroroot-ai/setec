@@ -380,6 +380,14 @@ type SessionCheckpointSpec struct {
 	// +optional
 	Backend string `json:"backend,omitempty"`
 
+	// Durable keeps a session through the loss of its node (setec#194).
+	// A durable session gets a checkpoint each Interval (15 minutes when
+	// Interval is unset), as a diff on the last checkpoint of the same
+	// machine. When its node goes away with no notice, the session resumes
+	// from its last checkpoint on another node.
+	// +optional
+	Durable bool `json:"durable,omitempty"`
+
 	// SuspendedTTL is how long a suspended session is kept. A session
 	// suspended for longer is recycled: the Sandbox is deleted with its
 	// checkpoint, its key and its workspace. Defaults to 7 days.
@@ -395,6 +403,25 @@ const DefaultSuspendedTTL = 7 * 24 * time.Hour
 // class with checkpoints is suspended when the class does not set one
 // (setec#193): no attach, no exec and no client stream for 10 minutes.
 const DefaultSessionIdleTimeout = 10 * time.Minute
+
+// DefaultDurableInterval is the checkpoint interval of a durable session
+// when the class does not set one (setec#194).
+const DefaultDurableInterval = 15 * time.Minute
+
+// EffectiveInterval returns the periodic checkpoint interval: Interval, or
+// DefaultDurableInterval for a durable session, or 0 for none.
+func (s *SessionCheckpointSpec) EffectiveInterval() time.Duration {
+	if s == nil {
+		return 0
+	}
+	if s.Interval != nil {
+		return s.Interval.Duration
+	}
+	if s.Durable {
+		return DefaultDurableInterval
+	}
+	return 0
+}
 
 // RecycleAfter returns the effective SuspendedTTL.
 func (s *SessionCheckpointSpec) RecycleAfter() time.Duration {

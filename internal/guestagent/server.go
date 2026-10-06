@@ -87,6 +87,8 @@ func (s *Server) serveConn(c net.Conn) {
 	case OpSetTime:
 		tv := syscall.NsecToTimeval(req.UnixNano)
 		err = syscall.Settimeofday(&tv)
+	case OpResumed:
+		err = WriteResumed(s.Sup.Root, time.Unix(0, req.UnixNano), time.Now())
 	case OpStart:
 		err = s.startWorkload(req.Process)
 	case OpExec:

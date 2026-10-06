@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -44,7 +45,7 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{5}, 32)
-	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek, false)
+	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek, false, "")
 	if err != nil {
 		t.Fatalf("CheckpointSession: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestRestoreSessionCheckpointNoNodePinning(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{6}, 32)
-	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3", kek); err != nil {
+	if err := coord.RestoreSessionCheckpoint(t.Context(), sb, sessCkpt3, "s3", kek, time.Time{}); err != nil {
 		t.Fatalf("RestoreSessionCheckpoint: %v", err)
 	}
 	if na.lastRestore.GetStorageRef() != sessCkpt3 ||
@@ -95,7 +96,7 @@ func TestRestoreSessionCheckpointFailurePropagates(t *testing.T) {
 		restoreRes: &setecgrpcv1.RestoreSandboxResponse{Success: false, Error: "corrupted snapshot"},
 	}
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
-	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-9", "s3", bytes.Repeat([]byte{1}, 32))
+	err := coord.RestoreSessionCheckpoint(t.Context(), sb, "t-a-sess-ckpt-9", "s3", bytes.Repeat([]byte{1}, 32), time.Time{})
 	if err == nil {
 		t.Fatal("want error from failed restore")
 	}
@@ -129,5 +130,18 @@ func TestDeleteSessionCheckpointNoNodesFails(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb), &fakeDialer{client: &fakeNodeAgentClient{}})
 	if err := coord.DeleteSessionCheckpoint(t.Context(), sb, "ref", "s3"); err == nil {
 		t.Fatal("want error when no node-agent is reachable")
+	}
+}
+
+// TestSessionCheckpointID_HoldsTheUID proves that two Sandboxes with one
+// name never share a checkpoint id, and that the restore binding follows.
+func TestSessionCheckpointID_HoldsTheUID(t *testing.T) {
+	a := &setecv1alpha1.Sandbox{Namespace: "ns", Name: "sess", UID: "uid-a"}
+	b := &setecv1alpha1.Sandbox{Namespace: "ns", Name: "sess", UID: "uid-b"}
+	if SessionCheckpointID(a, 3) == SessionCheckpointID(b, 3) {
+		t.Fatal("two Sandboxes with one name share a checkpoint id")
+	}
+	if SessionCheckpointID(a, 3) != "ns-sess-uid-a-ckpt-3" {
+		t.Fatalf("id = %q", SessionCheckpointID(a, 3))
 	}
 }

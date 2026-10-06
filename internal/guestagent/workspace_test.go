@@ -6,9 +6,11 @@
 package guestagent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestClaimWorkspace_GivesANewWorkspaceToTheUser needs files owned by root,
@@ -45,5 +47,24 @@ func TestClaimWorkspace_GivesANewWorkspaceToTheUser(t *testing.T) {
 	}
 	if len(owned) != 1 {
 		t.Fatal("a workspace with data changed its owner")
+	}
+}
+
+// TestWriteResumed_TellsTheWorkloadTheTimeOfItsState pins the event of
+// setec#194: a file in the root of the image with both times.
+func TestWriteResumed_TellsTheWorkloadTheTimeOfItsState(t *testing.T) {
+	root := t.TempDir()
+	state := time.Date(2026, 10, 6, 1, 2, 3, 0, time.UTC)
+	if err := WriteResumed(root, state, state.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, ResumedFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil || got["stateTakenAt"] != "2026-10-06T01:02:03Z" ||
+		got["resumedAt"] != "2026-10-06T02:02:03Z" {
+		t.Fatalf("resumed = %s, %v", raw, err)
 	}
 }
