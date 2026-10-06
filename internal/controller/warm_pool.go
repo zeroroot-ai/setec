@@ -324,7 +324,10 @@ func (r *WarmPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *SandboxReconciler) selectBase(
 	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
 ) (*setecv1alpha1.Snapshot, error) {
+	// A session needs its workspace device, which a base never had, so a
+	// session always boots or loads its own checkpoint.
 	if !poolActive(cls) || r.WarmPoolNamespace == "" || (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") ||
+		sb.Spec.IsSession() ||
 		sb.Spec.Image != cls.Spec.PreWarmImage || !sameResources(sb.Spec.Resources, *cls.Spec.DefaultResources) {
 		return nil, nil
 	}

@@ -112,6 +112,11 @@ message CreateSnapshotRequest {
   // them. A snapshot with a finding is not stored. The base of a warm
   // pool is taken with it (setec#103).
   bool scan_for_secrets = 8;
+
+  // leave_paused keeps the machine paused after the snapshot. A suspend
+  // asks for it: the Pod ends next, and a machine that ran on after the
+  // snapshot would leave the workspace newer than the memory.
+  bool leave_paused = 9;
 }
 
 // CreateSnapshotResponse carries the backend ref for the persisted

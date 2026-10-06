@@ -44,7 +44,7 @@ func TestCheckpointSessionForwardsKEKAndID(t *testing.T) {
 	coord := newCoord(newFakeClient(t, sb, pod), &fakeDialer{client: na})
 
 	kek := bytes.Repeat([]byte{5}, 32)
-	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek)
+	ref, size, err := coord.CheckpointSession(t.Context(), sb, "s3", 3, kek, false)
 	if err != nil {
 		t.Fatalf("CheckpointSession: %v", err)
 	}

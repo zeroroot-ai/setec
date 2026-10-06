@@ -4,6 +4,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -377,6 +379,29 @@ type SessionCheckpointSpec struct {
 	// +kubebuilder:default=s3
 	// +optional
 	Backend string `json:"backend,omitempty"`
+
+	// SuspendedTTL is how long a suspended session is kept. A session
+	// suspended for longer is recycled: the Sandbox is deleted with its
+	// checkpoint, its key and its workspace. Defaults to 7 days.
+	// +optional
+	SuspendedTTL *metav1.Duration `json:"suspendedTTL,omitempty"`
+}
+
+// DefaultSuspendedTTL is the recycle time of a suspended session when the
+// class does not set one (setec#193).
+const DefaultSuspendedTTL = 7 * 24 * time.Hour
+
+// DefaultSessionIdleTimeout is the idle time after which a session of a
+// class with checkpoints is suspended when the class does not set one
+// (setec#193): no attach, no exec and no client stream for 10 minutes.
+const DefaultSessionIdleTimeout = 10 * time.Minute
+
+// RecycleAfter returns the effective SuspendedTTL.
+func (s *SessionCheckpointSpec) RecycleAfter() time.Duration {
+	if s == nil || s.SuspendedTTL == nil || s.SuspendedTTL.Duration <= 0 {
+		return DefaultSuspendedTTL
+	}
+	return s.SuspendedTTL.Duration
 }
 
 // CheckpointBackend returns the effective checkpoint backend name.

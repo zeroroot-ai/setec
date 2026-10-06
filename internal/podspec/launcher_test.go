@@ -294,3 +294,35 @@ func TestBuildLauncher_FromBaseLoadsTheBaseAndStartsTheWorkload(t *testing.T) {
 		t.Fatalf("warm start spec = %+v, %v", s, err)
 	}
 }
+
+// TestBuildLauncher_SessionGetsItsWorkspaceDevice pins the workspace of a
+// launcher session: its PVC as a raw block device that the machine mounts.
+func TestBuildLauncher_SessionGetsItsWorkspaceDevice(t *testing.T) {
+	sb := launcherSandbox()
+	sb.Spec.Lifecycle = &setecv1alpha1.Lifecycle{Mode: setecv1alpha1.LifecycleModeSession}
+	if !sb.Spec.IsSession() {
+		t.Skip("the fixture is not a session")
+	}
+	pod, err := BuildLauncher(sb, launcherOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	devs := pod.Spec.Containers[0].VolumeDevices
+	if len(devs) != 1 || devs[0].DevicePath != LauncherWorkspaceDevice {
+		t.Fatalf("volume devices = %+v", devs)
+	}
+	found := false
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == WorkspacePVCName(sb.Name) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no workspace PVC volume")
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil || s.WorkspaceDevice != LauncherWorkspaceDevice {
+		t.Fatalf("spec workspace = %q, %v", s.WorkspaceDevice, err)
+	}
+}

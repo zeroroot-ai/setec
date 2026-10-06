@@ -6,6 +6,7 @@ package launcher
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,18 @@ func (s *Spec) prepareDisks(format Formatter) error {
 		if _, err := os.Stat(s.WorkspaceDevice); err != nil {
 			return fmt.Errorf("the workspace device: %w", err)
 		}
+		// A new workspace is empty. The guest mounts an ext4 file system
+		// from it, so the first launch of a session formats it, and each
+		// later launch keeps what is there.
+		has, err := hasExt4(s.WorkspaceDevice)
+		if err != nil {
+			return fmt.Errorf("read the workspace device: %w", err)
+		}
+		if !has {
+			if err := format(s.WorkspaceDevice); err != nil {
+				return fmt.Errorf("format the workspace: %w", err)
+			}
+		}
 		links[workspaceLink] = s.WorkspaceDevice
 	}
 	for name, target := range links {
@@ -65,4 +78,25 @@ func (s *Spec) prepareDisks(format Formatter) error {
 		}
 	}
 	return nil
+}
+
+// ext4 keeps its superblock at byte 1024, with the magic 0xEF53 at offset
+// 56 of it, little endian.
+const ext4MagicOffset = 1024 + 56
+
+// hasExt4 reports whether path holds an ext4 (or ext2/3) file system.
+func hasExt4(path string) (bool, error) {
+	f, err := os.Open(path) //nolint:gosec // the workspace device of the spec
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	magic := make([]byte, 2)
+	if _, err := f.ReadAt(magic, ext4MagicOffset); err != nil {
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		return false, err
+	}
+	return magic[0] == 0x53 && magic[1] == 0xEF, nil
 }

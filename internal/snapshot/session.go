@@ -46,6 +46,7 @@ func (c *Coordinator) CheckpointSession(
 	backendName string,
 	sequence int64,
 	sessionKEK []byte,
+	leavePaused bool,
 ) (string, int64, error) {
 	ctx, span := c.startSpan(ctx, "snapshot.CheckpointSession")
 	defer span.End()
@@ -77,6 +78,7 @@ func (c *Coordinator) CheckpointSession(
 		StorageBackend: backendName,
 		SourcePodUid:   string(pod.UID),
 		SessionKek:     sessionKEK,
+		LeavePaused:    leavePaused,
 	})
 	if rpcErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonCheckpointCreateFailed, rpcErr.Error())

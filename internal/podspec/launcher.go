@@ -117,6 +117,10 @@ type LauncherOptions struct {
 	CPUTemplate string
 }
 
+// LauncherWorkspaceDevice is the raw block device of the session workspace
+// in a launcher Pod.
+const LauncherWorkspaceDevice = "/dev/setec-workspace"
+
 // LauncherCPUTemplateDir holds the custom CPU templates in the launcher
 // image, one <name>.json each.
 const LauncherCPUTemplateDir = "/opt/setec/cpu-templates"
@@ -136,19 +140,20 @@ const (
 // launcherSpec is the JSON of internal/launcher.Spec. It is written here
 // rather than imported, so the operator does not link the launcher.
 type launcherSpec struct {
-	VCPU          int              `json:"vcpu"`
-	MemoryMiB     int64            `json:"memoryMiB"`
-	ImageRef      string           `json:"imageRef"`
-	DiskKeys      []string         `json:"diskKeys"`
-	ImageDisk     string           `json:"imageDisk"`
-	DiskSignature string           `json:"diskSignature"`
-	CPUTemplate   string           `json:"cpuTemplate,omitempty"`
-	Base          bool             `json:"base,omitempty"`
-	WritableDisk  string           `json:"writableDisk"`
-	WritableBytes int64            `json:"writableBytes"`
-	WorkDir       string           `json:"workDir"`
-	Source        launcherSource   `json:"source"`
-	Workload      *launcherProcess `json:"workload,omitempty"`
+	VCPU            int              `json:"vcpu"`
+	MemoryMiB       int64            `json:"memoryMiB"`
+	ImageRef        string           `json:"imageRef"`
+	DiskKeys        []string         `json:"diskKeys"`
+	ImageDisk       string           `json:"imageDisk"`
+	DiskSignature   string           `json:"diskSignature"`
+	CPUTemplate     string           `json:"cpuTemplate,omitempty"`
+	WorkspaceDevice string           `json:"workspaceDevice,omitempty"`
+	Base            bool             `json:"base,omitempty"`
+	WritableDisk    string           `json:"writableDisk"`
+	WritableBytes   int64            `json:"writableBytes"`
+	WorkDir         string           `json:"workDir"`
+	Source          launcherSource   `json:"source"`
+	Workload        *launcherProcess `json:"workload,omitempty"`
 }
 
 type launcherSource struct {
@@ -233,6 +238,11 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	}
 	if opts.CPUTemplate != "" {
 		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
+	}
+	// A session keeps its workspace on its PVC, a raw block device that
+	// the machine mounts at /workspace (setec#193).
+	if sb.Spec.IsSession() {
+		spec.WorkspaceDevice = LauncherWorkspaceDevice
 	}
 	if opts.Restore || opts.FromBase {
 		spec.Source.Snapshot = &launcherSnapshot{
@@ -333,6 +343,17 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		},
 	}
 	term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
+	if sb.Spec.IsSession() {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: WorkspaceVolumeName,
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: WorkspacePVCName(sb.Name),
+			},
+		})
+		pod.Spec.Containers[0].VolumeDevices = []corev1.VolumeDevice{{
+			Name: WorkspaceVolumeName, DevicePath: LauncherWorkspaceDevice,
+		}}
+	}
 	if opts.NodeName != "" {
 		term.MatchFields = []corev1.NodeSelectorRequirement{{
 			Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{opts.NodeName},
