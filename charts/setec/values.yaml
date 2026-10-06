@@ -1012,6 +1012,14 @@ snapshots:
   # applies. Select a StorageClass whose CSI driver encrypts its volumes
   # (docs/design/storage.md).
   keysDir: /var/lib/setec/keys
+  # -- kept are the Snapshots kept for review (setec#196). Each one is
+  # sealed with the key of its tenant in the S3-compatible store
+  # (snapshots.s3), opens only in a review Sandbox with no network, and
+  # expires after 30 days unless a person pins it.
+  kept:
+    # -- pinnedLimit caps the pinned kept Snapshots of one tenant. A pin
+    # above it is refused.
+    pinnedLimit: 20Gi
   # entropyReseed controls the ACTIVE entropy reseed on snapshot restore
   # (setec#72). "require" (default, fail-closed): a restore only succeeds
   # once the in-guest setec-guest-agent has acknowledged fresh entropy

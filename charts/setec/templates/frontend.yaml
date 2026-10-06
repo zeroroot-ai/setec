@@ -157,6 +157,12 @@ rules:
   - apiGroups: ["setec.zeroroot.ai"]
     resources: [sandboxclasses]
     verbs: [get, list, watch]
+  # Fork and Keep wait for the Snapshot they asked for, Pin writes
+  # spec.pinned of a kept Snapshot, and a review launch reads it
+  # (setec#195, setec#196). The admission webhook holds the pin limit.
+  - apiGroups: ["setec.zeroroot.ai"]
+    resources: [snapshots]
+    verbs: [get, list, watch, patch]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]

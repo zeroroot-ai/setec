@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -253,9 +254,33 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		return err
 	}
 	snap := c.newSnapshotCR(ctx, sb, pod.Spec.NodeName)
-	snap.Annotations = map[string]string{setecv1alpha1.SnapshotSourcePodUIDAnnotation: string(pod.UID)}
+	snap.Annotations = map[string]string{
+		setecv1alpha1.SnapshotSourcePodUIDAnnotation: string(pod.UID),
+		// The machine size of the source: a review Sandbox, which may
+		// start long after its source is gone, needs it (setec#196).
+		setecv1alpha1.SnapshotVCPUAnnotation:   strconv.Itoa(int(sb.Spec.Resources.VCPU)),
+		setecv1alpha1.SnapshotMemoryAnnotation: sb.Spec.Resources.Memory.String(),
+	}
 	snap.Spec.Parent = sb.Spec.Snapshot.Parent
 	snap.Spec.Forkable = sb.Spec.Snapshot.Forkable
+	// A kept Snapshot goes to the S3-compatible store, sealed with the key
+	// of its tenant, and lives 30 days unless the request sets a TTL or a
+	// person pins it (setec#196).
+	backend, kek := c.backendName(), []byte(nil)
+	if sb.Spec.Snapshot.Kept {
+		if parentRef != "" {
+			return fmt.Errorf("coordinator: a kept snapshot is a full snapshot, not a diff")
+		}
+		if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
+			return err
+		}
+		backend = KeptBackend
+		snap.Spec.Kept = true
+		snap.Spec.StorageBackend = backend
+		if snap.Spec.TTL == nil {
+			snap.Spec.TTL = &metav1.Duration{Duration: DefaultKeptTTL}
+		}
+	}
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Someone raced us. Return the sentinel so the reconciler
@@ -286,9 +311,10 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	resp, rpcErr := na.CreateSnapshot(ctx, &setecgrpcv1.CreateSnapshotRequest{
 		SandboxId:        sb.Namespace + "/" + sb.Name,
 		SnapshotId:       sb.Namespace + "-" + sb.Spec.Snapshot.Name,
-		StorageBackend:   c.backendName(),
+		StorageBackend:   backend,
 		SourcePodUid:     string(pod.UID),
 		ParentStorageRef: parentRef,
+		SessionKek:       kek,
 	})
 	if rpcErr != nil {
 		reason := EventReasonSnapshotCreateFailed
@@ -475,7 +501,7 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	// another — invariants 1/3/4 all fail — so outside dev-mode it is
 	// refused BEFORE any state is loaded into the target VM.
 	cls := c.classOf(ctx, sb)
-	bound := snap.Spec.SourceSandbox == sb.Name || c.isCleanBase(snap) || isOwnFork(sb, snap)
+	bound := snap.Spec.SourceSandbox == sb.Name || c.isCleanBase(snap) || isOwnFork(sb, snap) || isReviewOf(sb, snap)
 	preflight := gate.Evidence{
 		CleanBase:          bound,
 		EntropyReseeded:    true, // verified post-RPC
@@ -509,6 +535,15 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 			snap.Spec.Node, pod.Spec.NodeName)
 	}
 
+	var restoreKEK []byte
+	if snap.Spec.Kept {
+		k, err := c.TenantKEK(ctx, snap.Namespace)
+		if err != nil {
+			setSpanErr(span, err.Error())
+			return err
+		}
+		restoreKEK = k
+	}
 	na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName)
 	if dialErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable, dialErr.Error())
@@ -525,6 +560,7 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		PodIp:              pod.Status.PodIP,
 		Hostname:           sb.Name,
 		StateTakenUnixNano: snap.CreationTimestamp.UnixNano(),
+		SessionKek:         restoreKEK,
 	})
 	if rpcErr != nil || (resp != nil && !resp.Success) {
 		msg := errString(rpcErr, resp)

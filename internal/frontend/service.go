@@ -149,6 +149,9 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		return nil, err
 	}
 
+	if rs := req.GetReviewSnapshot(); rs != "" {
+		return s.launchReview(ctx, ns, pair, rs)
+	}
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
@@ -221,6 +224,27 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		// Read back from the created object, not the request, so any
 		// admission-time defaulting of the class is what gets reported.
 		SandboxClass: sb.Spec.SandboxClassName,
+	}, nil
+}
+
+// launchReview starts the review Sandbox of a kept snapshot of the tenant
+// (setec#196).
+func (s *Service) launchReview(ctx context.Context, ns string, pair tenancy.Pair, name string) (*setecv1grpc.LaunchResponse, error) {
+	snap := &setecv1alpha1.Snapshot{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, snap); err != nil {
+		return nil, status.Errorf(grpcCodeFor(err), "get the kept snapshot: %v", err)
+	}
+	sb, err := reviewSandbox(snap)
+	if err != nil {
+		return nil, err
+	}
+	sb.Labels = pairLabels(pair)
+	if err := s.Client.Create(ctx, sb); err != nil {
+		return nil, status.Errorf(grpcCodeFor(err), "create the review Sandbox: %v", err)
+	}
+	return &setecv1grpc.LaunchResponse{
+		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
+		Name:      sb.Name, Namespace: sb.Namespace, SandboxClass: sb.Spec.SandboxClassName,
 	}, nil
 }
 

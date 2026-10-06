@@ -93,6 +93,12 @@ spec:
                   node. With no CPU template, a restore runs only on a node of this
                   instance type, which has the same CPU.
                 type: string
+              kept:
+                description: |-
+                  Kept marks a Snapshot kept for review (setec#196): sealed with the
+                  key of its tenant, loaded only by a review Sandbox, deleted after
+                  its TTL (30 days by default) unless Pinned.
+                type: boolean
               kernelVersion:
                 description: |-
                   KernelVersion is the guest kernel version used by the source
@@ -112,6 +118,11 @@ spec:
                   loads the parent first, and a parent is not deleted while a diff
                   names it. Empty for a full snapshot.
                 type: string
+              pinned:
+                description: |-
+                  Pinned keeps a kept Snapshot past its TTL. The pinned Snapshots of a
+                  tenant count against a storage limit, and a pin above it is refused.
+                type: boolean
               sandboxClass:
                 description: |-
                   SandboxClass is the name of the SandboxClass this snapshot is

@@ -19,6 +19,14 @@ const SnapshotInUseFinalizer = "setec.zeroroot.ai/snapshot-in-use"
 // parent from the same machine, so the operator compares the two.
 const SnapshotSourcePodUIDAnnotation = "setec.zeroroot.ai/source-pod-uid"
 
+// SnapshotVCPUAnnotation and SnapshotMemoryAnnotation record the machine
+// size of the source of a Snapshot. A Sandbox that loads it needs the
+// same size.
+const (
+	SnapshotVCPUAnnotation   = "setec.zeroroot.ai/vcpu"
+	SnapshotMemoryAnnotation = "setec.zeroroot.ai/memory"
+)
+
 // SnapshotPhase is the high-level lifecycle state of a Snapshot.
 //
 // All four values are written by the operator. Ready was once the only
@@ -57,6 +65,17 @@ const (
 // Snapshot CRs are accepted but uncommon (the usual entry point is
 // Sandbox.spec.snapshot.create=true).
 type SnapshotSpec struct {
+	// Kept marks a Snapshot kept for review (setec#196): sealed with the
+	// key of its tenant, loaded only by a review Sandbox, deleted after
+	// its TTL (30 days by default) unless Pinned.
+	// +optional
+	Kept bool `json:"kept,omitempty"`
+
+	// Pinned keeps a kept Snapshot past its TTL. The pinned Snapshots of a
+	// tenant count against a storage limit, and a pin above it is refused.
+	// +optional
+	Pinned bool `json:"pinned,omitempty"`
+
 	// Forkable lets a Sandbox of the same namespace other than the source
 	// start from this Snapshot (setec#195). The namespace is the one owner
 	// pair, so a fork loads only for the owner of the Snapshot.

@@ -50,6 +50,10 @@ type SnapshotValidator struct {
 	// Client is a controller-runtime reader used to inspect existing
 	// Snapshots and ResourceQuotas in the namespace. Required.
 	Client client.Reader
+	// PinnedLimitBytes caps the pinned kept Snapshots of one namespace,
+	// which is one tenant of one client (setec#196). Zero refuses each
+	// pin.
+	PinnedLimitBytes int64
 }
 
 var _ admission.Validator[*setecv1alpha1.Snapshot] = (*SnapshotValidator)(nil)
@@ -108,10 +112,44 @@ func (v *SnapshotValidator) validate(ctx context.Context, snap *setecv1alpha1.Sn
 		}
 	}
 
+	// Rule 4: a pin needs a kept Snapshot and room under the limit.
+	if snap.Spec.Pinned {
+		if err := v.checkPin(ctx, snap); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil, nil
 	}
 	return nil, utilerrors.NewAggregate(errs)
+}
+
+// checkPin refuses a pin of a Snapshot that is not kept, and a pin that
+// takes the pinned Snapshots of the namespace above PinnedLimitBytes.
+func (v *SnapshotValidator) checkPin(ctx context.Context, snap *setecv1alpha1.Snapshot) error {
+	if !snap.Spec.Kept {
+		return fmt.Errorf("spec.pinned: only a kept Snapshot can be pinned")
+	}
+	if v.Client == nil {
+		return nil
+	}
+	all := &setecv1alpha1.SnapshotList{}
+	if err := v.Client.List(ctx, all, client.InNamespace(snap.Namespace)); err != nil {
+		return fmt.Errorf("webhook: list Snapshots: %w", err)
+	}
+	used := snap.Spec.Size
+	for i := range all.Items {
+		o := &all.Items[i]
+		if o.Name != snap.Name && o.Spec.Pinned {
+			used += o.Spec.Size
+		}
+	}
+	if used > v.PinnedLimitBytes {
+		return fmt.Errorf("spec.pinned: the pinned Snapshots of namespace %q would use %d bytes, above the limit of %d",
+			snap.Namespace, used, v.PinnedLimitBytes)
+	}
+	return nil
 }
 
 // checkQuota reads every ResourceQuota in the namespace and rejects

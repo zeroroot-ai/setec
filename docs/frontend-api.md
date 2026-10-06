@@ -19,6 +19,8 @@ service SandboxService {
   rpc Suspend(SuspendRequest) returns (SuspendResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
   rpc Fork(ForkRequest) returns (ForkResponse);
+  rpc Keep(KeepRequest) returns (KeepResponse);
+  rpc Pin(PinRequest) returns (PinResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
   rpc Exec(stream SandboxServiceExecRequest) returns (stream SandboxServiceExecResponse);
 }
@@ -428,6 +430,24 @@ another fork.
 - The snapshot is deleted `snapshot_ttl_seconds` after the fork (one hour
   by default), once no fork still needs it.
 - A session does not fork: its workspace belongs to one sandbox.
+
+## Keep a sandbox for review (`Keep`, `Pin`)
+
+`Keep` takes a snapshot of a running launcher sandbox for a later review.
+The snapshot is sealed with the key of the tenant in the S3-compatible
+store, so a node that never held it can open it.
+
+- A kept snapshot opens only in a review sandbox: `Launch` with
+  `review_snapshot` set to the snapshot name. A review sandbox has no
+  network and the machine size of its source. A normal launch from a
+  kept snapshot stays Pending with the reason `SnapshotIncompatible`.
+- A kept snapshot is deleted after 30 days. `Pin` keeps it past that
+  time, and `Pin` with `pinned: false` lets it expire again.
+- The pinned snapshots of a tenant count against a storage limit
+  (`snapshots.kept.pinnedLimit`, 20 GiB by default). A pin above it is
+  `FAILED_PRECONDITION`.
+- When the tenant goes, its namespace goes with its kept snapshots and
+  its key.
 
 ## Streaming logs
 

@@ -67,6 +67,18 @@ service SandboxService {
   // snapshot_ttl_seconds once no fork still needs it.
   rpc Fork(ForkRequest) returns (ForkResponse);
 
+  // Keep takes a snapshot of a running launcher sandbox for a later
+  // review (setec#196). The snapshot is sealed with the key of the
+  // tenant, opens only in a review sandbox with no network (see
+  // LaunchRequest.review_snapshot), and is deleted after 30 days unless
+  // a person pins it.
+  rpc Keep(KeepRequest) returns (KeepResponse);
+
+  // Pin keeps a kept snapshot past its 30 days, or lets it expire again.
+  // The pinned snapshots of a tenant count against a storage limit, and a
+  // pin above it is FAILED_PRECONDITION.
+  rpc Pin(PinRequest) returns (PinResponse);
+
   // Attach resolves a session handle (the sandbox_id returned by
   // Launch) to its live session so a caller that disconnected — or a
   // caller talking to a restarted frontend — can reattach and continue
@@ -180,6 +192,10 @@ message LaunchRequest {
   // pair of the caller cluster and this tenant selects the namespace of
   // the sandbox, and a call on a sandbox of a different pair is refused.
   string tenant = 8;
+  // review_snapshot names a kept snapshot of the tenant. The new sandbox
+  // is then a review sandbox: it loads the snapshot, has no network, and
+  // ignores image, command and network of this request (setec#196).
+  string review_snapshot = 9;
 }
 
 // LaunchResponse identifies the Sandbox created for the caller.
@@ -581,3 +597,27 @@ message ForkResponse {
   string snapshot = 1;
   repeated string sandbox_ids = 2;
 }
+
+// KeepRequest names the sandbox whose state is kept.
+message KeepRequest {
+  string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox, as in KillRequest.
+  string tenant = 2;
+  // pinned keeps the snapshot past its 30 days from the start.
+  bool pinned = 3;
+}
+
+// KeepResponse names the kept snapshot.
+message KeepResponse {
+  string snapshot = 1;
+}
+
+// PinRequest names a kept snapshot of the tenant.
+message PinRequest {
+  string snapshot = 1;
+  string tenant = 2;
+  bool pinned = 3;
+}
+
+message PinResponse {}
