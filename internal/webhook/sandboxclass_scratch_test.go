@@ -15,7 +15,7 @@ import (
 )
 
 // TestSandboxClassWebhook_ValidateScratch covers the two scratch values of a
-// class (ADR-0146, setec#172).
+// class (docs/design/storage.md, setec#172).
 func TestSandboxClassWebhook_ValidateScratch(t *testing.T) {
 	t.Parallel()
 	mk := func(def, max *resource.Quantity) *setecv1alpha1.SandboxClass {

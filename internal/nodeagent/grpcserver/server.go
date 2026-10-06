@@ -188,7 +188,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 
 	// A base for the warm pool holds no tenant data. The scan runs on the
 	// plaintext files before the store sees them, and a finding stops the
-	// snapshot (ADR-0145 invariant 1, setec#103).
+	// snapshot (check 1 of docs/design/isolation.md, setec#103).
 	clean := false
 	if in.GetScanForSecrets() {
 		files := []string{statePath, memPath, diskPath}

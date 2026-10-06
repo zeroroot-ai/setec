@@ -505,6 +505,13 @@ jobs:
       - name: No second isolation backend in the tree
         run: bash scripts/check-one-backend.sh
 
+      # setec#240: a Go comment points to a design page, not to an ADR.
+      - name: Mutation-test the ADR citation guard
+        run: bash scripts/check-no-adr-citation.sh --selftest
+
+      - name: No ADR citation in a Go file
+        run: bash scripts/check-no-adr-citation.sh
+
   crd-field-consumers:
     name: Every served CRD field has a consumer
     # Runs on both lanes, like the other tree guards. Each declaration has

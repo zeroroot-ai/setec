@@ -294,7 +294,7 @@ func (s *spiffeSource) identity(ctx context.Context) (tls.Certificate, error) {
 // will even parse a chain for.
 //
 // A fleet serves many enrolled clusters, each in its own trust domain
-// (ADR-0164). A domain whose federated bundle is missing is reported and
+// (docs/frontend-api.md, Authentication). A domain whose federated bundle is missing is reported and
 // left out: its peers are refused, and every other domain keeps working.
 // Failing the whole pool would let one cluster with broken federation stop
 // the fleet for all of them. A pool with no authority at all is an error.

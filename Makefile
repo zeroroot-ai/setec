@@ -254,6 +254,11 @@ check-trust-domain-literal: ## Fail on the SPIFFE trust domain of a real install
 	bash scripts/check-no-trust-domain-literal.sh --selftest
 	bash scripts/check-no-trust-domain-literal.sh
 
+.PHONY: check-no-adr-citation
+check-no-adr-citation: ## Fail on an ADR citation in a Go file: a comment points to a design page (setec#240).
+	bash scripts/check-no-adr-citation.sh --selftest
+	bash scripts/check-no-adr-citation.sh
+
 .PHONY: check-one-backend
 check-one-backend: ## Fail on a second isolation backend: the launcher is the one backend (setec#198).
 	bash scripts/check-one-backend.sh --selftest
@@ -287,7 +292,7 @@ helm-lint: ## Lint the Setec Helm chart (requires helm CLI on PATH).
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling check-trust-domain-literal check-one-backend ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard, trust domain literal guard — run 'make lint' separately).
+check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling check-trust-domain-literal check-one-backend check-no-adr-citation ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard, trust domain literal guard, one backend guard, ADR citation guard — run 'make lint' separately).
 
 ##@ Dependencies
 

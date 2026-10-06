@@ -397,7 +397,7 @@ func TestSamples_TheAPIServerAcceptsEachSample(t *testing.T) {
 	}
 }
 
-// TestAPI_MemoryCeiling proves the 64Gi memory ceiling of ADR-0146 against
+// TestAPI_MemoryCeiling proves the 64Gi memory ceiling (docs/design/lifecycles.md) against
 // the real CRD schema (setec#172). The API server refuses more, and accepts
 // the ceiling itself and a scratch value.
 func TestAPI_MemoryCeiling(t *testing.T) {

@@ -88,8 +88,8 @@ func Validate(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) []Cons
 	}
 
 	// Scratch ceiling. Unlike vcpu and memory it applies with no
-	// MaxResources too: the default ceiling is DefaultScratch (ADR-0146).
-	// The effective value is checked, so a class default above the class
+	// MaxResources too: the default ceiling is DefaultScratch
+	// (docs/design/storage.md). The effective value is checked, so a class default above the class
 	// ceiling is refused as well as an explicit request.
 	if scratch, ceiling := limits.EffectiveScratch(sb, cls), limits.ScratchCeiling(cls); scratch.Cmp(ceiling) > 0 {
 		out = append(out, ConstraintViolation{
