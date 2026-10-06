@@ -163,7 +163,7 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 	}
 }
 
-// uniquify gives a loaded guest a new identity (ADR-0145 invariant 2).
+// uniquify gives a loaded guest a new identity (check 2 of docs/design/isolation.md).
 func (g *Guest) uniquify(ctx context.Context, pn PodNet) error {
 	u := g.Uniquifier
 	if u == nil {

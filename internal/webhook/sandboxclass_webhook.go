@@ -210,9 +210,10 @@ func validateRequests(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	return errs
 }
 
-// validateScratch checks the two scratch values of a class (ADR-0146). Each
-// must be positive, and the default must fit under the ceiling: a default
-// above it would make every Sandbox that omits scratch fail admission.
+// validateScratch checks the two scratch values of a class
+// (docs/design/storage.md). Each must be positive, and the default must fit
+// under the ceiling: a default above it would make every Sandbox that omits
+// scratch fail admission.
 func validateScratch(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	var errs field.ErrorList
 	ceiling := limits.ScratchCeiling(class)

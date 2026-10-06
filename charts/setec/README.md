@@ -382,7 +382,7 @@ get one `--spiffe-authorized-id` per entry in the matching
 | `nodeAgentClients` | callers of the node-agent (the operator) | `nodeAgent.enabled=true` + `snapshots.enabled=true` |
 | `nodeAgentServers` | node-agent server IDs the operator accepts | `snapshots.enabled=true` |
 
-**Federation.** Each install has its own trust domain (ADR-0164).
+**Federation.** Each install has its own trust domain (see Authentication in `docs/frontend-api.md`).
 `credentials.spiffe.trustDomain` names the domain of this fleet and is
 required in SPIFFE mode with the frontend on. An enrolled client in a
 different domain needs a `federation` block: `bundleEndpointURL`,

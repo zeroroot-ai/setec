@@ -585,7 +585,7 @@ func eventually(t *testing.T, budget time.Duration, fn func() error) {
 }
 
 // TestSPIFFEServerCredentials_FederatedClientDomain is the federation test of
-// setec#169 (ADR-0164). The fleet runs in its own trust domain. An enrolled
+// setec#169 (docs/frontend-api.md, Authentication). The fleet runs in its own trust domain. An enrolled
 // client from a second domain connects with the bundle that federation
 // delivers. A caller from a third domain is refused, with its own CA and
 // with the CA of the federated domain.

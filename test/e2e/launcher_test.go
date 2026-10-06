@@ -6,7 +6,7 @@
 package e2e
 
 // The abilities that only the launcher has (setec#197): a restore with the
-// five isolation invariants of ADR-0145, the warm pool, a fork into three
+// five isolation checks of docs/design/isolation.md, the warm pool, a fork into three
 // Sandboxes and a kept snapshot. Suspend, resume and a resume on another
 // node after a drain are the scenarios of session_checkpoint_test.go, run
 // on the launcher backend. Each scenario here runs only on that backend.
@@ -102,7 +102,7 @@ func sandboxEventReasons(t *testing.T, ns, name string) []string {
 	return strings.Fields(string(out))
 }
 
-// assertRestoredGuest checks invariant 2 of ADR-0145 on a restored
+// assertRestoredGuest verifies check 2 of docs/design/isolation.md on a restored
 // Sandbox: the gate saw fresh randomness and a new identity, nothing was
 // served without that evidence, and the guest has its own machine-id,
 // randomness and clock and sees the address of its own Pod. Invariant 5

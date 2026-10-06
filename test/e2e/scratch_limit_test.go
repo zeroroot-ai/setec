@@ -18,7 +18,7 @@ import (
 )
 
 // TestSandbox_ScratchFullStopsTheSandbox fills the scratch volume past its
-// size limit (ADR-0146, setec#172). The kubelet must stop the Sandbox, and
+// size limit (docs/design/storage.md, setec#172). The kubelet must stop the Sandbox, and
 // the node must stay Ready: a full scratch volume never fills the node.
 func TestSandbox_ScratchFullStopsTheSandbox(t *testing.T) {
 	spec := minimalSpec("/bin/sh", "-c",

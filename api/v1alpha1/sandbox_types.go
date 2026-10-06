@@ -213,8 +213,8 @@ type SandboxSnapshotRef struct {
 // Resources declares the CPU, memory and scratch budget allocated to the
 // Sandbox microVM. VCPU and Memory are required.
 //
-// Memory has a ceiling of 64 GiB in the API (ADR-0146). A SandboxClass can
-// lower it with maxResources.memory, never raise it.
+// Memory has a ceiling of 64 GiB in the API (docs/design/lifecycles.md). A
+// SandboxClass can lower it with maxResources.memory, never raise it.
 // +kubebuilder:validation:XValidation:rule="quantity(string(self.memory)).compareTo(quantity('64Gi')) <= 0",message="memory must not exceed 64Gi"
 type Resources struct {
 	// VCPU is the number of virtual CPUs to assign to the microVM.
