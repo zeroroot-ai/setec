@@ -7,11 +7,16 @@
 {{- fail "frontend.tlsClientCASecretName is required when frontend.enabled=true in file mode; the frontend requires mTLS (client-cert verification)." -}}
 {{- end -}}
 {{- end -}}
-{{- if and .Values.frontend.sandboxNamespace .Values.frontend.tenantNamespaceLabel -}}
-{{- fail "frontend.sandboxNamespace and frontend.tenantNamespaceLabel are mutually exclusive: Sandboxes either all share one fixed namespace or are routed to a per-tenant namespace by label, never both (setec#158)." -}}
+{{- if not .Values.frontend.clients -}}
+{{- fail "frontend.clients must not be empty when frontend.enabled=true: the frontend refuses every caller that is not an enrolled client, so an install with no client serves nobody. Add one {name, spiffeID} entry for each Gibson cluster." -}}
 {{- end -}}
-{{- if and .Values.frontend.sandboxNamespace (not .Values.rbac.allowClusterWideSandboxWrite) (not (has .Values.frontend.sandboxNamespace .Values.sandboxNamespaces)) -}}
-{{- fail (printf "frontend.sandboxNamespace %q must be listed in sandboxNamespaces: that list is where the operator's Pod-write RBAC is bound and where the default-deny NetworkPolicy is installed, so a namespace outside it can hold Sandbox CRs but never run one." .Values.frontend.sandboxNamespace) -}}
+{{- range .Values.frontend.clients -}}
+{{- if or (not .name) (not .spiffeID) -}}
+{{- fail "each entry of frontend.clients needs a name and a spiffeID" -}}
+{{- end -}}
+{{- if not (hasPrefix "spiffe://" .spiffeID) -}}
+{{- fail (printf "frontend.clients entry %q: spiffeID must start with spiffe://, got %q" .name .spiffeID) -}}
+{{- end -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -43,17 +48,15 @@ spec:
           args:
             - --listen-addr={{ .Values.frontend.listenAddr }}
             - --metrics-addr=:{{ .Values.frontend.metricsPort }}
-            {{- with .Values.frontend.sandboxNamespace }}
-            - --sandbox-namespace={{ . }}
+            {{- range .Values.frontend.clients }}
+            - --client={{ .name }}={{ .spiffeID }}
             {{- end }}
-            {{- with .Values.frontend.tenantNamespaceLabel }}
-            - --tenant-namespace-label={{ . }}
-            {{- end }}
+            # The RoleBindings of each pair namespace that the frontend
+            # makes: Pod writes for the operator, exec for the frontend.
+            - --pair-namespace-grant={{ include "setec.fullname" . }}-sandbox-namespace={{ .Values.namespace }}/{{ include "setec.serviceAccountName" . }}
+            - --pair-namespace-grant={{ include "setec.fullname" . }}-frontend-exec={{ .Values.namespace }}/{{ include "setec.fullname" . }}-frontend
             {{- if eq .Values.credentials.mode "spiffe" }}
             - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
-            {{- range .Values.credentials.spiffe.authorizedIDs.frontendClients }}
-            - --spiffe-authorized-id={{ . }}
-            {{- end }}
             {{- else }}
             - --tls-cert=/etc/setec/tls/tls.crt
             - --tls-key=/etc/setec/tls/tls.key
@@ -152,6 +155,24 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list, watch]
+  # The namespace of each pair of client and tenant (setec#207). The
+  # frontend makes it on the first call of the pair, with two
+  # RoleBindings in it. The ValidatingAdmissionPolicy -frontend-scope
+  # limits both writes: a namespace only with the sandbox labels and the
+  # sbx- prefix, a RoleBinding only in such a namespace and only of the
+  # two roles below.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [rolebindings]
+    verbs: [create]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames:
+      - {{ include "setec.fullname" . }}-sandbox-namespace
+      - {{ include "setec.fullname" . }}-frontend-exec
   # Reads stay cluster-wide: the frontend resolves a Sandbox to its Pod
   # and streams that Pod's log. Neither verb enters a container.
   - apiGroups: [""]
@@ -185,9 +206,8 @@ its ServiceAccount token, its mounted Secrets and, on this platform, its
 SPIFFE SVID. No admission policy runs on a subresource, so the binding
 scope is the whole of the control.
 
-Sandbox Pods only ever run in the namespaces named in `sandboxNamespaces`
-— the render fails above when `frontend.sandboxNamespace` is outside that
-list — so the grant is RoleBound into exactly those namespaces and is
+Sandbox Pods only ever run in the namespaces named in `sandboxNamespaces`,
+so the grant is RoleBound into exactly those namespaces and is
 never cluster-wide. A namespace that holds a platform identity is
 therefore out of reach.
 

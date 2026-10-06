@@ -24,7 +24,6 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
-	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,17 +32,6 @@ import (
 // testSandboxClass is the SandboxClass name the class-reporting tests
 // bind Sandboxes to.
 const testSandboxClass = "standard"
-
-// stubResolver returns the configured namespace regardless of tenant;
-// cross-tenant tests construct instances with different values.
-type stubResolver struct {
-	ns  string
-	err error
-}
-
-func (s *stubResolver) NamespaceFor(_ context.Context, _ tenancy.TenantID) (string, error) {
-	return s.ns, s.err
-}
 
 func newClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
@@ -667,69 +655,6 @@ func errForTesting(msg string) error                                    { return
 type simpleErr struct{ s string }
 
 func (e *simpleErr) Error() string { return e.s }
-
-// stubResolver is used indirectly by Launch/Kill/Wait via AuthDisabled=true;
-// this test exercises the TenantResolver plumbing explicitly.
-func TestResolveNamespace_UsesResolver(t *testing.T) {
-	t.Parallel()
-	s := &Service{
-		Client:         newClient(t),
-		TenantResolver: &stubResolver{ns: "resolved-ns"},
-		AuthDisabled:   true,
-		// With AuthDisabled true, DefaultNamespace wins; so remove it
-		// here to test the AuthDisabled=false path below.
-	}
-	// AuthDisabled=true, DefaultNamespace empty → FailedPrecondition.
-	_, err := s.resolveNamespace(context.Background())
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", err)
-	}
-}
-
-func TestResolveNamespace_AuthEnabledWithCert(t *testing.T) {
-	t.Parallel()
-	cert := makeCert(t, []string{"tenant-a.svc"})
-	ctx := ctxWithCert(cert)
-
-	s := &Service{
-		Client:         newClient(t),
-		TenantResolver: &stubResolver{ns: "ns-for-tenant-a"},
-	}
-	ns, err := s.resolveNamespace(ctx)
-	if err != nil {
-		t.Fatalf("resolveNamespace(): %v", err)
-	}
-	if ns != "ns-for-tenant-a" {
-		t.Fatalf("ns = %q, want ns-for-tenant-a", ns)
-	}
-}
-
-func TestResolveNamespace_AuthEnabledNoResolver(t *testing.T) {
-	t.Parallel()
-	cert := makeCert(t, []string{"tenant-a.svc"})
-	ctx := ctxWithCert(cert)
-
-	s := &Service{Client: newClient(t)}
-	_, err := s.resolveNamespace(ctx)
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("code = %s, want FailedPrecondition", status.Code(err))
-	}
-}
-
-func TestResolveNamespace_ResolverError(t *testing.T) {
-	t.Parallel()
-	cert := makeCert(t, []string{"tenant-a.svc"})
-	ctx := ctxWithCert(cert)
-
-	s := &Service{
-		Client:         newClient(t),
-		TenantResolver: &stubResolver{err: status.Error(codes.NotFound, "no match")},
-	}
-	_, err := s.resolveNamespace(ctx)
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("code = %s, want PermissionDenied", status.Code(err))
-	}
-}
 
 func TestGrpcCodeFor_Cases(t *testing.T) {
 	t.Parallel()

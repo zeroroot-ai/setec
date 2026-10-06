@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -20,8 +21,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -32,7 +33,6 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/credentials"
 	"github.com/zeroroot-ai/setec/internal/frontend"
-	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc"
 )
@@ -41,8 +41,8 @@ func main() {
 	var (
 		listenAddr        string
 		creds             credentialFlags
-		tenantLabelKey    string
-		sandboxNamespace  string
+		clients           repeatedString
+		grants            repeatedString
 		metricsAddr       string
 		shutdownGraceTime time.Duration
 	)
@@ -56,15 +56,14 @@ func main() {
 	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
 			"Selects SPIFFE credential mode; mutually exclusive with the --tls-* flags.")
-	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
-		"Full SPIFFE ID allowed to call this frontend, e.g. spiffe://zeroroot.ai/ns/gibson/sa/gibson. "+
-			"Repeat for each caller. Required in SPIFFE mode; there is no accept-everyone setting.")
-	flag.StringVar(&tenantLabelKey, "tenant-namespace-label", "setec.zeroroot.ai/tenant",
-		"Label key used to map tenant → namespace. Mutually exclusive with --sandbox-namespace.")
-	flag.StringVar(&sandboxNamespace, "sandbox-namespace", "",
-		"Fixed namespace every tenant's Sandboxes are placed in, for installs "+
-			"that use one shared Sandbox namespace instead of one namespace per "+
-			"tenant. Mutually exclusive with --tenant-namespace-label.")
+	flag.Var(&clients, "client",
+		"An enrolled client cluster, as <name>=<spiffe-id>, e.g. "+
+			"saas=spiffe://example.org/ns/gibson/sa/gibson-daemon. Repeat for each Gibson cluster. "+
+			"Required: the frontend refuses every caller that is not enrolled. In SPIFFE mode "+
+			"these IDs are also the credential allow-list.")
+	flag.Var(&grants, "pair-namespace-grant",
+		"A RoleBinding that each new pair namespace gets, as <cluster-role>=<sa-namespace>/<sa-name>. "+
+			"Repeat for each: the operator needs its Pod-write role and the frontend its exec role there.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
 	flag.DurationVar(&shutdownGraceTime, "shutdown-grace", 30*time.Second,
 		"Maximum time to wait for in-flight RPCs during graceful shutdown.")
@@ -90,42 +89,43 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The namespace strategy is explicit, mirroring the credential-mode
-	// selection above: exactly one applies, and asking for both is a
-	// misconfiguration the Deployment should restart out of, not paper
-	// over.
-	labelKeySet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "tenant-namespace-label" {
-			labelKeySet = true
-		}
-	})
-	resolver, resolverDesc, err := selectResolver(k8sClient, sandboxNamespace, tenantLabelKey, labelKeySet)
+	// Each Gibson cluster is a named client. The pair of the client and the
+	// tenant of the request has one namespace, which the frontend makes on
+	// the first call of the pair (docs/design/isolation.md).
+	enrollment, err := frontend.ParseEnrollment(clients)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "frontend: tenant resolution: %s\n", resolverDesc)
+	roleGrants, err := parseGrants(grants)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "frontend: %v\n", err)
+		os.Exit(1)
+	}
+	resolver := &frontend.NamespaceProvisioner{Client: k8sClient, Grants: roleGrants}
+	fmt.Fprintf(os.Stderr, "frontend: %d enrolled clients\n", len(enrollment.SPIFFEIDs()))
 	srv := &frontend.Service{
 		Client:    k8sClient,
 		Clientset: clientset,
 		// Exec opens pods/exec streams, which need the REST config
 		// itself: the connection is an HTTP upgrade the typed clientset
 		// does not model.
-		RESTConfig:     cfg,
-		TenantResolver: resolver,
+		RESTConfig: cfg,
+		Enrollment: enrollment,
+		Resolver:   resolver,
 	}
 	leaseSrv := &frontend.LeaseService{
-		Client:         k8sClient,
-		Clientset:      clientset,
-		TenantResolver: resolver,
+		Client:     k8sClient,
+		Clientset:  clientset,
+		Enrollment: enrollment,
+		Resolver:   resolver,
 	}
 
 	// mTLS is mandatory and the credential mode is explicit. Half a
 	// mode, both modes, or neither is a misconfiguration the Deployment
 	// should restart out of, not paper over; credentials.New is what
 	// decides that, so there is one answer and not one per component.
-	credConfig, credMode := creds.config()
+	credConfig, credMode := creds.config(enrollment.SPIFFEIDs())
 	provider, err := credentials.New(credConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "frontend: credentials: %v\n", err)
@@ -195,15 +195,15 @@ const (
 
 // credentialFlags carries the frontend's credential flags.
 type credentialFlags struct {
-	tlsCert             string
-	tlsKey              string
-	tlsClientCA         string
-	spiffeSocket        string
-	spiffeAuthorizedIDs repeatedString
+	tlsCert      string
+	tlsKey       string
+	tlsClientCA  string
+	spiffeSocket string
 }
 
 // config maps the flags onto a credentials.Config and names the mode
-// they selected.
+// they selected. In SPIFFE mode the allow-list is the SPIFFE ID of each
+// enrolled client, so one list names who may call.
 //
 // It deliberately validates nothing. A source is *selected* by any of
 // its flags being set, not by all of them; whether the selection is
@@ -212,7 +212,7 @@ type credentialFlags struct {
 // same answer and the same message. Selecting on "any flag set" is what
 // makes a typo in one flag name a startup error naming the missing
 // piece rather than a silent switch to the other mode.
-func (f credentialFlags) config() (credentials.Config, string) {
+func (f credentialFlags) config(enrolledIDs []string) (credentials.Config, string) {
 	var (
 		cfg  credentials.Config
 		mode = unsetMode
@@ -225,10 +225,10 @@ func (f credentialFlags) config() (credentials.Config, string) {
 		}
 		mode = fileMode
 	}
-	if f.spiffeSocket != "" || len(f.spiffeAuthorizedIDs) > 0 {
+	if f.spiffeSocket != "" {
 		cfg.SPIFFE = &credentials.SPIFFESource{
 			SocketPath:    f.spiffeSocket,
-			AuthorizedIDs: f.spiffeAuthorizedIDs,
+			AuthorizedIDs: enrolledIDs,
 		}
 		mode = spiffeMode
 	}
@@ -238,8 +238,8 @@ func (f credentialFlags) config() (credentials.Config, string) {
 	return cfg, mode
 }
 
-// repeatedString collects a flag given more than once. The credential
-// allow-list is a list of full SPIFFE IDs, and repeating the flag keeps
+// repeatedString collects a flag given more than once. The enrolled
+// clients are a list, and repeating the flag keeps
 // each entry visible on its own line in a manifest rather than buried
 // in a delimited string.
 type repeatedString []string
@@ -251,64 +251,27 @@ func (r *repeatedString) Set(v string) error {
 	return nil
 }
 
-// selectResolver picks the tenant → namespace strategy from the flags.
-// Exactly one applies: a fixed shared namespace (--sandbox-namespace) or
-// the label lookup (--tenant-namespace-label, the default). Passing both
-// is refused with a message naming the cause rather than silently
-// preferring one.
-func selectResolver(
-	c client.Client, sandboxNamespace, tenantLabelKey string, labelKeySet bool,
-) (frontend.TenantResolver, string, error) {
-	if sandboxNamespace != "" {
-		if labelKeySet {
-			return nil, "", fmt.Errorf("--sandbox-namespace and --tenant-namespace-label are mutually exclusive: " +
-				"Sandboxes either all share one fixed namespace or are routed to a per-tenant namespace by label, never both")
+// parseGrants reads the --pair-namespace-grant entries. At least one is
+// required: without the Pod-write grant of the operator, no Sandbox of a
+// new pair could run.
+func parseGrants(entries []string) ([]frontend.RoleGrant, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("no --pair-namespace-grant is set; " +
+			"a new pair namespace would hold no Pod-write grant for the operator")
+	}
+	out := make([]frontend.RoleGrant, 0, len(entries))
+	for _, e := range entries {
+		role, sa, ok := strings.Cut(e, "=")
+		ns, name, ok2 := strings.Cut(sa, "/")
+		if !ok || !ok2 || role == "" || ns == "" || name == "" {
+			return nil, fmt.Errorf("--pair-namespace-grant %q is not <cluster-role>=<sa-namespace>/<sa-name>", e)
 		}
-		return fixedNamespaceResolver(sandboxNamespace), fmt.Sprintf("fixed namespace %q", sandboxNamespace), nil
+		out = append(out, frontend.RoleGrant{
+			ClusterRole:    role,
+			ServiceAccount: types.NamespacedName{Namespace: ns, Name: name},
+		})
 	}
-	return &labelTenantResolver{client: c, labelKey: tenantLabelKey},
-		fmt.Sprintf("namespace label %q", tenantLabelKey), nil
-}
-
-// fixedNamespaceResolver places every tenant's Sandboxes in one shared,
-// configured namespace. Tenant scoping still comes from the verified
-// mTLS peer identity — placement is not the tenancy boundary — but note
-// what the shared namespace means: every authorized caller resolves to
-// the same namespace, so the per-namespace ownership check no longer
-// separates callers from each other. Use it where the authorized caller
-// set is a single trusted platform, not where mutually untrusting
-// clients call the frontend directly; the label resolver remains the
-// strategy for per-tenant namespaces.
-type fixedNamespaceResolver string
-
-// NamespaceFor returns the configured namespace for every tenant.
-func (r fixedNamespaceResolver) NamespaceFor(_ context.Context, _ tenancy.TenantID) (string, error) {
-	return string(r), nil
-}
-
-// labelTenantResolver maps a TenantID to a namespace by listing
-// namespaces carrying a label whose value matches the tenant.
-type labelTenantResolver struct {
-	client   client.Client
-	labelKey string
-}
-
-// NamespaceFor returns the first namespace whose label[labelKey]
-// equals the tenant. Tenants are expected to own exactly one
-// namespace; multiple matches return the first one and log a warning
-// (the /metrics endpoint surfaces the cardinality).
-func (r *labelTenantResolver) NamespaceFor(ctx context.Context, t tenancy.TenantID) (string, error) {
-	list := &corev1.NamespaceList{}
-	if err := r.client.List(ctx, list); err != nil {
-		return "", fmt.Errorf("list namespaces: %w", err)
-	}
-	want := string(t)
-	for _, ns := range list.Items {
-		if ns.Labels[r.labelKey] == want {
-			return ns.Name, nil
-		}
-	}
-	return "", fmt.Errorf("no namespace with label %s=%s", r.labelKey, want)
+	return out, nil
 }
 
 // serveMetrics runs the Prometheus scrape endpoint. Uses the default

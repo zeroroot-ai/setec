@@ -59,8 +59,10 @@ openssl x509 -req -in "${PKI}/server.csr" -CA "${PKI}/ca.crt" -CAkey "${PKI}/ca.
 chmod 0600 "${PKI}/server.key"
 rm -f "${PKI}/server.csr" "${PKI}/server.cnf"
 
-# 3) Client cert for tenant gibson-dev
-green "Generating client cert (CN gibson-dev)"
+# 3) Client cert of the enrolled dev client. The frontend reads the client
+# from the SPIFFE ID in the URI SAN, never from the CN (setec#168). The ID
+# must equal frontend.clients[0].spiffeID in values-local.yaml.
+green "Generating client cert (SPIFFE ID spiffe://dev.local/ns/gibson/sa/gibson-daemon)"
 cat > "${PKI}/client.cnf" <<EOF
 [req]
 distinguished_name=req_distinguished_name
@@ -72,6 +74,7 @@ O=zeroroot-ai
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment
 extendedKeyUsage=clientAuth
+subjectAltName=URI:spiffe://dev.local/ns/gibson/sa/gibson-daemon
 EOF
 openssl genrsa -out "${PKI}/client.key" 4096 2>/dev/null
 openssl req -new -key "${PKI}/client.key" -config "${PKI}/client.cnf" -out "${PKI}/client.csr"

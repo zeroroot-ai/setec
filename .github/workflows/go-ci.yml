@@ -364,6 +364,8 @@ jobs:
             --set frontend.enabled=true \
             --set frontend.tlsCertSecretName=frontend-tls \
             --set frontend.tlsClientCASecretName=frontend-ca \
+            --set 'frontend.clients[0].name=saas' \
+            --set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
             --set webhook.certManager.enabled=true \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
 

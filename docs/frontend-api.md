@@ -219,10 +219,9 @@ unset in file mode. There is no insecure fallback.
   Workload API endpoint. A bare filesystem path is also accepted and
   read as `unix://<path>`. The `SPIFFE_ENDPOINT_SOCKET` environment
   variable is deliberately not consulted.
-- `--spiffe-authorized-id=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon` —
-  repeat once per caller. **Required**: an empty allow-list is a startup
-  error, so "accept everyone" cannot be reached by omitting
-  configuration.
+- The allow-list is the SPIFFE ID of each `--client` entry. **Required**:
+  an empty list is a startup error, so "accept everyone" cannot be
+  reached by omitting configuration.
 
 The frontend's own X509-SVID and the trust bundle come from the socket,
 and both are re-read for every handshake, so a rotated SVID is on the
@@ -240,9 +239,9 @@ node-agent server, and the operator's node-agent dialer together, so a
 mixed file/SPIFFE posture is not reachable from a values file. The
 chart renders `--spiffe-socket` from `credentials.spiffe.socketPath`
 (default `/run/spire/agent-sockets/api.sock`, hostPath-mounted
-read-only by directory) and one `--spiffe-authorized-id` per entry in
-`credentials.spiffe.authorizedIDs.frontendClients`; an empty list fails
-the render rather than deferring to the startup error, and a node
+read-only by directory) and one `--client` per entry in
+`frontend.clients`; an empty list fails the render rather than deferring
+to the startup error, and a node
 without a Workload API socket directory fails Pod creation rather than
 booting a frontend that can never fetch an SVID. See the chart README
 "Credential modes".
@@ -268,35 +267,37 @@ certificate in precedence order: SPIFFE URI SAN, DNS SAN, Subject CN.
 That is a different question from authorization — it answers which
 tenant a call is for, not whether the caller may make it.
 
-## Tenant resolution
+## Enrolled clients and tenant resolution
 
-The frontend maps the caller's tenant identity to the namespace it
-operates against with exactly one of two strategies. Configuring both
-is a startup error naming the cause; the chart also refuses to render
-both (`frontend.sandboxNamespace` vs `frontend.tenantNamespaceLabel`).
+Each Gibson cluster that calls the frontend is an enrolled client. The
+frontend takes one `--client=<name>=<spiffe-id>` flag for each client.
+The chart renders them from `frontend.clients`. A name is a DNS label.
+An empty list is a startup error.
 
-**Label resolution (default).** The frontend reads namespaces carrying
-the configured tenant label (default `setec.zeroroot.ai/tenant=<tenant>`,
-overridable with `--tenant-namespace-label` — e.g.
-`gibson.zeroroot.ai/tenant` where another system owns the namespace
-labels) and picks the first match as the tenant's namespace. Every RPC
-verifies the requested sandbox id's namespace matches the caller's
-resolved namespace; cross-tenant access returns gRPC
-`PERMISSION_DENIED`.
+The frontend reads the SPIFFE ID from the URI SAN of the verified client
+certificate and finds the enrolled name. A caller with no SPIFFE ID, or
+with an ID that is not enrolled, gets `PERMISSION_DENIED`. The
+certificate never gives the tenant: a certificate names a workload, not
+a tenant.
 
-**Fixed namespace (`--sandbox-namespace`).** Every tenant's Sandboxes
-are placed in one shared, configured namespace, for installs whose
-placement scheme is a single dedicated Sandbox namespace rather than
-one namespace per tenant. Tenant identity still comes from the verified
-mTLS peer — placement is not the tenancy boundary — but every
-authorized caller resolves to the same namespace, so the per-namespace
-ownership check no longer separates callers from each other. Use it
-where the authorized caller set is a single trusted platform; keep
-label resolution where mutually untrusting clients call the frontend
-directly. The chart requires the fixed namespace to be listed in
-`sandboxNamespaces` (or `rbac.allowClusterWideSandboxWrite=true`) so
-the operator holds Pod-write RBAC there and the namespace carries the
-default-deny NetworkPolicy.
+Each request carries the `tenant` field. An empty tenant, or a tenant that
+is not a DNS label, gets `INVALID_ARGUMENT`. The pair of the client name
+and the tenant has one namespace. Its name is `sbx-` and 20 hex digits
+of a hash of the pair, so a pair never gets two. The frontend makes it on
+the first call of the pair, with the labels
+`setec.zeroroot.ai/client=<name>`, `setec.zeroroot.ai/tenant=<tenant>` and
+`setec.zeroroot.ai/sandbox-namespace=true`, and with two RoleBindings: Pod
+writes for the operator and exec for the frontend. The operator writes
+the default-deny policy of the namespace before its first Pod, and the
+host guard binds to the label. A namespace with that name and different
+labels gets `PERMISSION_DENIED`. The admission policy `-frontend-scope`
+refuses any other namespace or binding that the frontend tries to write.
+
+Every call on an existing Sandbox checks that the namespace in the
+sandbox id is the namespace of the pair of the caller. A different
+client with the same tenant, or the same client with a different
+tenant, gets `PERMISSION_DENIED`. `Launch` and the lease service write
+the two labels on each Sandbox that they create.
 
 ## Example client
 
@@ -342,6 +343,7 @@ func main() {
   c := pb.NewSandboxServiceClient(conn)
 
   resp, err := c.Launch(context.Background(), &pb.LaunchRequest{
+    Tenant:       "acme",
     SandboxClass: "standard",
     Image:        "docker.io/library/python:3.12-slim",
     Command:      []string{"python", "-c", "print('hello')"},
@@ -352,7 +354,7 @@ func main() {
   }
   log.Println("sandbox_id:", resp.SandboxId)
 
-  wait, err := c.Wait(context.Background(), &pb.WaitRequest{SandboxId: resp.SandboxId})
+  wait, err := c.Wait(context.Background(), &pb.WaitRequest{SandboxId: resp.SandboxId, Tenant: "acme"})
   if err != nil {
     log.Fatal(err)
   }

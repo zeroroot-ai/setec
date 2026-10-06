@@ -6,6 +6,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,7 +45,7 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 		Namespace:    tmpl.Namespace,
 		Labels: map[string]string{
 			leaseClassLabel: tmpl.SandboxClass,
-			leasePoolLabel:  "true",
+			leasePoolLabel:  labelOn,
 		},
 		Spec: setecv1alpha1.SandboxSpec{
 			SandboxClassName: tmpl.SandboxClass,
@@ -52,6 +53,7 @@ func (b *crBackend) Launch(ctx context.Context, tmpl leasepool.PoolTemplate) (le
 			Command:          appendStrings(tmpl.Command, b.idleCommand),
 		},
 	}
+	maps.Copy(sb.Labels, tmpl.Labels)
 	if tmpl.VCPU > 0 {
 		sb.Spec.Resources = setecv1alpha1.Resources{VCPU: tmpl.VCPU}
 		if tmpl.Memory != "" {

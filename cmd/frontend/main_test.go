@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/zeroroot-ai/setec/internal/credentials"
-	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
 const daemonID = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
@@ -21,13 +20,12 @@ const daemonID = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
 func TestCredentialFlags_SelectsAMode(t *testing.T) {
 	t.Parallel()
 	fileFlags := credentialFlags{tlsCert: "c.pem", tlsKey: "k.pem", tlsClientCA: "ca.pem"}
-	spiffeFlags := credentialFlags{
-		spiffeSocket:        "unix:///run/spire/agent-sockets/api.sock",
-		spiffeAuthorizedIDs: repeatedString{daemonID},
-	}
+	spiffeFlags := credentialFlags{spiffeSocket: "unix:///run/spire/agent-sockets/api.sock"}
+	enrolled := []string{daemonID}
 
 	tests := map[string]struct {
 		flags    credentialFlags
+		enrolled []string
 		wantMode string
 		wantErr  string
 	}{
@@ -37,14 +35,15 @@ func TestCredentialFlags_SelectsAMode(t *testing.T) {
 		},
 		"spiffe mode": {
 			flags:    spiffeFlags,
+			enrolled: enrolled,
 			wantMode: spiffeMode,
 		},
 		"both modes": {
 			flags: credentialFlags{
 				tlsCert: fileFlags.tlsCert, tlsKey: fileFlags.tlsKey, tlsClientCA: fileFlags.tlsClientCA,
-				spiffeSocket:        spiffeFlags.spiffeSocket,
-				spiffeAuthorizedIDs: spiffeFlags.spiffeAuthorizedIDs,
+				spiffeSocket: spiffeFlags.spiffeSocket,
 			},
+			enrolled: enrolled,
 			wantMode: conflictingMode,
 			wantErr:  "exactly one",
 		},
@@ -61,22 +60,19 @@ func TestCredentialFlags_SelectsAMode(t *testing.T) {
 			wantMode: fileMode,
 			wantErr:  "CA path is empty",
 		},
-		"spiffe mode with a mistyped allow-list flag": {
-			flags:    credentialFlags{spiffeSocket: spiffeFlags.spiffeSocket},
+		// The allow-list is the enrolled clients. ParseEnrollment refuses
+		// an empty list first, and credentials.New refuses it again.
+		"spiffe mode with no enrolled client": {
+			flags:    spiffeFlags,
 			wantMode: spiffeMode,
 			wantErr:  "allow-list is empty",
-		},
-		"spiffe mode with a mistyped socket flag": {
-			flags:    credentialFlags{spiffeAuthorizedIDs: repeatedString{daemonID}},
-			wantMode: spiffeMode,
-			wantErr:  "socket path is empty",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cfg, mode := tc.flags.config()
+			cfg, mode := tc.flags.config(tc.enrolled)
 			if mode != tc.wantMode {
 				t.Errorf("mode = %q, want %q", mode, tc.wantMode)
 			}
@@ -115,69 +111,18 @@ func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 	}
 }
 
-// TestSelectResolver_ExactlyOneStrategy pins the tenant → namespace
-// strategy selection (setec#158). A fixed shared namespace and the
-// label lookup are mutually exclusive; asking for both is refused with
-// a message naming the cause rather than silently preferring one, and
-// the label strategy stays the default so an install that configures
-// nothing keeps today's behavior.
-func TestSelectResolver_ExactlyOneStrategy(t *testing.T) {
+// TestParseGrants pins the grant flag: the Pod-write grant of the operator
+// is required, and a malformed entry is refused.
+func TestParseGrants(t *testing.T) {
 	t.Parallel()
-
-	t.Run("default is the label resolver", func(t *testing.T) {
-		t.Parallel()
-		r, desc, err := selectResolver(nil, "", "setec.zeroroot.ai/tenant", false)
-		if err != nil {
-			t.Fatalf("selectResolver: %v", err)
-		}
-		if _, ok := r.(*labelTenantResolver); !ok {
-			t.Fatalf("resolver = %T, want *labelTenantResolver", r)
-		}
-		if !strings.Contains(desc, "setec.zeroroot.ai/tenant") {
-			t.Fatalf("desc = %q, want it to name the label key", desc)
-		}
-	})
-
-	t.Run("sandbox-namespace selects the fixed resolver", func(t *testing.T) {
-		t.Parallel()
-		r, desc, err := selectResolver(nil, "setec-sandboxes", "setec.zeroroot.ai/tenant", false)
-		if err != nil {
-			t.Fatalf("selectResolver: %v", err)
-		}
-		if _, ok := r.(fixedNamespaceResolver); !ok {
-			t.Fatalf("resolver = %T, want fixedNamespaceResolver", r)
-		}
-		if !strings.Contains(desc, "setec-sandboxes") {
-			t.Fatalf("desc = %q, want it to name the namespace", desc)
-		}
-	})
-
-	t.Run("both strategies are refused", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := selectResolver(nil, "setec-sandboxes", "gibson.zeroroot.ai/tenant", true)
-		if err == nil {
-			t.Fatal("selectResolver: want an error, got nil")
-		}
-		if !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Fatalf("error = %q, want it to say the flags are mutually exclusive", err)
-		}
-	})
-}
-
-// TestFixedNamespaceResolver_SameNamespaceForEveryTenant pins the fixed
-// resolver returning the configured namespace regardless of tenant, so
-// the per-namespace ownership check resolves consistently for every
-// authorized caller.
-func TestFixedNamespaceResolver_SameNamespaceForEveryTenant(t *testing.T) {
-	t.Parallel()
-	r := fixedNamespaceResolver("setec-sandboxes")
-	for _, tenant := range []string{"team-a", "team-b", ""} {
-		ns, err := r.NamespaceFor(t.Context(), tenancy.TenantID(tenant))
-		if err != nil {
-			t.Fatalf("NamespaceFor(%q): %v", tenant, err)
-		}
-		if ns != "setec-sandboxes" {
-			t.Fatalf("NamespaceFor(%q) = %q, want %q", tenant, ns, "setec-sandboxes")
+	got, err := parseGrants([]string{"setec-sandbox-namespace=setec-system/setec"})
+	if err != nil || len(got) != 1 || got[0].ClusterRole != "setec-sandbox-namespace" ||
+		got[0].ServiceAccount.Namespace != "setec-system" || got[0].ServiceAccount.Name != "setec" {
+		t.Fatalf("parseGrants = %+v, %v", got, err)
+	}
+	for _, bad := range [][]string{nil, {"role"}, {"role=sa"}, {"=ns/sa"}, {"role=/sa"}} {
+		if _, err := parseGrants(bad); err == nil {
+			t.Fatalf("parseGrants(%q) accepted the entries", bad)
 		}
 	}
 }

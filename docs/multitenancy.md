@@ -311,24 +311,13 @@ admission still produce clear `ConstraintViolated` Events.
 
 ## gRPC frontend
 
-The optional frontend carries tenant identity in its mTLS client
-certificate. When the chart installs the frontend with
-`tlsClientCASecretName` set, the server extracts the tenant from
-the client cert SAN and resolves it to the correct namespace via the
-tenant label mapping. Tenants cannot reach other tenants' Sandboxes
-through the frontend — every RPC applies the same namespace check.
+The frontend serves many Gibson clusters of one owner (ADR-0142). Each
+cluster is an enrolled client: `frontend.clients` joins a client name to
+the SPIFFE ID of the daemon of that cluster. Each request carries the
+tenant. Each pair of client and tenant has its own namespace, which the
+frontend makes on the first call of the pair. A call
+from a different pair on a Sandbox gets `PERMISSION_DENIED`. See
+`docs/frontend-api.md` "Enrolled clients and tenant resolution".
 
-The label the frontend matches on defaults to
-`setec.zeroroot.ai/tenant` and is overridable per install with
-`frontend.tenantNamespaceLabel` (the `--tenant-namespace-label` flag),
-for clusters where another system owns the tenant-namespace labels.
-Note this is the frontend's *resolution* key; the operator's
-`multiTenancy.tenantLabelKey` is the admission-time *enforcement*
-check — override both when the label scheme changes.
-
-Installs that place every tenant's Sandboxes in one shared, dedicated
-namespace instead of one namespace per tenant set
-`frontend.sandboxNamespace` (the `--sandbox-namespace` flag), which
-replaces label resolution entirely; the two are mutually exclusive.
-See `docs/frontend-api.md` "Tenant resolution" for what the shared
-namespace means for the per-namespace ownership check.
+The operator reads the tenant of a namespace from the same label,
+`setec.zeroroot.ai/tenant` (`multiTenancy.tenantLabelKey`).

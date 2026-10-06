@@ -289,13 +289,16 @@ verify the expected new manifests appear via `helm template`.
   frontend and the chart refuses to render without them (in SPIFFE mode the
   identities come from the Workload API instead; see "Credential modes"
   below). The frontend does NOT bypass Kubernetes admission; every call
-  still flows through the webhook. Tenant → namespace routing is
-  configurable: `frontend.tenantNamespaceLabel` overrides the label key the
-  frontend resolves tenant namespaces by (binary default
-  `setec.zeroroot.ai/tenant`), and `frontend.sandboxNamespace` instead places
-  every tenant's Sandboxes in one fixed shared namespace, which must be
-  listed in `sandboxNamespaces`. The two are mutually exclusive; setting
-  both fails the render.
+  still flows through the webhook. `frontend.clients` enrolls each Gibson
+  cluster as a named client, with the SPIFFE ID of its daemon, and is
+  required. The frontend refuses a caller that is not enrolled. Each
+  request carries a tenant. The frontend makes one namespace for each pair
+  of client and tenant on the first call of the pair, with its two
+  RoleBindings. The ValidatingAdmissionPolicy `-frontend-scope` limits the
+  frontend to those writes, and the host guard binds to each such
+  namespace by its `setec.zeroroot.ai/sandbox-namespace=true` label.
+  `sandboxNamespaces` lists only the namespaces that hold Sandboxes made
+  by other means, and it can be empty when the frontend is on.
 - `sandboxClasses.enabled=true` (the default) templates the `SandboxClass`
   set tenants launch against. The chart ships two: `tool`
   (`defaultNetworkMode: external-only`, marked cluster-default) and
@@ -420,12 +423,13 @@ agent socket on each node, given as a bare absolute path in
 `credentials.spiffe.socketPath` (default
 `/run/spire/agent-sockets/api.sock`). The chart mounts the socket's
 directory read-only via `hostPath` into each component and renders
-`--spiffe-socket` plus one `--spiffe-authorized-id` per entry in the
-matching `credentials.spiffe.authorizedIDs` list:
+`--spiffe-socket` on each component. The frontend authorizes the SPIFFE
+ID of each entry of `frontend.clients`. The node-agent and the operator
+get one `--spiffe-authorized-id` per entry in the matching
+`credentials.spiffe.authorizedIDs` list:
 
 | List | Authorizes | Required when |
 |---|---|---|
-| `frontendClients` | callers of the frontend SandboxService | `frontend.enabled=true` |
 | `nodeAgentClients` | callers of the node-agent (the operator) | `nodeAgent.enabled=true` + `snapshots.enabled=true` |
 | `nodeAgentServers` | node-agent server IDs the operator accepts | `snapshots.enabled=true` |
 

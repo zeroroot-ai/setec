@@ -370,6 +370,8 @@ helm upgrade --install setec charts/setec \
   --set webhook.enabled=true \
   --set webhook.certManager.enabled=true \
   --set frontend.enabled=true \
+  --set 'frontend.clients[0].name=dev' \
+  --set 'frontend.clients[0].spiffeID=spiffe://dev.local/ns/gibson/sa/gibson-daemon' \
   --set observability.enabled=true \
   --set sandboxClasses.enabled=true \
   --set 'sandboxNamespaces={tenant-a,tenant-b}'

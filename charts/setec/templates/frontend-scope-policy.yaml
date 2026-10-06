@@ -1,0 +1,88 @@
+{{- if .Values.frontend.enabled }}
+{{- /*
+=============================================================================
+What the frontend may write outside Sandboxes (setec#207).
+=============================================================================
+
+The frontend makes one namespace for each pair of enrolled client and
+tenant, and two RoleBindings in it. RBAC cannot scope a create by name or
+by label, so this policy does: a request of the frontend ServiceAccount is
+refused unless it is
+
+  - a Namespace whose name starts with sbx- and that carries the labels
+    setec.zeroroot.ai/sandbox-namespace=true, setec.zeroroot.ai/client and
+    setec.zeroroot.ai/tenant, or
+  - a RoleBinding in a namespace with setec.zeroroot.ai/sandbox-namespace=true
+    that binds one of the two ClusterRoles of the pair namespace to the one
+    ServiceAccount that role is for.
+
+So a compromised frontend cannot bind a role in a namespace that holds a
+platform identity. The labels of a namespace that exists are not the
+frontend's to change: it has no update verb on namespaces.
+*/ -}}
+{{- $fe := printf "system:serviceaccount:%s:%s-frontend" .Values.namespace (include "setec.fullname" .) }}
+{{- $sandboxRole := printf "%s-sandbox-namespace" (include "setec.fullname" .) }}
+{{- $execRole := printf "%s-frontend-exec" (include "setec.fullname" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-scope
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["namespaces"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: the-frontend-only
+      expression: request.userInfo.username == {{ $fe | quote }}
+  validations:
+    - expression: >-
+        request.kind.kind != 'Namespace' || (
+          object.metadata.name.startsWith('sbx-')
+          && has(object.metadata.labels)
+          && 'setec.zeroroot.ai/sandbox-namespace' in object.metadata.labels
+          && object.metadata.labels['setec.zeroroot.ai/sandbox-namespace'] == 'true'
+          && 'setec.zeroroot.ai/client' in object.metadata.labels
+          && 'setec.zeroroot.ai/tenant' in object.metadata.labels)
+      reason: Forbidden
+      message: >-
+        the setec frontend may create only a pair namespace: a name that
+        starts with sbx- and the sandbox, client and tenant labels.
+    - expression: >-
+        request.kind.kind != 'RoleBinding' || (
+          namespaceObject != null && has(namespaceObject.metadata.labels)
+          && 'setec.zeroroot.ai/sandbox-namespace' in namespaceObject.metadata.labels
+          && namespaceObject.metadata.labels['setec.zeroroot.ai/sandbox-namespace'] == 'true'
+          && object.roleRef.kind == 'ClusterRole'
+          && size(object.subjects) == 1
+          && object.subjects[0].kind == 'ServiceAccount'
+          && object.subjects[0].namespace == {{ .Values.namespace | quote }}
+          && ((object.roleRef.name == {{ $sandboxRole | quote }}
+               && object.subjects[0].name == {{ include "setec.serviceAccountName" . | quote }})
+              || (object.roleRef.name == {{ $execRole | quote }}
+               && object.subjects[0].name == {{ printf "%s-frontend" (include "setec.fullname" .) | quote }})))
+      reason: Forbidden
+      message: >-
+        the setec frontend may bind only the two roles of a pair namespace,
+        each to its own ServiceAccount, and only in a sandbox namespace.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "setec.fullname" . }}-frontend-scope
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "setec.fullname" . }}-frontend-scope
+  validationActions:
+    - Deny
+{{- end }}

@@ -93,9 +93,6 @@ error, so the mistake is caught before it reaches a cluster.
 {{- if not (hasPrefix "/" $s.socketPath) -}}
 {{- fail (printf "credentials.spiffe.socketPath must be a bare absolute filesystem path (no unix:// prefix); got %q" $s.socketPath) -}}
 {{- end -}}
-{{- if and .Values.frontend.enabled (not $s.authorizedIDs.frontendClients) -}}
-{{- fail "credentials.spiffe.authorizedIDs.frontendClients must not be empty in spiffe mode with frontend.enabled=true: an empty allow-list would be a startup error, and \"accept everyone\" is deliberately unreachable" -}}
-{{- end -}}
 {{- if and .Values.nodeAgent.enabled .Values.snapshots.enabled (not $s.authorizedIDs.nodeAgentClients) -}}
 {{- fail "credentials.spiffe.authorizedIDs.nodeAgentClients must not be empty in spiffe mode with nodeAgent.enabled=true and snapshots.enabled=true: the node-agent refuses an empty allow-list" -}}
 {{- end -}}

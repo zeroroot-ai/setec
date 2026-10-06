@@ -325,67 +325,72 @@ assert_absent "$workdir/le-off.yaml" "no leader-elect flag when disabled" \
 	"--leader-elect=true"
 
 # ---------------------------------------------------------------------------
-# Frontend tenant → namespace routing (setec#158).
+# Frontend enrollment (setec#168, ADR-0142).
 #
-# The frontend has two mutually exclusive strategies: a per-tenant
-# namespace resolved by label, or one fixed shared Sandbox namespace.
-# The chart must be able to render either (the flag existing on the
-# binary is worthless if no value reaches it), must refuse both at
-# once, and must refuse a fixed namespace the operator holds no
-# Pod-write RBAC in — that last one renders cleanly and then no Sandbox
-# ever starts, which is exactly the silent failure shape this script
-# exists to catch.
+# The frontend refuses a caller that is not an enrolled client, so an
+# install with no client serves nobody. The chart must render one --client
+# for each entry, refuse an empty list, and refuse an entry that is not a
+# SPIFFE ID. The fixed shared namespace and the tenant label override are
+# gone: two pairs of client and tenant must never share a namespace.
 # ---------------------------------------------------------------------------
-note "frontend tenant routing (setec#158)"
+note "frontend enrollment (setec#168)"
 FE_TLS=(--set frontend.enabled=true
 	--set frontend.tlsCertSecretName=fe-tls
-	--set frontend.tlsClientCASecretName=fe-ca)
+	--set frontend.tlsClientCASecretName=fe-ca
+	--set 'frontend.clients[0].name=saas'
+	--set 'frontend.clients[0].spiffeID=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon'
+	--set 'frontend.clients[1].name=onprem'
+	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon')
 
 render "$workdir/fe-default.yaml" "${FE_TLS[@]}" \
 	--show-only templates/frontend.yaml
 strip_comments "$workdir/fe-default.yaml" "$workdir/fe-default.stripped.yaml"
-assert_absent "$workdir/fe-default.stripped.yaml" "default render adds no routing flag (binary default applies)" \
-	"--tenant-namespace-label"
-assert_absent "$workdir/fe-default.stripped.yaml" "default render selects no fixed namespace" \
+assert_contains "$workdir/fe-default.stripped.yaml" "each enrolled client reaches the frontend" \
+	"--client=saas=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon" \
+	"--client=onprem=spiffe://onprem.example/ns/gibson/sa/gibson-daemon"
+assert_absent "$workdir/fe-default.stripped.yaml" "no fixed shared namespace" \
 	"--sandbox-namespace"
-
-render "$workdir/fe-label.yaml" "${FE_TLS[@]}" \
-	--set frontend.tenantNamespaceLabel=gibson.zeroroot.ai/tenant \
-	--show-only templates/frontend.yaml
-strip_comments "$workdir/fe-label.yaml" "$workdir/fe-label.stripped.yaml"
-assert_contains "$workdir/fe-label.stripped.yaml" "label key override reaches the frontend" \
-	"--tenant-namespace-label=gibson.zeroroot.ai/tenant"
-
-render "$workdir/fe-fixed.yaml" "${FE_TLS[@]}" \
-	--set frontend.sandboxNamespace="$NS_A" \
-	--show-only templates/frontend.yaml
-strip_comments "$workdir/fe-fixed.yaml" "$workdir/fe-fixed.stripped.yaml"
-assert_contains "$workdir/fe-fixed.stripped.yaml" "fixed Sandbox namespace reaches the frontend" \
-	"--sandbox-namespace=$NS_A"
-assert_absent "$workdir/fe-fixed.stripped.yaml" "fixed mode renders no label flag" \
+assert_absent "$workdir/fe-default.stripped.yaml" "no tenant label override" \
 	"--tenant-namespace-label"
 
-if "$HELM" template setec "$CHART_DIR" \
-	--set webhook.certManager.enabled=true \
-	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	"${FE_TLS[@]}" \
-	--set frontend.sandboxNamespace="$NS_A" \
-	--set frontend.tenantNamespaceLabel=gibson.zeroroot.ai/tenant \
-	>/dev/null 2>&1; then
-	fail "both routing strategies at once must fail the render"
+render "$workdir/fe-scope.yaml" "${FE_TLS[@]}"
+strip_comments "$workdir/fe-scope.yaml" "$workdir/fe-scope.stripped.yaml"
+assert_contains "$workdir/fe-scope.stripped.yaml" "the frontend gets the pair grants and the scope policy (setec#207)" \
+	"--pair-namespace-grant=setec-sandbox-namespace=" \
+	"--pair-namespace-grant=setec-frontend-exec=" \
+	"name: setec-frontend-scope" \
+	"name: setec-sandbox-host-guard-pairs" \
+	"setec.zeroroot.ai/sandbox-namespace: \"true\""
+if "$HELM" template setec "$CHART_DIR" --set webhook.certManager.enabled=true "${FE_TLS[@]}" >/dev/null 2>&1; then
+	pass "a frontend install renders with no static sandboxNamespaces"
 else
-	pass "both routing strategies at once fail the render"
+	fail "a frontend install must render with no static sandboxNamespaces: the frontend makes the pair namespaces"
 fi
 
 if "$HELM" template setec "$CHART_DIR" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	"${FE_TLS[@]}" \
-	--set frontend.sandboxNamespace=not-in-the-rbac-list \
+	--set frontend.enabled=true \
+	--set frontend.tlsCertSecretName=fe-tls \
+	--set frontend.tlsClientCASecretName=fe-ca \
 	>/dev/null 2>&1; then
-	fail "a fixed namespace outside sandboxNamespaces must fail the render (no Pod-write RBAC there)"
+	fail "a frontend with no enrolled client must fail the render"
 else
-	pass "a fixed namespace outside sandboxNamespaces fails the render"
+	pass "a frontend with no enrolled client fails the render"
+fi
+
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set frontend.enabled=true \
+	--set frontend.tlsCertSecretName=fe-tls \
+	--set frontend.tlsClientCASecretName=fe-ca \
+	--set 'frontend.clients[0].name=saas' \
+	--set 'frontend.clients[0].spiffeID=https://zeroroot.ai/gibson' \
+	>/dev/null 2>&1; then
+	fail "a client whose ID is not a SPIFFE ID must fail the render"
+else
+	pass "a client whose ID is not a SPIFFE ID fails the render"
 fi
 
 # ---------------------------------------------------------------------------
