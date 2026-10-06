@@ -1,32 +1,27 @@
-# Session checkpoints on real infrastructure
+# Session checkpoint e2e
 
-How to run the session-lifecycle e2e against a
-real cluster and a real object store, and what each scenario costs.
+How to run the session-lifecycle e2e, on CI and on a cluster of your
+own, and what each scenario needs.
 
 The suite is `test/e2e/session_reattach_test.go` and
-`test/e2e/session_checkpoint_test.go`. They do not need the same things,
-and today only one of them has a CI job.
+`test/e2e/session_checkpoint_test.go`.
 
 ## What the scenarios need, and which job runs them
 
 | Scenario | Object store | Sandbox-capable nodes | CI job |
 |---|---|---|---|
-| `TestSession_ReattachByHandle` | no | 1 | `e2e` / `suites (suites)`, nightly |
-| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | none (setec#16) |
-| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | none (setec#16) |
+| `TestSession_ReattachByHandle` | no | 1 | `e2e` / `launcher`, nightly |
+| `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | `e2e` / `launcher`, nightly |
+| `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | `e2e` / `launcher`, nightly |
 
-`TestSession_ReattachByHandle` needs a session-mode Sandbox with a
-workspace PVC and an in-process `frontend.Service`. It needs no bucket
-and no node-agent. It runs in the `suites` job of
-`.github/workflows/e2e.yml`, on a kind cluster inside a GitHub-hosted
-runner with nested KVM.
-
-The two checkpoint scenarios had a `session-checkpoint` job that ran on
-an ARC runner inside staging EKS, against a Terraform-made bucket and an
-IRSA role. Staging EKS is gone, so that job could never run, and it was
-removed. The path back to CI is the same kind cluster with an in-cluster
-MinIO as the object store. setec#16 tracks it. Checkpoints also need the
-operator to reach the node-agent, which setec#92 blocks today.
+The `launcher` job of `.github/workflows/e2e.yml` runs all three on a
+kind cluster inside a GitHub-hosted runner with nested KVM (setec#16).
+Two kind workers host machines (`hack/kind-launcher.yaml`), so the drain
+scenario resumes its session on the other node. An S3-compatible store in
+a container on the kind network holds the checkpoints, and its throwaway
+keys reach the node agent through `SETEC_E2E_S3_ACCESS_KEY_ID` and
+`SETEC_E2E_S3_SECRET_ACCESS_KEY`. The job sets `SETEC_E2E_S3=1` and
+`SETEC_E2E_SESSION_DRAIN=1`.
 
 All three run on the one backend, the launcher. Memory checkpointing
 drives the Firecracker API socket of the launcher Pod directly, so each
@@ -49,6 +44,7 @@ Set `SETEC_E2E_S3=1` plus:
 | `SETEC_E2E_S3_ENDPOINT` | set for MinIO and other self-hosted stores, empty for real S3 |
 | `SETEC_E2E_S3_ROLE_ARN` | IRSA role for the node-agent ServiceAccount (EKS) |
 | `SETEC_E2E_S3_CREDENTIALS_SECRET` | pre-existing Secret of static keys, for non-IRSA environments |
+| `SETEC_E2E_S3_ACCESS_KEY_ID`, `SETEC_E2E_S3_SECRET_ACCESS_KEY` | static keys that the suite writes into that Secret itself, for a throwaway store such as the one of the CI job |
 
 `SETEC_E2E_S3=1` with no bucket, or with neither a role ARN nor a
 credentials Secret against real S3, fails the suite at startup rather than
@@ -116,50 +112,24 @@ Two mitigations, and you want both:
   `s3:AbortMultipartUpload`; without them the sweep logs and continues rather
   than blocking startup.
 - An `abort_incomplete_multipart_upload` lifecycle rule on the bucket, which
-  catches uploads the agent never comes back to sweep. The staging bucket
-  has this rule; **a self-hosted MinIO has no such rule by default**,
-  so an on-prem install has to add one.
+  catches uploads the agent never comes back to sweep. **A self-hosted
+  MinIO has no such rule by default**, so an on-prem install has to add
+  one.
 
 Note that omitting `s3:AbortMultipartUpload` from a "Put/Get/Delete"
 least-privilege policy also means an abort failure masks the original upload
 error.
 
-## The two-node scenario, and what it costs
+## The two-node scenario
 
 `TestSessionCheckpoint_DrainResumeOnOtherNode` checkpoints a session on
 node A and resumes it on node B. It therefore needs two sandbox-capable
-nodes.
-
-Staging runs exactly **one**, by design. The `setec-metal` Karpenter
-NodePool (deploy `eks/gibson/karpenter.tf`) carries `limits: {cpu: 48}`,
-which is one `m5zn.metal`, and consolidates it away 120 seconds after it
-goes idle. The standing instruction is cheapest-possible with no warm
-nodes, so **the ceiling is not raised permanently**.
-
-A second `m5zn.metal` costs roughly **$4/hour on-demand in us-east-1**
-(48 vCPU, 192 GiB, bare metal), billed from the moment Karpenter
-provisions it until consolidation reclaims it. A drain run occupies it for
-a few minutes, but node provisioning adds 10–20 minutes on top, so budget on the order of **$1–2 per run** and treat
-a forgotten ceiling as roughly **$100/day**.
-
-The scenario is therefore an explicit, temporary opt-in rather than an
-automatic capability probe:
-
-1. Raise the ceiling. In `deploy`, `eks/gibson/karpenter.tf`, set the
-   `setec-metal` NodePool `limits.cpu` to `96`, open a PR, merge, and let
-   the apply run. This is a Terraform change, not a `kubectl patch` — the
-   cluster is GitOps-driven and a hand-patched NodePool is reverted by the
-   next reconcile.
-2. Wait for the second node to join and to offer an allocatable
-   `setec.zeroroot.ai/kvm` resource. The KVM device plugin offers it
-   only after it finds `/dev/kvm` on the node.
-3. Run with `SETEC_E2E_SESSION_DRAIN=1`.
-4. **Revert the ceiling PR.** Consolidation reclaims the node once it is
-   idle and back under the limit.
+nodes, and it runs only when `SETEC_E2E_SESSION_DRAIN=1` declares them.
 
 With the opt-in set but fewer than two schedulable capable nodes, the test
-**fails** rather than skipping. The opt-in is an assertion that capacity
-was paid for; a silent skip there would mean full cost and zero coverage.
+**fails** rather than skipping. The opt-in is an assertion that the
+capacity is there; a silent skip would mean no coverage with no warning.
+Without the opt-in it skips loudly.
 
 ## Diagnosing a failure
 

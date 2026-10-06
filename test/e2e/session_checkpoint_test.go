@@ -24,14 +24,18 @@ package e2e
 // Session-checkpoint e2e (setec#194, docs/design/lifecycles.md L2 / docs/design/storage.md): the
 // suspend-idle → resume loop and drain → resume-on-another-node, with
 // process state carried across by memory checkpoints on the
-// S3-compatible store (MinIO in the dev env).
+// S3-compatible store.
 //
 // Prerequisites beyond the usual e2e substrate:
 //   - the node-agent DaemonSet runs with the S3 checkpoint backend
-//     configured (snapshots.s3.enabled with a reachable MinIO/S3
+//     configured (snapshots.s3.enabled with a reachable S3-compatible
 //     bucket) — gated by SETEC_E2E_S3=1;
 //   - the drain scenario additionally needs >= 2 sandbox-capable
-//     nodes and is skipped otherwise.
+//     nodes, declared with SETEC_E2E_SESSION_DRAIN=1.
+//
+// The launcher job of .github/workflows/e2e.yml runs both on a kind
+// cluster with two workers and an S3-compatible store in a container on
+// the kind network (setec#16).
 //
 // The in-guest probe prints monotonically increasing TICK-<n> lines.
 // A resume that preserved process state CONTINUES the sequence; a
@@ -68,10 +72,10 @@ var ckptTickerCommand = []string{"/bin/sh", "-c",
 
 // loudSkip skips the test with a banner that survives `go test`'s
 // terse SKIP line and a CI log scroll. A silently skipped verification
-// test is indistinguishable from a passing one, which is exactly how
-// the session path reached staging at zero-percent verified; every
-// skip in this file therefore says what is missing and what it would
-// take to satisfy it.
+// test is indistinguishable from a passing one, so every skip in this
+// file says what is missing and what it would take to satisfy it. The
+// e2e workflow also fails a run that contains a SKIP
+// (scripts/e2e-summary.sh).
 func loudSkip(t *testing.T, reason, remedy string) {
 	t.Helper()
 	fmt.Fprintf(os.Stderr, `
@@ -93,25 +97,21 @@ func requireS3Checkpoints(t *testing.T) {
 	if os.Getenv("SETEC_E2E_S3") == "" {
 		loudSkip(t,
 			"SETEC_E2E_S3 is not set, so the suite installed the release without the node-agent S3 checkpoint backend",
-			"run with SETEC_E2E_S3=1 and SETEC_E2E_S3_BUCKET=<bucket> (staging: set the repository variable STAGING_SESSION_S3_READY=1 so the e2e workflow exports them)")
+			"run with SETEC_E2E_S3=1, SETEC_E2E_S3_BUCKET=<bucket> and the store's endpoint and keys "+
+				"(the launcher job of the e2e workflow sets them for its S3 store)")
 	}
 }
 
 // drainCapacityEnv opts the drain scenario in. The drain scenario is
 // the ONLY scenario in the suite that needs a second sandbox-capable
-// metal node, and on staging the setec-metal Karpenter NodePool is
-// deliberately capped at cpu:48 — exactly one m5zn.metal — because the
-// owner's standing instruction is "cheapest possible, no warm nodes".
-// A second m5zn.metal costs roughly $4/hour on-demand in us-east-1, so
-// the ceiling is raised by hand for a run and lowered again, and this
-// variable is how the operator declares they did it.
+// node. The launcher job of the e2e workflow has two workers that host
+// machines and sets it. On another cluster, this variable is how the
+// operator declares that a second node is there.
 const drainCapacityEnv = "SETEC_E2E_SESSION_DRAIN"
 
 // drainRemedy is the exact procedure the skip banner points at.
-const drainRemedy = "raise the setec-metal NodePool ceiling to cpu:96 via a gitops PR " +
-	"(setec.karpenter.nodePools.metal.limits.cpu in the umbrella values), wait for the " +
-	"second m5zn.metal to join (~$4/hr on-demand, us-east-1), then re-run with " +
-	drainCapacityEnv + "=1 — and revert the ceiling PR when the run finishes"
+const drainRemedy = "run on a cluster with two nodes that offer the " + string(launcherKVMResource) +
+	" resource (the launcher job of the e2e workflow has two), then set " + drainCapacityEnv + "=1"
 
 // requireTwoSandboxNodes enforces the drain scenario's two-node
 // precondition as a DELIBERATE, OPT-IN condition rather than a silent
