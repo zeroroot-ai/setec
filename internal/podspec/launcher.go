@@ -85,6 +85,13 @@ const (
 	launcherIdentityMountPath = "/etc/setec/identity"
 )
 
+// LauncherMemoryOverhead is the memory of a launcher Pod above the memory
+// of its machine. It holds the Firecracker process, the launcher, and the
+// page cache of a snapshot write: the kernel charges the memory file that
+// Firecracker writes to the Pod. With no overhead, a snapshot of a small
+// machine fills the limit and the kernel kills the Pod.
+var LauncherMemoryOverhead = resource.MustParse("256Mi")
+
 // IdentitySecretName is the name of the identity Secret of a Sandbox.
 func IdentitySecretName(sandbox string) string { return sandbox + "-identity" }
 
@@ -268,9 +275,11 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	}
 
 	one := resource.MustParse("1")
+	podMemory := sb.Spec.Resources.Memory.DeepCopy()
+	podMemory.Add(LauncherMemoryOverhead)
 	limits := corev1.ResourceList{
 		corev1.ResourceCPU:    *resource.NewQuantity(int64(sb.Spec.Resources.VCPU), resource.DecimalSI),
-		corev1.ResourceMemory: sb.Spec.Resources.Memory.DeepCopy(),
+		corev1.ResourceMemory: podMemory,
 		KVMResource:           one.DeepCopy(),
 		TunResource:           one.DeepCopy(),
 	}

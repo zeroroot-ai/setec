@@ -160,6 +160,26 @@ func TestBuildLauncher_CarriesTheSpec(t *testing.T) {
 	}
 }
 
+// TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM pins the memory of the
+// Pod above the memory of the machine. A Pod limit equal to the machine
+// memory was killed by the kernel during each snapshot of a small machine.
+func TestBuildLauncher_MemoryHoldsTheMachineAndTheVMM(t *testing.T) {
+	t.Parallel()
+	pod := launcherOrFatal(t)
+	res := pod.Spec.Containers[0].Resources
+	want := resource.MustParse("2Gi")
+	want.Add(LauncherMemoryOverhead)
+	for name, list := range map[string]corev1.ResourceList{"limit": res.Limits, "request": res.Requests} {
+		got := list[corev1.ResourceMemory]
+		if got.Cmp(want) != 0 {
+			t.Errorf("memory %s = %s, want %s (the machine and the overhead)", name, got.String(), want.String())
+		}
+	}
+	if LauncherMemoryOverhead.Sign() <= 0 {
+		t.Fatal("the launcher Pod has no memory for the VMM")
+	}
+}
+
 // TestBuildLauncher_SpecIsTheLauncherSpec ties the two sides together: the
 // launcher reads the JSON that the operator writes, and the checks of the
 // launcher accept it. The operator does not link the launcher, so this test
