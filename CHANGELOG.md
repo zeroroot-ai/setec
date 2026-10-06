@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.120.0](https://github.com/zeroroot-ai/setec/compare/v0.119.0...v0.120.0) (2026-10-06)
+
+
+### Features
+
+* **frontend:** enroll each Gibson cluster and scope each sandbox to its cluster and tenant ([#205](https://github.com/zeroroot-ai/setec/issues/205)) ([3126d3c](https://github.com/zeroroot-ai/setec/commit/3126d3c07c4f6af0ac44143a0ab2a50fc468727d))
+* **runtime:** a KVM device plugin and the launcher pod spec with one capability ([#208](https://github.com/zeroroot-ai/setec/issues/208)) ([4906c15](https://github.com/zeroroot-ai/setec/commit/4906c158d8d4806b7eefdc8ee3a779d449022581))
+
+
+### Bug Fixes
+
+* **installer:** the installer image ships no gVisor ([#206](https://github.com/zeroroot-ai/setec/issues/206)) ([7e320c4](https://github.com/zeroroot-ai/setec/commit/7e320c407d6a58332217f556cd110326981bc876))
+* **repo:** the scan record, the launch notes, the mailmap, the spelling and MAINTAINERS are current ([#204](https://github.com/zeroroot-ai/setec/issues/204)) ([f3dfd12](https://github.com/zeroroot-ai/setec/commit/f3dfd12d6a17f0f2bf17ca63fe50f5695cf7d1f0)), closes [#174](https://github.com/zeroroot-ai/setec/issues/174)
+* **scaffold:** the kustomize install tree and the scaffold notes leave ([#202](https://github.com/zeroroot-ai/setec/issues/202)) ([668cb93](https://github.com/zeroroot-ai/setec/commit/668cb931d16a5a428998a6d8e11c7b7571f8e616))
+
 ## [0.119.0](https://github.com/zeroroot-ai/setec/compare/v0.118.3...v0.119.0) (2026-10-05)
 
 
