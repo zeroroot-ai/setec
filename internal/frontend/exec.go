@@ -25,6 +25,8 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/podspec"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -99,7 +101,8 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 	if err := s.checkTenantNamespace(ctx, start.GetTenant(), ns); err != nil {
 		return err
 	}
-	if _, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId()); err != nil {
+	sb, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId())
+	if err != nil {
 		return err
 	}
 
@@ -119,7 +122,24 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 		return err
 	}
 
-	return s.runExec(ctx, stream, execer, ns, name, start.GetCommand())
+	container, command := execTarget(sb, start.GetCommand())
+	return s.runExec(ctx, stream, execer, ns, name, container, command)
+}
+
+// LauncherExecCommand is the relay in a launcher Pod: setec-launcher exec
+// passes the command to the guest agent over vsock and streams its stdio and
+// exit code back (docs/design/lifecycles.md). The command does not run in
+// the launcher container; the relay only carries it into the machine.
+var LauncherExecCommand = []string{"/usr/local/bin/setec-launcher", "exec", "--"}
+
+// execTarget is the container and the command of an exec. A launcher
+// Sandbox runs the command in its machine through the relay; any other
+// Sandbox runs it in its workload container.
+func execTarget(sb *setecv1alpha1.Sandbox, command []string) (string, []string) {
+	if sb != nil && sb.Status.Runtime != nil && sb.Status.Runtime.Chosen == runtimepkg.BackendLauncher {
+		return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
+	}
+	return workloadContainerName, command
 }
 
 // recvExecStart reads the mandatory opening message and validates it.
@@ -153,7 +173,7 @@ func (s *Service) runExec(
 	ctx context.Context,
 	stream setecv1grpc.SandboxService_ExecServer,
 	execer containerExecutor,
-	ns, name string,
+	ns, name, container string,
 	command []string,
 ) error {
 	// A private cancel lets a client protocol violation tear the
@@ -172,7 +192,7 @@ func (s *Service) runExec(
 		pump.run()
 	}()
 
-	execErr := execer.ExecInContainer(execCtx, ns, podNameFor(name), workloadContainerName,
+	execErr := execer.ExecInContainer(execCtx, ns, podNameFor(name), container,
 		command, stdinR, sender.writer(stdoutStreamName), sender.writer(stderrStreamName))
 
 	// Stop the pump and let it settle before deciding anything: a

@@ -243,6 +243,17 @@ type SandboxReconciler struct {
 	// workspace (setec#91). Set from --session-keepalive-image.
 	KeepaliveImage string
 
+	// LauncherImage and DiskRepo serve the launcher backend
+	// (docs/design/runtime.md). A Sandbox whose class selects the launcher
+	// gets a launcher Pod from this image, and its machine boots the signed
+	// disk of its image digest from DiskRepo.
+	LauncherImage string
+	DiskRepo      string
+	DiskKeys      []string
+	// DiskBuilder runs setec-disk-builder before the first launcher Pod of
+	// an image digest.
+	DiskBuilder DiskBuilderConfig
+
 	// --- Phase 2 optional dependencies ---
 	//
 	// All four of these may be nil. A nil value disables the
@@ -1065,13 +1076,8 @@ func nextLifecycleDeadline(
 // without them (setec#115).
 func (r *SandboxReconciler) checkPrereqs(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
 	{
-		classNames := make(map[string]string, len(r.RuntimeCfg.Runtimes))
-		for name, bc := range r.RuntimeCfg.Runtimes {
-			if bc.Enabled {
-				classNames[name] = bc.RuntimeClassName
-			}
-		}
-		prereqResult, err := prereq.CheckMulti(ctx, r.Client, r.RuntimeCfg.EnabledBackends(), classNames, r.NodeSelectorLabel)
+		backends, classNames := r.RuntimeCfg.RuntimeClassBackends()
+		prereqResult, err := prereq.CheckMulti(ctx, r.Client, backends, classNames, r.NodeSelectorLabel)
 		if err != nil {
 			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("prereq check: %w", err))
 		}
@@ -1666,7 +1672,19 @@ func (r *SandboxReconciler) createPod(
 	// A session with no command boots the keepalive from this image
 	// (setec#7). The builder refuses such a Sandbox when it is empty.
 	opts.KeepaliveImage = r.KeepaliveImage
-	pod, err := podspec.BuildWithOptions(sb, rcName, opts)
+	var pod *corev1.Pod
+	if sel != nil && sel.Backend == runtimepkg.BackendLauncher {
+		if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
+			return res, derr
+		}
+		pod, err = podspec.BuildLauncher(sb, podspec.LauncherOptions{
+			// The scratch limit of setec#172 (branch feat/sandbox-limits) sets
+			// Scratch here once both are on main; until then the default holds.
+			Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
+		})
+	} else {
+		pod, err = podspec.BuildWithOptions(sb, rcName, opts)
+	}
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))
 	}

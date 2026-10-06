@@ -105,6 +105,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	pid1 := os.Getpid() == 1
+	if pid1 {
+		if err := prepareMachine(); err != nil {
+			log.Printf("setec-guest-agent: %v", err)
+			os.Exit(1)
+		}
+	}
+
 	ln, err := listenVsock(opts.Port)
 	if err != nil {
 		log.Printf("setec-guest-agent: listen vsock port %d: %v", opts.Port, err)
@@ -118,7 +126,12 @@ func main() {
 	log.Printf("setec-guest-agent: listening on vsock ports %d (entropy) and %d (uniquify), random device %s",
 		opts.Port, opts.UniquifyPort, opts.RandomDevice)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+	// In a launcher machine the agent is PID 1: it is also the supervisor
+	// of the workload. Its exit ends the machine, so an error is fatal.
+	if pid1 {
+		go func() { errCh <- runSupervisor(ctx, log.Printf) }()
+	}
 	go func() {
 		errCh <- runUniquify(ctx, uln,
 			uniquify.NewLinuxIdentity(), uniquify.NewLinuxNetwork(), uniquify.VsockCID{}, log.Printf)
@@ -127,8 +140,19 @@ func main() {
 	pool := newKernelPool(opts.RandomDevice)
 	go func() { errCh <- run(ctx, ln, pool, log.Printf) }()
 
-	if err := <-errCh; err != nil {
-		log.Printf("setec-guest-agent: %v", err)
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-ctx.Done():
+	}
+	if runErr != nil {
+		log.Printf("setec-guest-agent: %v", runErr)
+	}
+	// As PID 1 the agent is the machine: a stop or a failure ends it.
+	if pid1 {
+		endMachine()
+	}
+	if runErr != nil {
 		os.Exit(1)
 	}
 }

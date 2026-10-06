@@ -587,19 +587,20 @@ spec:
                   backend:
                     description: |-
                       Backend is the isolation runtime to use for Sandboxes in this class.
-                      Must be one of the four supported backends. When unset the operator
+                      Must be one of the five supported backends. When unset the operator
                       falls back to the cluster default declared in Helm values.
                     enum:
                     - kata-fc
                     - kata-qemu
                     - gvisor
                     - runc
+                    - launcher
                     type: string
                   fallback:
                     description: |-
                       Fallback is an ordered list of backend names to attempt when no node
-                      advertises the requested Backend. Each entry must be one of the four
-                      supported values. The operator tries each in order; the first backend
+                      advertises the requested Backend. Each entry must be one of the five
+                      supported backends. The operator tries each in order; the first backend
                       with a capable node wins. status.runtime.chosen records the final
                       selection.
 

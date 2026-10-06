@@ -4,13 +4,16 @@
 package podspec
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 )
 
 // The launcher Pod (docs/design/runtime.md). One setec container starts a
@@ -30,6 +33,12 @@ const (
 	// writable layer and snapshot files.
 	launcherWorkVolume    = "work"
 	launcherWorkMountPath = "/work"
+
+	// launcherDiskVolume is the image volume of the signed disk of the
+	// image digest. The kubelet pulls it on the node, so the launcher
+	// reaches no registry through the Pod network.
+	launcherDiskVolume    = "disk"
+	launcherDiskMountPath = "/disk"
 )
 
 // LauncherCapability is the one capability of a launcher Pod. The launcher
@@ -47,6 +56,58 @@ type LauncherOptions struct {
 	// Scratch is the size limit of the writable layer of the machine.
 	// Zero takes the default scratch size of the Sandbox.
 	Scratch resource.Quantity
+	// DiskRepo is the repository of the signed image disks
+	// (setec-disk-builder). Required.
+	DiskRepo string
+	// DiskKeys are the base64 ed25519 public keys that may sign a disk.
+	// Required: the launcher refuses a disk that no key signed.
+	DiskKeys []string
+	// ResolverIPs are the DNS servers of the Pod. The launcher gives the
+	// resolv.conf of the Pod to the machine.
+	ResolverIPs []string
+}
+
+// LauncherSpecEnv is the environment variable that carries the launcher
+// spec (internal/launcher.Spec) as JSON.
+const LauncherSpecEnv = "SETEC_LAUNCHER_SPEC"
+
+// The fixed paths inside a launcher Pod. The launcher image holds the
+// kernel and the initrd with the guest agent.
+const (
+	launcherKernel   = "/opt/setec/vmlinux"
+	launcherInitrd   = "/opt/setec/initrd.cpio"
+	launcherBootArgs = "console=ttyS0 reboot=k panic=1 pci=off setec.lowerfs=squashfs"
+)
+
+// launcherSpec is the JSON of internal/launcher.Spec. It is written here
+// rather than imported, so the operator does not link the launcher.
+type launcherSpec struct {
+	VCPU          int             `json:"vcpu"`
+	MemoryMiB     int64           `json:"memoryMiB"`
+	ImageRef      string          `json:"imageRef"`
+	DiskKeys      []string        `json:"diskKeys"`
+	ImageDisk     string          `json:"imageDisk"`
+	DiskSignature string          `json:"diskSignature"`
+	WritableDisk  string          `json:"writableDisk"`
+	WritableBytes int64           `json:"writableBytes"`
+	WorkDir       string          `json:"workDir"`
+	Source        launcherSource  `json:"source"`
+	Workload      launcherProcess `json:"workload"`
+}
+
+type launcherSource struct {
+	Boot launcherBoot `json:"boot"`
+}
+
+type launcherBoot struct {
+	Kernel   string `json:"kernel"`
+	Initrd   string `json:"initrd"`
+	BootArgs string `json:"bootArgs"`
+}
+
+type launcherProcess struct {
+	Argv []string `json:"argv,omitempty"`
+	Env  []string `json:"env,omitempty"`
 }
 
 // BuildLauncher returns the launcher Pod of sb. The guest memory and vCPUs
@@ -62,6 +123,16 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	}
 	if opts.Image == "" {
 		return nil, fmt.Errorf("podspec: the launcher image is empty")
+	}
+	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
+		return nil, fmt.Errorf("podspec: the disk repository or the disk keys are empty")
+	}
+	if !strings.Contains(sb.Spec.Image, "@sha256:") {
+		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
+	}
+	diskRef, err := diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	if err != nil {
+		return nil, fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
 	}
 	if sb.Spec.Resources.VCPU < 1 {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
@@ -80,6 +151,32 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	work := opts.Scratch.DeepCopy()
 	if work.IsZero() {
 		work = resource.MustParse("10Gi")
+	}
+	// The writable layer takes the scratch size. The emptyDir holds it and
+	// the machine files, so it gets 2 GiB more.
+	workDir := work.DeepCopy()
+	workDir.Add(resource.MustParse("2Gi"))
+	spec := launcherSpec{
+		VCPU:          int(sb.Spec.Resources.VCPU),
+		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
+		ImageRef:      sb.Spec.Image,
+		DiskKeys:      opts.DiskKeys,
+		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
+		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
+		WritableDisk:  launcherWorkMountPath + "/writable.ext4",
+		WritableBytes: work.Value(),
+		WorkDir:       launcherWorkMountPath + "/vm",
+		Source:        launcherSource{Boot: launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}},
+		Workload:      launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)},
+	}
+	for _, e := range sb.Spec.Env {
+		if e.ValueFrom == nil {
+			spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
+		}
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return nil, err
 	}
 
 	pod := &corev1.Pod{
@@ -104,6 +201,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			Containers: []corev1.Container{{
 				Name:  LauncherContainerName,
 				Image: opts.Image,
+				Env:   []corev1.EnvVar{{Name: LauncherSpecEnv, Value: string(specJSON)}},
 				Resources: corev1.ResourceRequirements{
 					Limits:   limits,
 					Requests: limits.DeepCopy(),
@@ -118,12 +216,23 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 						Add:  []corev1.Capability{LauncherCapability},
 					},
 				},
-				VolumeMounts: []corev1.VolumeMount{{Name: launcherWorkVolume, MountPath: launcherWorkMountPath}},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: launcherWorkVolume, MountPath: launcherWorkMountPath},
+					{Name: launcherDiskVolume, MountPath: launcherDiskMountPath, ReadOnly: true},
+				},
 			}},
-			Volumes: []corev1.Volume{{
-				Name:     launcherWorkVolume,
-				EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &work},
-			}},
+			Volumes: []corev1.Volume{
+				{
+					Name:     launcherWorkVolume,
+					EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workDir},
+				},
+				{
+					Name: launcherDiskVolume,
+					Image: &corev1.ImageVolumeSource{
+						Reference: diskRef, PullPolicy: corev1.PullIfNotPresent,
+					},
+				},
+			},
 			Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 					NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
@@ -132,6 +241,10 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 				},
 			}},
 		},
+	}
+	if len(opts.ResolverIPs) > 0 {
+		pod.Spec.DNSPolicy = corev1.DNSNone
+		pod.Spec.DNSConfig = &corev1.PodDNSConfig{Nameservers: append([]string(nil), opts.ResolverIPs...)}
 	}
 	return pod, nil
 }

@@ -130,6 +130,13 @@ func main() {
 		multiTenancyEnabled   bool
 		tenantLabelKey        string
 		sessionKeepaliveImage string
+		launcherImage         string
+		diskRepo              string
+		diskBuilderImage      string
+		diskSigningSecret     string
+		diskRegistrySecret    string
+		operatorNamespace     string
+		diskPublicKeys        []string
 		otlpEndpoint          string
 		otlpInsecure          bool
 		otlpCAFile            string
@@ -170,6 +177,22 @@ func main() {
 	pflag.StringVar(&sessionKeepaliveImage, "session-keepalive-image", "",
 		"Image carrying the static setec-keepalive binary. A session Sandbox with no spec.command "+
 			"boots it (setec#7). The operator refuses such a Sandbox when this is empty.")
+	pflag.StringVar(&launcherImage, "launcher-image", "",
+		"Image of setec-launcher, with Firecracker, the guest kernel and the guest agent. "+
+			"Required when the launcher backend is enabled (docs/design/runtime.md).")
+	pflag.StringVar(&diskRepo, "disk-repo", "",
+		"Repository of the signed image disks that setec-disk-builder makes. "+
+			"Required when the launcher backend is enabled.")
+	pflag.StringVar(&diskBuilderImage, "disk-builder-image", "",
+		"Image of setec-disk-builder. The operator runs it as a Job before the first launcher Pod of an image digest.")
+	pflag.StringVar(&diskSigningSecret, "disk-signing-secret", "",
+		"Secret in the operator namespace with the ed25519 seed (key \"seed\") that signs each disk.")
+	pflag.StringVar(&diskRegistrySecret, "disk-registry-secret", "",
+		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
+	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
+		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
+	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
+		"Namespace of the operator, where the disk builder Jobs run.")
 	pflag.BoolVar(&multiTenancyEnabled, "multi-tenancy-enabled", false,
 		"Require Sandboxes' namespaces to carry the tenant label.")
 	pflag.StringVar(&tenantLabelKey, "tenant-label-key", "setec.zeroroot.ai/tenant",
@@ -354,6 +377,14 @@ func main() {
 			runtimeRegistry.Register(runtimepkg.NewGVisorDispatcher(bc))
 		case runtimepkg.BackendRunc:
 			runtimeRegistry.Register(runtimepkg.NewRuncDispatcher(bc))
+		case runtimepkg.BackendLauncher:
+			if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") ||
+				len(diskPublicKeys) == 0 {
+				setupLog.Error(nil, "the launcher backend is enabled, so --launcher-image, --disk-repo, "+
+					"--disk-builder-image, --disk-signing-secret, --disk-public-key and --operator-namespace are required")
+				os.Exit(1)
+			}
+			runtimeRegistry.Register(runtimepkg.NewLauncherDispatcher())
 		default:
 			setupLog.Info("unknown backend in runtimes config; skipping", "backend", backend)
 		}
@@ -470,6 +501,14 @@ func main() {
 		NetPol:                netpolCfg,
 		NamespaceBaselineDeny: nsBaselineDeny,
 		KeepaliveImage:        sessionKeepaliveImage,
+		LauncherImage:         launcherImage,
+		DiskRepo:              diskRepo,
+		DiskKeys:              diskPublicKeys,
+		DiskBuilder: controller.DiskBuilderConfig{
+			Image: diskBuilderImage, Namespace: operatorNamespace,
+			SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
+			Reader: mgr.GetAPIReader(),
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxReconciler")
 		os.Exit(1)
@@ -673,15 +712,10 @@ func runStartupPrereqCheck(
 		return
 	}
 
-	// Build the per-backend class-name map for the multi-backend prereq check.
-	classNames := make(map[string]string, len(runtimeCfg.Runtimes))
-	for name, bc := range runtimeCfg.Runtimes {
-		if bc.Enabled {
-			classNames[name] = bc.RuntimeClassName
-		}
-	}
+	// The prereq check covers each enabled backend that uses a RuntimeClass.
+	backends, classNames := runtimeCfg.RuntimeClassBackends()
 
-	result, err := prereq.CheckMulti(ctx, c, runtimeCfg.EnabledBackends(), classNames, nodeSelectorLabel)
+	result, err := prereq.CheckMulti(ctx, c, backends, classNames, nodeSelectorLabel)
 	if err != nil {
 		setupLog.Info("startup prerequisite check encountered an API error",
 			"error", err.Error(),

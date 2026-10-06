@@ -1,0 +1,36 @@
+{{- with index .Values.runtimes "launcher" }}
+{{- if .enabled }}
+{{- /*
+The operator runs setec-disk-builder as a Job in its own namespace, once for
+each image digest (docs/design/storage.md). It needs get and create on Jobs
+there and nowhere else. The Job Pod has no ServiceAccount token.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "setec.fullname" $ }}-disk-builder
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: [jobs]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "setec.fullname" $ }}-disk-builder
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "setec.fullname" $ }}-disk-builder
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "setec.serviceAccountName" $ }}
+    namespace: {{ $.Values.namespace }}
+{{- end }}
+{{- end }}

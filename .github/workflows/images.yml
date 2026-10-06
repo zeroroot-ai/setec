@@ -68,6 +68,8 @@ jobs:
     outputs:
       version: ${{ steps.read.outputs.version }}
       sha256: ${{ steps.read.outputs.sha256 }}
+      firecracker_version: ${{ steps.read.outputs.firecracker_version }}
+      firecracker_sha256: ${{ steps.read.outputs.firecracker_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Guard the pins and read kata.env
@@ -76,7 +78,10 @@ jobs:
           set -euo pipefail
           bash scripts/check-runtime-pins.sh
           . ./kata.env
+          . ./firecracker.env
           {
+            echo "firecracker_version=${FIRECRACKER_VERSION}"
+            echo "firecracker_sha256=${FIRECRACKER_SHA256}"
             echo "version=${KATA_VERSION}"
             echo "sha256=${KATA_SHA256}"
           } >> "$GITHUB_OUTPUT"
@@ -305,3 +310,51 @@ jobs:
       build_args: |
         KATA_VERSION=${{ needs.kata-pin.outputs.version }}
         KATA_SHA256=${{ needs.kata-pin.outputs.sha256 }}
+
+  setec-launcher:
+    needs: kata-pin
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-launcher
+      component_path: .
+      dockerfile_path: Dockerfile.launcher
+      image_name: ghcr.io/zeroroot-ai/setec-launcher
+      tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}
+      build_args: |
+        FIRECRACKER_VERSION=${{ needs.kata-pin.outputs.firecracker_version }}
+        FIRECRACKER_SHA256=${{ needs.kata-pin.outputs.firecracker_sha256 }}
+
+  setec-disk-builder:
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@eaa991cb73a79080f5ce1223b2f5332c47e02c70 # v0.10.5
+    permissions:
+      # the reusable build never writes repo contents (.github#323)
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+      actions: read
+    with:
+      component_name: setec-disk-builder
+      component_path: .
+      dockerfile_path: Dockerfile.disk-builder
+      image_name: ghcr.io/zeroroot-ai/setec-disk-builder
+      tag_pattern: (v.*)
+      # GOTOOLCHAIN=local as a build-arg (.github#22): the build fails when
+      # go.mod names a Go the pinned base does not carry.
+      go_toolchain_local: true
+      platforms: linux/amd64
+      version_tag: ${{ inputs.version_tag || '' }}

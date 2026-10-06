@@ -85,6 +85,30 @@ spec:
             {{- fail "sessionKeepalive.image.repository must not be empty: a session Sandbox with no spec.command boots this image's keepalive, a kata-fc session of any kind uses it to format and mount its workspace (setec#91), and the operator refuses such a Sandbox without it." }}
             {{- end }}
             - --session-keepalive-image={{ .Values.sessionKeepalive.image.repository }}:{{ .Values.sessionKeepalive.image.tag | default .Chart.AppVersion }}
+            {{- with index .Values.runtimes "launcher" }}
+            {{- if .enabled }}
+            {{- if not .diskRepo }}
+            {{- fail "runtimes.launcher.diskRepo is required when runtimes.launcher.enabled is true: each launcher machine boots the signed disk of its image from there" }}
+            {{- end }}
+            {{- if not .diskBuilder.publicKeys }}
+            {{- fail "runtimes.launcher.diskBuilder.publicKeys is required when runtimes.launcher.enabled is true: each launcher checks the disk signature with them" }}
+            {{- end }}
+            {{- if not .diskBuilder.signingSecret }}
+            {{- fail "runtimes.launcher.diskBuilder.signingSecret is required when runtimes.launcher.enabled is true: it signs each image disk" }}
+            {{- end }}
+            - --launcher-image={{ .image.repository }}:{{ .image.tag | default $.Chart.AppVersion }}
+            - --disk-repo={{ .diskRepo }}
+            - --disk-builder-image={{ .diskBuilder.image.repository }}:{{ .diskBuilder.image.tag | default $.Chart.AppVersion }}
+            - --disk-signing-secret={{ .diskBuilder.signingSecret }}
+            {{- with .diskBuilder.registrySecret }}
+            - --disk-registry-secret={{ . }}
+            {{- end }}
+            - --operator-namespace={{ $.Values.namespace }}
+            {{- range .diskBuilder.publicKeys }}
+            - --disk-public-key={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.snapshots.enabled }}
             - --snapshots-enabled
             - --nodeagent-authority-pattern=%s.{{ include "setec.fullname" . }}-node-agent.{{ .Values.namespace }}.svc:50052

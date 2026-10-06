@@ -145,6 +145,42 @@ runtimes:
   # runtime. NO isolation beyond namespaces and seccomp. DEV/DEBUG ONLY;
   # gated behind the namespace label setec.zeroroot.ai/allow-dev-runtimes
   # by the admission webhook. Never use in production tenancy scenarios.
+  # -- launcher is the launcher runtime (docs/design/runtime.md): one
+  # Firecracker machine in a launcher Pod that is not privileged. It needs
+  # no RuntimeClass and no node label: the Pod asks for the device resources
+  # of devicePlugin, so the scheduler places it on a node with /dev/kvm. A
+  # class names it with backend: launcher. Its image needs a digest.
+  launcher:
+    # -- enabled disabled by default until the cutover (setec#198).
+    enabled: false
+    # -- install stays false: the launcher has no RuntimeClass.
+    install: false
+    # -- image of setec-launcher, with Firecracker, the guest kernel and the
+    # guest agent.
+    image:
+      repository: ghcr.io/zeroroot-ai/setec-launcher
+      tag: ""
+    # -- diskRepo is the repository of the signed image disks that
+    # setec-disk-builder makes. Required when enabled. Each launcher Pod
+    # mounts its disk as an image volume (Kubernetes 1.35 or later), so the
+    # kubelet pulls it with the image credentials of the node.
+    diskRepo: ""
+    # -- diskBuilder runs as a Job in the operator namespace before the
+    # first launcher Pod of an image digest.
+    diskBuilder:
+      image:
+        repository: ghcr.io/zeroroot-ai/setec-disk-builder
+        tag: ""
+      # -- signingSecret holds the base64 ed25519 seed (key "seed") that
+      # signs each disk. Required when enabled. The install makes it.
+      signingSecret: ""
+      # -- registrySecret is an optional kubernetes.io/dockerconfigjson
+      # Secret with the push credentials of diskRepo.
+      registrySecret: ""
+      # -- publicKeys are the base64 ed25519 public keys of signingSecret.
+      # Each launcher refuses a disk that none of them signed. List two
+      # while the signing key rotates. Required when enabled.
+      publicKeys: []
   runc:
     # -- enabled disabled by default. Intended to simplify local dev and
     # CI where you want to exercise the Setec control plane without a
