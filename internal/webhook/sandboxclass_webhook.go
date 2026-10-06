@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/runtime"
 )
 
@@ -164,6 +165,7 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
 	allErrs = append(allErrs, validateRequests(class)...)
+	allErrs = append(allErrs, validateScratch(class)...)
 	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
 	allErrs = append(allErrs, validateEgressAllowSelectors(class)...)
 	allErrs = append(allErrs, validateRuntimeParams(class)...)
@@ -495,6 +497,29 @@ func validateRequests(class *setecv1alpha1.SandboxClass) field.ErrorList {
 		case maxRes != nil && req.Memory.Cmp(maxRes.Memory) > 0:
 			errs = append(errs, field.Invalid(p, req.Memory.String(),
 				fmt.Sprintf("exceeds spec.maxResources.memory (%s)", maxRes.Memory.String())))
+		}
+	}
+	return errs
+}
+
+// validateScratch checks the two scratch values of a class (ADR-0146). Each
+// must be positive, and the default must fit under the ceiling: a default
+// above it would make every Sandbox that omits scratch fail admission.
+func validateScratch(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	ceiling := limits.ScratchCeiling(class)
+	if m := class.Spec.MaxResources; m != nil && m.Scratch != nil && m.Scratch.Sign() <= 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "maxResources", "scratch"),
+			m.Scratch.String(), "must be positive"))
+	}
+	if d := class.Spec.DefaultResources; d != nil && d.Scratch != nil {
+		p := field.NewPath("spec", "defaultResources", "scratch")
+		switch {
+		case d.Scratch.Sign() <= 0:
+			errs = append(errs, field.Invalid(p, d.Scratch.String(), "must be positive"))
+		case d.Scratch.Cmp(ceiling) > 0:
+			errs = append(errs, field.Invalid(p, d.Scratch.String(),
+				fmt.Sprintf("exceeds the scratch ceiling of the class (%s)", ceiling.String())))
 		}
 	}
 	return errs

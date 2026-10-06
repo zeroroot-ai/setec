@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	setecLimits "github.com/zeroroot-ai/setec/internal/limits"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
@@ -139,6 +140,13 @@ type BuildOptions struct {
 	// /workspace, then either execs its own command or falls into the
 	// reap loop above. Empty is an error for a kata-fc session.
 	KeepaliveImage string
+
+	// Scratch is the size limit of the scratch volume, resolved with the
+	// class (setecLimits.EffectiveScratch). Zero resolves it without a class:
+	// the Sandbox's own value, else limits.DefaultScratch. The workload
+	// container's ephemeral-storage limit is Scratch plus
+	// limits.EphemeralHeadroom (ADR-0146).
+	Scratch resource.Quantity
 }
 
 // Keepalive injection for a session Sandbox with no spec.command.
@@ -314,12 +322,17 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 	// the same init container.
 	needsKeepaliveBinary := usesKeepalive || usesBlockWorkspace
 
+	scratch := opts.Scratch.DeepCopy()
+	if scratch.IsZero() {
+		scratch = setecLimits.EffectiveScratch(sb, nil)
+	}
+
 	container := corev1.Container{
 		Name:      ContainerName,
 		Image:     sb.Spec.Image,
 		Command:   append([]string(nil), sb.Spec.Command...),
 		Env:       append([]corev1.EnvVar(nil), sb.Spec.Env...),
-		Resources: buildResourceRequirements(sb.Spec.Resources, opts.Requests),
+		Resources: buildResourceRequirements(sb.Spec.Resources, opts.Requests, scratch),
 		// A read-only root filesystem needs somewhere to write, or every
 		// tool that touches a temporary file fails.
 		VolumeMounts: []corev1.VolumeMount{{
@@ -405,8 +418,10 @@ func BuildWithOptions(sb *setecv1alpha1.Sandbox, runtimeClassName string, opts B
 			},
 
 			Volumes: []corev1.Volume{{
-				Name:     scratchVolumeName,
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
+				Name: scratchVolumeName,
+				// The size limit of the scratch volume (ADR-0146). The
+				// kubelet evicts the Pod when the volume grows past it.
+				EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &scratch},
 			}},
 		},
 	}
@@ -630,7 +645,14 @@ func validate(sb *setecv1alpha1.Sandbox, runtimeClassName string) error {
 // the request for each resource it names, bounded by that resource's
 // limit: a request above its limit is an invalid Pod, so the
 // reservation can only ever lower what the scheduler sets aside.
-func buildResourceRequirements(r setecv1alpha1.Resources, req *setecv1alpha1.ResourceRequests) corev1.ResourceRequirements {
+//
+// The ephemeral-storage limit is the scratch size plus the fixed headroom,
+// so a full scratch volume and its logs cannot fill the node's disk. Its
+// request is the headroom alone: the scheduler sets aside what every Pod
+// uses, and the limit stops the one that grows.
+func buildResourceRequirements(
+	r setecv1alpha1.Resources, req *setecv1alpha1.ResourceRequests, scratch resource.Quantity,
+) corev1.ResourceRequirements {
 	cpu := *resource.NewQuantity(int64(r.VCPU), resource.DecimalSI)
 	mem := r.Memory.DeepCopy()
 
@@ -647,6 +669,9 @@ func buildResourceRequirements(r setecv1alpha1.Resources, req *setecv1alpha1.Res
 			requests[corev1.ResourceMemory] = minQuantity(*req.Memory, mem)
 		}
 	}
+
+	limits[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralLimit(scratch)
+	requests[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralHeadroom.DeepCopy()
 
 	return corev1.ResourceRequirements{
 		Requests: requests,

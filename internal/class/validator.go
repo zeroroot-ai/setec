@@ -16,6 +16,7 @@ import (
 	"slices"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 )
 
@@ -84,6 +85,25 @@ func Validate(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) []Cons
 				),
 			})
 		}
+	}
+
+	// Scratch ceiling. Unlike vcpu and memory it applies with no
+	// MaxResources too: the default ceiling is DefaultScratch (ADR-0146).
+	// The effective value is checked, so a class default above the class
+	// ceiling is refused as well as an explicit request.
+	if scratch, ceiling := limits.EffectiveScratch(sb, cls), limits.ScratchCeiling(cls); scratch.Cmp(ceiling) > 0 {
+		out = append(out, ConstraintViolation{
+			Field: "spec.resources.scratch",
+			Message: fmt.Sprintf(
+				"Sandbox scratch is %s but SandboxClass %q allows maximum %s",
+				scratch.String(), cls.Name, ceiling.String(),
+			),
+		})
+	} else if scratch.Sign() <= 0 {
+		out = append(out, ConstraintViolation{
+			Field:   "spec.resources.scratch",
+			Message: fmt.Sprintf("Sandbox scratch must be positive, got %s", scratch.String()),
+		})
 	}
 
 	// Network mode enforcement. An empty AllowedNetworkModes list means

@@ -40,6 +40,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/podspec"
@@ -1658,6 +1659,10 @@ func (r *SandboxReconciler) createPod(
 	if cls != nil {
 		opts.Requests = cls.Spec.Requests
 	}
+	// The scratch size limit resolves with the class: the Sandbox's own
+	// value, else the class default, else 10 GiB (ADR-0146). The class
+	// validator already refused a value above the class ceiling.
+	opts.Scratch = limits.EffectiveScratch(sb, cls)
 	// A session with no command boots the keepalive from this image
 	// (setec#7). The builder refuses such a Sandbox when it is empty.
 	opts.KeepaliveImage = r.KeepaliveImage

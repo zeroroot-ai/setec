@@ -190,8 +190,12 @@ type SandboxSnapshotRef struct {
 	Name string `json:"name"`
 }
 
-// Resources declares the CPU and memory budget allocated to the Sandbox
-// microVM. Both fields are required.
+// Resources declares the CPU, memory and scratch budget allocated to the
+// Sandbox microVM. VCPU and Memory are required.
+//
+// Memory has a ceiling of 64 GiB in the API (ADR-0146). A SandboxClass can
+// lower it with maxResources.memory, never raise it.
+// +kubebuilder:validation:XValidation:rule="quantity(string(self.memory)).compareTo(quantity('64Gi')) <= 0",message="memory must not exceed 64Gi"
 type Resources struct {
 	// VCPU is the number of virtual CPUs to assign to the microVM.
 	// +kubebuilder:validation:Minimum=1
@@ -203,6 +207,14 @@ type Resources struct {
 	// Kubernetes resource.Quantity (e.g. "2Gi", "512Mi").
 	// +required
 	Memory resource.Quantity `json:"memory"`
+
+	// Scratch is the size limit of the writable scratch volume at /tmp.
+	// The Pod also gets an ephemeral-storage limit of Scratch plus 1 GiB.
+	// Unset takes the class default (defaultResources.scratch), else
+	// 10 GiB. A Sandbox may ask for less than its class permits
+	// (maxResources.scratch, else 10 GiB), never for more.
+	// +optional
+	Scratch *resource.Quantity `json:"scratch,omitempty"`
 }
 
 // NetworkAllowPort is one port or one port range of a NetworkAllow entry.

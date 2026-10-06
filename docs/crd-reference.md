@@ -64,7 +64,8 @@ status:
 | `env` | []corev1.EnvVar | no | `[]` | Environment variables exposed to the workload, following the standard Kubernetes `EnvVar` schema. |
 | `resources` | object | yes | — | CPU and memory budget for the microVM; see [`spec.resources`](#specresources) below. |
 | `resources.vcpu` | int32 (`1`–`32`) | yes | — | Number of virtual CPUs allocated to the microVM. |
-| `resources.memory` | resource.Quantity | yes | — | RAM allocated to the microVM (e.g. `512Mi`, `2Gi`). |
+| `resources.memory` | resource.Quantity | yes | — | RAM allocated to the microVM (e.g. `512Mi`, `2Gi`). The API refuses more than `64Gi`. A class can lower the ceiling with `maxResources.memory`. |
+| `resources.scratch` | resource.Quantity | no | class `defaultResources.scratch`, else `10Gi` | Size limit of the scratch volume at `/tmp`. The Pod gets an ephemeral-storage limit of this value plus `1Gi`. The value must not exceed the class `maxResources.scratch`, else `10Gi`. The kubelet stops a Sandbox that writes past the limit. |
 | `network` | object | no | class default, else `{mode: none}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
 | `network.mode` | enum `external-only` \| `egress-allow-list` \| `none` | yes (when `network` set) | `none` | Egress posture. Every mode is enforced by a generated NetworkPolicy. |
 | `network.allow` | []object | no | `[]` | Permitted egress destinations. Meaningful only when `network.mode: egress-allow-list`. |

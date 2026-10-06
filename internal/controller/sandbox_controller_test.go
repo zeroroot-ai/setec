@@ -493,3 +493,32 @@ func TestSamples_TheAPIServerAcceptsEachSample(t *testing.T) {
 		})
 	}
 }
+
+// TestAPI_MemoryCeiling proves the 64Gi memory ceiling of ADR-0146 against
+// the real CRD schema (setec#172). The API server refuses more, and accepts
+// the ceiling itself and a scratch value.
+func TestAPI_MemoryCeiling(t *testing.T) {
+	g := NewWithT(t)
+	ns := newNamespace(t, "memceiling")
+	mk := func(name, memory string) *setecv1alpha1.Sandbox {
+		scratch := resource.MustParse("2Gi")
+		sb := &setecv1alpha1.Sandbox{
+			Spec: setecv1alpha1.SandboxSpec{
+				Image:   "busybox",
+				Command: []string{"true"},
+				Resources: setecv1alpha1.Resources{
+					VCPU: 1, Memory: resource.MustParse(memory), Scratch: &scratch,
+				},
+			},
+		}
+		sb.Name, sb.Namespace = name, ns
+		return sb
+	}
+	atCeiling := mk("at-ceiling", "64Gi")
+	g.Expect(testClient.Create(testCtx, atCeiling)).To(Succeed())
+	_ = testClient.Delete(testCtx, atCeiling)
+
+	err := testClient.Create(testCtx, mk("above-ceiling", "65Gi"))
+	g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "65Gi must be refused as invalid, got %v", err)
+	g.Expect(err.Error()).To(ContainSubstring("memory must not exceed 64Gi"))
+}
