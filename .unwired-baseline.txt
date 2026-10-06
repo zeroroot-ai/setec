@@ -181,3 +181,6 @@ field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go
 field podspec.launcherSpec.Base	# internal/podspec/launcher.go
 field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go
 field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go
+# The session workspace of a launcher Pod (setec#193): a wire field of the
+# launcher spec.
+field podspec.launcherSpec.WorkspaceDevice	# internal/podspec/launcher.go
