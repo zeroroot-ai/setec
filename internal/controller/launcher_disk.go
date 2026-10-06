@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create
@@ -92,7 +93,7 @@ func ensureDisk(ctx context.Context, c client.Client, cfg DiskBuilderConfig, dis
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, errwrap.Wrap(err, "client.Reader.Get")
 	}
 	for _, cond := range job.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {

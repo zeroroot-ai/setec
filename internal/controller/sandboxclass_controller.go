@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
@@ -108,7 +109,7 @@ func (r *SandboxClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, errwrap.Wrap(err, "client.SubResourceWriter.Patch")
 	}
 	return ctrl.Result{}, nil
 }
@@ -116,7 +117,7 @@ func (r *SandboxClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // SetupWithManager registers the reconciler with the given manager. It
 // watches cluster-scoped SandboxClass resources only.
 func (r *SandboxClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		For(&setecv1alpha1.SandboxClass{}).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }

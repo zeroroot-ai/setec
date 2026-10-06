@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -57,8 +58,8 @@ func relayExecLogs(ctx context.Context, r io.Reader, stream setecv1grpc.LeaseSer
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return nil
 			}
-			return err
+			return errwrap.Wrap(err, "grpc.ServerStreamingServer.Send")
 		}
 	}
-	return scanner.Err()
+	return errwrap.Wrap(scanner.Err(), "bufio.Scanner.Err")
 }

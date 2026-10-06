@@ -19,6 +19,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/leasepool"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -338,11 +339,11 @@ func (s *LeaseService) streamExec(ctx context.Context, ns, name string, stream s
 			if sb.Status.ExitCode != nil {
 				done.ExitCode = *sb.Status.ExitCode
 			}
-			return stream.Send(done)
+			return errwrap.Wrap(stream.Send(done), "grpc.ServerStreamingServer.Send")
 		}
 		select {
 		case <-ctx.Done():
-			return status.FromContextError(ctx.Err()).Err()
+			return errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-time.After(waitPollInterval):
 		}
 	}
@@ -360,7 +361,7 @@ func (s *LeaseService) waitLoggable(ctx context.Context, ns, podName string) err
 		case apierrors.IsNotFound(err):
 			// keep waiting
 		case err != nil:
-			return err
+			return errwrap.Wrap(err, "client.Reader.Get")
 		default:
 			if podLogsAvailable(pod) {
 				return nil
@@ -371,7 +372,7 @@ func (s *LeaseService) waitLoggable(ctx context.Context, ns, podName string) err
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-ticker.C:
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 )
 
@@ -61,7 +62,7 @@ func (f *FirecrackerVMM) Start(ctx context.Context, workDir, configFile string, 
 		case <-f.done:
 			return fmt.Errorf("firecracker ended at start: %w", f.waitErr)
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -97,5 +98,5 @@ func (f *FirecrackerVMM) Stop(grace time.Duration) error {
 		}
 		_ = os.Remove(f.socket)
 	})
-	return err
+	return errwrap.Wrap(err, "os.Process.Kill")
 }

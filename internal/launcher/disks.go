@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Formatter makes an empty ext4 file system on a new writable layer.
@@ -42,7 +44,7 @@ func (s *Spec) prepareDisks(format Formatter) error {
 			return fmt.Errorf("size the writable layer: %w", err)
 		}
 		if err := f.Close(); err != nil {
-			return err
+			return errwrap.Wrap(err, "os.File.Close")
 		}
 		if err := format(s.WritableDisk); err != nil {
 			_ = os.Remove(s.WritableDisk)
@@ -88,7 +90,7 @@ const ext4MagicOffset = 1024 + 56
 func hasExt4(path string) (bool, error) {
 	f, err := os.Open(path) //nolint:gosec // the workspace device of the spec
 	if err != nil {
-		return false, err
+		return false, errwrap.Wrap(err, "os.Open")
 	}
 	defer func() { _ = f.Close() }()
 	magic := make([]byte, 2)
@@ -96,7 +98,7 @@ func hasExt4(path string) (bool, error) {
 		if errors.Is(err, io.EOF) {
 			return false, nil
 		}
-		return false, err
+		return false, errwrap.Wrap(err, "os.File.ReadAt")
 	}
 	return magic[0] == 0x53 && magic[1] == 0xEF, nil
 }

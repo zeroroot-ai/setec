@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 )
 
@@ -188,7 +189,7 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 		client.InNamespace(snap.Namespace),
 		client.MatchingFields{SnapshotSandboxRefIndex: snap.Name},
 	); err != nil {
-		return 0, err
+		return 0, errwrap.Wrap(err, "client.Reader.List")
 	}
 	// A launcher Sandbox that has loaded the Snapshot no longer needs it,
 	// so the TTL of a fork snapshot can end it (setec#195).
@@ -203,7 +204,7 @@ func (r *SnapshotReconciler) referenceCount(ctx context.Context, snap *setecv1al
 		client.InNamespace(snap.Namespace),
 		client.MatchingFields{SnapshotParentIndex: snap.Name},
 	); err != nil {
-		return 0, err
+		return 0, errwrap.Wrap(err, "client.Reader.List")
 	}
 	return inUse + len(diffs.Items), nil
 }
@@ -247,7 +248,7 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// requeue-after. The mapping function reads spec.snapshotRef to
 	// decide which Snapshot to notify; a Sandbox without a ref is a
 	// no-op.
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		For(&setecv1alpha1.Snapshot{}, builder.WithPredicates()).
 		WatchesRawSource(source.Kind(
 			mgr.GetCache(),
@@ -261,5 +262,5 @@ func (r *SnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      sb.Spec.SnapshotRef.Name}}
 			}),
 		)).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }

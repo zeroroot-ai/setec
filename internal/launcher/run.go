@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Reason names why a launch failed. It is the first word of the
@@ -266,7 +268,7 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		return LaunchFailedExit, fail(ReasonVMMExited, errors.Join(errors.New("firecracker ended before the guest reported an exit"), werr))
 	case <-ctx.Done():
 		stop()
-		return LaunchFailedExit, ctx.Err()
+		return LaunchFailedExit, errwrap.Wrap(ctx.Err(), "context.Context.Err")
 	case err := <-errC:
 		stop()
 		return LaunchFailedExit, fail(ReasonVMMExited, err)
@@ -290,13 +292,13 @@ func writeEvidence(path string, ev RestoreEvidence) error {
 	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "json.Marshal")
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.WriteFile")
 	}
-	return os.Rename(tmp, path)
+	return errwrap.Wrap(os.Rename(tmp, path), "os.Rename")
 }
 
 // stagedPoll is the interval at which the launcher looks for the staged
@@ -313,11 +315,11 @@ func waitFile(ctx context.Context, path string) error {
 		if _, err := os.Stat(path); err == nil {
 			return nil
 		} else if !os.IsNotExist(err) {
-			return err
+			return errwrap.Wrap(err, "os.Stat")
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-time.After(stagedPoll):
 		}
 	}

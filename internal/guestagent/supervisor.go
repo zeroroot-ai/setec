@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Supervisor starts processes in the root of the image and is the one
@@ -168,20 +170,21 @@ const maxLinks = 40
 // of the agent. Images such as alpine link /bin/sh to /bin/busybox.
 func statInRoot(root, path string) (os.FileInfo, error) {
 	if root == "" {
-		return os.Stat(path)
+		fi, err := os.Stat(path)
+		return fi, errwrap.Wrap(err, "os.Stat")
 	}
 	cur := filepath.Clean("/" + path)
 	for range maxLinks {
 		fi, err := os.Lstat(filepath.Join(root, cur))
 		if err != nil {
-			return nil, err
+			return nil, errwrap.Wrap(err, "os.Lstat")
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			return fi, nil
 		}
 		target, err := os.Readlink(filepath.Join(root, cur))
 		if err != nil {
-			return nil, err
+			return nil, errwrap.Wrap(err, "os.Readlink")
 		}
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(filepath.Dir(cur), target)
@@ -273,7 +276,7 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Stat")
 	}
 	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok || sys.Uid != 0 {
@@ -281,7 +284,7 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.ReadDir")
 	}
 	for _, e := range entries {
 		if e.Name() != "lost+found" {
@@ -307,14 +310,14 @@ const ResumedFile = "run/setec/resumed"
 func WriteResumed(root string, stateAt, resumedAt time.Time) error {
 	path := filepath.Join(root, ResumedFile)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.MkdirAll")
 	}
 	raw, err := json.Marshal(map[string]string{
 		"stateTakenAt": stateAt.UTC().Format(time.RFC3339Nano),
 		"resumedAt":    resumedAt.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "json.Marshal")
 	}
-	return os.WriteFile(path, append(raw, '\n'), 0o644) //nolint:gosec // the workload reads it
+	return errwrap.Wrap(os.WriteFile(path, append(raw, '\n'), 0o644), "os.WriteFile") //nolint:gosec // the workload reads it
 }

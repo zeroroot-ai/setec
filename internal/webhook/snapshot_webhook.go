@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // SnapshotResourceName is the ResourceQuota counter name that
@@ -196,9 +197,9 @@ func quantityString(q resource.Quantity) string {
 
 // SetupWebhookWithManager registers the Snapshot validating webhook.
 func (v *SnapshotValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Snapshot{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Snapshot{}).
 		WithValidator(v).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // errMinSnapshotTTL is a sentinel so tests can errors.Is against

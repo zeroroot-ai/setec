@@ -51,6 +51,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"golang.org/x/sys/unix"
 )
 
@@ -197,12 +198,12 @@ func Encrypt(dst io.Writer, src io.Reader, dek []byte) (int64, error) {
 	n, err := dst.Write([]byte(streamMagic))
 	written += int64(n)
 	if err != nil {
-		return written, err
+		return written, errwrap.Wrap(err, "io.Writer.Write")
 	}
 	n, err = dst.Write(prefix)
 	written += int64(n)
 	if err != nil {
-		return written, err
+		return written, errwrap.Wrap(err, "io.Writer.Write")
 	}
 
 	br := bufio.NewReaderSize(src, chunkSize)
@@ -230,12 +231,12 @@ func Encrypt(dst io.Writer, src io.Reader, dek []byte) (int64, error) {
 		n, err = dst.Write(lenBuf)
 		written += int64(n)
 		if err != nil {
-			return written, err
+			return written, errwrap.Wrap(err, "io.Writer.Write")
 		}
 		n, err = dst.Write(ct)
 		written += int64(n)
 		if err != nil {
-			return written, err
+			return written, errwrap.Wrap(err, "io.Writer.Write")
 		}
 		if final {
 			return written, nil
@@ -361,12 +362,12 @@ func chunkNonce(prefix []byte, counter uint32, final bool) []byte {
 func Shred(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Stat")
 	}
 	if size := info.Size(); size > 0 {
 		f, err := os.OpenFile(path, os.O_WRONLY, 0o600) //nolint:gosec // node-agent controlled path
 		if err != nil {
-			return err
+			return errwrap.Wrap(err, "os.OpenFile")
 		}
 		if err := zeroData(f, size); err != nil {
 			_ = f.Close()
@@ -374,13 +375,13 @@ func Shred(path string) error {
 		}
 		if err := f.Sync(); err != nil {
 			_ = f.Close()
-			return err
+			return errwrap.Wrap(err, "os.File.Sync")
 		}
 		if err := f.Close(); err != nil {
-			return err
+			return errwrap.Wrap(err, "os.File.Close")
 		}
 	}
-	return os.Remove(path)
+	return errwrap.Wrap(os.Remove(path), "os.Remove")
 }
 
 // zeroData writes zeros over each data extent of f. A file system with no
@@ -391,7 +392,7 @@ func zeroData(f *os.File, size int64) error {
 		for off < end {
 			n, err := f.WriteAt(buf[:min(end-off, int64(len(buf)))], off)
 			if err != nil {
-				return err
+				return errwrap.Wrap(err, "os.File.WriteAt")
 			}
 			off += int64(n)
 		}
@@ -430,7 +431,7 @@ func readFull(r io.Reader, buf []byte) ([]byte, error) {
 	if errors.Is(err, io.EOF) {
 		return nil, io.EOF
 	}
-	return buf[:n], err
+	return buf[:n], errwrap.Wrap(err, "io.ReadFull")
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {

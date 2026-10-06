@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 )
 
@@ -202,7 +203,7 @@ func dekAAD(snapshotID string) string {
 // remains.
 func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, "", err
+		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
@@ -251,7 +252,7 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 // or payload that fails authentication returns ErrCorrupted.
 func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
@@ -293,7 +294,7 @@ func (b *EncryptedBackend) Open(ctx context.Context, storageRef string) (io.Read
 // caller's idempotency contract is preserved.
 func (b *EncryptedBackend) Delete(ctx context.Context, storageRef string) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
@@ -324,7 +325,7 @@ type decryptReadCloser struct {
 	closer io.Closer
 }
 
-func (d *decryptReadCloser) Close() error { return d.closer.Close() }
+func (d *decryptReadCloser) Close() error { return d.closer.Close() } //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
 
 // Compile-time interface assertions.
 var (

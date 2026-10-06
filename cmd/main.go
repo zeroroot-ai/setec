@@ -38,6 +38,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
 	"github.com/zeroroot-ai/setec/internal/credentials"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
@@ -670,7 +671,7 @@ func newProbeServer(addr string) manager.Runnable {
 
 		setupLog.Info("starting health probe server", "address", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			return errwrap.Wrap(err, "http.Server.ListenAndServe")
 		}
 		<-shutdownDone
 		return nil

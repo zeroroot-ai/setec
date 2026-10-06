@@ -22,6 +22,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -105,7 +106,7 @@ func (g *ClientNamespaceGetter) GetNamespaceLabels(ctx context.Context, name str
 	}
 	ns := &corev1.Namespace{}
 	if err := g.Client.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "client.Reader.Get")
 	}
 	return ns.Labels, nil
 }
@@ -287,9 +288,9 @@ func (v *SandboxValidator) checkTenantLabel(ctx context.Context, sb *setecv1alph
 // SetupWebhookWithManager registers the Sandbox validating webhook with
 // the controller-runtime manager. Callers invoke it from cmd/main.go.
 func (v *SandboxValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Sandbox{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Sandbox{}).
 		WithValidator(v).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // assert the webhook type exists as referenced by docs and tests.

@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ControlPort is the vsock port of the guest agent in the machine.
@@ -94,19 +96,19 @@ func ReadLine(r *bufio.Reader, v any) error {
 		return errors.New("guestagent: line too long")
 	}
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "bufio.Reader.ReadSlice")
 	}
-	return json.Unmarshal(line, v)
+	return errwrap.Wrap(json.Unmarshal(line, v), "json.Unmarshal")
 }
 
 // WriteLine writes v as one JSON line.
 func WriteLine(w io.Writer, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "json.Marshal")
 	}
 	_, err = w.Write(append(b, '\n'))
-	return err
+	return errwrap.Wrap(err, "io.Writer.Write")
 }
 
 // FrameType tags a frame of an exec stream.
@@ -133,17 +135,17 @@ func WriteFrame(w io.Writer, t FrameType, data []byte) error {
 	hdr := [5]byte{byte(t)}
 	binary.BigEndian.PutUint32(hdr[1:], uint32(len(data)))
 	if _, err := w.Write(hdr[:]); err != nil {
-		return err
+		return errwrap.Wrap(err, "io.Writer.Write")
 	}
 	_, err := w.Write(data)
-	return err
+	return errwrap.Wrap(err, "io.Writer.Write")
 }
 
 // ReadFrame reads one frame.
 func ReadFrame(r io.Reader) (FrameType, []byte, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return 0, nil, err
+		return 0, nil, errwrap.Wrap(err, "io.ReadFull")
 	}
 	n := binary.BigEndian.Uint32(hdr[1:])
 	if n > MaxFrame {
@@ -151,7 +153,7 @@ func ReadFrame(r io.Reader) (FrameType, []byte, error) {
 	}
 	data := make([]byte, n)
 	if _, err := io.ReadFull(r, data); err != nil {
-		return 0, nil, err
+		return 0, nil, errwrap.Wrap(err, "io.ReadFull")
 	}
 	return FrameType(hdr[0]), data, nil
 }

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ErrPoolEmpty is returned by Lease when the pool has no ready entry and
@@ -420,7 +422,7 @@ func (m *Manager) waitReady(ctx context.Context, ref SandboxRef) error {
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-time.After(poll):
 		}
 	}

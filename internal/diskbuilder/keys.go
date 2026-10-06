@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ReadPrivateKey reads an ed25519 seed (32 bytes, base64) from path. The
@@ -17,7 +19,7 @@ import (
 func ReadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // a mounted Secret
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "os.ReadFile")
 	}
 	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
 	if err != nil || len(seed) != ed25519.SeedSize {

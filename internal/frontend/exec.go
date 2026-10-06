@@ -25,6 +25,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 
 	"google.golang.org/grpc/codes"
@@ -144,7 +145,7 @@ func recvExecStart(stream setecv1grpc.SandboxService_ExecServer) (*setecv1grpc.S
 			return nil, status.Error(codes.InvalidArgument,
 				"exec stream closed before sending a start message")
 		}
-		return nil, err
+		return nil, errwrap.Wrap(err, "grpc.BidiStreamingServer.Recv")
 	}
 	start := first.GetStart()
 	if start == nil {
@@ -397,7 +398,7 @@ func (s *Service) ensureSessionRunning(ctx context.Context, ns, name string) err
 		}
 		select {
 		case <-ctx.Done():
-			return status.FromContextError(ctx.Err()).Err()
+			return errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-time.After(execReadyPollInterval):
 		}
 	}
@@ -418,7 +419,7 @@ func (s *Service) requestSessionRunning(ctx context.Context, ns, name string) er
 	sb := &setecv1alpha1.Sandbox{
 		Namespace: ns, Name: name,
 	}
-	return s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body))
+	return errwrap.Wrap(s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body)), "client.Writer.Patch")
 }
 
 // execReadyBudget is the configured readiness budget, or the default.
@@ -527,7 +528,7 @@ func (s *execSender) send(msg *setecv1grpc.SandboxServiceExecResponse) error {
 	}
 	if err := s.stream.Send(msg); err != nil {
 		s.sendErr = err
-		return err
+		return errwrap.Wrap(err, "grpc.BidiStreamingServer.Send")
 	}
 	return nil
 }
@@ -610,10 +611,10 @@ func (e *podSubresourceExecutor) ExecInContainer(
 		return fmt.Errorf("build exec: %w", err)
 	}
 
-	return exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	return errwrap.Wrap(exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:  stdin,
 		Stdout: stdout,
 		Stderr: stderr,
 		Tty:    false,
-	})
+	}), "remotecommand.Executor.StreamWithContext")
 }

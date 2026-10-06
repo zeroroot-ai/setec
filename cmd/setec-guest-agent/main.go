@@ -33,6 +33,7 @@ import (
 	"syscall"
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
 
@@ -61,7 +62,7 @@ func parseFlags(args []string) (Options, error) {
 	fs.StringVar(&dev, "random-device", "/dev/urandom",
 		"device node the RNDADDENTROPY ioctl is issued against")
 	if err := fs.Parse(args); err != nil {
-		return Options{}, err
+		return Options{}, errwrap.Wrap(err, "flag.FlagSet.Parse")
 	}
 	if port == 0 || port > 0xFFFFFFFF {
 		return Options{}, fmt.Errorf("--vsock-port must be in 1..2^32-1, got %d", port)

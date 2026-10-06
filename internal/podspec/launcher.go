@@ -15,6 +15,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	setecLimits "github.com/zeroroot-ai/setec/internal/limits"
 )
 
@@ -346,7 +347,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	}
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "json.Marshal")
 	}
 
 	pod := &corev1.Pod{

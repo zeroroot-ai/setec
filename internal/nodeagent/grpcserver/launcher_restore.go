@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
@@ -109,7 +110,7 @@ func waitLauncherEvidence(ctx context.Context, path string) (podspec.RestoreEvid
 			return ev, nil
 		}
 		if !os.IsNotExist(err) {
-			return podspec.RestoreEvidence{}, err
+			return podspec.RestoreEvidence{}, errwrap.Wrap(err, "os.ReadFile")
 		}
 		select {
 		case <-ctx.Done():
@@ -124,7 +125,7 @@ func waitLauncherEvidence(ctx context.Context, path string) (podspec.RestoreEvid
 func writeIdentityGeneration(path string, gen int64) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(gen, 10)+"\n"), 0o600); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.WriteFile")
 	}
-	return os.Rename(tmp, path)
+	return errwrap.Wrap(os.Rename(tmp, path), "os.Rename")
 }

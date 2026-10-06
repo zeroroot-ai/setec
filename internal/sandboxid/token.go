@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Issuer is the iss claim of each token.
@@ -79,11 +81,11 @@ func Sign(key ed25519.PrivateKey, c Claims) (string, error) {
 	}
 	h, err := json.Marshal(header{Alg: "EdDSA", Typ: "JWT", Kid: KeyID(pub)})
 	if err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "json.Marshal")
 	}
 	p, err := json.Marshal(c)
 	if err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "json.Marshal")
 	}
 	input := b64.EncodeToString(h) + "." + b64.EncodeToString(p)
 	return input + "." + b64.EncodeToString(ed25519.Sign(key, []byte(input))), nil

@@ -23,6 +23,7 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
 	"github.com/zeroroot-ai/setec/internal/deviceplugin"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 func main() {
@@ -89,7 +90,7 @@ func waitForRestart(ctx context.Context, socket string, done <-chan error) error
 		case err := <-done:
 			return err
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-tick.C:
 			if _, err := os.Stat(socket); errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("the plugin socket %s is gone; the kubelet restarted", socket)

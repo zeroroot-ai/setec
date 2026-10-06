@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
@@ -107,7 +108,7 @@ func (p *Plugin) ListAndWatch(_ *pluginapi.Empty, stream grpc.ServerStreamingSer
 	last := p.present()
 	p.setHealthy(last)
 	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: p.devices(last)}); err != nil {
-		return err
+		return errwrap.Wrap(err, "grpc.ServerStreamingServer.Send")
 	}
 	tick := time.NewTicker(p.interval)
 	defer tick.Stop()
@@ -123,7 +124,7 @@ func (p *Plugin) ListAndWatch(_ *pluginapi.Empty, stream grpc.ServerStreamingSer
 			last = now
 			p.setHealthy(now)
 			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: p.devices(now)}); err != nil {
-				return err
+				return errwrap.Wrap(err, "grpc.ServerStreamingServer.Send")
 			}
 		}
 	}

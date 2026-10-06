@@ -11,6 +11,7 @@ import (
 	"net/netip"
 
 	"github.com/vishvananda/netlink"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"golang.org/x/sys/unix"
 )
 
@@ -62,7 +63,7 @@ func (TCNetwork) Join() (PodNet, error) {
 	}
 	tapLink, err := netlink.LinkByName(TapDevice)
 	if err != nil {
-		return PodNet{}, err
+		return PodNet{}, errwrap.Wrap(err, "netlink.LinkByName")
 	}
 	// A tuntap device ignores the MTU of LinkAdd, so it is set here. The
 	// machine and the Pod must agree on it, or large frames are lost.

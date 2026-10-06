@@ -40,6 +40,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
@@ -1622,7 +1623,7 @@ func (r *SandboxReconciler) patchFailedStatus(
 	sb.Status.Reason = reason
 	now := metav1.NewTime(time.Now())
 	sb.Status.LastTransitionTime = &now
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // patchPendingStatus writes a minimal Pending/<reason> status using the
@@ -1641,7 +1642,7 @@ func (r *SandboxReconciler) patchPendingStatus(
 	sb.Status.Reason = reason
 	now := metav1.NewTime(time.Now())
 	sb.Status.LastTransitionTime = &now
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // reconcilePhase3Lifecycle handles desiredState pause/resume and the
@@ -1781,7 +1782,7 @@ func (r *SandboxReconciler) patchPhase(
 	} else {
 		sb.Status.PausedAt = nil
 	}
-	return r.Status().Patch(ctx, sb, client.MergeFrom(original))
+	return errwrap.Wrap(r.Status().Patch(ctx, sb, client.MergeFrom(original)), "client.SubResourceWriter.Patch")
 }
 
 // recordAndReturnErr emits a Warning Event for an unexpected error and
@@ -1821,7 +1822,7 @@ func statusEqual(a, b setecv1alpha1.SandboxStatus) bool {
 // Owns(&networkingv1.NetworkPolicy{}) so NetworkPolicy edits surface
 // back to the parent Sandbox for reconcile.
 func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		For(&setecv1alpha1.Sandbox{}).
 		Owns(&corev1.Pod{}).
 		Owns(&networkingv1.NetworkPolicy{}).
@@ -1829,7 +1830,7 @@ func (r *SandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(r.sandboxesOnCordonedNode),
 			builder.WithPredicates(nodeCordonPredicate())).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }
 
 // nodeCordonPredicate admits only Node events where the node is (or

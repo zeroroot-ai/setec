@@ -27,12 +27,17 @@ import (
 	"github.com/mdlayher/vsock"
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // listenVsock binds an AF_VSOCK listener on the given port for any
 // CID (the guest side of the Firecracker vsock device).
 func listenVsock(port uint32) (net.Listener, error) {
-	return vsock.Listen(port, nil)
+	ln, err := vsock.Listen(port, nil)
+	if err != nil {
+		return nil, errwrap.Wrap(err, "vsock.Listen")
+	}
+	return ln, nil
 }
 
 // newKernelPool returns the production RNDADDENTROPY-backed pool.

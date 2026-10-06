@@ -31,6 +31,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ImageConfigPath is where the disk holds the image config.
@@ -75,7 +76,7 @@ func imageTar(img v1.Image, w io.Writer) error {
 		User: cf.Config.User, WorkingDir: cf.Config.WorkingDir,
 	})
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "json.Marshal")
 	}
 	flat := mutate.Extract(img)
 	defer func() { _ = flat.Close() }()
@@ -111,10 +112,10 @@ func imageTar(img v1.Image, w io.Writer) error {
 			continue
 		}
 		if err := tw.WriteHeader(h); err != nil {
-			return err
+			return errwrap.Wrap(err, "tar.Writer.WriteHeader")
 		}
 		if _, err := io.Copy(tw, tr); err != nil { //nolint:gosec // the size is bounded by the image
-			return err
+			return errwrap.Wrap(err, "io.Copy")
 		}
 	}
 	epoch := time.Unix(0, 0)
@@ -123,13 +124,13 @@ func imageTar(img v1.Image, w io.Writer) error {
 		{Name: ImageConfigPath, Typeflag: tar.TypeReg, Mode: 0o444, Size: int64(len(cfg)), ModTime: epoch},
 	} {
 		if err := tw.WriteHeader(h); err != nil {
-			return err
+			return errwrap.Wrap(err, "tar.Writer.WriteHeader")
 		}
 	}
 	if _, err := tw.Write(cfg); err != nil {
-		return err
+		return errwrap.Wrap(err, "tar.Writer.Write")
 	}
-	return tw.Close()
+	return errwrap.Wrap(tw.Close(), "tar.Writer.Close")
 }
 
 // cleanTarName drops "." parts and a leading "/", keeps a trailing "/"
@@ -189,12 +190,12 @@ func (s Signature) Payload() []byte {
 func FileSHA256(path string) (string, error) {
 	f, err := os.Open(path) //nolint:gosec // a disk path of the builder or the node
 	if err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "os.Open")
 	}
 	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "io.Copy")
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

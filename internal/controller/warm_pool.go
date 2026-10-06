@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
@@ -94,7 +95,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, r.deleteAll(ctx, req.Name, nil, nil)
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, errwrap.Wrap(err, "client.Reader.Get")
 	}
 	bases, pods, err := r.list(ctx, cls.Name)
 	if err != nil {
@@ -123,7 +124,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		case b.Annotations[snapshot.BaseKeyAnnotation] != key, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
 			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && len(ready) >= want:
 			if err := r.Delete(ctx, b); client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
 			ready = append(ready, *b)
@@ -133,7 +134,7 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// The write of this base stopped with its Pod, for example
 			// at a restart of the operator. It never becomes Ready.
 			if err := r.Delete(ctx, b); client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
 			}
 		default:
 			nodes[b.Spec.Node] = true
@@ -232,7 +233,7 @@ func (r *WarmPoolReconciler) startBase(ctx context.Context, cls *setecv1alpha1.S
 	}
 	pod.Spec.NodeSelector = cls.Spec.NodeSelector
 	pod.Spec.Tolerations = cls.Spec.Tolerations
-	return client.IgnoreAlreadyExists(r.Create(ctx, pod))
+	return errwrap.Wrap(client.IgnoreAlreadyExists(r.Create(ctx, pod)), "client.IgnoreAlreadyExists")
 }
 
 // list returns the bases and the base Pods of a class.
@@ -240,11 +241,11 @@ func (r *WarmPoolReconciler) list(ctx context.Context, class string) ([]setecv1a
 	sel := client.MatchingLabels{snapshot.BaseLabel: snapshot.BaseLabelValue, snapshot.BaseClassLabel: class}
 	bases := &setecv1alpha1.SnapshotList{}
 	if err := r.List(ctx, bases, client.InNamespace(r.Namespace), sel); err != nil {
-		return nil, nil, err
+		return nil, nil, errwrap.Wrap(err, "client.Reader.List")
 	}
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.InNamespace(r.Namespace), sel); err != nil {
-		return nil, nil, err
+		return nil, nil, errwrap.Wrap(err, "client.Reader.List")
 	}
 	return bases.Items, pods.Items, nil
 }
@@ -274,12 +275,12 @@ func (r *WarmPoolReconciler) deleteAll(ctx context.Context, class string, bases 
 	}
 	for i := range bases {
 		if err := r.Delete(ctx, &bases[i]); client.IgnoreNotFound(err) != nil {
-			return err
+			return errwrap.Wrap(err, "client.Writer.Delete")
 		}
 	}
 	for i := range pods {
 		if err := r.Delete(ctx, &pods[i]); client.IgnoreNotFound(err) != nil {
-			return err
+			return errwrap.Wrap(err, "client.Writer.Delete")
 		}
 	}
 	return nil
@@ -295,7 +296,7 @@ func (r *WarmPoolReconciler) patchStatus(ctx context.Context, cls *setecv1alpha1
 	}
 	orig := cls.DeepCopy()
 	cls.Status.WarmPool = ws
-	return r.Status().Patch(ctx, cls, client.MergeFrom(orig))
+	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
 }
 
 // SetupWithManager registers the reconciler. A change of a base Pod or a
@@ -307,12 +308,12 @@ func (r *WarmPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return []reconcile.Request{{Name: obj.GetLabels()[snapshot.BaseClassLabel]}}
 	})
-	return ctrl.NewControllerManagedBy(mgr).
+	return errwrap.Wrap(ctrl.NewControllerManagedBy(mgr).
 		Named("warmpool").
 		For(&setecv1alpha1.SandboxClass{}).
 		Watches(&corev1.Pod{}, toClass).
 		Watches(&setecv1alpha1.Snapshot{}, toClass).
-		Complete(r)
+		Complete(r), "builder.TypedBuilder.Complete")
 }
 
 // --- the Sandbox side ---------------------------------------------------
@@ -335,7 +336,7 @@ func (r *SandboxReconciler) selectBase(
 	bases := &setecv1alpha1.SnapshotList{}
 	if err := r.List(ctx, bases, client.InNamespace(r.WarmPoolNamespace),
 		client.MatchingLabels{snapshot.BaseLabel: snapshot.BaseLabelValue, snapshot.BaseClassLabel: cls.Name}); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "client.Reader.List")
 	}
 	slices.SortFunc(bases.Items, func(a, b setecv1alpha1.Snapshot) int { return strings.Compare(a.Name, b.Name) })
 	for i := range bases.Items {
@@ -368,7 +369,7 @@ func (r *SandboxReconciler) markPoolUsed(ctx context.Context, sb *setecv1alpha1.
 	}
 	t := metav1.NewTime(now)
 	cls.Status.WarmPool.LastUsed = &t
-	return r.Status().Patch(ctx, cls, client.MergeFrom(orig))
+	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
 }
 
 // isPodReady reports whether the Ready condition of p is True: for a

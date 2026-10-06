@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/runtime"
 )
@@ -149,10 +150,10 @@ func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
 // for SandboxClass with the controller-runtime manager. Invoke from cmd/main.go
 // alongside the other webhook registrations.
 func (w *SandboxClassWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.SandboxClass{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.SandboxClass{}).
 		WithDefaulter(w).
 		WithValidator(w).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // validateRequests checks the class's scheduler reservation

@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/mdlayher/vsock"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"golang.org/x/sys/unix"
 )
 
@@ -96,7 +97,7 @@ func (l *LinuxIdentity) ApplyMachineID(id string) error {
 	if len(id) != 32 {
 		return fmt.Errorf("machine-id must be 32 hex chars, got %d", len(id))
 	}
-	return os.WriteFile(l.MachineIDPath, []byte(id+"\n"), 0o444)
+	return errwrap.Wrap(os.WriteFile(l.MachineIDPath, []byte(id+"\n"), 0o444), "os.WriteFile")
 }
 
 // ApplyBootID materializes the directed boot-id and bind-mounts it
@@ -106,10 +107,10 @@ func (l *LinuxIdentity) ApplyBootID(id string) error {
 		return errors.New("empty boot-id")
 	}
 	if err := os.MkdirAll(filepath.Dir(l.RunPath), 0o755); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.MkdirAll")
 	}
 	if err := os.WriteFile(l.RunPath, []byte(id+"\n"), 0o444); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.WriteFile")
 	}
 	return l.BindMount(l.RunPath, l.BootIDProcPath)
 }
@@ -122,7 +123,7 @@ func (l *LinuxIdentity) ApplyHostname(name string) error {
 	if err := l.Sethostname([]byte(name)); err != nil {
 		return fmt.Errorf("sethostname: %w", err)
 	}
-	return os.WriteFile(l.HostnamePath, []byte(name+"\n"), 0o644)
+	return errwrap.Wrap(os.WriteFile(l.HostnamePath, []byte(name+"\n"), 0o644), "os.WriteFile")
 }
 
 // Read returns the identity currently observable in the guest. The
@@ -281,7 +282,7 @@ func ioctlSetAddr(iface string, ip net.IP, mask net.IPMask) error {
 		return fmt.Errorf("ifreq %q: %w", iface, err)
 	}
 	if err := ifr.SetInet4Addr(v4); err != nil {
-		return err
+		return errwrap.Wrap(err, "unix.Ifreq.SetInet4Addr")
 	}
 	if err := unix.IoctlIfreq(fd, unix.SIOCSIFADDR, ifr); err != nil {
 		return fmt.Errorf("SIOCSIFADDR: %w", err)
@@ -290,10 +291,10 @@ func ioctlSetAddr(iface string, ip net.IP, mask net.IPMask) error {
 	if len(mask) == 4 {
 		mfr, err := unix.NewIfreq(iface)
 		if err != nil {
-			return err
+			return errwrap.Wrap(err, "unix.NewIfreq")
 		}
 		if err := mfr.SetInet4Addr(net.IP(mask).To4()); err != nil {
-			return err
+			return errwrap.Wrap(err, "unix.Ifreq.SetInet4Addr")
 		}
 		if err := unix.IoctlIfreq(fd, unix.SIOCSIFNETMASK, mfr); err != nil {
 			return fmt.Errorf("SIOCSIFNETMASK: %w", err)

@@ -24,6 +24,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -342,7 +343,7 @@ func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*sete
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
+			return nil, errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-time.After(waitPollInterval):
 		}
 	}
@@ -688,7 +689,7 @@ func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, fo
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
+			return nil, errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-ticker.C:
 		}
 	}

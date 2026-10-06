@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // The registry form of a disk is an OCI image with one gzip tar layer. The layer holds two files: the disk and its signature. A launcher
@@ -67,7 +68,8 @@ type Builder struct {
 
 func diskTag(repo string, d name.Digest) (name.Tag, error) {
 	hexPart := strings.TrimPrefix(d.DigestStr(), "sha256:")
-	return name.NewTag(repo + ":" + hexPart)
+	tag, err := name.NewTag(repo + ":" + hexPart)
+	return tag, errwrap.Wrap(err, "name.NewTag")
 }
 
 // Ensure returns the reference of the disk of ref, and builds it first when
@@ -94,7 +96,7 @@ func (b *Builder) Ensure(ctx context.Context, ref string) (name.Tag, error) {
 	}
 	dir, err := os.MkdirTemp(b.TempDir, "disk")
 	if err != nil {
-		return name.Tag{}, err
+		return name.Tag{}, errwrap.Wrap(err, "os.MkdirTemp")
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	out := filepath.Join(dir, "disk.sqfs")
@@ -128,7 +130,7 @@ func isNotFound(err error) bool {
 func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 	sigJSON, err := json.Marshal(sig)
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "json.Marshal")
 	}
 	layerPath := filepath.Join(dir, "layer.tar")
 	if err := writeLayer(layerPath, disk, sigJSON); err != nil {
@@ -140,7 +142,7 @@ func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 	layer, err := tarball.LayerFromFile(layerPath, tarball.WithMediaType(types.OCILayer),
 		tarball.WithCompressedCaching)
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "tarball.LayerFromFile")
 	}
 	base := mutate.MediaType(empty.Image, types.OCIManifestSchema1)
 	base = mutate.ConfigMediaType(base, types.OCIConfigJSON)
@@ -149,9 +151,10 @@ func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 		RootFS: v1.RootFS{Type: "layers"},
 	})
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "mutate.ConfigFile")
 	}
-	return mutate.Append(base, mutate.Addendum{Layer: layer, MediaType: types.OCILayer})
+	img, err := mutate.Append(base, mutate.Addendum{Layer: layer, MediaType: types.OCILayer})
+	return img, errwrap.Wrap(err, "mutate.Append")
 }
 
 // writeLayer writes a tar with the disk and its signature. The headers carry
@@ -159,7 +162,7 @@ func diskImage(dir, disk string, sig Signature) (v1.Image, error) {
 func writeLayer(path, disk string, sigJSON []byte) error {
 	f, err := os.Create(path) //nolint:gosec // a path in the build directory
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Create")
 	}
 	tw := tar.NewWriter(f)
 	werr := writeLayerEntries(tw, disk, sigJSON)
@@ -175,26 +178,26 @@ func writeLayer(path, disk string, sigJSON []byte) error {
 func writeLayerEntries(tw *tar.Writer, disk string, sigJSON []byte) error {
 	d, err := os.Open(disk) //nolint:gosec // the disk that this builder made
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Open")
 	}
 	defer func() { _ = d.Close() }()
 	st, err := d.Stat()
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.File.Stat")
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: DiskFile, Mode: 0o444, Size: st.Size(), Format: tar.FormatPAX}); err != nil {
-		return err
+		return errwrap.Wrap(err, "tar.Writer.WriteHeader")
 	}
 	if _, err := io.Copy(tw, d); err != nil {
-		return err
+		return errwrap.Wrap(err, "io.Copy")
 	}
 	if err := tw.WriteHeader(&tar.Header{
 		Name: SignatureFile, Mode: 0o444, Size: int64(len(sigJSON)), Format: tar.FormatPAX,
 	}); err != nil {
-		return err
+		return errwrap.Wrap(err, "tar.Writer.WriteHeader")
 	}
 	_, err = tw.Write(sigJSON)
-	return err
+	return errwrap.Wrap(err, "tar.Writer.Write")
 }
 
 // VerifyMounted is the check of a launcher before the machine uses a disk.
