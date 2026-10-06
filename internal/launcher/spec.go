@@ -152,21 +152,48 @@ func (s *Spec) Validate() error {
 		return errors.New("launcher: writableBytes must be positive")
 	case s.WorkspaceDevice != "" && !filepath.IsAbs(s.WorkspaceDevice):
 		return errors.New("launcher: workspaceDevice must be an absolute path")
+	}
+	return s.validateSource()
+}
+
+// validateSource reports the first problem of the source, the workload and
+// the identity of s.
+func (s *Spec) validateSource() error {
+	switch {
 	case (s.Source.Boot == nil) == (s.Source.Snapshot == nil):
 		return errors.New("launcher: the source must be exactly one of boot and snapshot")
 	case s.Source.Boot != nil && !filepath.IsAbs(s.Source.Boot.Kernel):
 		return errors.New("launcher: the boot kernel must be an absolute path")
-	case s.Source.Snapshot != nil && (!filepath.IsAbs(s.Source.Snapshot.State) || !filepath.IsAbs(s.Source.Snapshot.Memory)):
-		return errors.New("launcher: the snapshot state and memory must be absolute paths")
-	case s.Source.Snapshot != nil && (s.Source.Snapshot.Staged != "" && !filepath.IsAbs(s.Source.Snapshot.Staged) ||
-		s.Source.Snapshot.Evidence != "" && !filepath.IsAbs(s.Source.Snapshot.Evidence)):
-		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
+	case s.Source.Snapshot != nil:
+		if err := s.Source.Snapshot.validate(); err != nil {
+			return err
+		}
+	}
+	switch {
 	case s.Base && (s.Workload != nil || s.Source.Boot == nil):
 		return errors.New("launcher: a base boots and runs no workload")
 	case s.Source.Boot != nil && s.Workload == nil && !s.Base:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
-	case s.Identity != nil && (s.Identity.SandboxID == "" || !filepath.IsAbs(s.Identity.KeyFile) ||
-		s.Identity.GenerationFile != "" && !filepath.IsAbs(s.Identity.GenerationFile)):
+	}
+	return s.validateIdentity()
+}
+
+// validate reports a problem of the paths of a snapshot source.
+func (sn *SnapshotSource) validate() error {
+	if !filepath.IsAbs(sn.State) || !filepath.IsAbs(sn.Memory) {
+		return errors.New("launcher: the snapshot state and memory must be absolute paths")
+	}
+	if sn.Staged != "" && !filepath.IsAbs(sn.Staged) || sn.Evidence != "" && !filepath.IsAbs(sn.Evidence) {
+		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
+	}
+	return nil
+}
+
+// validateIdentity reports a problem of the identity of s.
+func (s *Spec) validateIdentity() error {
+	id := s.Identity
+	if id != nil && (id.SandboxID == "" || !filepath.IsAbs(id.KeyFile) ||
+		id.GenerationFile != "" && !filepath.IsAbs(id.GenerationFile)) {
 		return errors.New("launcher: the identity needs a sandbox id and absolute key and generation paths")
 	}
 	return nil

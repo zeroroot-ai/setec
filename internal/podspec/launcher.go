@@ -250,30 +250,9 @@ type launcherProcess struct {
 // capability is effective only for root without ambient capabilities, and
 // root holds no other capability here.
 func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod, error) {
-	if sb == nil {
-		return nil, ErrNilSandbox
-	}
-	if sb.Name == "" {
-		return nil, ErrMissingName
-	}
-	if opts.Image == "" {
-		return nil, errors.New("podspec: the launcher image is empty")
-	}
-	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
-		return nil, errors.New("podspec: the disk repository or the disk keys are empty")
-	}
-	if !strings.Contains(sb.Spec.Image, "@sha256:") {
-		return nil, fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
-	}
-	diskRef, err := diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	diskRef, err := checkLauncherInputs(sb, opts)
 	if err != nil {
-		return nil, fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
-	}
-	if sb.Spec.Resources.VCPU < 1 {
-		return nil, fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
-	}
-	if sb.Spec.Resources.Memory.Sign() <= 0 {
-		return nil, fmt.Errorf("%w: got %q", ErrInvalidMemory, sb.Spec.Resources.Memory.String())
+		return nil, err
 	}
 
 	one := resource.MustParse("1")
@@ -297,54 +276,7 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 	// for logs (setec#172), so a full work volume cannot fill the disk of
 	// the node.
 	limits[corev1.ResourceEphemeralStorage] = setecLimits.EphemeralLimit(workDir)
-	spec := launcherSpec{
-		VCPU:          int(sb.Spec.Resources.VCPU),
-		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
-		ImageRef:      sb.Spec.Image,
-		DiskKeys:      opts.DiskKeys,
-		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
-		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
-		WritableDisk:  LauncherWritableDisk,
-		WritableBytes: work.Value(),
-		WorkDir:       LauncherVMDir,
-	}
-	if opts.CPUTemplate != "" {
-		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
-	}
-	// A session keeps its workspace on its PVC, a raw block device that
-	// the machine mounts at /workspace (setec#193).
-	if sb.Spec.IsSession() {
-		spec.WorkspaceDevice = LauncherWorkspaceDevice
-	}
-	if opts.Restore || opts.FromBase {
-		spec.Source.Snapshot = &launcherSnapshot{
-			State:    LauncherRestoreState,
-			Memory:   LauncherRestoreMemory,
-			Staged:   LauncherRestoreStaged,
-			Evidence: LauncherRestoreEvidence,
-			TakenAt:  LauncherRestoreTakenAt,
-		}
-	} else {
-		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
-	}
-	// A loaded Sandbox snapshot already runs its workload, and a base runs
-	// none. A boot and the load of a base start the workload of the Sandbox.
-	if !opts.Restore && !opts.Base {
-		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
-		for _, e := range sb.Spec.Env {
-			if e.ValueFrom == nil {
-				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
-			}
-		}
-	}
-	spec.Base = opts.Base
-	if opts.Identity != nil && !opts.Base {
-		spec.Identity = &launcherIdentitySpec{
-			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,
-			KeyFile: LauncherIdentityKey, Generation: opts.Identity.Generation,
-			GenerationFile: LauncherIdentityGeneration,
-		}
-	}
+	spec := buildLauncherSpec(sb, opts, work)
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return nil, errwrap.Wrap(err, "json.Marshal")
@@ -461,6 +393,91 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		pod.Spec.DNSConfig = &corev1.PodDNSConfig{Nameservers: append([]string(nil), opts.ResolverIPs...)}
 	}
 	return pod, nil
+}
+
+// checkLauncherInputs checks sb and opts, and returns the reference of the
+// image disk.
+func checkLauncherInputs(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (diskRef string, err error) {
+	if sb == nil {
+		return "", ErrNilSandbox
+	}
+	if sb.Name == "" {
+		return "", ErrMissingName
+	}
+	if opts.Image == "" {
+		return "", errors.New("podspec: the launcher image is empty")
+	}
+	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
+		return "", errors.New("podspec: the disk repository or the disk keys are empty")
+	}
+	if !strings.Contains(sb.Spec.Image, "@sha256:") {
+		return "", fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
+	}
+	diskRef, err = diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	if err != nil {
+		return "", fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
+	}
+	if sb.Spec.Resources.VCPU < 1 {
+		return "", fmt.Errorf("%w: got %d", ErrInvalidVCPU, sb.Spec.Resources.VCPU)
+	}
+	if sb.Spec.Resources.Memory.Sign() <= 0 {
+		return "", fmt.Errorf("%w: got %q", ErrInvalidMemory, sb.Spec.Resources.Memory.String())
+	}
+	return diskRef, nil
+}
+
+// buildLauncherSpec is the spec that the launcher reads from its
+// environment. work is the size of the writable layer.
+func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work resource.Quantity) launcherSpec {
+	spec := launcherSpec{
+		VCPU:          int(sb.Spec.Resources.VCPU),
+		MemoryMiB:     sb.Spec.Resources.Memory.Value() >> 20,
+		ImageRef:      sb.Spec.Image,
+		DiskKeys:      opts.DiskKeys,
+		ImageDisk:     launcherDiskMountPath + "/" + diskbuilder.DiskFile,
+		DiskSignature: launcherDiskMountPath + "/" + diskbuilder.SignatureFile,
+		WritableDisk:  LauncherWritableDisk,
+		WritableBytes: work.Value(),
+		WorkDir:       LauncherVMDir,
+	}
+	if opts.CPUTemplate != "" {
+		spec.CPUTemplate = LauncherCPUTemplateDir + "/" + opts.CPUTemplate + ".json"
+	}
+	// A session keeps its workspace on its PVC, a raw block device that
+	// the machine mounts at /workspace (setec#193).
+	if sb.Spec.IsSession() {
+		spec.WorkspaceDevice = LauncherWorkspaceDevice
+	}
+	if opts.Restore || opts.FromBase {
+		spec.Source.Snapshot = &launcherSnapshot{
+			State:    LauncherRestoreState,
+			Memory:   LauncherRestoreMemory,
+			Staged:   LauncherRestoreStaged,
+			Evidence: LauncherRestoreEvidence,
+			TakenAt:  LauncherRestoreTakenAt,
+		}
+	} else {
+		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}
+	}
+	// A loaded Sandbox snapshot already runs its workload, and a base runs
+	// none. A boot and the load of a base start the workload of the Sandbox.
+	if !opts.Restore && !opts.Base {
+		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
+		for _, e := range sb.Spec.Env {
+			if e.ValueFrom == nil {
+				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)
+			}
+		}
+	}
+	spec.Base = opts.Base
+	if opts.Identity != nil && !opts.Base {
+		spec.Identity = &launcherIdentitySpec{
+			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,
+			KeyFile: LauncherIdentityKey, Generation: opts.Identity.Generation,
+			GenerationFile: LauncherIdentityGeneration,
+		}
+	}
+	return spec
 }
 
 // launcherRequests is the request of the launcher container: its limits,

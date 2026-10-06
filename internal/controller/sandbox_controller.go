@@ -331,6 +331,37 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
+// handleWorkspaceFinalizer releases a deleted session after the teardown
+// of its workspace, and adds the finalizer to a new session. handled is
+// true when the reconcile ends here.
+func (r *SandboxReconciler) handleWorkspaceFinalizer(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox,
+) (res ctrl.Result, handled bool, err error) {
+	// (1a) Session teardown. A Sandbox being deleted that still carries
+	// the workspace finalizer must have its workspace PVC deleted before
+	// the object is released (docs/design/isolation.md invariant 3). Ephemeral Sandboxes
+	// never carry the finalizer and fall straight through to owner-ref GC.
+	if !sb.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+			res, err := r.teardownWorkspace(ctx, logger, sb)
+			return res, true, err
+		}
+		return ctrl.Result{}, true, nil
+	}
+
+	// (1b) Session Sandboxes acquire the workspace finalizer before any
+	// other work so no window exists in which the PVC could outlive its
+	// Sandbox unattended.
+	if sb.Spec.IsSession() && !controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
+		original := sb.DeepCopy()
+		controllerutil.AddFinalizer(sb, workspaceFinalizer)
+		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, true, fmt.Errorf("add workspace finalizer: %w", err)
+		}
+	}
+	return ctrl.Result{}, false, nil
+}
+
 // Reconcile drives a single Sandbox toward its desired state. The function is
 // intentionally thin: the three pure packages own every non-trivial decision
 // and Reconcile restricts itself to I/O, error handling, and idempotent
@@ -359,26 +390,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("get Sandbox: %w", err)
 	}
 
-	// (1a) Session teardown. A Sandbox being deleted that still carries
-	// the workspace finalizer must have its workspace PVC deleted before
-	// the object is released (docs/design/isolation.md invariant 3). Ephemeral Sandboxes
-	// never carry the finalizer and fall straight through to owner-ref GC.
-	if !sb.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
-			return r.teardownWorkspace(ctx, logger, sb)
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// (1b) Session Sandboxes acquire the workspace finalizer before any
-	// other work so no window exists in which the PVC could outlive its
-	// Sandbox unattended.
-	if sb.Spec.IsSession() && !controllerutil.ContainsFinalizer(sb, workspaceFinalizer) {
-		original := sb.DeepCopy()
-		controllerutil.AddFinalizer(sb, workspaceFinalizer)
-		if err := r.Patch(ctx, sb, client.MergeFrom(original)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("add workspace finalizer: %w", err)
-		}
+	// (1a), (1b) The workspace finalizer of a session.
+	if res, handled, err := r.handleWorkspaceFinalizer(ctx, logger, sb); handled || err != nil {
+		return res, err
 	}
 
 	// (1c) docs/design/lifecycles.md "auto-destroy on exit": a terminal ephemeral Sandbox is
@@ -789,10 +803,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// re-asserted on every pass as well, so a policy deleted or widened
 	// out of band is restored on the next reconcile rather than staying
 	// gone until the next Sandbox is created.
-	if err := r.ensureNamespaceBaseline(ctx, log.FromContext(ctx), sb); err != nil {
-		return ctrl.Result{}, err
-	}
-	if _, err := r.applyNetworkPolicy(ctx, sb, cls); err != nil {
+	if err := r.ensurePolicies(ctx, sb, cls); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -804,8 +815,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// carries the suspend mark: deriving from it then flipped the phase to
 	// Running, the next reconcile made a new Pod, and a session asked to
 	// stay suspended came back at once (found in setec#193).
-	if sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
-		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "") {
+	if holdingSuspend(sb, pod) {
 		return ctrl.Result{RequeueAfter: suspendWaitRequeue}, nil
 	}
 
@@ -840,9 +850,7 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// terminal (Timeout still wins and stays terminal), delete the Pod;
 	// the next reconcile recreates it and the fresh VM re-mounts the
 	// durable workspace PVC, so session data survives the restart.
-	if sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
-		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
-		pod.DeletionTimestamp.IsZero() {
+	if sessionPodEnded(sb, desired, pod) {
 		return r.restartExitedSession(ctx, sb, cls, pod)
 	}
 
@@ -880,6 +888,31 @@ func (r *SandboxReconciler) reconcileExistingPod(
 	// but there RequeueAfter means "do not create the Pod yet", so
 	// reusing it for a refresh would defer the launch instead.
 	return r.requeueAfter(sb, cls, desired, checkpointRequeue), nil
+}
+
+// ensurePolicies applies the namespace baseline and the NetworkPolicy of
+// sb.
+func (r *SandboxReconciler) ensurePolicies(ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) error {
+	if err := r.ensureNamespaceBaseline(ctx, log.FromContext(ctx), sb); err != nil {
+		return err
+	}
+	_, err := r.applyNetworkPolicy(ctx, sb, cls)
+	return err
+}
+
+// holdingSuspend reports whether the Pod of a suspended session still
+// ends (step 9a).
+func holdingSuspend(sb *setecv1alpha1.Sandbox, pod *corev1.Pod) bool {
+	return sb.Spec.IsSession() && sb.Status.Phase == setecv1alpha1.SandboxPhaseSuspended &&
+		(!pod.DeletionTimestamp.IsZero() || pod.Annotations[annotationSuspendedPod] != "")
+}
+
+// sessionPodEnded reports whether the Pod of a live session ended and is
+// not yet deleted (step 11b).
+func sessionPodEnded(sb *setecv1alpha1.Sandbox, desired setecv1alpha1.SandboxStatus, pod *corev1.Pod) bool {
+	return sb.Spec.IsSession() && !isTerminalPhase(desired.Phase) &&
+		(pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed) &&
+		pod.DeletionTimestamp.IsZero()
 }
 
 // deriveStatus derives the status of the Sandbox from its Pod and its
@@ -1480,6 +1513,35 @@ func (r *SandboxReconciler) createPod(
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("build Pod spec: %w", err))
 	}
 
+	applyClassScheduling(pod, cls)
+
+	// podspec.BuildLauncher already populates a basic OwnerReference, but UID and
+	// APIVersion are authoritative only once the Scheme is consulted.
+	// SetControllerReference overwrites the reference in place, which keeps
+	// responsibility for the canonical form in the controller.
+	pod.OwnerReferences = nil
+	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("set owner reference: %w", err))
+	}
+
+	if err := r.Create(ctx, pod); err != nil {
+		// A conflicting Create means another reconcile already produced
+		// the Pod. Treat it as success so the next reconcile can observe
+		// the live Pod via the Owns watch.
+		if apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, nil
+		}
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("create Pod: %w", err))
+	}
+
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
+		"Created Pod %q for Sandbox", pod.Name)
+	return ctrl.Result{}, nil
+}
+
+// applyClassScheduling adds the NodeSelector and the Tolerations of cls to
+// pod.
+func applyClassScheduling(pod *corev1.Pod, cls *setecv1alpha1.SandboxClass) {
 	// Merge class-level NodeSelector into the Pod. The map is additive —
 	// the class cannot override an existing Pod-selector key.
 	if cls != nil && len(cls.Spec.NodeSelector) > 0 {
@@ -1504,29 +1566,6 @@ func (r *SandboxReconciler) createPod(
 	if cls != nil && len(cls.Spec.Tolerations) > 0 {
 		pod.Spec.Tolerations = append(pod.Spec.Tolerations, cls.Spec.Tolerations...)
 	}
-
-	// podspec.BuildLauncher already populates a basic OwnerReference, but UID and
-	// APIVersion are authoritative only once the Scheme is consulted.
-	// SetControllerReference overwrites the reference in place, which keeps
-	// responsibility for the canonical form in the controller.
-	pod.OwnerReferences = nil
-	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
-		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("set owner reference: %w", err))
-	}
-
-	if err := r.Create(ctx, pod); err != nil {
-		// A conflicting Create means another reconcile already produced
-		// the Pod. Treat it as success so the next reconcile can observe
-		// the live Pod via the Owns watch.
-		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, nil
-		}
-		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("create Pod: %w", err))
-	}
-
-	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
-		"Created Pod %q for Sandbox", pod.Name)
-	return ctrl.Result{}, nil
 }
 
 // classNotFoundExpired reports whether a Sandbox has been waiting on an
@@ -1739,77 +1778,86 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 	if sb.Spec.Snapshot != nil && sb.Spec.Snapshot.Create && sb.Spec.Snapshot.Name != "" &&
 		(desired.Phase == setecv1alpha1.SandboxPhaseRunning ||
 			desired.Phase == setecv1alpha1.SandboxPhasePaused) {
-		existing := &setecv1alpha1.Snapshot{}
-		err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
-		if err == nil {
-			// A Snapshot with the target name exists. Which phase it is
-			// in decides what happens next, and it has to be read.
-			//
-			// The Coordinator now creates the CR before the storage write
-			// so that Creating and Failed are reportable (setec#129).
-			// That means "the object exists" no longer implies "the state
-			// is on disk". Treating existence as success would run the
-			// AfterCreate intent on a failed snapshot, and with
-			// afterCreate=Terminated that deletes the Sandbox whose state
-			// was never saved.
-			switch existing.Status.Phase {
-			case setecv1alpha1.SnapshotPhaseCreating:
-				// Another reconcile is mid-write, or one died mid-write.
-				// Wait rather than racing a second RPC at the same name.
-				return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
-			case setecv1alpha1.SnapshotPhaseFailed:
-				// Terminal by design: a Failed snapshot never becomes
-				// Ready, so re-snapshotting under the same name is not an
-				// option and the AfterCreate intent must not run. The
-				// user deletes the Snapshot and asks again.
-				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
-					"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
-					existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
-				return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
-			default:
-				// Ready, Terminating, or a phase this version does not
-				// know. Honor the AfterCreate intent without
-				// re-snapshotting, as before.
-				return ctrl.Result{}, nil
-			}
-		}
-		if !apierrors.IsNotFound(err) {
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("check Snapshot: %w", err))
-		}
-
-		// Mark Snapshotting before the RPC so status observers see the
-		// transient phase.
-		if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseSnapshotting, "SnapshotInProgress", true); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch Snapshotting: %w", err)
-		}
-		r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
-			"creating Snapshot %q", sb.Spec.Snapshot.Name)
-		if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
-			// Roll back to Running if the Coordinator could not complete
-			// (e.g. InsufficientStorage before VM pause).
-			_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
-			return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create snapshot: %w", err))
-		}
-
-		// After-create transition.
-		after := sb.Spec.Snapshot.AfterCreate
-		if after == "" {
-			after = setecv1alpha1.SandboxSnapshotAfterCreateRunning
-		}
-		switch after {
-		case setecv1alpha1.SandboxSnapshotAfterCreatePaused:
-			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhasePaused, "UserPaused", true)
-		case setecv1alpha1.SandboxSnapshotAfterCreateTerminated:
-			if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
-			}
-			return ctrl.Result{}, nil
-		default:
-			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
-		}
+		return r.requestSnapshot(ctx, sb)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// requestSnapshot creates the Snapshot that sb asks for, unless one with
+// its name exists, and then applies the afterCreate intent.
+func (r *SandboxReconciler) requestSnapshot(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
+	existing := &setecv1alpha1.Snapshot{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
+	if err == nil {
+		// A Snapshot with the target name exists. Which phase it is
+		// in decides what happens next, and it has to be read.
+		//
+		// The Coordinator now creates the CR before the storage write
+		// so that Creating and Failed are reportable (setec#129).
+		// That means "the object exists" no longer implies "the state
+		// is on disk". Treating existence as success would run the
+		// AfterCreate intent on a failed snapshot, and with
+		// afterCreate=Terminated that deletes the Sandbox whose state
+		// was never saved.
+		switch existing.Status.Phase {
+		case setecv1alpha1.SnapshotPhaseCreating:
+			// Another reconcile is mid-write, or one died mid-write.
+			// Wait rather than racing a second RPC at the same name.
+			return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+		case setecv1alpha1.SnapshotPhaseFailed:
+			// Terminal by design: a Failed snapshot never becomes
+			// Ready, so re-snapshotting under the same name is not an
+			// option and the AfterCreate intent must not run. The
+			// user deletes the Snapshot and asks again.
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
+				"Snapshot %q is in phase Failed (%s); delete it to retry. Not applying afterCreate=%q",
+				existing.Name, existing.Status.Reason, sb.Spec.Snapshot.AfterCreate)
+			return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+		default:
+			// Ready, Terminating, or a phase this version does not
+			// know. Honor the AfterCreate intent without
+			// re-snapshotting, as before.
+			return ctrl.Result{}, nil
+		}
+	}
+	if !apierrors.IsNotFound(err) {
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("check Snapshot: %w", err))
+	}
+
+	// Mark Snapshotting before the RPC so status observers see the
+	// transient phase.
+	if err := r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseSnapshotting, "SnapshotInProgress", true); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch Snapshotting: %w", err)
+	}
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
+		"creating Snapshot %q", sb.Spec.Snapshot.Name)
+	if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
+		// Roll back to Running if the Coordinator could not complete
+		// (e.g. InsufficientStorage before VM pause).
+		_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)
+		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("create snapshot: %w", err))
+	}
+	return r.applyAfterCreate(ctx, sb)
+}
+
+// applyAfterCreate moves sb to the state that its afterCreate intent names.
+func (r *SandboxReconciler) applyAfterCreate(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
+	after := sb.Spec.Snapshot.AfterCreate
+	if after == "" {
+		after = setecv1alpha1.SandboxSnapshotAfterCreateRunning
+	}
+	switch after {
+	case setecv1alpha1.SandboxSnapshotAfterCreatePaused:
+		return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhasePaused, "UserPaused", true)
+	case setecv1alpha1.SandboxSnapshotAfterCreateTerminated:
+		if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete sandbox after snapshot: %w", err)
+		}
+		return ctrl.Result{}, nil
+	default:
+		return ctrl.Result{}, r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "", false)
+	}
 }
 
 // patchPhase mutates the Sandbox status to the given phase/reason

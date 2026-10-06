@@ -9,6 +9,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/go-logr/logr"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,39 +105,7 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Step 2: deletion handling.
 	if !snap.DeletionTimestamp.IsZero() {
-		// Report Terminating for as long as the in-use finalizer is
-		// held. Nothing wrote this phase before (setec#129), so a
-		// snapshot blocked on a reference, or on a backend erase that
-		// keeps failing, still read as Ready — indistinguishable from one
-		// nobody had asked to delete. The write happens before the
-		// reference check, because "deletion requested and blocked" is
-		// exactly the state an operator needs to see.
-		if snap.Status.Phase != setecv1alpha1.SnapshotPhaseTerminating {
-			if err := r.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseTerminating, "DeletionInProgress"); err != nil {
-				return ctrl.Result{}, fmt.Errorf("mark Snapshot Terminating: %w", err)
-			}
-		}
-		if count > 0 {
-			logger.V(1).Info("deletion blocked by referenceCount > 0",
-				"referenceCount", count)
-			return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
-		}
-		if r.Coordinator != nil {
-			if err := r.Coordinator.DeleteSnapshot(ctx, snap); err != nil {
-				// Retry on next reconcile. Finalizer remains so the
-				// CR doesn't vanish with storage still present.
-				if r.Recorder != nil {
-					r.Recorder.Eventf(snap, nil, corev1.EventTypeWarning, eventReasonSnapshotDel, actionDeleteSnapshot, "%s", err.Error())
-				}
-				return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
-			}
-		}
-		if controllerutil.RemoveFinalizer(snap, setecv1alpha1.SnapshotInUseFinalizer) {
-			if err := r.Update(ctx, snap); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil
+		return r.finalizeSnapshot(ctx, logger, snap, count)
 	}
 
 	// Step 3: ensure finalizer present.
@@ -163,6 +133,46 @@ func (r *SnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{RequeueAfter: snapshotTTLRequeue}, nil
+}
+
+// finalizeSnapshot erases a deleted Snapshot that nothing references, and
+// then removes its finalizer. It reports Terminating while it waits.
+func (r *SnapshotReconciler) finalizeSnapshot(
+	ctx context.Context, logger logr.Logger, snap *setecv1alpha1.Snapshot, count int,
+) (ctrl.Result, error) {
+	// Report Terminating for as long as the in-use finalizer is
+	// held. Nothing wrote this phase before (setec#129), so a
+	// snapshot blocked on a reference, or on a backend erase that
+	// keeps failing, still read as Ready — indistinguishable from one
+	// nobody had asked to delete. The write happens before the
+	// reference check, because "deletion requested and blocked" is
+	// exactly the state an operator needs to see.
+	if snap.Status.Phase != setecv1alpha1.SnapshotPhaseTerminating {
+		if err := r.markPhase(ctx, snap, setecv1alpha1.SnapshotPhaseTerminating, "DeletionInProgress"); err != nil {
+			return ctrl.Result{}, fmt.Errorf("mark Snapshot Terminating: %w", err)
+		}
+	}
+	if count > 0 {
+		logger.V(1).Info("deletion blocked by referenceCount > 0",
+			"referenceCount", count)
+		return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
+	}
+	if r.Coordinator != nil {
+		if err := r.Coordinator.DeleteSnapshot(ctx, snap); err != nil {
+			// Retry on next reconcile. Finalizer remains so the
+			// CR doesn't vanish with storage still present.
+			if r.Recorder != nil {
+				r.Recorder.Eventf(snap, nil, corev1.EventTypeWarning, eventReasonSnapshotDel, actionDeleteSnapshot, "%s", err.Error())
+			}
+			return ctrl.Result{RequeueAfter: snapshotErrorRequeue}, nil
+		}
+	}
+	if controllerutil.RemoveFinalizer(snap, setecv1alpha1.SnapshotInUseFinalizer) {
+		if err := r.Update(ctx, snap); err != nil {
+			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+		}
+	}
+	return ctrl.Result{}, nil
 }
 
 // markPhase writes one phase/reason pair to the Snapshot status

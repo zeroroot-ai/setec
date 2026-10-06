@@ -41,7 +41,16 @@ func TestBuildLauncher_IsNotPrivileged(t *testing.T) {
 	if len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 {
 		t.Fatalf("containers=%d init=%d, want one container", len(pod.Spec.Containers), len(pod.Spec.InitContainers))
 	}
-	c := pod.Spec.Containers[0]
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("the launcher Pod mounts a ServiceAccount token")
+	}
+	checkLauncherContainer(t, &pod.Spec.Containers[0])
+}
+
+// checkLauncherContainer checks that c has no privilege, no host port,
+// one of each device, and a readiness probe on the guest agent.
+func checkLauncherContainer(t *testing.T, c *corev1.Container) {
+	t.Helper()
 	sc := c.SecurityContext
 	if sc == nil || sc.Privileged != nil && *sc.Privileged {
 		t.Fatal("the launcher container is privileged")
@@ -58,9 +67,6 @@ func TestBuildLauncher_IsNotPrivileged(t *testing.T) {
 		if q := c.Resources.Limits[r]; q.Value() != 1 {
 			t.Fatalf("limit %s = %s, want 1", r, q.String())
 		}
-	}
-	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
-		t.Fatal("the launcher Pod mounts a ServiceAccount token")
 	}
 	if rp := c.ReadinessProbe; rp == nil || rp.Exec == nil || rp.Exec.Command[len(rp.Exec.Command)-1] != "ready" {
 		t.Fatal("the launcher container has no readiness probe on the guest agent")

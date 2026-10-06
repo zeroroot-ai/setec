@@ -131,44 +131,12 @@ func (s *Service) launchFromSnapshot(
 // machine size of the snapshot, and the network, lifecycle and env of the
 // request. It is a pure function, so each rule has a unit test.
 func sandboxFromSnapshot(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) (*setecv1alpha1.Sandbox, error) {
-	switch {
-	case snap.Spec.Kept:
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"snapshot %q is kept: it opens only in a review sandbox (review_snapshot)", snap.Name)
-	case !snap.Spec.Forkable:
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"snapshot %q was not taken by the Snapshot call or by Fork", snap.Name)
-	case snap.Status.Phase != setecv1alpha1.SnapshotPhaseReady:
-		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q is %q, not Ready", snap.Name, snap.Status.Phase)
+	if err := checkSnapshotOpens(snap, req); err != nil {
+		return nil, err
 	}
-	if c := req.GetSandboxClass(); c != "" && c != snap.Spec.SandboxClass {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"sandbox_class %q differs from the class %q of the snapshot", c, snap.Spec.SandboxClass)
-	}
-	if img := req.GetImage(); img != "" && img != snap.Spec.ImageRef {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"image %q differs from the image %q of the snapshot", img, snap.Spec.ImageRef)
-	}
-	vcpu, err := strconv.Atoi(snap.Annotations[setecv1alpha1.SnapshotVCPUAnnotation])
-	if err != nil || vcpu < 1 {
-		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q has no machine size", snap.Name)
-	}
-	mem, err := resource.ParseQuantity(snap.Annotations[setecv1alpha1.SnapshotMemoryAnnotation])
+	vcpu, mem, err := snapshotMachine(snap, req)
 	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q has no memory size", snap.Name)
-	}
-	if r := req.GetResources(); r != nil {
-		if r.GetVcpu() != 0 && int(r.GetVcpu()) != vcpu {
-			return nil, status.Errorf(codes.InvalidArgument,
-				"resources.vcpu %d differs from the %d of the snapshot", r.GetVcpu(), vcpu)
-		}
-		if m := r.GetMemory(); m != "" {
-			q, err := resource.ParseQuantity(m)
-			if err != nil || q.Cmp(mem) != 0 {
-				return nil, status.Errorf(codes.InvalidArgument,
-					"resources.memory %q differs from the %s of the snapshot", m, mem.String())
-			}
-		}
+		return nil, err
 	}
 	var lifecycle *setecv1alpha1.Lifecycle
 	if lc := req.GetLifecycle(); lc != nil {
@@ -182,16 +150,9 @@ func sandboxFromSnapshot(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRe
 		return nil, status.Error(codes.InvalidArgument,
 			"a session does not start from a snapshot: its workspace belongs to one sandbox")
 	}
-	command := append([]string(nil), req.GetCommand()...)
-	if len(command) == 0 {
-		if raw := snap.Annotations[snapshotCommandAnnotation]; raw != "" {
-			if err := json.Unmarshal([]byte(raw), &command); err != nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q has a bad command record", snap.Name)
-			}
-		}
-	}
-	if len(command) == 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "snapshot %q records no command: set command", snap.Name)
+	command, err := snapshotCommand(snap, req)
+	if err != nil {
+		return nil, err
 	}
 	sb := &setecv1alpha1.Sandbox{
 		GenerateName: "sbx-",
@@ -216,4 +177,70 @@ func sandboxFromSnapshot(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRe
 		sb.Spec.Env = append(sb.Spec.Env, corev1.EnvVar{Name: k, Value: v})
 	}
 	return sb, nil
+}
+
+// checkSnapshotOpens reports why req cannot open snap, or nil.
+func checkSnapshotOpens(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) error {
+	switch {
+	case snap.Spec.Kept:
+		return status.Errorf(codes.FailedPrecondition,
+			"snapshot %q is kept: it opens only in a review sandbox (review_snapshot)", snap.Name)
+	case !snap.Spec.Forkable:
+		return status.Errorf(codes.FailedPrecondition,
+			"snapshot %q was not taken by the Snapshot call or by Fork", snap.Name)
+	case snap.Status.Phase != setecv1alpha1.SnapshotPhaseReady:
+		return status.Errorf(codes.FailedPrecondition, "snapshot %q is %q, not Ready", snap.Name, snap.Status.Phase)
+	}
+	if c := req.GetSandboxClass(); c != "" && c != snap.Spec.SandboxClass {
+		return status.Errorf(codes.InvalidArgument,
+			"sandbox_class %q differs from the class %q of the snapshot", c, snap.Spec.SandboxClass)
+	}
+	if img := req.GetImage(); img != "" && img != snap.Spec.ImageRef {
+		return status.Errorf(codes.InvalidArgument,
+			"image %q differs from the image %q of the snapshot", img, snap.Spec.ImageRef)
+	}
+	return nil
+}
+
+// snapshotMachine is the machine size of snap. A size in req must match it.
+func snapshotMachine(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) (vcpu int, mem resource.Quantity, err error) {
+	vcpu, err = strconv.Atoi(snap.Annotations[setecv1alpha1.SnapshotVCPUAnnotation])
+	if err != nil || vcpu < 1 {
+		return 0, mem, status.Errorf(codes.FailedPrecondition, "snapshot %q has no machine size", snap.Name)
+	}
+	mem, err = resource.ParseQuantity(snap.Annotations[setecv1alpha1.SnapshotMemoryAnnotation])
+	if err != nil {
+		return 0, mem, status.Errorf(codes.FailedPrecondition, "snapshot %q has no memory size", snap.Name)
+	}
+	if r := req.GetResources(); r != nil {
+		if r.GetVcpu() != 0 && int(r.GetVcpu()) != vcpu {
+			return 0, mem, status.Errorf(codes.InvalidArgument,
+				"resources.vcpu %d differs from the %d of the snapshot", r.GetVcpu(), vcpu)
+		}
+		if m := r.GetMemory(); m != "" {
+			q, err := resource.ParseQuantity(m)
+			if err != nil || q.Cmp(mem) != 0 {
+				return 0, mem, status.Errorf(codes.InvalidArgument,
+					"resources.memory %q differs from the %s of the snapshot", m, mem.String())
+			}
+		}
+	}
+	return vcpu, mem, nil
+}
+
+// snapshotCommand is the command of req, or else the command that snap
+// recorded.
+func snapshotCommand(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) ([]string, error) {
+	command := append([]string(nil), req.GetCommand()...)
+	if len(command) == 0 {
+		if raw := snap.Annotations[snapshotCommandAnnotation]; raw != "" {
+			if err := json.Unmarshal([]byte(raw), &command); err != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q has a bad command record", snap.Name)
+			}
+		}
+	}
+	if len(command) == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "snapshot %q records no command: set command", snap.Name)
+	}
+	return command, nil
 }

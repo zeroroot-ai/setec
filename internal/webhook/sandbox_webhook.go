@@ -148,6 +148,42 @@ func (v *SandboxValidator) ValidateDelete(_ context.Context, _ *setecv1alpha1.Sa
 // error and returns a single aggregate so users see the whole list at
 // once rather than playing whack-a-mole against one error per apply.
 func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandbox) (admission.Warnings, error) {
+	errs := structuralErrors(sb)
+
+	// (1) Tenant-label enforcement when multi-tenancy is enabled.
+	// Fail closed: a nil NamespaceGetter means mis-wired production
+	// and the webhook refuses the Sandbox rather than silently
+	// skipping the check.
+	if v.MultiTenancyEnabled && v.TenantLabelKey != "" {
+		if v.NamespaceGetter == nil {
+			return nil, errors.New("webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
+		}
+		if err := v.checkTenantLabel(ctx, sb); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	cls, classErrs, err := v.classErrors(ctx, sb)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, classErrs...)
+
+	snapErrs, err := v.snapshotErrors(ctx, sb, cls)
+	if err != nil {
+		return nil, err
+	}
+	errs = append(errs, snapErrs...)
+
+	if len(errs) == 0 {
+		return nil, nil
+	}
+	return nil, utilerrors.NewAggregate(errs)
+}
+
+// structuralErrors are the problems of the lifecycle, the command and the
+// desired state of sb, which need no lookup.
+func structuralErrors(sb *setecv1alpha1.Sandbox) []error {
 	var errs []error
 
 	// (0) Lifecycle structural checks. A workspace block is a
@@ -185,22 +221,17 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 			"spec.desiredState=Suspended requires spec.lifecycle.mode=session (effective mode is %q)",
 			sb.Spec.EffectiveLifecycleMode()))
 	}
+	return errs
+}
 
-	// (1) Tenant-label enforcement when multi-tenancy is enabled.
-	// Fail closed: a nil NamespaceGetter means mis-wired production
-	// and the webhook refuses the Sandbox rather than silently
-	// skipping the check.
-	if v.MultiTenancyEnabled && v.TenantLabelKey != "" {
-		if v.NamespaceGetter == nil {
-			return nil, errors.New("webhook: multi-tenancy enabled but NamespaceGetter not configured; refusing Sandbox to fail closed")
-		}
-		if err := v.checkTenantLabel(ctx, sb); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
+// classErrors resolves the SandboxClass of sb and checks sb against it
+// (step 2). err is an unexpected failure that the admission controller
+// handles with its failurePolicy.
+func (v *SandboxValidator) classErrors(
+	ctx context.Context, sb *setecv1alpha1.Sandbox,
+) (cls *setecv1alpha1.SandboxClass, errs []error, err error) {
 	// (2) SandboxClass resolution + constraint validation.
-	cls, err := v.Resolver.Resolve(ctx, sb)
+	cls, err = v.Resolver.Resolve(ctx, sb)
 	switch {
 	case errors.Is(err, class.ErrClassNotFound):
 		errs = append(errs, fmt.Errorf(
@@ -219,7 +250,7 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 	case err != nil:
 		// Unexpected error (e.g., API server down). Return directly
 		// so the admission controller can apply failurePolicy.
-		return nil, fmt.Errorf("webhook: resolve SandboxClass: %w", err)
+		return nil, nil, fmt.Errorf("webhook: resolve SandboxClass: %w", err)
 	default:
 		// Class resolved cleanly: run the pure validator.
 		for _, vio := range class.Validate(sb, cls) {
@@ -232,7 +263,14 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 				"spec.desiredState=Suspended requires SandboxClass %q to enable spec.sessionCheckpoint", cls.Name))
 		}
 	}
+	return cls, errs, nil
+}
 
+// snapshotErrors checks the snapshotRef of sb (step 3).
+func (v *SandboxValidator) snapshotErrors(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass,
+) ([]error, error) {
+	var errs []error
 	// (3) Phase 3: snapshotRef admission. Reject Sandboxes whose
 	// snapshot reference resolves to a different namespace, does not
 	// exist, or is incompatible with the resolved class.
@@ -255,11 +293,7 @@ func (v *SandboxValidator) validate(ctx context.Context, sb *setecv1alpha1.Sandb
 			}
 		}
 	}
-
-	if len(errs) == 0 {
-		return nil, nil
-	}
-	return nil, utilerrors.NewAggregate(errs)
+	return errs, nil
 }
 
 // checkTenantLabel reads the Sandbox's namespace and confirms the

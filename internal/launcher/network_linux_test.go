@@ -21,6 +21,45 @@ func TestTCNetwork_JoinAndLeave(t *testing.T) {
 	if os.Getenv("SETEC_NETNS_TEST") != "1" {
 		t.Skip("needs a private network namespace; set SETEC_NETNS_TEST=1 under unshare -rn")
 	}
+	link := fakePodInterface(t)
+
+	pn, err := TCNetwork{}.Join()
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if pn.Address.String() != "10.42.0.7/32" || pn.Gateway.String() != "10.42.0.1" || pn.MTU != 1450 ||
+		pn.MAC != link.Attrs().HardwareAddr.String() {
+		t.Fatalf("PodNet = %+v", pn)
+	}
+	tap, err := netlink.LinkByName(TapDevice)
+	if err != nil || tap.Attrs().MTU != 1450 {
+		t.Fatalf("tap: %v %v", tap, err)
+	}
+	// Before Connect the machine has no network: no filter exists.
+	checkRedirects(t, false, link, tap)
+	if err := (TCNetwork{}).Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	checkRedirects(t, true, link, tap)
+
+	if err := (TCNetwork{}).Leave(); err != nil {
+		t.Fatalf("Leave: %v", err)
+	}
+	if _, err := netlink.LinkByName(TapDevice); err == nil {
+		t.Fatal("the tap device is still there after Leave")
+	}
+	qs, _ := netlink.QdiscList(link)
+	for _, q := range qs {
+		if q.Type() == "ingress" {
+			t.Fatal("the ingress qdisc of the Pod interface is still there after Leave")
+		}
+	}
+}
+
+// fakePodInterface makes a dummy Pod interface with an address, a gateway
+// and a default route, as the CNI does.
+func fakePodInterface(t *testing.T) netlink.Link {
+	t.Helper()
 	lo, _ := netlink.LinkByName("lo")
 	_ = netlink.LinkSetUp(lo)
 	eth := &netlink.Dummy{Name: PodInterface, MTU: 1450}
@@ -42,45 +81,23 @@ func TestTCNetwork_JoinAndLeave(t *testing.T) {
 	if err := netlink.RouteAdd(&netlink.Route{LinkIndex: link.Attrs().Index, Gw: gw}); err != nil {
 		t.Fatal(err)
 	}
+	return link
+}
 
-	pn, err := TCNetwork{}.Join()
-	if err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	if pn.Address.String() != "10.42.0.7/32" || pn.Gateway.String() != "10.42.0.1" || pn.MTU != 1450 ||
-		pn.MAC != link.Attrs().HardwareAddr.String() {
-		t.Fatalf("PodNet = %+v", pn)
-	}
-	tap, err := netlink.LinkByName(TapDevice)
-	if err != nil || tap.Attrs().MTU != 1450 {
-		t.Fatalf("tap: %v %v", tap, err)
-	}
-	// Before Connect the machine has no network: no filter exists.
-	for _, l := range []netlink.Link{link, tap} {
-		if fs, _ := netlink.FilterList(l, netlink.MakeHandle(0xffff, 0)); len(fs) != 0 {
-			t.Fatalf("filters of %s before Connect = %v; want none", l.Attrs().Name, fs)
-		}
-	}
-	if err := (TCNetwork{}).Connect(); err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	for _, l := range []netlink.Link{link, tap} {
+// checkRedirects checks that each link has one matchall redirect when
+// want is true, and no filter when want is false.
+func checkRedirects(t *testing.T, want bool, links ...netlink.Link) {
+	t.Helper()
+	for _, l := range links {
 		fs, err := netlink.FilterList(l, netlink.MakeHandle(0xffff, 0))
+		if !want {
+			if len(fs) != 0 {
+				t.Fatalf("filters of %s before Connect = %v; want none", l.Attrs().Name, fs)
+			}
+			continue
+		}
 		if err != nil || len(fs) != 1 || fs[0].Type() != "matchall" {
 			t.Fatalf("filters of %s = %v, %v; want one matchall redirect", l.Attrs().Name, fs, err)
-		}
-	}
-
-	if err := (TCNetwork{}).Leave(); err != nil {
-		t.Fatalf("Leave: %v", err)
-	}
-	if _, err := netlink.LinkByName(TapDevice); err == nil {
-		t.Fatal("the tap device is still there after Leave")
-	}
-	qs, _ := netlink.QdiscList(link)
-	for _, q := range qs {
-		if q.Type() == "ingress" {
-			t.Fatal("the ingress qdisc of the Pod interface is still there after Leave")
 		}
 	}
 }

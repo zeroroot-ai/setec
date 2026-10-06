@@ -114,50 +114,13 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		want = 0
 	}
 
-	// A stale or failed base goes, and so does each base above the wanted
-	// count.
-	var ready []setecv1alpha1.Snapshot
-	nodes := map[string]bool{}
-	for i := range bases {
-		b := &bases[i]
-		switch {
-		case b.Annotations[snapshot.BaseKeyAnnotation] != key, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
-			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && len(ready) >= want:
-			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
-				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
-			}
-		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
-			ready = append(ready, *b)
-			nodes[b.Spec.Node] = true
-		case !slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == b.Name }) &&
-			r.now().Sub(b.CreationTimestamp.Time) > baseWriteTimeout:
-			// The write of this base stopped with its Pod, for example
-			// at a restart of the operator. It never becomes Ready.
-			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
-				return ctrl.Result{}, errwrap.Wrap(err, "client.Writer.Delete")
-			}
-		default:
-			nodes[b.Spec.Node] = true
-		}
+	ready, nodes, err := r.pruneBases(ctx, bases, pods, key, want)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
+	building := r.stepBasePods(ctx, cls, pods, key, bases, nodes)
 
-	building := 0
-	for i := range pods {
-		p := &pods[i]
-		done, err := r.stepBasePod(ctx, cls, p, key, bases)
-		if err != nil {
-			logger.Error(err, "base Pod step", "pod", p.Name)
-		}
-		if !done {
-			building++
-		}
-		// The node of a base Pod holds a base now or soon.
-		if p.Spec.NodeName != "" {
-			nodes[p.Spec.NodeName] = true
-		}
-	}
-
-	if len(ready)+building < want {
+	if ready+building < want {
 		if err := r.startBase(ctx, cls, key, nodes); err != nil {
 			logger.Error(err, "start a base")
 		}
@@ -173,6 +136,62 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: warmPoolRequeue}, nil
+}
+
+// pruneBases deletes a stale or failed base, and each base above the
+// wanted count. It returns the count of Ready bases, and the nodes that
+// hold a base.
+func (r *WarmPoolReconciler) pruneBases(
+	ctx context.Context, bases []setecv1alpha1.Snapshot, pods []corev1.Pod, key string, want int,
+) (ready int, nodes map[string]bool, err error) {
+	nodes = map[string]bool{}
+	for i := range bases {
+		b := &bases[i]
+		switch {
+		case b.Annotations[snapshot.BaseKeyAnnotation] != key, b.Status.Phase == setecv1alpha1.SnapshotPhaseFailed,
+			b.Status.Phase == setecv1alpha1.SnapshotPhaseReady && ready >= want:
+			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
+				return 0, nil, errwrap.Wrap(err, "client.Writer.Delete")
+			}
+		case b.Status.Phase == setecv1alpha1.SnapshotPhaseReady:
+			ready++
+			nodes[b.Spec.Node] = true
+		case !slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == b.Name }) &&
+			r.now().Sub(b.CreationTimestamp.Time) > baseWriteTimeout:
+			// The write of this base stopped with its Pod, for example
+			// at a restart of the operator. It never becomes Ready.
+			if err := client.IgnoreNotFound(r.Delete(ctx, b)); err != nil {
+				return 0, nil, errwrap.Wrap(err, "client.Writer.Delete")
+			}
+		default:
+			nodes[b.Spec.Node] = true
+		}
+	}
+	return ready, nodes, nil
+}
+
+// stepBasePods moves each base Pod on, and adds its node to nodes. It
+// returns the count of Pods that still build a base.
+func (r *WarmPoolReconciler) stepBasePods(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, pods []corev1.Pod, key string,
+	bases []setecv1alpha1.Snapshot, nodes map[string]bool,
+) int {
+	building := 0
+	for i := range pods {
+		p := &pods[i]
+		done, err := r.stepBasePod(ctx, cls, p, key, bases)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "base Pod step", "pod", p.Name)
+		}
+		if !done {
+			building++
+		}
+		// The node of a base Pod holds a base now or soon.
+		if p.Spec.NodeName != "" {
+			nodes[p.Spec.NodeName] = true
+		}
+	}
+	return building
 }
 
 // stepBasePod moves one base Pod on. A Ready Pod (its guest agent answers)

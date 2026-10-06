@@ -152,6 +152,48 @@ var ErrSnapshotNameConflict = errors.New("snapshot: name already in use in names
 // service.
 var ErrInvariantGateViolation = errors.New("snapshot: docs/design/isolation.md invariant gate refused the restore")
 
+// checkNameFree returns ErrSnapshotNameConflict, with an Event, when a
+// Snapshot with the requested name exists.
+func (c *Coordinator) checkNameFree(ctx context.Context, sb *setecv1alpha1.Sandbox) error {
+	existing := &setecv1alpha1.Snapshot{}
+	err := c.Client.Get(ctx, types.NamespacedName{
+		Namespace: sb.Namespace,
+		Name:      sb.Spec.Snapshot.Name,
+	}, existing)
+	switch {
+	case err == nil:
+		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotNameConflict,
+			fmt.Sprintf("snapshot %q already exists in namespace %q", sb.Spec.Snapshot.Name, sb.Namespace))
+		return ErrSnapshotNameConflict
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("coordinator: get existing Snapshot: %w", err)
+	}
+	return nil
+}
+
+// applyKept sets up a kept Snapshot and returns its backend and the key of
+// its tenant. Any other Snapshot keeps the default backend and no key.
+func (c *Coordinator) applyKept(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, parentRef string,
+) (backend string, kek []byte, err error) {
+	backend = c.backendName()
+	if !sb.Spec.Snapshot.Kept {
+		return backend, nil, nil
+	}
+	if parentRef != "" {
+		return "", nil, errors.New("coordinator: a kept snapshot is a full snapshot, not a diff")
+	}
+	if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
+		return "", nil, err
+	}
+	snap.Spec.Kept = true
+	snap.Spec.StorageBackend = KeptBackend
+	if snap.Spec.TTL == nil {
+		snap.Spec.TTL = &metav1.Duration{Duration: DefaultKeptTTL}
+	}
+	return KeptBackend, kek, nil
+}
+
 // CreateSnapshot pauses the source sandbox, delegates snapshot
 // persistence to the node-agent, and creates a Snapshot CR on
 // success. On any error the Coordinator emits an Event on the parent
@@ -176,20 +218,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 
 	// 1. Detect name conflicts. We do this first so we can fail fast
 	//    before touching the source VM.
-	existing := &setecv1alpha1.Snapshot{}
-	err := c.Client.Get(ctx, types.NamespacedName{
-		Namespace: sb.Namespace,
-		Name:      sb.Spec.Snapshot.Name,
-	}, existing)
-	switch {
-	case err == nil:
-		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotNameConflict,
-			fmt.Sprintf("snapshot %q already exists in namespace %q", sb.Spec.Snapshot.Name, sb.Namespace))
-		setSpanErr(span, "name conflict")
-		return ErrSnapshotNameConflict
-	case !apierrors.IsNotFound(err):
+	if err := c.checkNameFree(ctx, sb); err != nil {
 		setSpanErr(span, err.Error())
-		return fmt.Errorf("coordinator: get existing Snapshot: %w", err)
+		return err
 	}
 
 	// 2. Resolve the node-agent for the Sandbox's pod. The node name is
@@ -237,20 +268,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	// A kept Snapshot goes to the S3-compatible store, sealed with the key
 	// of its tenant, and lives 30 days unless the request sets a TTL or a
 	// person pins it (setec#196).
-	backend, kek := c.backendName(), []byte(nil)
-	if sb.Spec.Snapshot.Kept {
-		if parentRef != "" {
-			return errors.New("coordinator: a kept snapshot is a full snapshot, not a diff")
-		}
-		if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
-			return err
-		}
-		backend = KeptBackend
-		snap.Spec.Kept = true
-		snap.Spec.StorageBackend = backend
-		if snap.Spec.TTL == nil {
-			snap.Spec.TTL = &metav1.Duration{Duration: DefaultKeptTTL}
-		}
+	backend, kek, err := c.applyKept(ctx, sb, snap, parentRef)
+	if err != nil {
+		return err
 	}
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -491,22 +511,10 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
 	}
 
-	pod, err := c.getPod(ctx, sb)
+	pod, err := c.restoreTarget(ctx, sb, snap)
 	if err != nil {
 		setSpanErr(span, err.Error())
 		return err
-	}
-	if pod.Spec.NodeName == "" {
-		setSpanErr(span, "pod not scheduled")
-		return fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
-	}
-	// A snapshot on the local disk of a node loads on that node only. A
-	// snapshot in the S3-compatible store loads on any node.
-	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
-	if local && pod.Spec.NodeName != snap.Spec.Node {
-		setSpanErr(span, "node mismatch")
-		return fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
-			snap.Spec.Node, pod.Spec.NodeName)
 	}
 
 	var restoreKEK []byte
@@ -577,6 +585,15 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 			fmt.Sprintf("DEV-MODE OPT-OUT: serving restore of snapshot %q despite %s", snap.Name, decision.String()))
 	}
 
+	c.emitRestored(sb, snap, pod, resp)
+	c.recordDuration("restore", sb, time.Since(start))
+	return nil
+}
+
+// emitRestored emits the Events of a restore that passed the gate.
+func (c *Coordinator) emitRestored(
+	sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, pod *corev1.Pod, resp *setecgrpcv1.RestoreSandboxResponse,
+) {
 	c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotRestoreStarted,
 		fmt.Sprintf("restored sandbox from snapshot %q on node %q", snap.Name, pod.Spec.NodeName))
 	// Surface the node-agent's active entropy-reseed confirmation
@@ -596,8 +613,25 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
 			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (snapshot %q)", snap.Name))
 	}
-	c.recordDuration("restore", sb, time.Since(start))
-	return nil
+}
+
+// restoreTarget is the scheduled Pod that loads snap. A snapshot on the
+// local disk of a node loads on that node only. A snapshot in the
+// S3-compatible store loads on any node.
+func (c *Coordinator) restoreTarget(ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot) (*corev1.Pod, error) {
+	pod, err := c.getPod(ctx, sb)
+	if err != nil {
+		return nil, err
+	}
+	if pod.Spec.NodeName == "" {
+		return nil, fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
+	}
+	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
+	if local && pod.Spec.NodeName != snap.Spec.Node {
+		return nil, fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
+			snap.Spec.Node, pod.Spec.NodeName)
+	}
+	return pod, nil
 }
 
 // Pause invokes the node-agent Firecracker pause RPC.
