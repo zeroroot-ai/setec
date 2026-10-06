@@ -16,13 +16,11 @@ enforces it.
 
 The device plugin gets no allow: it talks to the kubelet over a unix socket.
 
-The policy renders where the cluster serves cilium.io/v2. A cluster with no
-Cilium cannot enforce it, and a CiliumNetworkPolicy object there would fail
-the install. A Gibson cluster always runs Cilium (D76).
+The policy always renders. Cilium is the network plugin of every cluster that
+runs setec (D76); development/k3s installs it too.
 hack/verify-chart-security.sh renders this file and fails when a Pod of the
 namespace has no allow it needs, or when the default deny is missing.
 */}}
-{{- if .Capabilities.APIVersions.Has "cilium.io/v2" }}
 {{- $ns := .Values.namespace }}
 {{- $fn := include "setec.fullname" . }}
 {{- $sp := .Values.systemPolicy }}
@@ -125,17 +123,39 @@ spec:
   egress:
     - toEntities:
         - kube-apiserver
+  {{- $grpcPort := regexReplaceAll "^.*:" (toString .Values.frontend.listenAddr) "" }}
+  {{- $pods := list }}
+  {{- $cidrs := list }}
+  {{- range $c := $sp.frontendCallers }}
+  {{- if $c.cidr }}
+  {{- $cidrs = append $cidrs $c.cidr }}
+  {{- else }}
+  {{- $pods = append $pods $c }}
+  {{- end }}
+  {{- end }}
   ingress:
+    {{- if $pods }}
     - fromEndpoints:
-        {{- range $c := $sp.frontendCallers }}
+        {{- range $c := $pods }}
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: {{ required "each systemPolicy.frontendCallers entry needs a namespace" $c.namespace }}
-            {{- toYaml (required "each systemPolicy.frontendCallers entry needs podLabels" $c.podLabels) | nindent 12 }}
+            k8s:io.kubernetes.pod.namespace: {{ required "each systemPolicy.frontendCallers entry needs a namespace or a cidr" $c.namespace }}
+            {{- toYaml (required "each systemPolicy.frontendCallers entry with a namespace needs podLabels" $c.podLabels) | nindent 12 }}
         {{- end }}
       toPorts:
         - ports:
-            - port: {{ (regexReplaceAll "^.*:" (toString .Values.frontend.listenAddr) "") | quote }}
+            - port: {{ $grpcPort | quote }}
               protocol: TCP
+    {{- end }}
+    {{- if $cidrs }}
+    - fromCIDR:
+        {{- range $cidrs }}
+        - {{ . }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: {{ $grpcPort | quote }}
+              protocol: TCP
+    {{- end }}
     - fromEndpoints:
         {{- range $l := $sp.metricsScrapers }}
         - matchLabels:
@@ -216,5 +236,4 @@ spec:
               protocol: TCP
     {{- end }}
   {{- end }}
-{{- end }}
 {{- end }}

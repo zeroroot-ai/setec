@@ -7,8 +7,10 @@
 # virtualization, measured 2026-09-27: 4 vCPU, 15 GB, kvm_amd loaded,
 # KVM_GET_API_VERSION 12). The `launcher` job creates a kind cluster on that
 # runner. The workers mount the runner's /dev, so the device plugin offers
-# /dev/kvm and /dev/net/tun to the launcher Pods. The cluster runs Calico, so
-# NetworkPolicy is enforced the way production CNIs enforce it.
+# /dev/kvm and /dev/net/tun to the launcher Pods. The cluster runs Cilium, the
+# network plugin of every cluster that runs setec (D76): NetworkPolicy is
+# enforced, and the chart's CiliumNetworkPolicy objects of its own namespace
+# install.
 # hack/kind-launcher.yaml has the details. No metal node, no AWS account.
 #
 # The launcher is the only runtime. The Kata, gVisor and runc backends, the
@@ -233,17 +235,22 @@ jobs:
           config: hack/kind-launcher.yaml
           wait: 0s
 
-      - name: Install Calico
+      - name: Install Cilium
+        # The pin equals the one of the Gibson clusters (hosted
+        # bootstrap/cilium/VERSION) and of development/k3s.
         env:
-          CALICO_VERSION: v3.32.2
-          CALICO_SHA256: a8c828a06a87c629a282ebbc424895b77f3a030251993e41ea400a743675bb02
+          CILIUM_VERSION: 1.20.2
         run: |
           set -euo pipefail
-          curl -fsSL -o calico.yaml \
-            "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
-          echo "${CALICO_SHA256}  calico.yaml" | sha256sum -c
-          kubectl apply -f calico.yaml
-          kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+          helm upgrade --install cilium oci://quay.io/cilium/charts/cilium \
+            --version "${CILIUM_VERSION}" --namespace kube-system \
+            --set ipam.mode=kubernetes \
+            --set operator.replicas=1 \
+            --set envoy.enabled=false \
+            --set hubble.enabled=false \
+            --wait --timeout 10m
+          kubectl -n kube-system rollout status daemonset/cilium --timeout=300s
+          kubectl get crd ciliumnetworkpolicies.cilium.io
           kubectl wait --for=condition=Ready nodes --all --timeout=300s
           kubectl version
 

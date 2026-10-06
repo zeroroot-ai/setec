@@ -242,14 +242,17 @@ observability:
 # The launcher Pods run in the Sandbox namespaces, under the policy of
 # sandbox-namespace-baseline-netpol.yaml.
 systemPolicy:
-  # frontendCallers are the Pods that may call the frontend gRPC port, each
-  # as a namespace and the labels of its Pods. Required when the frontend is
-  # on: an empty list leaves the frontend reachable by nobody. A Gibson
-  # install names its daemon here.
+  # frontendCallers are the callers that may reach the frontend gRPC port.
+  # Each entry is a namespace and the labels of its Pods (a Gibson daemon in
+  # this cluster), or a cidr (a Gibson cluster elsewhere, which reaches the
+  # frontend through its own addresses). Required when the frontend is on:
+  # an empty list leaves the frontend reachable by nobody. mTLS with an
+  # enrolled client (frontend.clients) still gates each call.
   frontendCallers: []
   #  - namespace: gibson
   #    podLabels:
   #      app.kubernetes.io/component: daemon
+  #  - cidr: 203.0.113.0/24
   # metricsScrapers are the labels of the Pods that may scrape the metrics
   # ports, in any namespace.
   metricsScrapers:

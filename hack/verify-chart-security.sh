@@ -308,7 +308,8 @@ FE_TLS=(--set frontend.enabled=true
 	--set 'frontend.clients[1].name=onprem'
 	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
 	--set 'systemPolicy.frontendCallers[0].namespace=gibson'
-	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon')
+	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
+	--set 'systemPolicy.frontendCallers[1].cidr=203.0.113.0/24')
 
 render "$workdir/fe-default.yaml" "${FE_TLS[@]}" \
 	--show-only templates/frontend.yaml
@@ -648,7 +649,7 @@ allowance_refused "a port with an unknown protocol fails the render" \
 # render with one piece removed, and the checker must refuse it.
 # ---------------------------------------------------------------------------
 note "the setec namespace network policy"
-SP_ALL=(--api-versions cilium.io/v2 "${FE_TLS[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
+SP_ALL=("${FE_TLS[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
 	--set snapshots.mTLS.caProvided=true --set snapshots.s3.bucket=setec-snapshots)
 render "$workdir/sp-all.yaml" "${SP_ALL[@]}"
 if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec-system >"$workdir/sp-all.out"; then
@@ -656,7 +657,7 @@ if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec
 else
 	fail "the setec namespace policy is incomplete: $(cat "$workdir/sp-all.out")"
 fi
-render "$workdir/sp-default.yaml" --api-versions cilium.io/v2
+render "$workdir/sp-default.yaml"
 if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-default.yaml" setec-system >"$workdir/sp-default.out"; then
 	pass "the default install has the default deny and the operator allow"
 else
@@ -679,7 +680,6 @@ for fx in no-deny no-node-agent no-frontend; do
 	fi
 done
 if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
-	--api-versions cilium.io/v2 \
 	--set frontend.enabled=true --set frontend.tlsCertSecretName=fe-tls --set frontend.tlsClientCASecretName=fe-ca \
 	--set 'frontend.clients[0].name=saas' \
 	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
@@ -690,13 +690,10 @@ elif grep -qF "systemPolicy.frontendCallers" "$workdir/sp-nocaller.err"; then
 else
 	fail "a frontend with no callers failed for another reason: $(tail -n1 "$workdir/sp-nocaller.err")"
 fi
-render "$workdir/sp-nocilium.yaml"
-grep -q "cilium.io/v2" "$workdir/sp-nocilium.yaml" \
-	&& fail "a cluster with no Cilium API must get no Cilium policy object" \
-	|| pass "a cluster with no Cilium API gets no Cilium policy object"
 grep -q "port: \"50051\"" "$workdir/sp-all.yaml" && grep -q "k8s:io.kubernetes.pod.namespace: gibson" "$workdir/sp-all.yaml" \
-	&& pass "the frontend gRPC port admits the named caller" \
-	|| fail "the frontend gRPC port does not admit the named caller"
+	&& grep -q -- "- 203.0.113.0/24" "$workdir/sp-all.yaml" \
+	&& pass "the frontend gRPC port admits the named caller and the named range" \
+	|| fail "the frontend gRPC port does not admit the named caller and range"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
