@@ -686,3 +686,32 @@ func TestGrpcCodeFor_Cases(t *testing.T) {
 		})
 	}
 }
+
+// TestLaunch_ReportsTheRuntimeOfTheBoundClass checks both fields of the
+// response: the class read back from the created Sandbox, and the
+// isolation backend that the class declares. A class that does not
+// resolve gives an empty runtime, which a caller refuses.
+func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
+	t.Parallel()
+	cls := &setecv1alpha1.SandboxClass{}
+	cls.Name = testSandboxClass
+	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"}
+	s := &Service{Client: newClient(t, cls), AuthDisabled: true, DefaultNamespace: "team-a"}
+
+	launch := func(class string) *setecv1grpc.LaunchResponse {
+		t.Helper()
+		resp, err := s.Launch(context.Background(), &setecv1grpc.LaunchRequest{
+			SandboxClass: class, Image: "alpine:3.19", Command: []string{"true"},
+		})
+		if err != nil {
+			t.Fatalf("Launch(%q): %v", class, err)
+		}
+		return resp
+	}
+	if resp := launch(testSandboxClass); resp.GetSandboxClass() != testSandboxClass || resp.GetRuntime() != "kata-fc" {
+		t.Fatalf("response = class %q runtime %q, want %q and kata-fc", resp.GetSandboxClass(), resp.GetRuntime(), testSandboxClass)
+	}
+	if resp := launch("missing"); resp.GetRuntime() != "" {
+		t.Fatalf("runtime of an unresolved class = %q, want empty", resp.GetRuntime())
+	}
+}

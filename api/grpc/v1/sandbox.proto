@@ -244,6 +244,12 @@ message LaunchResponse {
   // schedules the Sandbox. The authoritative post-resolution values
   // are reported on WaitResponse and AttachResponse.
   string sandbox_class = 4;
+
+  // runtime is the isolation backend that the bound SandboxClass
+  // declares (spec.runtime.backend), read when the Sandbox is created.
+  // Empty means the class is not resolved or declares no backend. A
+  // caller that requires a known backend refuses an empty value.
+  string runtime = 5;
 }
 
 // Resources mirrors Sandbox.spec.resources.

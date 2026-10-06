@@ -24,6 +24,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -227,7 +228,19 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		// Read back from the created object, not the request, so any
 		// admission-time defaulting of the class is what gets reported.
 		SandboxClass: sb.Spec.SandboxClassName,
+		Runtime:      s.launchRuntime(ctx, sb),
 	}, nil
+}
+
+// launchRuntime is the isolation backend that the class of sb declares.
+// It is empty when the class does not resolve or declares no backend, so
+// a caller that requires a known backend refuses the Sandbox.
+func (s *Service) launchRuntime(ctx context.Context, sb *setecv1alpha1.Sandbox) string {
+	cls, err := class.NewResolver(s.Client).Resolve(ctx, sb)
+	if err != nil || cls == nil || cls.Spec.Runtime == nil {
+		return ""
+	}
+	return cls.Spec.Runtime.Backend
 }
 
 // launchReview starts the review Sandbox of a kept snapshot of the tenant
@@ -248,6 +261,7 @@ func (s *Service) launchReview(ctx context.Context, ns string, pair tenancy.Pair
 	return &setecv1grpc.LaunchResponse{
 		SandboxId: fmt.Sprintf("%s/%s/%s", sb.Namespace, sb.Name, string(sb.UID)),
 		Name:      sb.Name, Namespace: sb.Namespace, SandboxClass: sb.Spec.SandboxClassName,
+		Runtime: s.launchRuntime(ctx, sb),
 	}, nil
 }
 
