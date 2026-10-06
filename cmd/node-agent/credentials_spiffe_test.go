@@ -42,8 +42,8 @@ import (
 // (setec#161).
 
 const (
-	nodeAgentID = "spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent"
-	callerID    = "spiffe://zeroroot.ai/ns/setec/sa/setec"
+	nodeAgentID = "spiffe://example.org/ns/setec/sa/setec-node-agent"
+	callerID    = "spiffe://example.org/ns/setec/sa/setec"
 )
 
 func TestNodeAgentListener_SPIFFEAcceptsAuthorizedPeer(t *testing.T) {
@@ -67,7 +67,7 @@ func TestNodeAgentListener_SPIFFERefusesUnauthorizedSPIFFEID(t *testing.T) {
 	api := startWorkloadAPI(t, ca)
 	addr := serveNodeAgentSPIFFE(t, api.addr, callerID)
 
-	intruder := "spiffe://zeroroot.ai/ns/default/sa/anything-else"
+	intruder := "spiffe://example.org/ns/default/sa/anything-else"
 	if err := dialHealth(t, addr, spiffePeer(t, ca, intruder, ca)); err == nil {
 		t.Fatal("handshake with a validly-signed but unauthorized SPIFFE ID: want refusal, got success")
 	}

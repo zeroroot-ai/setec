@@ -21,7 +21,7 @@ import (
 // slices" is the acceptance criterion; asserting the same cases is how
 // it stays true.
 
-const nodeAgentID = "spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent"
+const nodeAgentID = "spiffe://example.org/ns/setec/sa/setec-node-agent"
 
 func TestNodeAgentCredentialFlags_SelectsAMode(t *testing.T) {
 	t.Parallel()
@@ -114,7 +114,7 @@ func TestNodeAgentCredentialFlags_FileFlagsReachTheSourceIntact(t *testing.T) {
 
 func TestNodeAgentCredentialFlags_SPIFFEFlagsReachTheSourceIntact(t *testing.T) {
 	t.Parallel()
-	other := "spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent-canary"
+	other := "spiffe://example.org/ns/setec/sa/setec-node-agent-canary"
 	flags := nodeAgentCredentialFlags{
 		spiffeSocket:        "unix:///run/spire/agent-sockets/api.sock",
 		spiffeAuthorizedIDs: []string{nodeAgentID, other},

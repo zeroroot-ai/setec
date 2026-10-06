@@ -103,7 +103,7 @@ BASE=(
 	--set 'sandboxNamespaces={sandbox-workloads}'
 	--set frontend.enabled=true
 	--set 'frontend.clients[0].name=saas'
-	--set 'frontend.clients[0].spiffeID=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon'
+	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon'
 	--set nodeAgent.enabled=true
 	--set snapshots.enabled=true
 )
@@ -118,8 +118,9 @@ FILE_CREDS=(
 )
 SPIFFE=(
 	--set credentials.mode=spiffe
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://zeroroot.ai/ns/setec/sa/setec}'
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent}'
+	--set credentials.spiffe.trustDomain=example.org
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}'
 )
 
 # ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ strip_comments "$workdir/spiffe-operator.yaml" "$workdir/spiffe-operator.strippe
 
 assert_contains "$workdir/spiffe-frontend.stripped.yaml" "frontend gets the socket and the enrolled clients" \
 	"--spiffe-socket=/run/spire/agent-sockets/api.sock" \
-	"--client=saas=spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
+	"--client=saas=spiffe://example.org/ns/gibson/sa/gibson-daemon"
 assert_absent "$workdir/spiffe-frontend.stripped.yaml" "frontend has no second allow-list" \
 	"--spiffe-authorized-id"
 assert_contains "$workdir/spiffe-frontend.stripped.yaml" "frontend mounts the Workload API socket dir read-only" \
@@ -181,7 +182,7 @@ assert_absent "$workdir/spiffe-frontend.stripped.yaml" "frontend drops the TLS S
 
 assert_contains "$workdir/spiffe-nodeagent.stripped.yaml" "node-agent gets socket + allow-list" \
 	"--spiffe-socket=/run/spire/agent-sockets/api.sock" \
-	"--spiffe-authorized-id=spiffe://zeroroot.ai/ns/setec/sa/setec"
+	"--spiffe-authorized-id=spiffe://example.org/ns/setec/sa/setec"
 assert_contains "$workdir/spiffe-nodeagent.stripped.yaml" "node-agent mounts the Workload API socket dir" \
 	"name: spiffe-workload-api"
 assert_absent "$workdir/spiffe-nodeagent.stripped.yaml" "node-agent drops the file-mode flags" "--tls-cert"
@@ -189,7 +190,7 @@ assert_absent "$workdir/spiffe-nodeagent.stripped.yaml" "node-agent drops the TL
 
 assert_contains "$workdir/spiffe-operator.stripped.yaml" "operator dialer gets socket + allow-list" \
 	"--nodeagent-spiffe-socket=/run/spire/agent-sockets/api.sock" \
-	"--nodeagent-spiffe-authorized-id=spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent"
+	"--nodeagent-spiffe-authorized-id=spiffe://example.org/ns/setec/sa/setec-node-agent"
 assert_absent "$workdir/spiffe-operator.stripped.yaml" "operator drops the file-mode dialer flags" "--nodeagent-tls-cert"
 assert_absent "$workdir/spiffe-operator.stripped.yaml" "operator drops the client-cert Secret volume" "secretName: setec-nodeagent-client-tls"
 
@@ -198,6 +199,38 @@ assert_absent "$workdir/spiffe-operator.stripped.yaml" "operator drops the clien
 # pod startup; so must a mode typo and a legacy cert-manager block that
 # would otherwise render unused Certificates.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Federation (setec#169, ADR-0164): a client in a foreign trust domain gets a
+# ClusterFederatedTrustDomain, and a client in the domain of the fleet gets
+# none. A foreign client with no bundle source fails the render.
+# ---------------------------------------------------------------------------
+note "federation with enrolled clients"
+FOREIGN=(
+	--set 'frontend.clients[1].name=onprem'
+	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
+)
+"$HELM" template setec "$CHART_DIR" "${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
+	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443' \
+	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server' \
+	--show-only templates/federation.yaml >"$workdir/federation.yaml"
+assert_contains "$workdir/federation.yaml" "the foreign client gets a federated trust domain" \
+	"kind: ClusterFederatedTrustDomain" \
+	'trustDomain: "onprem.example"' \
+	'bundleEndpointURL: "https://spire.onprem.example:8443"' \
+	'endpointSPIFFEID: "spiffe://onprem.example/spire/server"'
+assert_absent "$workdir/federation.yaml" "the client in the domain of the fleet gets none" \
+	'trustDomain: "example.org"'
+assert_render_fails "a foreign client with no bundle source fails the render" \
+	"needs federation.bundleEndpointURL" \
+	"${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}"
+assert_render_fails "spiffe mode with no fleet trust domain fails the render" \
+	"credentials.spiffe.trustDomain is required" \
+	"${BASE[@]}" "${SPIFFE[@]}" --set credentials.spiffe.trustDomain=
+assert_render_fails "the https_spiffe profile with no endpoint ID fails the render" \
+	"federation.endpointSPIFFEID is required" \
+	"${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
+	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443'
+
 note "render-time failures"
 assert_render_fails "a frontend with no enrolled client fails the render" \
 	"frontend.clients must not be empty" \
@@ -206,11 +239,11 @@ assert_render_fails "a frontend with no enrolled client fails the render" \
 assert_render_fails "empty node-agent allow-list fails the render" \
 	"credentials.spiffe.authorizedIDs.nodeAgentClients must not be empty" \
 	"${BASE[@]}" --set credentials.mode=spiffe \
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://zeroroot.ai/ns/setec/sa/setec-node-agent}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}'
 assert_render_fails "empty dialer allow-list fails the render" \
 	"credentials.spiffe.authorizedIDs.nodeAgentServers must not be empty" \
 	"${BASE[@]}" --set credentials.mode=spiffe \
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://zeroroot.ai/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
 assert_render_fails "unknown mode fails the render" \
 	'credentials.mode must be "file" or "spiffe"' \
 	"${BASE[@]}" "${FILE_CREDS[@]}" --set credentials.mode=files

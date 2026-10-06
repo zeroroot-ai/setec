@@ -491,6 +491,13 @@ jobs:
       - name: No British spelling in a Go comment
         run: bash scripts/check-go-comment-spelling.sh
 
+      # setec#169: no trust domain literal of a real install (ADR-0164).
+      - name: Mutation-test the trust domain literal guard
+        run: bash scripts/check-no-trust-domain-literal.sh --selftest
+
+      - name: No trust domain literal in the tree
+        run: bash scripts/check-no-trust-domain-literal.sh
+
   crd-field-consumers:
     name: Every served CRD field has a consumer
     # Runs on both lanes, like the other tree guards. ADR-0094 layer 6, the

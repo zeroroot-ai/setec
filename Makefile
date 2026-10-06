@@ -274,6 +274,11 @@ check-go-comment-spelling: ## Fail on British spelling in a Go comment (setec#17
 	bash scripts/check-go-comment-spelling.sh --selftest
 	bash scripts/check-go-comment-spelling.sh
 
+.PHONY: check-trust-domain-literal
+check-trust-domain-literal: ## Fail on the SPIFFE trust domain of a real install as a literal (setec#169, ADR-0164).
+	bash scripts/check-no-trust-domain-literal.sh --selftest
+	bash scripts/check-no-trust-domain-literal.sh
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
@@ -326,7 +331,7 @@ verify-x86-substrate: ## Assert the x86-only substrate (ADR-0141): amd64-only im
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard — run 'make lint' separately).
+check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling check-trust-domain-literal ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard, trust domain literal guard — run 'make lint' separately).
 
 ##@ Dependencies
 

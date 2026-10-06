@@ -50,7 +50,7 @@ import (
 // that is to assert the same cases against both.
 // ---------------------------------------------------------------------
 
-const operatorID = "spiffe://zeroroot.ai/ns/setec/sa/setec"
+const operatorID = "spiffe://example.org/ns/setec/sa/setec"
 
 func TestCredentialFlags_SelectsAMode(t *testing.T) {
 	t.Parallel()
@@ -143,7 +143,7 @@ func TestCredentialFlags_FileFlagsReachTheSourceIntact(t *testing.T) {
 
 func TestCredentialFlags_SPIFFEFlagsReachTheSourceIntact(t *testing.T) {
 	t.Parallel()
-	other := "spiffe://zeroroot.ai/ns/setec/sa/setec-frontend"
+	other := "spiffe://example.org/ns/setec/sa/setec-frontend"
 	flags := credentialFlags{
 		spiffeSocket:        "unix:///run/spire/agent-sockets/api.sock",
 		spiffeAuthorizedIDs: repeatedString{operatorID, other},
@@ -169,7 +169,7 @@ func TestCredentialFlags_SPIFFEFlagsReachTheSourceIntact(t *testing.T) {
 func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 	t.Parallel()
 	var ids repeatedString
-	for _, id := range []string{operatorID, "spiffe://zeroroot.ai/ns/setec/sa/setec-frontend"} {
+	for _, id := range []string{operatorID, "spiffe://example.org/ns/setec/sa/setec-frontend"} {
 		if err := ids.Set(id); err != nil {
 			t.Fatalf("Set(%q): %v", id, err)
 		}

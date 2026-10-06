@@ -433,6 +433,19 @@ get one `--spiffe-authorized-id` per entry in the matching
 | `nodeAgentClients` | callers of the node-agent (the operator) | `nodeAgent.enabled=true` + `snapshots.enabled=true` |
 | `nodeAgentServers` | node-agent server IDs the operator accepts | `snapshots.enabled=true` |
 
+**Federation.** Each install has its own trust domain (ADR-0164).
+`credentials.spiffe.trustDomain` names the domain of this fleet and is
+required in SPIFFE mode with the frontend on. An enrolled client in a
+different domain needs a `federation` block: `bundleEndpointURL`,
+`bundleEndpointProfile` (`https_spiffe` or `https_web`) and, for
+`https_spiffe`, `endpointSPIFFEID`. The chart renders one
+`ClusterFederatedTrustDomain` for each such client, so SPIRE fetches the
+bundle of that domain and serves it to the frontend. The render fails
+when a foreign client has no bundle source. The `ClusterSPIFFEID` of the
+frontend must list each client domain under `federatesWith`. The install
+owns that registration. The frontend refuses a client whose bundle has
+not arrived, and keeps serving every other client.
+
 The lists are per trust relationship on purpose: an ID authorized to
 call the frontend is not thereby trusted as a node-agent, or vice
 versa. An empty list that is in use **fails the render** — "accept

@@ -10,7 +10,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/credentials"
 )
 
-const daemonID = "spiffe://zeroroot.ai/ns/gibson/sa/gibson-daemon"
+const daemonID = "spiffe://example.org/ns/gibson/sa/gibson-daemon"
 
 // TestCredentialFlags_SelectsAMode covers what an operator can type.
 // The file flags keep their meaning and remain the default posture, the
@@ -97,7 +97,7 @@ func TestCredentialFlags_SelectsAMode(t *testing.T) {
 func TestRepeatedString_CollectsEveryOccurrence(t *testing.T) {
 	t.Parallel()
 	var ids repeatedString
-	for _, id := range []string{daemonID, "spiffe://zeroroot.ai/ns/gibson/sa/gibson-executor"} {
+	for _, id := range []string{daemonID, "spiffe://example.org/ns/gibson/sa/gibson-executor"} {
 		if err := ids.Set(id); err != nil {
 			t.Fatalf("Set(%q): %v", id, err)
 		}

@@ -1,0 +1,59 @@
+{{- /*
+=============================================================================
+Federation with each enrolled client cluster (setec#169, ADR-0164).
+=============================================================================
+
+Each install has its own SPIFFE trust domain. An enrolled client whose
+SPIFFE ID is in a different trust domain than this fleet
+(credentials.spiffe.trustDomain) needs the trust bundle of its domain. SPIRE
+fetches it from the bundle endpoint of that domain and serves it to the
+frontend through the Workload API. This template asks SPIRE for it, with one
+ClusterFederatedTrustDomain (spire-controller-manager) for each such client.
+
+The render fails when a client in a foreign domain names no bundle source:
+the frontend would refuse that client on every call, and nothing at render
+time would say why.
+
+The SPIFFE registration of the frontend (its ClusterSPIFFEID) must list the
+same domains under federatesWith. The install owns that registration.
+*/ -}}
+{{- if and .Values.frontend.enabled (eq .Values.credentials.mode "spiffe") }}
+{{- $own := .Values.credentials.spiffe.trustDomain -}}
+{{- if not $own }}
+{{- fail "credentials.spiffe.trustDomain is required in spiffe mode with frontend.enabled=true: it names the trust domain of this fleet, so the chart can tell which enrolled clients need federation (ADR-0164)" }}
+{{- end }}
+{{- range .Values.frontend.clients }}
+{{- $domain := regexReplaceAll "^spiffe://([^/]+).*$" .spiffeID "${1}" }}
+{{- if ne $domain $own }}
+{{- $f := .federation | default dict }}
+{{- if not $f.bundleEndpointURL }}
+{{- fail (printf "frontend.clients entry %q is in trust domain %q, not %q: it needs federation.bundleEndpointURL, the bundle source of its domain" .name $domain $own) }}
+{{- end }}
+{{- $profile := $f.bundleEndpointProfile | default "https_spiffe" }}
+{{- if not (has $profile (list "https_spiffe" "https_web")) }}
+{{- fail (printf "frontend.clients entry %q: federation.bundleEndpointProfile must be https_spiffe or https_web, got %q" .name $profile) }}
+{{- end }}
+{{- if and (eq $profile "https_spiffe") (not $f.endpointSPIFFEID) }}
+{{- fail (printf "frontend.clients entry %q: federation.endpointSPIFFEID is required with the https_spiffe profile" .name) }}
+{{- end }}
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterFederatedTrustDomain
+metadata:
+  name: {{ include "setec.fullname" $ }}-client-{{ .name }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  trustDomain: {{ $domain | quote }}
+  bundleEndpointURL: {{ $f.bundleEndpointURL | quote }}
+  bundleEndpointProfile:
+    type: {{ $profile }}
+    {{- if eq $profile "https_spiffe" }}
+    endpointSPIFFEID: {{ $f.endpointSPIFFEID | quote }}
+    {{- end }}
+  {{- with $.Values.credentials.spiffe.className }}
+  className: {{ . | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

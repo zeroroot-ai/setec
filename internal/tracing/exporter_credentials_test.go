@@ -18,7 +18,7 @@ func TestExporterCredentials_RefusesBothModes(t *testing.T) {
 		Endpoint:      "collector:4317",
 		CAFile:        "/etc/setec/otel-ca.pem",
 		SPIFFESocket:  "unix:///run/spire/agent-sockets/api.sock",
-		SPIFFEServers: []string{"spiffe://zeroroot.ai/ns/observability/sa/collector"},
+		SPIFFEServers: []string{"spiffe://example.org/ns/observability/sa/collector"},
 	})
 	if err == nil {
 		t.Fatal("both --otel-ca-file and --otel-spiffe-socket: want a startup error, got nil")
@@ -51,7 +51,7 @@ func TestExporterCredentials_RefusesSPIFFEWithoutASocket(t *testing.T) {
 	t.Parallel()
 	_, err := exporterCredentials(Config{
 		Endpoint:      "collector:4317",
-		SPIFFEServers: []string{"spiffe://zeroroot.ai/ns/observability/sa/collector"},
+		SPIFFEServers: []string{"spiffe://example.org/ns/observability/sa/collector"},
 	})
 	if err == nil {
 		t.Fatal("SPIFFE mode with no Workload API socket: want a startup error, got nil")
