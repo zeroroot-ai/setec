@@ -178,6 +178,12 @@ type SandboxSnapshotSpec struct {
 	// +optional
 	TTL *metav1.Duration `json:"ttl,omitempty"`
 
+	// Forkable lets other Sandboxes of the same namespace start from the
+	// Snapshot: the forks of setec#195. Each fork loads the state with a
+	// new identity, new randomness and its own writable layer.
+	// +optional
+	Forkable bool `json:"forkable,omitempty"`
+
 	// Parent names an earlier Ready Snapshot of this Sandbox, taken from
 	// its current Pod. The new Snapshot is then a diff: it holds only the
 	// memory that changed since the parent. Only a launcher Sandbox takes

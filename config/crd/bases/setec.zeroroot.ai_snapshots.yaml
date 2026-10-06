@@ -73,6 +73,12 @@ spec:
                   CPUTemplate is the CPU template of the class at the time of the
                   snapshot. A restore needs a class with the same template.
                 type: string
+              forkable:
+                description: |-
+                  Forkable lets a Sandbox of the same namespace other than the source
+                  start from this Snapshot (setec#195). The namespace is the one owner
+                  pair, so a fork loads only for the owner of the Snapshot.
+                type: boolean
               imageRef:
                 description: |-
                   ImageRef is the OCI reference the source Sandbox was running at

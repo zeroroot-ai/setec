@@ -512,6 +512,12 @@ spec:
                       one-shot operation — once the Snapshot CR is Ready, further
                       reconciles of the Sandbox do not re-snapshot.
                     type: boolean
+                  forkable:
+                    description: |-
+                      Forkable lets other Sandboxes of the same namespace start from the
+                      Snapshot: the forks of setec#195. Each fork loads the state with a
+                      new identity, new randomness and its own writable layer.
+                    type: boolean
                   name:
                     description: |-
                       Name is the name given to the resulting Snapshot CR. Must be a

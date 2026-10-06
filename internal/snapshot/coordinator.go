@@ -255,6 +255,7 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	snap := c.newSnapshotCR(ctx, sb, pod.Spec.NodeName)
 	snap.Annotations = map[string]string{setecv1alpha1.SnapshotSourcePodUIDAnnotation: string(pod.UID)}
 	snap.Spec.Parent = sb.Spec.Snapshot.Parent
+	snap.Spec.Forkable = sb.Spec.Snapshot.Forkable
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// Someone raced us. Return the sentinel so the reconciler
@@ -474,7 +475,7 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 	// another — invariants 1/3/4 all fail — so outside dev-mode it is
 	// refused BEFORE any state is loaded into the target VM.
 	cls := c.classOf(ctx, sb)
-	bound := snap.Spec.SourceSandbox == sb.Name || c.isCleanBase(snap)
+	bound := snap.Spec.SourceSandbox == sb.Name || c.isCleanBase(snap) || isOwnFork(sb, snap)
 	preflight := gate.Evidence{
 		CleanBase:          bound,
 		EntropyReseeded:    true, // verified post-RPC
@@ -1005,4 +1006,11 @@ func ttlFrom(ttl *metav1.Duration) *metav1.Duration {
 	}
 	out := *ttl
 	return &out
+}
+
+// isOwnFork reports whether sb is a fork of a forkable Snapshot of its own
+// namespace (setec#195). The namespace is one owner pair, so the state
+// stays with its owner, and each fork gets a new identity and randomness.
+func isOwnFork(sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot) bool {
+	return snap.Spec.Forkable && snap.Namespace == sb.Namespace && snap.Spec.SourceSandbox != ""
 }

@@ -18,6 +18,7 @@ service SandboxService {
   rpc Kill(KillRequest) returns (KillResponse);
   rpc Suspend(SuspendRequest) returns (SuspendResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
+  rpc Fork(ForkRequest) returns (ForkResponse);
   rpc Attach(AttachRequest) returns (AttachResponse);
   rpc Exec(stream SandboxServiceExecRequest) returns (stream SandboxServiceExecResponse);
 }
@@ -412,6 +413,21 @@ The session runs again only after the isolation checks pass.
   Sandbox goes with its checkpoint, its key and its workspace.
 - Both calls are idempotent. Each takes `sandbox_id` and `tenant`, as
   `Kill` does.
+
+## Fork a sandbox (`Fork`)
+
+`Fork` takes a snapshot of a running launcher sandbox and starts `count`
+sandboxes from it (1 to 32). Each fork gets a new identity, new
+randomness and its own writable layer, so no fork sees a change of
+another fork.
+
+- Each fork gets the `network` of the request, or the default of the
+  class. It never gets the network of the source.
+- Only the owner of the source forks it: the snapshot loads only in the
+  namespace of its owner pair.
+- The snapshot is deleted `snapshot_ttl_seconds` after the fork (one hour
+  by default), once no fork still needs it.
+- A session does not fork: its workspace belongs to one sandbox.
 
 ## Streaming logs
 

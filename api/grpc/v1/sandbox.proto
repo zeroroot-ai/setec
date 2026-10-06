@@ -59,6 +59,14 @@ service SandboxService {
   // it too. A resume of a running session succeeds.
   rpc Resume(ResumeRequest) returns (ResumeResponse);
 
+  // Fork takes a snapshot of a running launcher sandbox and starts count
+  // sandboxes from it (setec#195). Each fork gets a new identity, new
+  // randomness and its own writable layer, and the network that this
+  // request gives, never the network of the source. Only the owner of
+  // the source can fork it. The snapshot is deleted after
+  // snapshot_ttl_seconds once no fork still needs it.
+  rpc Fork(ForkRequest) returns (ForkResponse);
+
   // Attach resolves a session handle (the sandbox_id returned by
   // Launch) to its live session so a caller that disconnected — or a
   // caller talking to a restarted frontend — can reattach and continue
@@ -551,3 +559,25 @@ message ResumeRequest {
 }
 
 message ResumeResponse {}
+
+// ForkRequest names the source sandbox and the forks to start.
+message ForkRequest {
+  string sandbox_id = 1;
+  // tenant names the tenant of the enrolled client cluster that owns the
+  // sandbox, as in KillRequest.
+  string tenant = 2;
+  // count is the number of forks, 1 to 32.
+  uint32 count = 3;
+  // network is the network of each fork. Empty takes the default of the
+  // class. The network of the source is never copied.
+  Network network = 4;
+  // snapshot_ttl_seconds is the lifetime of the snapshot. Zero takes one
+  // hour.
+  int64 snapshot_ttl_seconds = 5;
+}
+
+// ForkResponse names the snapshot and the forks.
+message ForkResponse {
+  string snapshot = 1;
+  repeated string sandbox_ids = 2;
+}

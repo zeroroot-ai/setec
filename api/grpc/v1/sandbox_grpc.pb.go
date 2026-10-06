@@ -33,6 +33,7 @@ const (
 	SandboxService_Kill_FullMethodName       = "/setec.v1.SandboxService/Kill"
 	SandboxService_Suspend_FullMethodName    = "/setec.v1.SandboxService/Suspend"
 	SandboxService_Resume_FullMethodName     = "/setec.v1.SandboxService/Resume"
+	SandboxService_Fork_FullMethodName       = "/setec.v1.SandboxService/Fork"
 	SandboxService_Attach_FullMethodName     = "/setec.v1.SandboxService/Attach"
 	SandboxService_Exec_FullMethodName       = "/setec.v1.SandboxService/Exec"
 )
@@ -82,6 +83,13 @@ type SandboxServiceClient interface {
 	// An Attach or an Exec on a session that suspended for idleness resumes
 	// it too. A resume of a running session succeeds.
 	Resume(ctx context.Context, in *ResumeRequest, opts ...grpc.CallOption) (*ResumeResponse, error)
+	// Fork takes a snapshot of a running launcher sandbox and starts count
+	// sandboxes from it (setec#195). Each fork gets a new identity, new
+	// randomness and its own writable layer, and the network that this
+	// request gives, never the network of the source. Only the owner of
+	// the source can fork it. The snapshot is deleted after
+	// snapshot_ttl_seconds once no fork still needs it.
+	Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (*ForkResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -237,6 +245,16 @@ func (c *sandboxServiceClient) Resume(ctx context.Context, in *ResumeRequest, op
 	return out, nil
 }
 
+func (c *sandboxServiceClient) Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (*ForkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForkResponse)
+	err := c.cc.Invoke(ctx, SandboxService_Fork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sandboxServiceClient) Attach(ctx context.Context, in *AttachRequest, opts ...grpc.CallOption) (*AttachResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AttachResponse)
@@ -305,6 +323,13 @@ type SandboxServiceServer interface {
 	// An Attach or an Exec on a session that suspended for idleness resumes
 	// it too. A resume of a running session succeeds.
 	Resume(context.Context, *ResumeRequest) (*ResumeResponse, error)
+	// Fork takes a snapshot of a running launcher sandbox and starts count
+	// sandboxes from it (setec#195). Each fork gets a new identity, new
+	// randomness and its own writable layer, and the network that this
+	// request gives, never the network of the source. Only the owner of
+	// the source can fork it. The snapshot is deleted after
+	// snapshot_ttl_seconds once no fork still needs it.
+	Fork(context.Context, *ForkRequest) (*ForkResponse, error)
 	// Attach resolves a session handle (the sandbox_id returned by
 	// Launch) to its live session so a caller that disconnected — or a
 	// caller talking to a restarted frontend — can reattach and continue
@@ -408,6 +433,9 @@ func (UnimplementedSandboxServiceServer) Suspend(context.Context, *SuspendReques
 }
 func (UnimplementedSandboxServiceServer) Resume(context.Context, *ResumeRequest) (*ResumeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Resume not implemented")
+}
+func (UnimplementedSandboxServiceServer) Fork(context.Context, *ForkRequest) (*ForkResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Fork not implemented")
 }
 func (UnimplementedSandboxServiceServer) Attach(context.Context, *AttachRequest) (*AttachResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Attach not implemented")
@@ -537,6 +565,24 @@ func _SandboxService_Resume_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_Fork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).Fork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_Fork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).Fork(ctx, req.(*ForkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SandboxService_Attach_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AttachRequest)
 	if err := dec(in); err != nil {
@@ -588,6 +634,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Resume",
 			Handler:    _SandboxService_Resume_Handler,
+		},
+		{
+			MethodName: "Fork",
+			Handler:    _SandboxService_Fork_Handler,
 		},
 		{
 			MethodName: "Attach",
