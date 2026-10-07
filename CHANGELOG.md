@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.126.0](https://github.com/zeroroot-ai/setec/compare/v0.125.0...v0.126.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* the --tls-cert, --tls-key, --tls-client-ca and --nodeagent-tls-* flags and the chart values credentials.mode, frontend.tlsCertSecretName, frontend.tlsClientCASecretName and snapshots.mTLS are removed. Each install needs a SPIRE agent.
+
+### Features
+
+* end-phase integration of setec ([#249](https://github.com/zeroroot-ai/setec/issues/249)) ([31caa04](https://github.com/zeroroot-ai/setec/commit/31caa048bfe93b2b3a2cd42782582dc95009f51c))
+
 ## [0.125.0](https://github.com/zeroroot-ai/setec/compare/v0.124.0...v0.125.0) (2026-10-06)
 
 
