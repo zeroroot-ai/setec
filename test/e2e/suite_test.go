@@ -24,7 +24,7 @@ limitations under the License.
 // Every file in this package carries the `e2e` build tag so that
 // `go test ./...` never compiles or runs these tests. The suite is intended
 // to run only on a cluster whose nodes expose /dev/kvm. See
-// .github/workflows/e2e.yml.
+// .github/workflows/exit-test-launcher.yml.
 //
 // The suite installs the charts/setec Helm chart into a throwaway namespace,
 // runs the scenarios against real Firecracker machines in launcher Pods, and then
@@ -1209,7 +1209,7 @@ func snapshotsEnabled() bool {
 // The cost of skipping is stated out loud rather than left implicit: a run
 // that skips CRDs exercises the CLUSTER's CRD schema, not this PR's. A PR
 // that changes an API type is not covered by such a run. That caveat was
-// already true and already documented in .github/workflows/e2e.yml; what was
+// already true and already documented in .github/workflows/exit-test-launcher.yml; what was
 // missing is anything that says so at the point it applies.
 func crdInstallArgs() []string {
 	out, err := exec.Command("kubectl", "get", "crd",

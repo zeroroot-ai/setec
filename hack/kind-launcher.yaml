@@ -1,4 +1,4 @@
-# kind topology for the Go e2e suite (.github/workflows/e2e.yml, job
+# kind topology for the Go e2e suite (.github/workflows/exit-test-launcher.yml, job
 # `launcher`, setec#197).
 #
 # The job runs on a GitHub-hosted ubuntu-latest runner, which exposes

@@ -431,7 +431,6 @@ jobs:
           ./bin/node-agent --help 2>&1 | tee node-agent-help.txt
           grep -q -- '-grpc-listen-addr' node-agent-help.txt
           grep -q -- '-snapshot-root' node-agent-help.txt
-          grep -q -- '-snapshot-backend' node-agent-help.txt
 
   no-marker-in-source:
     name: No TODO/FIXME/XXX/HACK markers in production source

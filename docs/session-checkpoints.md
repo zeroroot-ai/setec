@@ -18,7 +18,7 @@ and today only one of them has a CI job.
 `TestSession_ReattachByHandle` needs a session-mode Sandbox with a
 workspace PVC and an in-process `frontend.Service`. It needs no bucket
 and no node-agent. It runs in the `suites` job of
-`.github/workflows/e2e.yml`, on a kind cluster inside a GitHub-hosted
+`.github/workflows/exit-test-launcher.yml`, on a kind cluster inside a GitHub-hosted
 runner with nested KVM.
 
 The two checkpoint scenarios had a `session-checkpoint` job that ran on

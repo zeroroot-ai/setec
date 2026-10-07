@@ -24,7 +24,7 @@
 # takes tens of minutes, so it does not gate a merge (exit tests run on main
 # and on a schedule, never on a pull request).
 
-name: e2e
+name: exit-test-launcher
 
 on:
   workflow_dispatch:

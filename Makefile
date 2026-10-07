@@ -86,7 +86,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # skipped from `make test` and `go test ./...` on GitHub-hosted runners (which
 # have no KVM). Run `make e2e` against a cluster whose nodes expose /dev/kvm,
 # with the SETEC_E2E_LAUNCHER_* and SETEC_E2E_DISK_REPO environment set. See
-# test/e2e/ for the suite and .github/workflows/e2e.yml for the CI wiring.
+# test/e2e/ for the suite and .github/workflows/exit-test-launcher.yml for the CI wiring.
 
 # Timeout for the full suite. Each scenario waits up to a few minutes for the
 # microVM to boot/exit; the aggregate budget is tuned for a warm host.
