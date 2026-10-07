@@ -14,12 +14,12 @@ import (
 
 // pauseClass builds a SandboxClass with the given maxPauseDuration
 // pointer (nil = knob absent).
-func pauseClass(max *time.Duration) *setecv1alpha1.SandboxClass {
+func pauseClass(maxPause *time.Duration) *setecv1alpha1.SandboxClass {
 	cls := &setecv1alpha1.SandboxClass{
 		Name: "pause-class",
 	}
-	if max != nil {
-		cls.Spec.MaxPauseDuration = &metav1.Duration{Duration: *max}
+	if maxPause != nil {
+		cls.Spec.MaxPauseDuration = &metav1.Duration{Duration: *maxPause}
 	}
 	return cls
 }

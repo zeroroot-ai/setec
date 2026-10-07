@@ -22,7 +22,7 @@ func TestSandboxClassWebhook_ValidateMaxPauseDuration(t *testing.T) {
 	t.Parallel()
 
 	mk := func(max *metav1.Duration) *setecv1alpha1.SandboxClass {
-		cls := mkSandboxClass("mpd", "", mkRuntime(setecruntime.BackendKataFC))
+		cls := mkSandboxClass("mpd", mkRuntime(setecruntime.BackendLauncher))
 		cls.Spec.MaxPauseDuration = max
 		return cls
 	}
@@ -58,7 +58,7 @@ func TestSandboxClassWebhook_ValidateMaxPauseDuration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
+			w := classWebhook(t)
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
 				if err == nil {

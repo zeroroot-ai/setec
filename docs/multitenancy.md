@@ -65,9 +65,9 @@ Sandbox stays `Pending` until the quota frees up; the operator never
 throws away the CR.
 
 The quota is the second control. The first is the limit of each Sandbox
-(ADR-0146): memory at most `64Gi` in the API, a scratch volume of `10Gi`
+([lifecycles](design/lifecycles.md#limits), [storage](design/storage.md#scratch)): memory at most `64Gi` in the API, a scratch volume of `10Gi`
 by default, and an ephemeral-storage limit of the scratch size plus
-`1Gi`. A SandboxClass changes the scratch values with
+`3Gi`. A SandboxClass changes the scratch values with
 `defaultResources.scratch` and `maxResources.scratch`, and lowers the
 memory ceiling with `maxResources.memory`. The limits stop one Sandbox.
 The quota stops a tenant that starts many. Add
@@ -267,16 +267,10 @@ rather than against the manifests.
 `SandboxClass` is a cluster-scoped resource administrators author once
 and tenants reference by name. A class carries:
 
-- `runtime.backend`, `runtime.fallback`, `runtime.params`: runtime backend
-  selection — `kata-fc`, `kata-qemu`, `gvisor`, or `runc` (dev-only) —
-  plus an optional fallback chain. `runtime.params` is backend-specific
-  tuning that only `kata-qemu` consumes (`vcpus` and `memory`); the
-  webhook refuses params named for a backend that reads none. The
-  legacy `vmm` + `runtimeClassName` fields are accepted for
-  back-compat and translated by the defaulting webhook. See
+- `runtime.backend`: `launcher` or empty. setec has one backend: each
+  Sandbox is a Firecracker machine in a launcher Pod
+  (`docs/design/runtime.md`). The webhook refuses each other name. See
   [`crd-reference.md`](./crd-reference.md#sandboxclass) for the full schema.
-- `kernelImage`, `rootfsImage`: image overrides for kata-fc / kata-qemu
-  backends (ignored for gvisor and runc).
 - `defaultResources`, `maxResources`: per-Sandbox resource ceilings.
 - `allowedNetworkModes`: the subset of `Network.mode` values the
   class permits. Checked against the *effective* mode, so a Sandbox that
@@ -304,7 +298,7 @@ metadata:
   name: standard
 spec:
   runtime:
-    backend: kata-fc
+    backend: launcher
   maxResources:
     vcpu: 4
     memory: 8Gi

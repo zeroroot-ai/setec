@@ -41,12 +41,12 @@ import (
 // workspaceStorageClassEnv, when set, names the StorageClass every
 // session-lifecycle scenario provisions its workspace PVC from.
 //
-// The suite's session class pins backend=kata-fc only, and kata-fc
-// provisions its workspace PVC as volumeMode: Block (setec#91):
+// A launcher session provisions its workspace PVC as volumeMode: Block
+// (setec#91):
 // Firecracker has no virtio-fs, so a filesystem-mode PVC's writes never
 // reach the guest's writes back. kind's default StorageClass
 // (rancher.io/local-path) cannot provision a Block-mode PVC, so the
-// `suites` job wires a dedicated block-capable StorageClass and points
+// launcher job wires a dedicated block-capable StorageClass and points
 // every session scenario at it via this variable. Empty (any run
 // outside that job) falls back to the cluster default StorageClass —
 // unchanged pre-setec#91 behavior.
@@ -102,7 +102,7 @@ func sessionClassName() string { return "e2e-session-" + testNamespace }
 func installSessionClass(t *testing.T) {
 	t.Helper()
 	cls := newSandboxClass(sessionClassName(), setecv1alpha1.SandboxClassSpec{
-		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: sessionBackend()},
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
 	})
 	if err := k8sClient.Create(context.Background(), cls); err != nil {
 		t.Fatalf("create session SandboxClass %q: %v", cls.Name, err)
@@ -112,21 +112,12 @@ func installSessionClass(t *testing.T) {
 	})
 }
 
-// sessionBackend is the backend of the session class: the launcher on the
-// launcher backend, else the kata-fc RuntimeClass name.
-func sessionBackend() string {
-	if onLauncher() {
-		return backendLauncher
-	}
-	return kataRuntimeClass
-}
-
 // podLogs returns the workload container logs of the named Pod via
 // kubectl, consistent with the harness's other cluster inspection.
 func podLogs(t *testing.T, podName string) string {
 	t.Helper()
 	out, err := exec.Command("kubectl", "logs", podName, "-n", sandboxNamespace,
-		"-c", workloadContainer()).CombinedOutput()
+		"-c", launcherContainer).CombinedOutput()
 	if err != nil {
 		t.Logf("kubectl logs %s: %v (output: %s)", podName, err, out)
 	}

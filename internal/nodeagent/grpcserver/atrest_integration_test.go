@@ -6,14 +6,18 @@ package grpcserver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
+	"time"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	"github.com/zeroroot-ai/setec/internal/firecracker"
+	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
+	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
@@ -28,33 +32,44 @@ import (
 // fake Firecracker writes into the snapshot.
 var guestSecret = bytes.Repeat([]byte("INTEGRATION-GUEST-SECRET-"), 128)
 
-// capturingFC writes guestSecret at CreateSnapshot and captures the
-// plaintext it is handed back at LoadSnapshot.
+// capturingFC writes guestSecret at CreateSnapshot.
 type capturingFC struct {
-	mu       sync.Mutex
-	restored []byte
-	// root is where the fake resolves the paths it is handed, as a
-	// jailed Firecracker resolves them inside its chroot.
+	// root is the work volume of the launcher Pod on the host. The fake
+	// maps the paths that Firecracker sees in the Pod to it.
 	root string
+}
+
+func (f *capturingFC) host(p string) string {
+	return filepath.Join(f.root, strings.TrimPrefix(p, podspec.LauncherWorkMountPath))
 }
 
 func (f *capturingFC) Pause(context.Context) error  { return nil }
 func (f *capturingFC) Resume(context.Context) error { return nil }
 func (f *capturingFC) CreateSnapshot(_ context.Context, state, mem string) error {
-	if err := os.WriteFile(filepath.Join(f.root, state), []byte("STATE-HEADER"), 0o600); err != nil {
+	if err := os.WriteFile(f.host(state), []byte("STATE-HEADER"), 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(f.root, mem), guestSecret, 0o600)
+	return os.WriteFile(f.host(mem), guestSecret, 0o600)
 }
-func (f *capturingFC) LoadSnapshot(_ context.Context, _, mem string) error {
-	b, err := os.ReadFile(filepath.Join(f.root, mem))
-	if err != nil {
-		return err
-	}
-	f.mu.Lock()
-	f.restored = b
-	f.mu.Unlock()
-	return nil
+
+// launcherReadingMemory plays the launcher of one restore: it waits for
+// the staged marker, reads the staged memory and confirms the guest.
+func launcherReadingMemory(t *testing.T, p launchersandbox.Paths) <-chan []byte {
+	t.Helper()
+	got := make(chan []byte, 1)
+	go func() {
+		for range 500 {
+			if _, err := os.Stat(launchersandbox.HostPath(p, podspec.LauncherRestoreStaged)); err == nil {
+				b, _ := os.ReadFile(launchersandbox.HostPath(p, podspec.LauncherRestoreMemory))
+				got <- b
+				raw, _ := json.Marshal(podspec.RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true})
+				_ = os.WriteFile(launchersandbox.HostPath(p, podspec.LauncherRestoreEvidence), raw, 0o600)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	return got
 }
 
 // grepDir reports whether needle occurs in any regular file under
@@ -100,7 +115,7 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 	srv := &Server{
 		Storage:            backend,
 		FirecrackerFactory: func(_ string) firecracker.Client { return fc },
-		KataSandboxes:      fakeKata{root: fc.root},
+		Machines:           fakeMachine{root: fc.root},
 	}
 	ctx := context.Background()
 
@@ -126,6 +141,11 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 
 	// 3. The legitimate restore path still recovers the exact guest
 	// memory (decryption through the sealed per-snapshot DEK).
+	p, err := srv.Machines.Resolve(ctx, testPodUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := launcherReadingMemory(t, p)
 	rresp, err := srv.RestoreSandbox(ctx, &setecgrpcv1.RestoreSandboxRequest{
 		SnapshotId:   "ns-snap",
 		StorageRef:   resp.GetStorageRef(),
@@ -134,9 +154,11 @@ func TestSnapshotAtRest_UnreadableWithoutKeyAndGoneAfterTeardown(t *testing.T) {
 	if err != nil || !rresp.GetSuccess() {
 		t.Fatalf("RestoreSandbox: %v / %+v", err, rresp)
 	}
-	if !bytes.Equal(fc.restored, guestSecret) {
+	if !bytes.Equal(<-restored, guestSecret) {
 		t.Fatal("restore did not recover the original guest memory")
 	}
+	_ = os.Remove(launchersandbox.HostPath(p, podspec.LauncherRestoreStaged))
+	_ = os.Remove(launchersandbox.HostPath(p, podspec.LauncherRestoreEvidence))
 
 	// 4. Destroy ONLY the key: the ciphertext is still on disk, but
 	// the artifact must be unreadable — cryptographically erased.

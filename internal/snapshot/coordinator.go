@@ -40,8 +40,6 @@ type NodeAgentClient interface {
 	RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error)
 	PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error)
 	ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error)
-	QueryPool(ctx context.Context, in *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error)
-	ClaimPoolEntry(ctx context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error)
 	DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error)
 }
 
@@ -119,8 +117,6 @@ const (
 	EventReasonNodeAgentUnreachable   = "NodeAgentUnreachable"
 	EventReasonSnapshotNameConflict   = "SnapshotNameConflict"
 	EventReasonSnapshotNodeGone       = "SnapshotNodeGone"
-	EventReasonWarmStartRestored      = "WarmStartRestored"
-	EventReasonWarmStartColdBoot      = "WarmStartColdBoot"
 	// EventReasonInvariantGateViolation is the typed reason surfaced
 	// when the docs/design/isolation.md invariant gate refuses a restore/resume: one
 	// or more per-restore invariant verifications did not pass and no
@@ -132,31 +128,6 @@ const (
 	// invariant verifications. Deliberately loud: dev-mode is an
 	// auditable exception, not a quiet default.
 	EventReasonUnverifiedRestoreAllowed = "UnverifiedRestoreAllowed"
-)
-
-// WarmStartOutcome classifies the result of a pool warm-start attempt.
-// The values are bounded so they can double as metric label values.
-type WarmStartOutcome string
-
-const (
-	// WarmStartRestored: a pool entry was claimed and its state
-	// restored into the Sandbox's kata-fc Pod.
-	WarmStartRestored WarmStartOutcome = "restored"
-	// WarmStartMiss: no compatible pool entry existed on the
-	// Sandbox's node; the Sandbox continues its cold boot.
-	WarmStartMiss WarmStartOutcome = "miss"
-	// WarmStartError: an entry was claimed but the restore failed, or
-	// the node-agent was unreachable; the Sandbox continues its cold
-	// boot.
-	WarmStartError WarmStartOutcome = "error"
-	// WarmStartRejected: the restore itself succeeded node-side but
-	// the docs/design/isolation.md invariant gate refused to serve it — at least one
-	// per-restore invariant verification did not pass and no dev-mode
-	// opt-out is active. Unlike every other failure mode this does NOT
-	// fall back to cold boot: the Sandbox's VM already holds the
-	// unverified restored state, so the caller must destroy the
-	// Sandbox.
-	WarmStartRejected WarmStartOutcome = "rejected"
 )
 
 // actionRecordSnapshotPhase is the action constant for events emitted
@@ -180,6 +151,48 @@ var ErrSnapshotNameConflict = errors.New("snapshot: name already in use in names
 // restored state, so the sandbox is destroyed, never retried into
 // service.
 var ErrInvariantGateViolation = errors.New("snapshot: docs/design/isolation.md invariant gate refused the restore")
+
+// checkNameFree returns ErrSnapshotNameConflict, with an Event, when a
+// Snapshot with the requested name exists.
+func (c *Coordinator) checkNameFree(ctx context.Context, sb *setecv1alpha1.Sandbox) error {
+	existing := &setecv1alpha1.Snapshot{}
+	err := c.Client.Get(ctx, types.NamespacedName{
+		Namespace: sb.Namespace,
+		Name:      sb.Spec.Snapshot.Name,
+	}, existing)
+	switch {
+	case err == nil:
+		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotNameConflict,
+			fmt.Sprintf("snapshot %q already exists in namespace %q", sb.Spec.Snapshot.Name, sb.Namespace))
+		return ErrSnapshotNameConflict
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("coordinator: get existing Snapshot: %w", err)
+	}
+	return nil
+}
+
+// applyKept sets up a kept Snapshot and returns its backend and the key of
+// its tenant. Any other Snapshot keeps the default backend and no key.
+func (c *Coordinator) applyKept(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, parentRef string,
+) (backend string, kek []byte, err error) {
+	backend = c.backendName()
+	if !sb.Spec.Snapshot.Kept {
+		return backend, nil, nil
+	}
+	if parentRef != "" {
+		return "", nil, errors.New("coordinator: a kept snapshot is a full snapshot, not a diff")
+	}
+	if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
+		return "", nil, err
+	}
+	snap.Spec.Kept = true
+	snap.Spec.StorageBackend = KeptBackend
+	if snap.Spec.TTL == nil {
+		snap.Spec.TTL = &metav1.Duration{Duration: DefaultKeptTTL}
+	}
+	return KeptBackend, kek, nil
+}
 
 // CreateSnapshot pauses the source sandbox, delegates snapshot
 // persistence to the node-agent, and creates a Snapshot CR on
@@ -205,20 +218,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 
 	// 1. Detect name conflicts. We do this first so we can fail fast
 	//    before touching the source VM.
-	existing := &setecv1alpha1.Snapshot{}
-	err := c.Client.Get(ctx, types.NamespacedName{
-		Namespace: sb.Namespace,
-		Name:      sb.Spec.Snapshot.Name,
-	}, existing)
-	switch {
-	case err == nil:
-		c.emit(sb, corev1.EventTypeWarning, EventReasonSnapshotNameConflict,
-			fmt.Sprintf("snapshot %q already exists in namespace %q", sb.Spec.Snapshot.Name, sb.Namespace))
-		setSpanErr(span, "name conflict")
-		return ErrSnapshotNameConflict
-	case !apierrors.IsNotFound(err):
+	if err := c.checkNameFree(ctx, sb); err != nil {
 		setSpanErr(span, err.Error())
-		return fmt.Errorf("coordinator: get existing Snapshot: %w", err)
+		return err
 	}
 
 	// 2. Resolve the node-agent for the Sandbox's pod. The node name is
@@ -266,20 +268,9 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	// A kept Snapshot goes to the S3-compatible store, sealed with the key
 	// of its tenant, and lives 30 days unless the request sets a TTL or a
 	// person pins it (setec#196).
-	backend, kek := c.backendName(), []byte(nil)
-	if sb.Spec.Snapshot.Kept {
-		if parentRef != "" {
-			return fmt.Errorf("coordinator: a kept snapshot is a full snapshot, not a diff")
-		}
-		if kek, err = c.TenantKEK(ctx, sb.Namespace); err != nil {
-			return err
-		}
-		backend = KeptBackend
-		snap.Spec.Kept = true
-		snap.Spec.StorageBackend = backend
-		if snap.Spec.TTL == nil {
-			snap.Spec.TTL = &metav1.Duration{Duration: DefaultKeptTTL}
-		}
+	backend, kek, err := c.applyKept(ctx, sb, snap, parentRef)
+	if err != nil {
+		return err
 	}
 	if err := c.Client.Create(ctx, snap); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -345,7 +336,6 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	original := snap.DeepCopy()
 	snap.Spec.StorageRef = resp.GetStorageRef()
 	snap.Spec.Size = resp.GetSizeBytes()
-	snap.Spec.SHA256 = resp.GetSha256()
 	if err := c.Client.Patch(ctx, snap, client.MergeFrom(original)); err != nil {
 		// The state is on disk but the CR does not say where. Leaving it
 		// Creating would be a lie in the safe direction; Ready without a
@@ -402,20 +392,12 @@ func (c *Coordinator) diffParent(ctx context.Context, sb *setecv1alpha1.Sandbox,
 
 // newSnapshotCR builds the Snapshot CR for a sandbox snapshot request.
 // Everything it fills is knowable before the storage write: the node is
-// the Pod's node, and the VMM comes from the resolved class.
-//
-// VMM is populated from the resolved class when possible so the CRD enum
-// validation is satisfied. Callers using the bare sandbox (no class)
-// fall back to Firecracker, matching Phase 3's supported-VMM default.
+// the Pod's node, and the CPU template comes from the resolved class.
 func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandbox, nodeName string) *setecv1alpha1.Snapshot {
-	vmm := setecv1alpha1.VMMFirecracker
 	cpuTemplate := ""
 	if sb.Spec.SandboxClassName != "" {
 		cls := &setecv1alpha1.SandboxClass{}
 		if gerr := c.Client.Get(ctx, types.NamespacedName{Name: sb.Spec.SandboxClassName}, cls); gerr == nil {
-			if cls.Spec.VMM != "" { //nolint:staticcheck // back-compat: VMM retained until v2
-				vmm = cls.Spec.VMM //nolint:staticcheck // back-compat: VMM retained until v2
-			}
 			cpuTemplate = cls.Spec.CPUTemplate
 		}
 	}
@@ -433,7 +415,6 @@ func (c *Coordinator) newSnapshotCR(ctx context.Context, sb *setecv1alpha1.Sandb
 			SourceSandbox:  sb.Name,
 			SandboxClass:   className,
 			ImageRef:       sb.Spec.Image,
-			VMM:            vmm,
 			TTL:            ttlFrom(sb.Spec.Snapshot.TTL),
 			StorageBackend: c.backendName(),
 			Node:           nodeName,
@@ -530,22 +511,10 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		return fmt.Errorf("coordinator: %w: %s", ErrInvariantGateViolation, msg)
 	}
 
-	pod, err := c.getPod(ctx, sb)
+	pod, err := c.restoreTarget(ctx, sb, snap)
 	if err != nil {
 		setSpanErr(span, err.Error())
 		return err
-	}
-	if pod.Spec.NodeName == "" {
-		setSpanErr(span, "pod not scheduled")
-		return fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
-	}
-	// A snapshot on the local disk of a node loads on that node only. A
-	// snapshot in the S3-compatible store loads on any node.
-	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
-	if local && pod.Spec.NodeName != snap.Spec.Node {
-		setSpanErr(span, "node mismatch")
-		return fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
-			snap.Spec.Node, pod.Spec.NodeName)
 	}
 
 	var restoreKEK []byte
@@ -616,6 +585,15 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 			fmt.Sprintf("DEV-MODE OPT-OUT: serving restore of snapshot %q despite %s", snap.Name, decision.String()))
 	}
 
+	c.emitRestored(sb, snap, pod, resp)
+	c.recordDuration("restore", sb, time.Since(start))
+	return nil
+}
+
+// emitRestored emits the Events of a restore that passed the gate.
+func (c *Coordinator) emitRestored(
+	sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, pod *corev1.Pod, resp *setecgrpcv1.RestoreSandboxResponse,
+) {
 	c.emit(sb, corev1.EventTypeNormal, EventReasonSnapshotRestoreStarted,
 		fmt.Sprintf("restored sandbox from snapshot %q on node %q", snap.Name, pod.Spec.NodeName))
 	// Surface the node-agent's active entropy-reseed confirmation
@@ -635,145 +613,25 @@ func (c *Coordinator) RestoreSandbox(ctx context.Context, sb *setecv1alpha1.Sand
 		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
 			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (snapshot %q)", snap.Name))
 	}
-	c.recordDuration("restore", sb, time.Since(start))
-	return nil
 }
 
-// WarmStartFromPool attempts the docs/design/lifecycles.md declarative warm start for
-// an ephemeral Sandbox whose class maintains a pre-warm pool: it dials
-// the node-agent on the Sandbox Pod's node and asks it to claim a pool
-// entry and restore the paused-VM state into the Pod's Firecracker
-// socket.
-//
-// The method NEVER returns an error — every failure mode (unscheduled
-// pod, unreachable node-agent, empty pool, failed restore) resolves to
-// a cold-boot fallback, which is the acceptance contract of setec#188:
-// a restore failure must not fail the Sandbox. The returned outcome +
-// entry id are for status/metrics; Events are emitted here.
-//
-// The ONE exception is the docs/design/isolation.md invariant gate: when the node
-// reports a successful restore whose per-restore invariant
-// verifications did not all pass, cold boot is no longer safe — the
-// Pod's VM already holds the unverified restored state — so the
-// outcome is WarmStartRejected and the caller MUST destroy the
-// Sandbox.
-func (c *Coordinator) WarmStartFromPool(
-	ctx context.Context,
-	sb *setecv1alpha1.Sandbox,
-	cls *setecv1alpha1.SandboxClass,
-) (WarmStartOutcome, string) {
-	ctx, span := c.startSpan(ctx, "snapshot.WarmStartFromPool")
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("setec.sandbox", sb.Namespace+"/"+sb.Name),
-		attribute.String("setec.class", cls.Name),
-	)
-	start := time.Now()
-
-	fallback := func(reason string) (WarmStartOutcome, string) {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
-			fmt.Sprintf("warm-start unavailable, continuing cold boot: %s", reason))
-		setSpanErr(span, reason)
-		c.recordWarmStart(WarmStartError, cls.Name)
-		return WarmStartError, ""
-	}
-
+// restoreTarget is the scheduled Pod that loads snap. A snapshot on the
+// local disk of a node loads on that node only. A snapshot in the
+// S3-compatible store loads on any node.
+func (c *Coordinator) restoreTarget(ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot) (*corev1.Pod, error) {
 	pod, err := c.getPod(ctx, sb)
 	if err != nil {
-		return fallback(err.Error())
+		return nil, err
 	}
 	if pod.Spec.NodeName == "" {
-		return fallback("pod not scheduled")
+		return nil, fmt.Errorf("coordinator: Pod %q has no NodeName; restore requires a scheduled pod", pod.Name)
 	}
-	na, dialErr := c.Dialer.Dial(ctx, pod.Spec.NodeName)
-	if dialErr != nil {
-		return fallback(fmt.Sprintf("dial node-agent on %q: %v", pod.Spec.NodeName, dialErr))
+	local := snap.Spec.StorageBackend == "" || snap.Spec.StorageBackend == "local-disk"
+	if local && pod.Spec.NodeName != snap.Spec.Node {
+		return nil, fmt.Errorf("coordinator: snapshot lives on %q but Pod is on %q; restore must run on the snapshot's node",
+			snap.Spec.Node, pod.Spec.NodeName)
 	}
-
-	resp, rpcErr := na.ClaimPoolEntry(ctx, &setecgrpcv1.ClaimPoolEntryRequest{
-		SandboxClass: cls.Name,
-		ImageRef:     cls.Spec.PreWarmImage,
-		TargetPodUid: string(pod.UID),
-		SandboxId:    sb.Namespace + "/" + sb.Name,
-		PodIp:        pod.Status.PodIP,
-		Hostname:     sb.Name,
-	})
-	switch {
-	case rpcErr != nil:
-		return fallback(fmt.Sprintf("ClaimPoolEntry RPC: %v", rpcErr))
-	case !resp.GetClaimed():
-		c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartColdBoot,
-			fmt.Sprintf("no pre-warmed pool entry for class %q on node %q; continuing cold boot",
-				cls.Name, pod.Spec.NodeName))
-		c.recordWarmStart(WarmStartMiss, cls.Name)
-		return WarmStartMiss, ""
-	case !resp.GetSuccess():
-		return fallback(fmt.Sprintf("pool entry %q restore failed: %s", resp.GetEntryId(), resp.GetError()))
-	}
-
-	// docs/design/isolation.md invariant gate — the single decision point between "the
-	// node restored state into this Pod" and "the Sandbox is served".
-	// Evidence: invariant 1 from the node's clean-base attestation
-	// (the entry's recorded secret-scan verdict, digest-matched
-	// against this restore's decrypted artifacts — independent of
-	// invariant 4's provenance evidence, setec#206); invariants 4/5
-	// from the provenance/encryption attestations; invariant 2 from
-	// the reseed + uniquification confirmations; invariant 3 holds
-	// structurally on this path (the entry was consumed by this one
-	// claim — a pool entry is never restored twice — and the
-	// controller attempts warm-start at most once per Sandbox,
-	// stamped in status.warmStart).
-	ev := gate.Evidence{
-		CleanBase:          resp.GetCleanBaseVerified(),
-		EntropyReseeded:    resp.GetEntropyReseeded(),
-		IdentityUniquified: resp.GetUniquified(),
-		SingleSession:      true,
-		ProvenanceVerified: resp.GetProvenanceVerified(),
-		EncryptedAtRest:    resp.GetEncryptedAtRest(),
-	}
-	decision, gateErr := c.Gate.Decide(ctx, cls, ev)
-	if !decision.Allowed {
-		msg := c.gateRefusalMsg(fmt.Sprintf("pool entry %q", resp.GetEntryId()), decision, gateErr)
-		if _, pauseErr := na.PauseSandbox(ctx, &setecgrpcv1.PauseSandboxRequest{
-			SandboxId:    sb.Namespace + "/" + sb.Name,
-			TargetPodUid: string(pod.UID),
-		}); pauseErr != nil {
-			msg += fmt.Sprintf("; additionally failed to pause the unverified VM: %v", pauseErr)
-		}
-		c.emit(sb, corev1.EventTypeWarning, EventReasonInvariantGateViolation, msg)
-		setSpanErr(span, msg)
-		c.recordWarmStart(WarmStartRejected, cls.Name)
-		c.recordDuration("warmstart", sb, time.Since(start))
-		return WarmStartRejected, resp.GetEntryId()
-	}
-	if decision.DevOptOut {
-		c.emit(sb, corev1.EventTypeWarning, EventReasonUnverifiedRestoreAllowed,
-			fmt.Sprintf("DEV-MODE OPT-OUT: serving warm start from pool entry %q despite %s",
-				resp.GetEntryId(), decision.String()))
-	}
-
-	c.emit(sb, corev1.EventTypeNormal, EventReasonWarmStartRestored,
-		fmt.Sprintf("warm-started from pool entry %q on node %q", resp.GetEntryId(), pod.Spec.NodeName))
-	if resp.GetEntropyReseeded() {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonEntropyReseeded,
-			fmt.Sprintf("restored guest CSPRNG reseeded with fresh entropy (pool entry %q)", resp.GetEntryId()))
-	}
-	if resp.GetUniquified() {
-		c.emit(sb, corev1.EventTypeNormal, EventReasonSandboxUniquified,
-			fmt.Sprintf("restored guest identity uniquified: fresh machine-id/boot-id/hostname, Pod IP verified, vsock CID unique (pool entry %q)", resp.GetEntryId()))
-	}
-	c.recordWarmStart(WarmStartRestored, cls.Name)
-	c.recordDuration("warmstart", sb, time.Since(start))
-	return WarmStartRestored, resp.GetEntryId()
-}
-
-// recordWarmStart increments the warm-start outcome counter when
-// metrics are enabled.
-func (c *Coordinator) recordWarmStart(outcome WarmStartOutcome, class string) {
-	if c.Metrics == nil {
-		return
-	}
-	c.Metrics.IncWarmStart(string(outcome), class)
+	return pod, nil
 }
 
 // Pause invokes the node-agent Firecracker pause RPC.

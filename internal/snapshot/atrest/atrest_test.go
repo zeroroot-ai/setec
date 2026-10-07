@@ -6,9 +6,7 @@ package atrest
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -207,52 +205,6 @@ func TestLoadOrCreateKEK_RejectsLooseModes(t *testing.T) {
 	}
 	if _, err := LoadOrCreateKEK(path); err == nil {
 		t.Fatal("world-readable keyfile must be rejected")
-	}
-}
-
-func TestEncryptFile_ReplacesPlaintextInPlace(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.bin")
-	marker := bytes.Repeat([]byte("TOPSECRET-GUEST-MEMORY-"), 100)
-	if err := os.WriteFile(path, marker, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dek := mustDEK(t)
-	if err := EncryptFile(path, dek); err != nil {
-		t.Fatalf("EncryptFile: %v", err)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(raw, []byte("TOPSECRET")) {
-		t.Fatal("encrypted file still contains plaintext marker")
-	}
-	if !bytes.HasPrefix(raw, []byte(streamMagic)) {
-		t.Fatal("encrypted file missing stream magic")
-	}
-	// No stray temp files.
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
-		t.Fatalf("expected exactly 1 file in dir, got %d", len(entries))
-	}
-	// Roundtrip through DecryptFile, which also reports the plaintext
-	// digest for verdict checks (docs/design/isolation.md invariant 1).
-	out := filepath.Join(dir, "plain.bin")
-	digest, err := DecryptFile(path, out, dek)
-	if err != nil {
-		t.Fatalf("DecryptFile: %v", err)
-	}
-	got, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, marker) {
-		t.Fatal("DecryptFile roundtrip mismatch")
-	}
-	want := sha256.Sum256(marker)
-	if digest != hex.EncodeToString(want[:]) {
-		t.Fatalf("DecryptFile digest = %s, want SHA-256 of the plaintext", digest)
 	}
 }
 

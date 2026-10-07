@@ -4,7 +4,6 @@
 package controller
 
 import (
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -24,8 +23,8 @@ import (
 // this emulates is otherwise absent in envtest.
 // nodeName is fixed: every caller binds to the same fixture node.
 func bindPodToNode(t *testing.T, pod *corev1.Pod) {
-	const nodeName = "kata-node-1"
 	t.Helper()
+	const nodeName = "fleet-node-1"
 	binding := &corev1.Binding{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
@@ -46,7 +45,7 @@ func newPhase3Sandbox(name, ns string, mutators ...func(*setecv1alpha1.Sandbox))
 	sb := &setecv1alpha1.Sandbox{
 		Name: name, Namespace: ns,
 		Spec: setecv1alpha1.SandboxSpec{
-			Image:   "alpine:3.19",
+			Image:   testImage,
 			Command: []string{"sh"},
 			Resources: setecv1alpha1.Resources{
 				VCPU:   1,
@@ -170,9 +169,7 @@ func TestPhase3_SnapshotCreateHappyPath(t *testing.T) {
 	// the class validator to reject mismatches elsewhere.
 	cls := &setecv1alpha1.SandboxClass{
 		Name: "p3-std-" + ns,
-		Spec: setecv1alpha1.SandboxClassSpec{
-			VMM: setecv1alpha1.VMMFirecracker,
-		},
+		Spec: setecv1alpha1.SandboxClassSpec{},
 	}
 	g.Expect(testClient.Create(testCtx, cls)).To(gomega.Succeed())
 	t.Cleanup(func() { _ = testClient.Delete(testCtx, cls) })
@@ -227,7 +224,7 @@ func TestSnapshotFinalizer_BlocksDeleteWhileReferenced(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "snap-1", Node: "node-a",
 		},
 	}
@@ -290,7 +287,7 @@ func TestSnapshotFinalizer_AllowsDeleteWhenFree(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "solo",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "solo", Node: "node-a",
 		},
 	}
@@ -328,7 +325,7 @@ func TestSnapshotTTL_TriggersDelete(t *testing.T) {
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-3 * time.Second)), // not actually settable; see below
 		},
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "ephemeral", Node: "node-a",
 			TTL: &metav1.Duration{Duration: 1 * time.Second},
 		},
@@ -341,9 +338,6 @@ func TestSnapshotTTL_TriggersDelete(t *testing.T) {
 		err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "ephemeral"}, got)
 		return err != nil // fully deleted
 	}, 90*time.Second, 1*time.Second).Should(gomega.BeTrue(), "Snapshot should be deleted by TTL")
-
-	// Housekeeping.
-	_ = fmt.Sprintf("ns=%s", ns)
 }
 
 // TestSnapshotPhase_TerminatingWhileFinalizerHeld is the Terminating
@@ -366,7 +360,7 @@ func TestSnapshotPhase_TerminatingWhileFinalizerHeld(t *testing.T) {
 	snap := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "term-1",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", StorageRef: "term-1", Node: "node-a",
 		},
 	}
@@ -435,7 +429,7 @@ func TestSnapshotCreate_FailedSnapshotDoesNotRunAfterCreate(t *testing.T) {
 	failed := &setecv1alpha1.Snapshot{
 		Namespace: ns, Name: "snap-failed",
 		Spec: setecv1alpha1.SnapshotSpec{
-			SandboxClass: "standard", ImageRef: "img:v1", VMM: setecv1alpha1.VMMFirecracker,
+			SandboxClass: "standard", ImageRef: "img:v1",
 			StorageBackend: "local-disk", Node: "node-a",
 			// No storageRef: the write never completed.
 		},

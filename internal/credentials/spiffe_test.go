@@ -36,24 +36,9 @@ const (
 )
 
 // ---------------------------------------------------------------------
-// Mode selection. These are the silent-failure cases: SPIFFE mode is
-// only worth having if it cannot be half-configured into something
-// weaker than the file mode it replaces.
+// Configuration. These are the silent-failure cases: the source must
+// not be half-configured into something that accepts every peer.
 // ---------------------------------------------------------------------
-
-func TestNew_BothSourcesConfigured(t *testing.T) {
-	t.Parallel()
-	_, err := credentials.New(credentials.Config{
-		Files:  &credentials.FileSource{CertFile: "c.pem", KeyFile: "k.pem", CAFile: "ca.pem"},
-		SPIFFE: &credentials.SPIFFESource{SocketPath: "/run/api.sock", AuthorizedIDs: []string{callerID}},
-	})
-	if err == nil {
-		t.Fatal("New with both sources: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "exactly one") {
-		t.Fatalf("error = %q, want it to name the conflict", err)
-	}
-}
 
 func TestNew_IncompleteSPIFFESource(t *testing.T) {
 	t.Parallel()
@@ -89,7 +74,7 @@ func TestNew_IncompleteSPIFFESource(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := credentials.New(credentials.Config{SPIFFE: &tc.src})
+			_, err := credentials.New(tc.src)
 			if err == nil {
 				t.Fatalf("New(%+v): want error, got nil", tc.src)
 			}
@@ -106,10 +91,10 @@ func TestNew_CompleteSPIFFESource(t *testing.T) {
 	// socket and one full SPIFFE ID is accepted, and accepted without
 	// touching the socket, which is what lets a component decide its
 	// configuration is coherent before it decides it can boot.
-	if _, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+	if _, err := credentials.New(credentials.SPIFFESource{
 		SocketPath:    filepath.Join(t.TempDir(), "absent.sock"),
 		AuthorizedIDs: []string{callerID},
-	}}); err != nil {
+	}); err != nil {
 		t.Fatalf("New with a complete SPIFFE source: %v", err)
 	}
 }
@@ -216,8 +201,8 @@ func TestSPIFFEServerCredentials_RefusesPeerWithoutSPIFFEID(t *testing.T) {
 	addr := serveHealthSPIFFE(t, api.addr, callerID)
 
 	// A perfectly ordinary cert-manager-shaped client certificate from
-	// the trusted CA. In file mode this peer is accepted; in SPIFFE
-	// mode it has no identity to authorize.
+	// the trusted CA. It has no SPIFFE ID, so it has no identity to
+	// authorize.
 	dir := t.TempDir()
 	certPath, keyPath := ca.issue(t, dir, "client", clientLeaf)
 	keypair, err := tls.LoadX509KeyPair(certPath, keyPath)
@@ -287,7 +272,7 @@ func TestSPIFFESource_RotationFailureSurfaces(t *testing.T) {
 	api := startWorkloadAPI(t, newCA(t))
 
 	reported := make(chan error, 8)
-	p, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+	p, err := credentials.New(credentials.SPIFFESource{
 		SocketPath:    api.addr,
 		AuthorizedIDs: []string{callerID},
 		OnRotationError: func(err error) {
@@ -296,7 +281,7 @@ func TestSPIFFESource_RotationFailureSurfaces(t *testing.T) {
 			default:
 			}
 		},
-	}})
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -331,11 +316,11 @@ func TestSPIFFESource_RotationFailureSurfaces(t *testing.T) {
 
 func mustSPIFFEProvider(t *testing.T, socket string, authorized ...string) *credentials.Provider {
 	t.Helper()
-	p, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+	p, err := credentials.New(credentials.SPIFFESource{
 		SocketPath:      socket,
 		AuthorizedIDs:   authorized,
 		OnRotationError: testReporter(t),
-	}})
+	})
 	if err != nil {
 		t.Fatalf("New(SPIFFE %s): %v", socket, err)
 	}
@@ -585,7 +570,7 @@ func eventually(t *testing.T, budget time.Duration, fn func() error) {
 }
 
 // TestSPIFFEServerCredentials_FederatedClientDomain is the federation test of
-// setec#169 (ADR-0164). The fleet runs in its own trust domain. An enrolled
+// setec#169 (docs/frontend-api.md, Authentication). The fleet runs in its own trust domain. An enrolled
 // client from a second domain connects with the bundle that federation
 // delivers. A caller from a third domain is refused, with its own CA and
 // with the CA of the federated domain.
@@ -618,11 +603,11 @@ func TestSPIFFEServerCredentials_EnrolledDomainWithoutBundle(t *testing.T) {
 	fleetCA, clientCA := newCA(t), newCA(t)
 	api := startWorkloadAPI(t, fleetCA)
 	enrolled := "spiffe://b.example/ns/gibson/sa/gibson-daemon"
-	p, err := credentials.New(credentials.Config{SPIFFE: &credentials.SPIFFESource{
+	p, err := credentials.New(credentials.SPIFFESource{
 		SocketPath:      api.addr,
 		AuthorizedIDs:   []string{callerID, enrolled},
 		OnRotationError: func(error) {},
-	}})
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

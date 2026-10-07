@@ -35,11 +35,14 @@ func TestFrontendScope_OnlyPairNamespacesAndTheirGrants(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred(), "this test renders the chart and needs helm on PATH")
 	var out bytes.Buffer
 	cmd := exec.Command(helm, "template", "setec", filepath.Join("..", "..", "charts", "setec"), //nolint:gosec // fixed arguments
+		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "frontend.enabled=true",
-		"--set", "frontend.tlsCertSecretName=x", "--set", "frontend.tlsClientCASecretName=y",
+		"--set", "credentials.spiffe.trustDomain=example.org",
 		"--set", "frontend.clients[0].name=saas",
 		"--set", "frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon",
+		"--set", "systemPolicy.frontendCallers[0].namespace=gibson",
+		"--set", `systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon`,
 		"--show-only", "templates/frontend-scope-policy.yaml")
 	cmd.Stdout = &out
 	g.Expect(cmd.Run()).To(Succeed())

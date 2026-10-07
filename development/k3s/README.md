@@ -1,8 +1,8 @@
-# Local k3s + Kata + Setec dev environment
+# Local k3s + Setec dev environment
 
-Single-host bring-up of Setec (with real Firecracker microVMs via Kata Containers) on bare-metal Debian, suitable for local integration testing. Detailed walk-through is in [README full doc](#detailed-walk-through) below.
+Single-host bring-up of Setec (each Sandbox a real Firecracker microVM in a launcher Pod) on bare-metal Debian, suitable for local integration testing. Detailed walk-through is in [README full doc](#detailed-walk-through) below.
 
-> **Production this is not.** PKI is a self-signed dev CA, the cluster is single-node, and operator + sandbox workloads co-locate. For production / multi-tenant / scheduled-uptime patterns see `setec-eks-dev-env`.
+> **Production this is not.** SPIRE runs with the dev trust domain `dev.local`, the cluster is single-node, and operator + sandbox workloads co-locate. For production / multi-tenant / scheduled-uptime patterns see `setec-eks-dev-env`.
 
 ## TL;DR
 
@@ -11,7 +11,6 @@ Single-host bring-up of Setec (with real Firecracker microVMs via Kata Container
 make up
 
 # Verify each phase:
-make smoke-kata             # microVM boots
 make smoke-setec            # Setec works end-to-end
 make smoke-cross-cluster    # Pod-in-Kind can reach Setec-on-k3s over mTLS
 make smoke-integration      # Gibson dispatches a tool through Setec (requires Phase D wiring)
@@ -39,25 +38,25 @@ make down
 ./scripts/00-preflight.sh
 ```
 
-### Phase 1 — k3s + Kata
+### Phase 1 — k3s and the disk registry
 
 `scripts/10-install-k3s.sh` installs k3s as a single-node systemd unit with Traefik disabled (we ship our own ingress nothing for this dev cluster) and exports a kubeconfig at `kubeconfig/`, with the API server URL rewritten to your host's primary LAN IP so the kubeconfig works from the Kind cluster's container network too.
 
-`scripts/20-install-kata.sh` installs `kata-deploy` (Helm) into `kube-system`, waits for the DaemonSet, and verifies the `kata-fc` RuntimeClass appears. The kata release it installs comes from `kata.env` at the repo root, the one place the pin is edited (setec#26).
+`scripts/20-install-disk-registry.sh` starts a local OCI registry on the host LAN IP, port 5000, and writes a k3s `registries.yaml` entry so containerd pulls from it over HTTP. The disk builder pushes each signed image disk there, and each launcher Pod mounts its disk as an image volume. k3s is 1.35 or later, because image volumes need it.
 
-`make smoke-kata` runs a one-shot Pod with `runtimeClassName: kata-fc` and asserts the kernel string differs from the host kernel — proving real microVM boot, not silent runc fallback.
+`scripts/40-install-setec.sh` makes a dev ed25519 disk signing key under `pki/`, stores its seed in the Secret `setec-disk-signing`, and passes the public key to the chart. The KVM device plugin of the chart offers `/dev/kvm` and `/dev/net/tun` to the launcher Pods.
 
 ### Phase 2 — Setec install
 
-`scripts/30-generate-pki.sh` produces a dev CA under `pki/` plus a server cert (CN `setec-frontend.setec-system.svc`, with SANs covering the LAN IP, `host.docker.internal`, and loopback) and a client cert (CN `gibson-dev`).
+`scripts/30-install-spire.sh` installs SPIRE (the hardened charts, at the versions that the platform pins) with the trust domain `dev.local`. setec has one credential source, the SPIFFE Workload API: the frontend, the node-agent and the operator take their SVIDs from the SPIRE agent on the node. The script then runs `scripts/35-mint-client-svid.sh`, which mints the SVID of the dev client `spiffe://dev.local/ns/gibson/sa/gibson-daemon` into `pki/` (`client.crt`, `client.key` and the trust bundle `ca.crt`). An SVID lives a few hours, so each smoke script mints a fresh one.
 
 `scripts/40-install-setec.sh` creates two namespaces:
 - `setec-system` (privileged PSS) — Setec operator + frontend
-- `gibson-dev` (the tenant namespace) — labeled `setec.zeroroot.ai/client=dev` and `setec.zeroroot.ai/tenant=gibson-dev`. The dev client certificate carries the SPIFFE ID of the enrolled client `dev`, and a request with tenant `gibson-dev` resolves to this namespace.
+- `gibson-dev` (the tenant namespace) — labeled `setec.zeroroot.ai/client=dev` and `setec.zeroroot.ai/tenant=gibson-dev`. The dev client SVID carries the SPIFFE ID of the enrolled client `dev`, and a request with tenant `gibson-dev` resolves to this namespace.
 
-It then materialises the TLS Secret and runs `helm upgrade --install setec ../../charts/setec -f values-local.yaml`. A NodePort wrapper Service is applied separately at `manifests/setec-nodeport.yaml` (the Setec chart does not yet expose a NodePort knob; we keep this concern out of the chart and bolt it on via a sibling Service in dev only).
+It then runs `helm upgrade --install setec ../../charts/setec -f values-local.yaml`. A NodePort wrapper Service is applied separately at `manifests/setec-nodeport.yaml` (the Setec chart does not yet expose a NodePort knob; we keep this concern out of the chart and bolt it on via a sibling Service in dev only).
 
-`make smoke-setec` invokes the existing `examples/ai-code-exec` client from your host with the dev client cert, launches a `python:3.12-slim` sandbox printing `hello from microvm`, asserts exit code 0.
+`make smoke-setec` invokes the existing `examples/ai-code-exec` client from your host with the dev client SVID, and checks the SPIFFE ID of the frontend instead of a hostname. It launches a `python:3.12-slim` sandbox printing `hello from microvm`, asserts exit code 0.
 
 ### Phase 3 — Cross-cluster reachability
 
@@ -82,7 +81,7 @@ kind create cluster --config helm/kind-config.yaml --name gibson
 
 > **CLAUDE.md compliance:** this patch is documented but not auto-applied. GitOps-driven; you apply it.
 
-After the Kind cluster has `host-gateway`, `make smoke-cross-cluster` applies the dev client TLS Secret to the Gibson namespace and runs a tiny Job that dials Setec end-to-end. **Zero Gibson code involved** — this isolates the network/auth path from any Gibson integration.
+After the Kind cluster has `host-gateway`, `make smoke-cross-cluster` applies the dev client SVID as a Secret to the Gibson namespace and runs a tiny Job that dials Setec end-to-end. **Zero Gibson code involved** — this isolates the network/auth path from any Gibson integration.
 
 ### Phase 4 — Gibson integration
 
@@ -99,17 +98,17 @@ development/k3s/
 ├── manifests/
 │   ├── setec-nodeport.yaml          # NodePort wrapper Service (port 30051)
 │   └── gibson-kind/
-│       ├── setec-client-tls.yaml.tpl   # template; bash wrapper substitutes PKI bytes
+│       ├── setec-client-tls.yaml.tpl   # template; bash wrapper substitutes the SVID bytes
 │       └── setec-smoke-job.yaml     # cross-cluster smoke Job (Phase 3)
-├── pki/                             # dev CA + certs (gitignored)
+├── pki/                             # dev client SVID + disk signing key (gitignored)
 ├── kubeconfig                       # k3s kubeconfig (gitignored)
 └── scripts/                         # numbered for ordering
     ├── 00-preflight.sh
     ├── 10-install-k3s.sh
-    ├── 20-install-kata.sh
-    ├── 30-generate-pki.sh
+    ├── 20-install-disk-registry.sh
+    ├── 30-install-spire.sh
+    ├── 35-mint-client-svid.sh
     ├── 40-install-setec.sh
-    ├── 50-smoke-kata.sh
     ├── 60-smoke-setec.sh
     ├── 65-smoke-cross-cluster.sh
     ├── 70-smoke-integration.sh
@@ -119,9 +118,10 @@ development/k3s/
 ## Cleanup
 
 `make down` runs `scripts/99-uninstall.sh` which:
-1. `helm uninstall setec` and `helm uninstall kata-deploy` (best-effort)
+1. `helm uninstall setec` (best-effort)
 2. Runs `/usr/local/bin/k3s-uninstall.sh` (the official k3s uninstaller)
-3. Removes `pki/` and `kubeconfig` from the working tree
+3. Stops the disk registry container
+4. Removes `pki/`, `kubeconfig` and `disk-repo` from the working tree
 
 After `make down` the host is in its pre-install state and the Gibson Kind cluster is unaffected.
 
@@ -131,7 +131,7 @@ After `make down` the host is in its pre-install state and the Gibson Kind clust
 |-----------------|--------------------------------------|------------------------------------------|
 | Cluster nodes   | dedicated bare-metal sandbox pool    | single shared node                       |
 | Operator schedu | system pool (taint-isolated)         | co-located on the only node              |
-| TLS material    | SPIRE-issued                         | self-signed dev CA under `pki/`          |
+| TLS material    | SPIRE-issued                         | SPIRE-issued, trust domain `dev.local`   |
 | Frontend expose | LB + DNS + Let's Encrypt             | NodePort 30051 (no DNS, no public TLS)   |
 | Tenancy         | per-customer namespace               | single tenant `gibson-dev`               |
 

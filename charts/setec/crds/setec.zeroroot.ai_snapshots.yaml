@@ -99,12 +99,6 @@ spec:
                   key of its tenant, loaded only by a review Sandbox, deleted after
                   its TTL (30 days by default) unless Pinned.
                 type: boolean
-              kernelVersion:
-                description: |-
-                  KernelVersion is the guest kernel version used by the source
-                  sandbox at snapshot time. Mismatches between snapshot and
-                  restore-target kernels cause the Validator to reject the restore.
-                type: string
               node:
                 description: |-
                   Node is the name of the node holding the state files. Sandboxes
@@ -130,12 +124,6 @@ spec:
                   reference the same class; the snapshot.Validator enforces the
                   match.
                 minLength: 1
-                type: string
-              sha256:
-                description: |-
-                  SHA256 is the hex-encoded SHA256 digest of the persisted state
-                  file, written alongside the state on disk and verified on
-                  restore. Populated by the operator; must not be edited.
                 type: string
               size:
                 description: |-
@@ -180,21 +168,11 @@ spec:
                   SnapshotReconciler deletes it. When unset, snapshots live until
                   explicitly deleted or garbage-collected by namespace deletion.
                 type: string
-              vmm:
-                description: |-
-                  VMM is the virtual machine monitor the snapshot is compatible
-                  with. Cross-VMM restore is not supported.
-                enum:
-                - firecracker
-                - qemu
-                - cloud-hypervisor
-                type: string
             required:
             - imageRef
             - node
             - sandboxClass
             - storageBackend
-            - vmm
             type: object
           status:
             description: status reflects the observed state of the Snapshot.

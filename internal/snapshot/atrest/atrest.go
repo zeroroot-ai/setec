@@ -44,15 +44,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,7 +100,7 @@ func NewDEK() ([]byte, error) {
 // does not exist. A keyfile that is group- or world-accessible is
 // rejected rather than silently used.
 func LoadOrCreateKEK(path string) ([]byte, error) {
-	if b, err := os.ReadFile(path); err == nil {
+	if b, err := os.ReadFile(filepath.Clean(path)); err == nil {
 		if len(b) != KeySize {
 			return nil, fmt.Errorf("atrest: keyfile %q has %d bytes, want %d", path, len(b), KeySize)
 		}
@@ -126,7 +125,7 @@ func LoadOrCreateKEK(path string) ([]byte, error) {
 	}
 	// O_EXCL: if two processes race the create, exactly one wins and
 	// the loser re-reads the winner's key.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return LoadOrCreateKEK(path)
@@ -199,12 +198,12 @@ func Encrypt(dst io.Writer, src io.Reader, dek []byte) (int64, error) {
 	n, err := dst.Write([]byte(streamMagic))
 	written += int64(n)
 	if err != nil {
-		return written, err
+		return written, errwrap.Wrap(err, "io.Writer.Write")
 	}
 	n, err = dst.Write(prefix)
 	written += int64(n)
 	if err != nil {
-		return written, err
+		return written, errwrap.Wrap(err, "io.Writer.Write")
 	}
 
 	br := bufio.NewReaderSize(src, chunkSize)
@@ -228,16 +227,16 @@ func Encrypt(dst io.Writer, src io.Reader, dek []byte) (int64, error) {
 		}
 
 		ct := aead.Seal(nil, chunkNonce(prefix, counter, final), pt, nil)
-		binary.BigEndian.PutUint32(lenBuf, uint32(len(ct)))
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(ct))) //nolint:gosec // G115: a sealed chunk is one chunk size plus the tag
 		n, err = dst.Write(lenBuf)
 		written += int64(n)
 		if err != nil {
-			return written, err
+			return written, errwrap.Wrap(err, "io.Writer.Write")
 		}
 		n, err = dst.Write(ct)
 		written += int64(n)
 		if err != nil {
-			return written, err
+			return written, errwrap.Wrap(err, "io.Writer.Write")
 		}
 		if final {
 			return written, nil
@@ -351,77 +350,6 @@ func chunkNonce(prefix []byte, counter uint32, final bool) []byte {
 	return nonce
 }
 
-// EncryptFile replaces the plaintext file at path with its encrypted
-// form: the ciphertext is written to a sibling temp file, fsynced, the
-// plaintext is zero-overwritten and unlinked, and the temp file is
-// renamed into place. On any error the plaintext file is left intact.
-func EncryptFile(path string, dek []byte) error {
-	src, err := os.Open(path) //nolint:gosec // path is node-agent controlled, not attacker input
-	if err != nil {
-		return fmt.Errorf("atrest: open %q: %w", path, err)
-	}
-	tmp := path + ".enc.tmp"
-	dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // sibling of node-agent controlled path
-	if err != nil {
-		_ = src.Close()
-		return fmt.Errorf("atrest: create %q: %w", tmp, err)
-	}
-	_, encErr := Encrypt(dst, src, dek)
-	if serr := dst.Sync(); encErr == nil {
-		encErr = serr
-	}
-	if cerr := dst.Close(); encErr == nil {
-		encErr = cerr
-	}
-	_ = src.Close()
-	if encErr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("atrest: encrypt %q: %w", path, encErr)
-	}
-	// Plaintext existed on disk; zero it before unlink so residual
-	// bytes are not trivially recoverable, then move the ciphertext in.
-	if err := Shred(path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("atrest: shred plaintext %q: %w", path, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("atrest: rename %q: %w", tmp, err)
-	}
-	return nil
-}
-
-// DecryptFile streams the encrypted file at src into a plaintext file
-// at dst (0600) and returns the lowercase-hex SHA-256 of the plaintext,
-// computed in the same pass. Used by restore paths that must hand
-// Firecracker a plaintext state file; the digest lets them check the
-// recovered bytes against a recorded verdict (e.g. the pool entry's
-// secret-scan record, docs/design/isolation.md invariant 1) without a second read.
-func DecryptFile(src, dst string, dek []byte) (string, error) {
-	in, err := os.Open(src) //nolint:gosec // node-agent controlled path
-	if err != nil {
-		return "", fmt.Errorf("atrest: open %q: %w", src, err)
-	}
-	defer func() { _ = in.Close() }()
-	dr, err := NewDecryptingReader(in, dek)
-	if err != nil {
-		return "", err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // node-agent controlled path
-	if err != nil {
-		return "", fmt.Errorf("atrest: create %q: %w", dst, err)
-	}
-	h := sha256.New()
-	_, cpErr := io.Copy(io.MultiWriter(out, h), dr)
-	if cerr := out.Close(); cpErr == nil {
-		cpErr = cerr
-	}
-	if cpErr != nil {
-		_ = os.Remove(dst)
-		return "", fmt.Errorf("atrest: decrypt %q: %w", src, cpErr)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // Shred zero-overwrites the data of the file at path (single pass),
 // fsyncs, and unlinks it. Only the data extents are overwritten: a hole of
 // a sparse file holds no data, and overwriting it would write the whole
@@ -434,12 +362,12 @@ func DecryptFile(src, dst string, dek []byte) (string, error) {
 func Shred(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.Stat")
 	}
 	if size := info.Size(); size > 0 {
 		f, err := os.OpenFile(path, os.O_WRONLY, 0o600) //nolint:gosec // node-agent controlled path
 		if err != nil {
-			return err
+			return errwrap.Wrap(err, "os.OpenFile")
 		}
 		if err := zeroData(f, size); err != nil {
 			_ = f.Close()
@@ -447,13 +375,13 @@ func Shred(path string) error {
 		}
 		if err := f.Sync(); err != nil {
 			_ = f.Close()
-			return err
+			return errwrap.Wrap(err, "os.File.Sync")
 		}
 		if err := f.Close(); err != nil {
-			return err
+			return errwrap.Wrap(err, "os.File.Close")
 		}
 	}
-	return os.Remove(path)
+	return errwrap.Wrap(os.Remove(path), "os.Remove")
 }
 
 // zeroData writes zeros over each data extent of f. A file system with no
@@ -464,7 +392,7 @@ func zeroData(f *os.File, size int64) error {
 		for off < end {
 			n, err := f.WriteAt(buf[:min(end-off, int64(len(buf)))], off)
 			if err != nil {
-				return err
+				return errwrap.Wrap(err, "os.File.WriteAt")
 			}
 			off += int64(n)
 		}
@@ -503,7 +431,7 @@ func readFull(r io.Reader, buf []byte) ([]byte, error) {
 	if errors.Is(err, io.EOF) {
 		return nil, io.EOF
 	}
-	return buf[:n], err
+	return buf[:n], errwrap.Wrap(err, "io.ReadFull")
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {

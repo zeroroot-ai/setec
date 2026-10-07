@@ -17,24 +17,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/limits"
 	"github.com/zeroroot-ai/setec/internal/runtime"
 )
-
-// defaultAllowDevLabel is the namespace label key that gates dev-only runtimes
-// such as runc. Operators may override it via SandboxClassWebhook.AllowDevLabel.
-const defaultAllowDevLabel = "setec.zeroroot.ai/allow-dev-runtimes"
-
-// devGateNamespace is the cluster-level namespace consulted for the dev-only
-// runtime gate. SandboxClass is cluster-scoped and therefore has no namespace of
-// its own; a well-known namespace carries the cluster operator's intent. Using
-// "default" is conventional and avoids introducing a custom cluster-scoped
-// sentinel resource.
-const devGateNamespace = "default"
 
 // +kubebuilder:webhook:path=/mutate-setec-zeroroot-ai-v1alpha1-sandboxclass,mutating=true,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=msandboxclass.setec.zeroroot.ai,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-setec-zeroroot-ai-v1alpha1-sandboxclass,mutating=false,failurePolicy=fail,sideEffects=None,groups=setec.zeroroot.ai,resources=sandboxclasses,verbs=create;update,versions=v1alpha1,name=vsandboxclass.setec.zeroroot.ai,admissionReviewVersions=v1
@@ -42,92 +32,41 @@ const devGateNamespace = "default"
 // SandboxClassWebhook implements both the defaulting and validating admission
 // webhooks for v1alpha1.SandboxClass. It is registered once per manager and
 // acts as:
-//   - a mutating webhook that fills Runtime.Backend from the legacy VMM field
-//     when Runtime is nil (defaulting, REQ-6.1).
-//   - a validating webhook that enforces backend enablement (REQ-4.2) and the
-//     dev-only namespace gate for runc (REQ-4.3).
+//   - a mutating webhook that sets Runtime.Backend to the one backend, the
+//     launcher, when the class names none.
+//   - a validating webhook that refuses a removed backend with the reason,
+//     and checks the coherence of the network, pool, session and resource
+//     fields.
 //
-// RuntimeCfg is a snapshot taken at operator startup. The webhook does not
-// live-reload it; a rolling restart is required to pick up Helm value changes.
-//
-// The construction site in cmd/main.go MUST NOT pass a nil RuntimeCfg. If
-// RuntimeConfig loading fails, cmd/main.go should call os.Exit before
-// constructing this struct. Passing nil RuntimeCfg causes a nil-pointer panic
-// on the first admission call, which surfaces the mis-wiring early rather than
-// silently admitting everything.
-//
-// The dev-only gate for runc (REQ-4.3) is enforced by fetching a well-known
-// namespace (devGateNamespace, "default") and checking for the AllowDevLabel.
-// Cluster operators signal cluster-wide dev-runtime consent by labeling that
-// namespace; a SandboxClass requesting runc without the label present is
-// rejected.
-type SandboxClassWebhook struct {
-	// Client is a controller-runtime reader used to fetch the gate namespace for
-	// dev-only backend checks. Required.
-	Client client.Client
-
-	// RuntimeCfg is the operator-wide runtime configuration loaded at startup.
-	// Must not be nil; the webhook panics on the first admission call if nil.
-	RuntimeCfg *runtime.RuntimeConfig
-
-	// AllowDevLabel is the namespace label key checked when a dev-only backend
-	// (e.g. runc) is requested. Defaults to defaultAllowDevLabel when empty.
-	AllowDevLabel string
-}
-
-// allowDevLabel returns the effective label key, falling back to the package
-// constant when the field is empty.
-func (w *SandboxClassWebhook) allowDevLabel() string {
-	if w.AllowDevLabel != "" {
-		return w.AllowDevLabel
-	}
-	return defaultAllowDevLabel
-}
+// It reads no other object, so it holds no client.
+type SandboxClassWebhook struct{}
 
 // Compile-time interface assertions. A broken refactor produces a build error
 // rather than a runtime admission failure.
 var _ admission.Defaulter[*setecv1alpha1.SandboxClass] = (*SandboxClassWebhook)(nil)
 var _ admission.Validator[*setecv1alpha1.SandboxClass] = (*SandboxClassWebhook)(nil)
 
-// Default implements admission.Defaulter[*SandboxClass]. It fills
-// Spec.Runtime.Backend from the legacy Spec.VMM field when Runtime is nil, so
-// existing SandboxClass manifests without a Runtime block continue to behave
-// correctly after an operator upgrade. Calling Default twice on the same
-// object is idempotent — the second call detects Runtime != nil and returns
-// without modification (REQ-6.1, Error Handling scenario 7).
+// Default implements admission.Defaulter[*SandboxClass]. A class with no
+// Runtime gets the one backend. Calling Default twice is idempotent.
 func (w *SandboxClassWebhook) Default(_ context.Context, class *setecv1alpha1.SandboxClass) error {
-	// Idempotency guard: if Runtime is already set, do not overwrite it.
 	if class.Spec.Runtime != nil {
 		return nil
 	}
-
-	backend := ""
-	switch class.Spec.VMM { //nolint:staticcheck // back-compat: VMM retained until v2
-	case setecv1alpha1.VMMFirecracker:
-		backend = runtime.BackendKataFC
-	case setecv1alpha1.VMMQEMU:
-		backend = runtime.BackendKataQEMU
-	default:
-		// VMM is also unset or an unrecognized value — fall back to the
-		// cluster-default backend from Helm values.
-		backend = w.RuntimeCfg.Defaults.Runtime.Backend
-	}
-
-	class.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: backend}
+	class.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: runtime.BackendLauncher}
 	return nil
 }
 
 // ValidateCreate implements admission.Validator[*SandboxClass] for creates
 // (REQ-4.2, REQ-4.3, Error Handling scenario 3).
 func (w *SandboxClassWebhook) ValidateCreate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
-	return w.validate(ctx, class)
+	return w.validate(class)
 }
 
 // ValidateUpdate implements admission.Validator[*SandboxClass] for updates.
 // The same rules that apply to creation apply to mutation: a class cannot be
-// updated to reference a disabled or ungated backend.
+// updated to name a removed backend.
 func (w *SandboxClassWebhook) ValidateUpdate(ctx context.Context, _, newClass *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
-	return w.validate(ctx, newClass)
+	return w.validate(newClass)
 }
 
 // ValidateDelete implements admission.Validator[*SandboxClass]. Deletion is
@@ -138,7 +77,7 @@ func (w *SandboxClassWebhook) ValidateDelete(_ context.Context, _ *setecv1alpha1
 
 // validate is the shared create/update path. It aggregates all field errors so
 // users see every violation at once rather than playing whack-a-mole.
-func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
+func (w *SandboxClassWebhook) validate(class *setecv1alpha1.SandboxClass) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 
 	// Default-deny egress consistency (docs/design/threat-model.md, setec#66): when a class
@@ -158,9 +97,8 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 		))
 	}
 
-	// Pre-warm pool knobs (docs/design/lifecycles.md, setec#188). The three fields are one
-	// declarative surface: a pool needs an image to bake, and a TTL of zero
-	// or less would recycle entries in a hot loop.
+	// Warm pool fields (docs/design/lifecycles.md, setec#103): a pool needs
+	// an image with a digest and the resources that its bases boot with.
 	allErrs = append(allErrs, validatePreWarm(class)...)
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
@@ -168,76 +106,12 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	allErrs = append(allErrs, validateScratch(class)...)
 	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
 	allErrs = append(allErrs, validateEgressAllowSelectors(class)...)
-	allErrs = append(allErrs, validateRuntimeParams(class)...)
-	allErrs = append(allErrs, validateGuestImages(class)...)
-
-	// Runtime may be nil when a SandboxClass without a Runtime block is applied
-	// before the defaulting webhook fires (e.g. --dry-run, kubectl apply with
-	// webhooks bypassed). Treat it as "no runtime constraint to validate" —
-	// but still surface any network-default error accumulated above.
-	if class.Spec.Runtime == nil {
-		if len(allErrs) == 0 {
-			return nil, nil
-		}
-		return nil, allErrs.ToAggregate()
-	}
-
-	rtPath := field.NewPath("spec", "runtime")
-
-	// Rule 1: primary backend must be in the enabled set.
-	backend := class.Spec.Runtime.Backend
-	if backend != "" {
-		if ferr := w.validateBackendEnabled(backend, rtPath.Child("backend")); ferr != nil {
-			allErrs = append(allErrs, ferr)
-		}
-	}
-
-	// Rule 2: every fallback entry must be a known AND enabled backend.
-	for i, fb := range class.Spec.Runtime.Fallback {
-		fbPath := rtPath.Child("fallback").Index(i)
-		if ferr := w.validateBackendKnownAndEnabled(fb, fbPath); ferr != nil {
-			allErrs = append(allErrs, ferr)
-		}
-	}
-
-	// Rule 3: dev-only gate. If any referenced backend is marked devOnly,
-	// the cluster-level gate namespace must carry the allow label.
-	devBackends := []struct {
-		name string
-		path *field.Path
-	}{}
-	if backend != "" && w.isDevOnly(backend) {
-		devBackends = append(devBackends, struct {
-			name string
-			path *field.Path
-		}{backend, rtPath.Child("backend")})
-	}
-	for i, fb := range class.Spec.Runtime.Fallback {
-		if w.isDevOnly(fb) {
-			devBackends = append(devBackends, struct {
-				name string
-				path *field.Path
-			}{fb, rtPath.Child("fallback").Index(i)})
-		}
-	}
-
-	if len(devBackends) > 0 {
-		// Fetch the gate namespace once — all devOnly backends share the same
-		// cluster-level gate label check.
-		gateLabels, gateErr := w.fetchGateNamespaceLabels(ctx)
-		if gateErr != nil {
-			// Fail closed: if we cannot read the namespace, reject the request.
-			allErrs = append(allErrs, field.InternalError(rtPath,
-				fmt.Errorf("webhook: fetching dev-runtime gate namespace %q: %w", devGateNamespace, gateErr)))
-		} else {
-			for _, db := range devBackends {
-				if gateLabels[w.allowDevLabel()] != "true" {
-					allErrs = append(allErrs, field.Forbidden(db.path,
-						fmt.Sprintf("backend %q is dev-only; to use it add label %s=true to the %q namespace, "+
-							"or set runtimes.%s.devOnly=false in Helm values to remove the gate",
-							db.name, w.allowDevLabel(), devGateNamespace, db.name)))
-				}
-			}
+	// One backend (setec#198): a removed backend name is refused with the
+	// reason, never run on another isolation.
+	if class.Spec.Runtime != nil {
+		if err := runtime.ValidateBackend(class.Spec.Runtime.Backend); err != nil {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "runtime", "backend"),
+				class.Spec.Runtime.Backend, err.Error()))
 		}
 	}
 
@@ -247,236 +121,52 @@ func (w *SandboxClassWebhook) validate(ctx context.Context, class *setecv1alpha1
 	return nil, allErrs.ToAggregate()
 }
 
-// validateGuestImages refuses a SandboxClass that names its own guest kernel
-// or rootfs image, because nothing in this operator reads either field
-// (setec#126).
-//
-// Both are served CRD spec fields with no consumer. `grep -rn
-// "KernelImage\|RootfsImage"` finds the declaration, the generated deepcopy and
-// nothing else: no controller, no podspec builder, no node-agent call. A class
-// that named a hardened or digest-pinned kernel was admitted, the Sandbox
-// started, and it booted the operator-wide default instead. The CR applied
-// cleanly and the operator believed the pin took.
-//
-// That is the worst of the three possible behaviors. The microVM is the
-// isolation boundary and the kernel and rootfs are its contents, so a silent
-// substitution there is a silent change of the boundary. Refusing the field is
-// the only honest state until something honors it: an operator who cannot set
-// it knows where they stand, and one whose setting is ignored does not.
-//
-// Why this is not simply wired up instead. The path a value would have to take
-// is a Kata hypervisor annotation
-// (io.katacontainers.config.hypervisor.kernel / .image), and Kata gates those
-// behind enable_annotations plus kernel_path_list / image_path_list in the
-// node's configuration.toml — allowlists that are empty by default, precisely
-// because choosing the kernel path chooses the boundary. setec does not write
-// that file; it uses the one the Kata tarball ships. So honoring a free-form
-// per-class OCI reference would mean an operator-owned allowlist of permitted
-// images, which is a different shape from the field this CRD declares. That
-// decision is recorded on setec#126 rather than guessed at here.
-//
-// Not a deprecation: the fields stay served, so an existing object still
-// validates when read, and a cluster that never set them is unaffected.
-func validateGuestImages(class *setecv1alpha1.SandboxClass) field.ErrorList {
-	var errs field.ErrorList
-	specPath := field.NewPath("spec")
-
-	const how = "no component reads this field, so the sandbox would boot the " +
-		"operator-wide default and report nothing. Pin the guest kernel and rootfs " +
-		"on the node instead, through the Kata configuration the installer uses, " +
-		"and remove this field. Tracked in setec#126"
-
-	if class.Spec.KernelImage != "" {
-		errs = append(errs, field.Invalid(
-			specPath.Child("kernelImage"), class.Spec.KernelImage, how))
-	}
-	if class.Spec.RootfsImage != "" {
-		errs = append(errs, field.Invalid(
-			specPath.Child("rootfsImage"), class.Spec.RootfsImage, how))
-	}
-	return errs
-}
-
-// validateRuntimeParams refuses runtime.params a backend cannot consume.
-//
-// The params now reach MutatePod (#121). Before that they reached nothing, so a
-// bad key was harmless; now an unknown key fails pod creation, which would land
-// on every Sandbox that uses the class rather than on whoever wrote it. The
-// admission check moves the failure to the author.
-//
-// Two ways to be wrong, and they need different messages:
-//
-//   - the backend consumes NO params (kata-fc, gvisor and runc all take
-//     `_ map[string]string`), so any entry is a declaration that cannot take
-//     effect. Naming only the keys would read as a typo.
-//   - the backend consumes some, and this key is not one of them.
-//
-// The accepted set comes from runtime.AcceptedParams, which derives it from the
-// same table MutatePod translates with, so admission and execution cannot
-// disagree about which keys exist.
-//
-// Only evaluated when Runtime is populated. The defaulting webhook runs first in
-// the admission chain so it normally is; with --dry-run or webhooks bypassed the
-// params travel with a Selection built from the cluster default backend, and a
-// class with no Runtime block has declared no backend to check them against.
-func validateRuntimeParams(class *setecv1alpha1.SandboxClass) field.ErrorList {
-	var errs field.ErrorList
-	if class.Spec.Runtime == nil || len(class.Spec.Runtime.Params) == 0 {
-		return nil
-	}
-	backend := class.Spec.Runtime.Backend
-	if backend == "" {
-		return nil
-	}
-	paramsPath := field.NewPath("spec", "runtime", "params")
-
-	accepted := runtime.AcceptedParams(backend)
-	if len(accepted) == 0 {
-		keys := make([]string, 0, len(class.Spec.Runtime.Params))
-		for k := range class.Spec.Runtime.Params {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		errs = append(errs, field.Invalid(paramsPath, strings.Join(keys, ","),
-			fmt.Sprintf("the %q backend consumes no runtime params, so these would be "+
-				"declared and never applied. Remove them, or choose a backend that "+
-				"accepts them", backend)))
-		return errs
-	}
-
-	var unknown []string
-	for k := range class.Spec.Runtime.Params {
-		if !slices.Contains(accepted, k) {
-			unknown = append(unknown, k)
-		}
-	}
-	if len(unknown) > 0 {
-		slices.Sort(unknown)
-		errs = append(errs, field.Invalid(paramsPath, strings.Join(unknown, ","),
-			fmt.Sprintf("the %q backend accepts only %s. An unrecognized key fails pod "+
-				"creation for every Sandbox in this class",
-				backend, strings.Join(accepted, ", "))))
-	}
-	return errs
-}
-
-// validatePreWarm enforces the coherence rules of the declarative
-// pre-warm pool surface (PreWarmPoolSize / PreWarmImage / PreWarmTTL,
-// docs/design/lifecycles.md):
-//
-//   - a non-zero pool size requires a PreWarmImage — the node-agent
-//     bakes pool entries from the class image and has nothing to boot
-//     otherwise;
-//   - PreWarmTTL, when set, must be positive;
-//   - an active pool requires the class's effective backend to be
-//     kata-fc — the pool restore path drives the Kata VM's Firecracker
-//     socket, which no other backend exposes. The backend rule is only
-//     evaluated when Runtime is populated (the defaulting webhook runs
-//     first in the admission chain, so it always is on the normal path).
+// validatePreWarm enforces the coherence rules of the warm pool of a
+// class (setec#103, setec#238): a non-zero pool size needs
+// DefaultResources, because a base boots with them. A first pool image
+// is optional, and it needs a digest, because a base belongs to one
+// digest.
 func validatePreWarm(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	var errs field.ErrorList
 	specPath := field.NewPath("spec")
-
-	poolActive := class.Spec.PreWarmPoolSize > 0
-	if poolActive && class.Spec.PreWarmImage == "" {
-		errs = append(errs, field.Required(
-			specPath.Child("preWarmImage"),
-			fmt.Sprintf("preWarmPoolSize=%d requires preWarmImage: the node-agent builds pool entries from the class image",
-				class.Spec.PreWarmPoolSize)))
+	if class.Spec.PreWarmPoolSize <= 0 {
+		return nil
 	}
-	if class.Spec.PreWarmTTL != nil && class.Spec.PreWarmTTL.Duration <= 0 {
-		errs = append(errs, field.Invalid(
-			specPath.Child("preWarmTTL"),
-			class.Spec.PreWarmTTL.Duration.String(),
-			"preWarmTTL must be a positive duration"))
+	if img := class.Spec.PreWarmImage; img != "" && !strings.Contains(img, "@sha256:") {
+		errs = append(errs, field.Invalid(specPath.Child("preWarmImage"), img,
+			"a pool needs an image with a digest: a base belongs to one digest"))
 	}
-	backend := ""
-	if class.Spec.Runtime != nil {
-		backend = class.Spec.Runtime.Backend
+	if class.Spec.DefaultResources == nil {
+		errs = append(errs, field.Required(specPath.Child("defaultResources"),
+			"a pool boots its bases with the default resources of the class"))
 	}
-	if poolActive && backend != "" && backend != runtime.BackendKataFC && backend != runtime.BackendLauncher {
-		errs = append(errs, field.Invalid(
-			specPath.Child("runtime", "backend"),
-			backend,
-			fmt.Sprintf("pre-warm pools require the %q or the %q backend: a pool entry is a Firecracker snapshot",
-				runtime.BackendKataFC, runtime.BackendLauncher)))
-	}
-	// A launcher pool keeps bases of one machine: the image needs a digest
-	// and the class a default size (setec#103).
-	if poolActive && backend == runtime.BackendLauncher {
-		if class.Spec.PreWarmImage != "" && !strings.Contains(class.Spec.PreWarmImage, "@sha256:") {
-			errs = append(errs, field.Invalid(specPath.Child("preWarmImage"), class.Spec.PreWarmImage,
-				"a launcher pool needs an image with a digest: a base belongs to one digest"))
-		}
-		if class.Spec.DefaultResources == nil {
-			errs = append(errs, field.Required(specPath.Child("defaultResources"),
-				"a launcher pool boots its bases with the default resources of the class"))
-		}
-	}
+	errs = append(errs, validateImageSignature(class.Spec.PreWarmImageSignature, specPath.Child("preWarmImageSignature"))...)
 	return errs
 }
 
-// validateBackendEnabled returns a field.Error when backend is not present in
-// the config or not enabled. Unknown-but-disabled and known-but-disabled both
-// produce the same "not enabled" message — the actionable remediation is the
-// same (enable via Helm).
-func (w *SandboxClassWebhook) validateBackendEnabled(backend string, fldPath *field.Path) *field.Error {
-	bc, ok := w.RuntimeCfg.Runtimes[backend]
-	if !ok || !bc.Enabled {
-		return field.Invalid(fldPath, backend,
-			fmt.Sprintf("%q is not enabled in this cluster; enable via Helm value runtimes.%s.enabled=true",
-				backend, backend))
+// validateImageSignature requires the signer of the pool image: a keyless
+// issuer and identity, or a PEM public key, and not both. The operator
+// builds no base from an image it cannot verify.
+func validateImageSignature(sig *setecv1alpha1.ImageSignature, path *field.Path) field.ErrorList {
+	if sig == nil {
+		return field.ErrorList{field.Required(path,
+			"a pool needs the signer of its image: the operator checks the signature before it builds a base")}
+	}
+	p := diskbuilder.SignaturePolicy{Issuer: sig.Issuer, Identity: sig.Identity, PublicKey: []byte(sig.PublicKey)}
+	if err := p.Validate(); err != nil {
+		return field.ErrorList{field.Invalid(path, "", err.Error())}
 	}
 	return nil
-}
-
-// validateBackendKnownAndEnabled returns a field.Error for fallback entries that
-// are either unknown (not in AllKnownBackends) or not enabled. Unknown backends
-// get a distinct message referencing AllKnownBackends so the user knows exactly
-// what values are accepted.
-func (w *SandboxClassWebhook) validateBackendKnownAndEnabled(backend string, fldPath *field.Path) *field.Error {
-	known := slices.Contains(runtime.AllKnownBackends, backend)
-	if !known {
-		return field.Invalid(fldPath, backend,
-			fmt.Sprintf("%q is not a recognized backend; must be one of %v", backend, runtime.AllKnownBackends))
-	}
-	bc, ok := w.RuntimeCfg.Runtimes[backend]
-	if !ok || !bc.Enabled {
-		return field.Invalid(fldPath, backend,
-			fmt.Sprintf("%q is not enabled in this cluster; enable via Helm value runtimes.%s.enabled=true",
-				backend, backend))
-	}
-	return nil
-}
-
-// isDevOnly returns true when backend is configured with DevOnly=true.
-// Unknown backends return false (no restriction imposed).
-//
-// The predicate is RuntimeConfig.IsDevOnly, shared with the startup check
-// that keeps a devOnly backend out of the cluster defaults
-// (GHSA-q7hq-f8hm-wmjr). Two copies of "what counts as devOnly" is exactly
-// how the two paths drifted apart in the first place.
-func (w *SandboxClassWebhook) isDevOnly(backend string) bool {
-	return w.RuntimeCfg.IsDevOnly(backend)
-}
-
-// fetchGateNamespaceLabels fetches the label map of devGateNamespace.
-func (w *SandboxClassWebhook) fetchGateNamespaceLabels(ctx context.Context) (map[string]string, error) {
-	ns := &corev1.Namespace{}
-	if err := w.Client.Get(ctx, client.ObjectKey{Name: devGateNamespace}, ns); err != nil {
-		return nil, err
-	}
-	return ns.Labels, nil
 }
 
 // SetupWebhookWithManager registers both the defaulting and validating webhooks
 // for SandboxClass with the controller-runtime manager. Invoke from cmd/main.go
 // alongside the other webhook registrations.
 func (w *SandboxClassWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.SandboxClass{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.SandboxClass{}).
 		WithDefaulter(w).
 		WithValidator(w).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // validateRequests checks the class's scheduler reservation
@@ -516,9 +206,10 @@ func validateRequests(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	return errs
 }
 
-// validateScratch checks the two scratch values of a class (ADR-0146). Each
-// must be positive, and the default must fit under the ceiling: a default
-// above it would make every Sandbox that omits scratch fail admission.
+// validateScratch checks the two scratch values of a class
+// (docs/design/storage.md). Each must be positive, and the default must fit
+// under the ceiling: a default above it would make every Sandbox that omits
+// scratch fail admission.
 func validateScratch(class *setecv1alpha1.SandboxClass) field.ErrorList {
 	var errs field.ErrorList
 	ceiling := limits.ScratchCeiling(class)

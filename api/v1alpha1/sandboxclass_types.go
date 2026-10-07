@@ -12,56 +12,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// VMM identifies a virtual machine monitor a SandboxClass may target. The
-// enum matches the set of VMMs Kata Containers currently ships support for;
-// the operator itself does not embed VMM-specific logic — the value is
-// surfaced to administrators as an explicit capability declaration.
-// +kubebuilder:validation:Enum=firecracker;qemu;cloud-hypervisor
-type VMM string
-
-const (
-	// VMMFirecracker selects the Firecracker VMM (Kata runtime kata-fc).
-	VMMFirecracker VMM = "firecracker"
-	// VMMQEMU selects the QEMU VMM (Kata runtime kata-qemu).
-	VMMQEMU VMM = "qemu"
-	// VMMCloudHypervisor selects Cloud Hypervisor (Kata runtime kata-clh).
-	VMMCloudHypervisor VMM = "cloud-hypervisor"
-)
-
-// SandboxClassRuntime selects the isolation backend for Sandboxes in this
-// class and optionally declares an ordered fallback chain. When Runtime is
-// nil the operator infers a backend from the legacy VMM field; when that is
-// also unset the cluster-default backend from Helm values is used.
+// SandboxClassRuntime names the isolation backend of the Sandboxes of a
+// class. setec has one backend: each Sandbox is a Firecracker machine in a
+// launcher Pod (docs/design/runtime.md). The field stays, so that a class
+// written for a removed backend gets a clear refusal from the webhook and
+// the operator rather than a silent change of its isolation.
 // +kubebuilder:validation:Optional
 type SandboxClassRuntime struct {
-	// Backend is the isolation runtime to use for Sandboxes in this class.
-	// Must be one of the five supported backends. When unset the operator
-	// falls back to the cluster default declared in Helm values.
-	// +kubebuilder:validation:Enum=kata-fc;kata-qemu;gvisor;runc;launcher
+	// Backend is "launcher" or empty. The webhook and the operator refuse
+	// each other name, and name the reason for a backend that left in
+	// setec#198.
 	// +optional
 	Backend string `json:"backend,omitempty"`
-
-	// Params is a map of backend-specific tuning parameters forwarded to the
-	// RuntimeDispatcher. Keys and semantics vary per backend (e.g.
-	// params.vcpus, params.memory for kata-qemu). Unknown keys are ignored
-	// by backends that do not understand them.
-	// +optional
-	Params map[string]string `json:"params,omitempty"`
-
-	// Fallback is an ordered list of backend names to attempt when no node
-	// advertises the requested Backend. Each entry must be one of the five
-	// supported backends. The operator tries each in order; the first backend
-	// with a capable node wins. status.runtime.chosen records the final
-	// selection.
-	//
-	// When NO candidate has a capable node the operator keeps the requested
-	// Backend, creates the Pod anyway, and holds the Sandbox Pending with
-	// reason AwaitingCapableNode. The unschedulable Pod is what makes a
-	// scale-to-zero node pool provision a node; falling back would not help,
-	// because a fallback with no capable node is exactly as unschedulable as
-	// the primary with no capable node.
-	// +optional
-	Fallback []string `json:"fallback,omitempty"`
 }
 
 // SandboxClassSpec defines the constraints and defaults a cluster
@@ -70,54 +32,10 @@ type SandboxClassRuntime struct {
 // SandboxSpec in a later task) and the operator enforces that the requested
 // Sandbox fits within the class.
 type SandboxClassSpec struct {
-	// Deprecated: use Runtime.Backend instead.
-	// VMM selects the virtual machine monitor targeted by this class.
-	//
-	// Optional. It was previously required, which made every class that
-	// states its isolation the current way — through Runtime.Backend —
-	// unadmittable: the API server rejected it with "spec.vmm: Required
-	// value", so the chart's own SandboxClasses could not be applied, no
-	// class resolved, and every Sandbox fell back to deny-all. A field
-	// that is deprecated cannot also be mandatory. When it is empty the
-	// operator reads Runtime.Backend; when both are empty the operator's
-	// configured default backend applies.
-	// +optional
-	VMM VMM `json:"vmm,omitempty"`
-
-	// Deprecated: use Runtime.Backend instead.
-	// RuntimeClassName optionally overrides the operator-wide default
-	// RuntimeClass name (e.g. "kata-fc", "kata-qemu"). When empty the
-	// controller falls back to its --runtime-class-name flag.
-	// +optional
-	RuntimeClassName string `json:"runtimeClassName,omitempty"`
-
-	// Runtime selects the isolation backend and optional fallback chain for
-	// Sandboxes in this class. When nil the operator infers the backend from
-	// the legacy VMM field for backwards compatibility.
+	// Runtime names the isolation backend of the class. Nil means the one
+	// backend, the launcher.
 	// +optional
 	Runtime *SandboxClassRuntime `json:"runtime,omitempty"`
-
-	// KernelImage is NOT HONORED and the validating webhook refuses a class
-	// that sets it (setec#126).
-	//
-	// It read "an optional OCI reference to a custom guest kernel image the node
-	// agent pre-pulls and hands to Kata". No node agent pre-pulls it and no
-	// controller reads it, so a class naming a hardened or digest-pinned kernel
-	// was admitted and the sandbox booted the operator-wide default, reporting
-	// nothing. The microVM is the isolation boundary, so that substitution
-	// silently changed the boundary.
-	//
-	// Honoring it needs a Kata hypervisor path annotation, which Kata gates
-	// behind an operator-configured allowlist that is empty by default for the
-	// same reason. Pin the guest kernel on the node instead. The field stays
-	// served so an existing object still validates.
-	// +optional
-	KernelImage string `json:"kernelImage,omitempty"`
-
-	// RootfsImage is NOT HONORED and the validating webhook refuses a class
-	// that sets it. Same cause and same remedy as KernelImage (setec#126).
-	// +optional
-	RootfsImage string `json:"rootfsImage,omitempty"`
 
 	// DefaultResources is the resource budget applied to Sandboxes that do
 	// not specify their own. Optional; when nil the Sandbox must declare
@@ -209,8 +127,7 @@ type SandboxClassSpec struct {
 	DefaultEgressAllow []NetworkAllow `json:"defaultEgressAllow,omitempty"`
 
 	// NodeSelector is injected into every Sandbox Pod produced under this
-	// class. It is additive to any Pod-level selectors the controller sets
-	// for RuntimeClass affinity.
+	// class. It is additive to the node affinity that the controller sets.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
@@ -230,21 +147,31 @@ type SandboxClassSpec struct {
 	// +optional
 	Default bool `json:"default,omitempty"`
 
-	// PreWarmPoolSize declares how many paused microVMs the node-agent
-	// maintains per eligible node for this class. Zero disables the
-	// pool (Phase 1/2 behavior). When non-zero PreWarmImage MUST be
-	// set — the webhook enforces the pairing.
+	// PreWarmPoolSize is the number of warm pool bases that the operator
+	// keeps for each pool image of this class (setec#103, setec#238). A
+	// pool image is an image by digest that a Sandbox of the class asked
+	// for with the default resources, in the last 7 days. Zero disables
+	// the pool. When non-zero, DefaultResources must be set; the webhook
+	// enforces it.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	PreWarmPoolSize int32 `json:"preWarmPoolSize,omitempty"`
 
-	// PreWarmImage is the OCI reference baked into pre-warmed pool
-	// entries. Sandboxes requesting a different image fall through to
-	// the cold-boot path. The format follows the usual OCI reference
-	// grammar; validation beyond non-empty is a webhook concern so the
-	// CRD schema remains minimal.
+	// PreWarmImage is an optional first pool image, by digest. The pool
+	// warms it from the creation of the class, before any Sandbox asks
+	// for it. Like every pool image, it has no base after 7 days in which
+	// no Sandbox of the class asked for it. Each other image by digest
+	// joins the pool on its first request.
 	// +optional
 	PreWarmImage string `json:"preWarmImage,omitempty"`
+
+	// PreWarmImageSignature names who must have signed PreWarmImage. The
+	// operator checks the cosign signature of the image before it builds a
+	// base. An image that does not verify gets the condition
+	// ImageNotVerified on the class, and no base. A pool needs it; the
+	// webhook enforces that.
+	// +optional
+	PreWarmImageSignature *ImageSignature `json:"preWarmImageSignature,omitempty"`
 
 	// CPUTemplate names a Firecracker custom CPU template that the
 	// launcher image holds. The machine of each launcher Sandbox of the
@@ -256,13 +183,6 @@ type SandboxClassSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	CPUTemplate string `json:"cpuTemplate,omitempty"`
-
-	// PreWarmTTL bounds the age of pool entries. Entries older than
-	// this are recycled (torn down and reprovisioned) to avoid stale
-	// kernel state accumulating in paused VMs. When unset the
-	// node-agent defaults to 24h at runtime.
-	// +optional
-	PreWarmTTL *metav1.Duration `json:"preWarmTTL,omitempty"`
 
 	// MaxPauseDuration bounds how long a Sandbox may remain in
 	// phase=Paused — a paused microVM keeps its full memory
@@ -455,16 +375,9 @@ type ResourceRequests struct {
 	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
-// SandboxClassStatus reflects the observed state of a SandboxClass. Phase 2
-// does not compute any status fields — the struct exists so future phases
-// can record counts, validation summaries, or image-prefetch state without
-// breaking the CRD schema.
+// SandboxClassStatus reflects the observed state of a SandboxClass: its
+// conditions and its warm pool.
 type SandboxClassStatus struct {
-	// ObservedGeneration is the .metadata.generation the operator last
-	// reconciled. Optional; left empty in Phase 2.
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-
 	// Conditions surface class-level facts the operator wants loudly
 	// visible. Today the only stamped type is
 	// UnverifiedRestoresAllowed: True when the class carries the
@@ -483,32 +396,69 @@ type SandboxClassStatus struct {
 	WarmPool *SandboxClassWarmPoolStatus `json:"warmPool,omitempty"`
 }
 
+// ImageSignature names the signer of an image: a keyless signer (the OIDC
+// issuer and the certificate identity of a cosign keyless signature), or a
+// public key. Exactly one of the two is set.
+type ImageSignature struct {
+	// Issuer is the OIDC issuer of a keyless signature, for example
+	// https://token.actions.githubusercontent.com.
+	// +optional
+	Issuer string `json:"issuer,omitempty"`
+
+	// Identity is the certificate identity of a keyless signature, for
+	// example the URI of the release workflow of the image owner.
+	// +optional
+	Identity string `json:"identity,omitempty"`
+
+	// PublicKey is a PEM public key, for an image signed with a key.
+	// +optional
+	PublicKey string `json:"publicKey,omitempty"`
+}
+
+// ConditionImageNotVerified is True on a class whose pool image has no
+// signature that matches spec.preWarmImageSignature.
+const ConditionImageNotVerified = "ImageNotVerified"
+
 // SandboxClassWarmPoolStatus is the state of the warm pool of a class.
 type SandboxClassWarmPoolStatus struct {
-	// Ready is the number of Ready bases with the current key.
+	// Images is the pool of each image that a Sandbox of the class asked
+	// for in the last 7 days.
 	// +optional
-	Ready int32 `json:"ready,omitempty"`
+	// +listType=map
+	// +listMapKey=image
+	Images []SandboxClassWarmPoolImage `json:"images,omitempty"`
+}
 
-	// Key is the hash of the inputs of the current base: the image
-	// digest, the launcher image, the CPU template and the machine size.
+// SandboxClassWarmPoolImage is the pool of one image of a class.
+type SandboxClassWarmPoolImage struct {
+	// Image is the OCI reference of the image, by digest.
+	// +required
+	Image string `json:"image"`
+
+	// LastUsed is the last time a Sandbox of the class asked for the
+	// image. The pool drops the image, and its bases, 7 days later.
+	// +required
+	LastUsed metav1.Time `json:"lastUsed"`
+
+	// Key is the hash of the inputs of the current base of the image: the
+	// image digest, the launcher image, the CPU template and the machine
+	// size.
 	// +optional
 	Key string `json:"key,omitempty"`
 
-	// LastUsed is the last time a Sandbox of the class asked for the pool
-	// image. A pool whose image nobody ran for 7 days keeps no base.
+	// Ready is the number of Ready bases with the current key.
 	// +optional
-	LastUsed *metav1.Time `json:"lastUsed,omitempty"`
+	Ready int32 `json:"ready,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sbxcls
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="VMM",type=string,JSONPath=`.spec.vmm`
 // +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Max-VCPU",type=integer,JSONPath=`.spec.maxResources.vcpu`,priority=1
 // +kubebuilder:printcolumn:name="Max-Memory",type=string,JSONPath=`.spec.maxResources.memory`,priority=1
-// +kubebuilder:printcolumn:name="Pool-Ready",type=integer,JSONPath=`.status.warmPool.ready`
-// +kubebuilder:printcolumn:name="Pool-Key",type=string,JSONPath=`.status.warmPool.key`,priority=1
+// +kubebuilder:printcolumn:name="Pool-Ready",type=string,JSONPath=`.status.warmPool.images[*].ready`
+// +kubebuilder:printcolumn:name="Pool-Images",type=string,JSONPath=`.status.warmPool.images[*].image`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SandboxClass is a cluster-scoped, administrator-authored resource that
@@ -540,8 +490,4 @@ type SandboxClassList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SandboxClass `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&SandboxClass{}, &SandboxClassList{})
 }

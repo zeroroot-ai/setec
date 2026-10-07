@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
 )
 
@@ -23,7 +24,7 @@ import (
 // crypto-erases each kept Snapshot.
 const (
 	// TenantKEKSecret names the Secret that holds the key of a tenant.
-	TenantKEKSecret = "setec-tenant-kek"
+	TenantKEKSecret = "setec-tenant-kek" //nolint:gosec // G101: the name of a Secret, not a secret
 	tenantKEKKey    = "kek"
 	// KeptBackend is the store of kept Snapshots: the S3-compatible store
 	// of session checkpoints, which a node that never held a Snapshot can
@@ -49,7 +50,7 @@ func (c *Coordinator) TenantKEK(ctx context.Context, ns string) ([]byte, error) 
 	}
 	key := make([]byte, atrest.KeySize)
 	if _, err := rand.Read(key); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "rand.Read")
 	}
 	secret = &corev1.Secret{
 		Namespace: ns, Name: TenantKEKSecret,

@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   - Kind cluster 'gibson' is running and current kube context can reach it
-#   - PKI exists under ../pki/ (run 30-generate-pki.sh first)
+#   - SPIRE runs on the k3s cluster (30-install-spire.sh)
 #
 # The Job dials the Setec frontend at the host's LAN IP (the NodePort
 # exposure on the k3s cluster). Kind Pods can reach the host LAN directly
@@ -22,10 +22,8 @@ SETEC_ADDR="${SETEC_ADDR:-${HOST_IP}:${NODEPORT}}"
 green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 red()   { printf '\033[0;31m%s\033[0m\n' "$*"; }
 
-[[ -f "${PKI}/ca.crt" && -f "${PKI}/client.crt" && -f "${PKI}/client.key" ]] || {
-    red "FAIL: dev PKI missing — run scripts/30-generate-pki.sh first"
-    exit 1
-}
+# A fresh SVID of the dev client (it lives a few hours).
+"${ROOT}/scripts/35-mint-client-svid.sh"
 kubectl --context="${KIND_CONTEXT}" get ns gibson >/dev/null 2>&1 || {
     red "FAIL: namespace 'gibson' not found in context ${KIND_CONTEXT} — is the Gibson chart deployed?"
     exit 1
@@ -40,7 +38,7 @@ sed \
     "${ROOT}/manifests/gibson-kind/setec-client-tls.yaml.tpl" > "${GEN}"
 green "Generated ${GEN}"
 
-green "Applying TLS Secret to ${KIND_CONTEXT}/gibson"
+green "Applying the dev client SVID Secret to ${KIND_CONTEXT}/gibson"
 kubectl --context="${KIND_CONTEXT}" apply -f "${GEN}"
 
 green "Applying smoke Job (deletes any prior run first)"

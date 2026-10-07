@@ -6,10 +6,8 @@ modules:
     # state so the v1 wire format never breaks.
     name: buf.build/zeroroot-ai/setec
     excludes:
-      # development/k3s/.cache holds vendored kata-containers protos pulled
-      # in by the dev k3s harness. They are .gitignored build artifacts, not
-      # part of this module, and define duplicate gogoproto symbols that
-      # break `buf generate`. Keep buf scoped to the api/ tree only.
+      # development/ holds the dev k3s harness and its .gitignored cache,
+      # not part of this module. Keep buf scoped to the api/ tree only.
       - development
 lint:
   use:

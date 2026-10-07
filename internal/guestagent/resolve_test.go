@@ -21,7 +21,7 @@ func TestResolve_FollowsLinksInsideTheRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin/busybox"), []byte("#!"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "bin", "busybox"), []byte("#!"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	links := map[string]string{"bin/sh": "/bin/busybox", "usr/bin/env": "../../bin/busybox", "bin/gone": "/bin/nothing"}

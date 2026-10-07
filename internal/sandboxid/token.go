@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Issuer is the iss claim of each token.
@@ -79,11 +81,11 @@ func Sign(key ed25519.PrivateKey, c Claims) (string, error) {
 	}
 	h, err := json.Marshal(header{Alg: "EdDSA", Typ: "JWT", Kid: KeyID(pub)})
 	if err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "json.Marshal")
 	}
 	p, err := json.Marshal(c)
 	if err != nil {
-		return "", err
+		return "", errwrap.Wrap(err, "json.Marshal")
 	}
 	input := b64.EncodeToString(h) + "." + b64.EncodeToString(p)
 	return input + "." + b64.EncodeToString(ed25519.Sign(key, []byte(input))), nil
@@ -147,24 +149,22 @@ func Verify(token string, want Expect) (Claims, error) {
 	return c, nil
 }
 
-func split(token string) (header, Claims, string, []byte, error) {
+func split(token string) (h header, c Claims, signingInput string, sig []byte, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return header{}, Claims{}, "", nil, fmt.Errorf("%w: it is not a compact JWS", ErrInvalid)
 	}
-	var h header
-	var c Claims
 	hb, err1 := b64.DecodeString(parts[0])
 	pb, err2 := b64.DecodeString(parts[1])
 	sig, err3 := b64.DecodeString(parts[2])
 	if err := errors.Join(err1, err2, err3); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := json.Unmarshal(hb, &h); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the header: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the header: %w", ErrInvalid, err)
 	}
 	if err := json.Unmarshal(pb, &c); err != nil {
-		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the claims: %v", ErrInvalid, err)
+		return header{}, Claims{}, "", nil, fmt.Errorf("%w: the claims: %w", ErrInvalid, err)
 	}
 	return h, c, parts[0] + "." + parts[1], sig, nil
 }

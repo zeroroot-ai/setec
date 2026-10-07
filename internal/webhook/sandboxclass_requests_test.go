@@ -26,7 +26,7 @@ func TestSandboxClassWebhook_ValidateRequests(t *testing.T) {
 	t.Parallel()
 
 	mk := func(req *setecv1alpha1.ResourceRequests, max *setecv1alpha1.Resources) *setecv1alpha1.SandboxClass {
-		cls := mkSandboxClass("req", "", mkRuntime(setecruntime.BackendGVisor))
+		cls := mkSandboxClass("req", mkRuntime(setecruntime.BackendLauncher))
 		cls.Spec.Requests = req
 		cls.Spec.MaxResources = max
 		return cls
@@ -84,7 +84,7 @@ func TestSandboxClassWebhook_ValidateRequests(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
+			w := classWebhook(t)
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			if tc.wantErr {
 				if err == nil {

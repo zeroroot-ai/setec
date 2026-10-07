@@ -17,11 +17,11 @@
 # fails when the footprint grows.
 #
 # A Sandbox that holds an always-on agent stays up for weeks. Its
-# process spends nearly all of that time waiting. A gVisor Sandbox
-# carries a Sentry process per Sandbox, so what has to hold steady is
-# the whole Pod's memory, not the workload's own RSS: a Sentry that
-# grows while nothing happens is the leak that ends a long-lived
-# member.
+# process spends nearly all of that time waiting. A launcher Pod
+# carries the launcher and a Firecracker process for each Sandbox, so
+# what has to hold steady is the memory of the whole Pod, not the RSS of
+# the workload: a process that grows while nothing happens is the leak
+# that ends a long-lived member.
 #
 # The script only READS. It samples an existing Sandbox and never
 # creates, patches or deletes anything, so it is safe to point at a

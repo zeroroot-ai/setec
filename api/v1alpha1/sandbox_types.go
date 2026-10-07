@@ -213,8 +213,8 @@ type SandboxSnapshotRef struct {
 // Resources declares the CPU, memory and scratch budget allocated to the
 // Sandbox microVM. VCPU and Memory are required.
 //
-// Memory has a ceiling of 64 GiB in the API (ADR-0146). A SandboxClass can
-// lower it with maxResources.memory, never raise it.
+// Memory has a ceiling of 64 GiB in the API (docs/design/lifecycles.md). A
+// SandboxClass can lower it with maxResources.memory, never raise it.
 // +kubebuilder:validation:XValidation:rule="quantity(string(self.memory)).compareTo(quantity('64Gi')) <= 0",message="memory must not exceed 64Gi"
 type Resources struct {
 	// VCPU is the number of virtual CPUs to assign to the microVM.
@@ -228,8 +228,9 @@ type Resources struct {
 	// +required
 	Memory resource.Quantity `json:"memory"`
 
-	// Scratch is the size limit of the writable scratch volume at /tmp.
-	// The Pod also gets an ephemeral-storage limit of Scratch plus 1 GiB.
+	// Scratch is the size of the writable layer of the machine. The Pod
+	// gets an ephemeral-storage limit of Scratch plus 3 GiB: 2 GiB for the
+	// machine files and 1 GiB for logs.
 	// Unset takes the class default (defaultResources.scratch), else
 	// 10 GiB. A Sandbox may ask for less than its class permits
 	// (maxResources.scratch, else 10 GiB), never for more.
@@ -417,11 +418,9 @@ type SandboxSpec struct {
 	// are passed verbatim; no shell interpretation occurs.
 	//
 	// Required for the ephemeral lifecycle: that one command is the whole
-	// life of the Sandbox (docs/design/lifecycles.md). A session may leave it empty. The
-	// operator then boots the setec keepalive, a process that reaps
-	// orphans and never exits on its own, so the session outlives every
-	// command sent through Exec. The keepalive never depends on a shell
-	// or a sleep binary in the image.
+	// life of the Sandbox (docs/design/lifecycles.md). A session may
+	// leave it empty. The machine then runs the entry point and the
+	// command of the image, and work arrives through Exec.
 	// +optional
 	Command []string `json:"command,omitempty"`
 
@@ -502,9 +501,7 @@ func (s *SandboxSpec) IsEphemeral() bool {
 // for this Sandbox after fallback resolution. Populated by the reconciler
 // once a backend is chosen; empty while the Sandbox is still Pending.
 type SandboxRuntimeStatus struct {
-	// Chosen is the name of the backend selected after evaluating the
-	// SandboxClass's primary backend and any fallback chain. One of
-	// kata-fc, kata-qemu, gvisor, or runc.
+	// Chosen is the backend of the Sandbox: launcher.
 	// +optional
 	Chosen string `json:"chosen,omitempty"`
 }
@@ -519,7 +516,7 @@ type SandboxStatus struct {
 
 	// Reason is a short, machine-readable explanation for the current
 	// phase. Populated on Failed (e.g. "Timeout", "ImagePullFailure",
-	// "RuntimeUnavailable", "ContainerExitedNonZero").
+	// "UnsupportedBackend", "ContainerExitedNonZero").
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
@@ -674,13 +671,12 @@ type SandboxCheckpointStatus struct {
 type SandboxWarmStartOutcome string
 
 const (
-	// SandboxWarmStartPoolRestored means a pre-warmed pool entry was
-	// claimed and restored into this Sandbox's kata-fc Pod.
+	// SandboxWarmStartPoolRestored means the Sandbox loaded a base of the
+	// warm pool of its class.
 	SandboxWarmStartPoolRestored SandboxWarmStartOutcome = "PoolRestored"
-	// SandboxWarmStartColdBoot means no pool entry was used (pool
-	// empty, node-agent unreachable, or restore failed) and the
-	// Sandbox continued its normal cold boot. Cold boot is the
-	// fallback, never a failure.
+	// SandboxWarmStartColdBoot means the warm pool of the class had no
+	// Ready base for the Sandbox, and the Sandbox booted cold. Cold boot
+	// is the fallback, never a failure.
 	SandboxWarmStartColdBoot SandboxWarmStartOutcome = "ColdBoot"
 	// SandboxWarmStartRejected means the restore succeeded node-side
 	// but the docs/design/isolation.md invariant gate refused to serve it: one or more
@@ -694,8 +690,9 @@ const (
 // SandboxWarmStartStatus reports the pool warm-start outcome for one
 // Sandbox.
 type SandboxWarmStartStatus struct {
-	// Outcome is PoolRestored when the Sandbox started from a pool
-	// entry, ColdBoot otherwise.
+	// Outcome is PoolRestored when the Sandbox loaded a base, ColdBoot
+	// when the pool had none, and Rejected when a loaded base failed the
+	// invariant gate.
 	Outcome SandboxWarmStartOutcome `json:"outcome"`
 
 	// EntryID identifies the consumed pool entry when Outcome is
@@ -756,10 +753,6 @@ type SandboxList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Sandbox `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&Sandbox{}, &SandboxList{})
 }
 
 // RecordRecovery records one recovery of a session on its checkpoint

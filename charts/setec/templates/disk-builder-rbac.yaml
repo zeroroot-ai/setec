@@ -1,5 +1,4 @@
-{{- with index .Values.runtimes "launcher" }}
-{{- if .enabled }}
+{{- with .Values.launcher }}
 {{- /*
 The operator runs setec-disk-builder as a Job in its own namespace, once for
 each image digest (docs/design/storage.md). It needs get and create on Jobs
@@ -32,5 +31,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "setec.serviceAccountName" $ }}
     namespace: {{ $.Values.namespace }}
-{{- end }}
 {{- end }}

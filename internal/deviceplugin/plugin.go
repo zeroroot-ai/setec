@@ -20,9 +20,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
@@ -49,9 +49,6 @@ type Plugin struct {
 	// HostPath when the plugin runs on the host, or a path under a mount.
 	statPath string
 	interval time.Duration
-
-	mu      sync.Mutex
-	healthy bool
 }
 
 // New checks d and returns its Plugin. statPath is where this process can
@@ -105,9 +102,8 @@ func (p *Plugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*plu
 // unhealthy devices, so the scheduler places no launcher Pod there.
 func (p *Plugin) ListAndWatch(_ *pluginapi.Empty, stream grpc.ServerStreamingServer[pluginapi.ListAndWatchResponse]) error {
 	last := p.present()
-	p.setHealthy(last)
 	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: p.devices(last)}); err != nil {
-		return err
+		return errwrap.Wrap(err, "grpc.ServerStreamingServer.Send")
 	}
 	tick := time.NewTicker(p.interval)
 	defer tick.Stop()
@@ -121,18 +117,11 @@ func (p *Plugin) ListAndWatch(_ *pluginapi.Empty, stream grpc.ServerStreamingSer
 				continue
 			}
 			last = now
-			p.setHealthy(now)
 			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: p.devices(now)}); err != nil {
-				return err
+				return errwrap.Wrap(err, "grpc.ServerStreamingServer.Send")
 			}
 		}
 	}
-}
-
-func (p *Plugin) setHealthy(h bool) {
-	p.mu.Lock()
-	p.healthy = h
-	p.mu.Unlock()
 }
 
 // Allocate gives each container that asked for the resource the one host

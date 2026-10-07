@@ -7,10 +7,9 @@
 // criterion of setec#239). The ABI landed with unit tests behind a
 // containerExecutor seam; these scenarios drive the real pods/exec path.
 //
-// They run on any backend, kata-fc on metal or runc on kind: Exec rides
-// the CRI exec path (docs/design/lifecycles.md), which is backend-agnostic, and the
-// properties asserted here belong to the session lifecycle and the exit
-// contract, not to the isolation backend.
+// Exec rides the launcher relay over the pods/exec path
+// (docs/design/lifecycles.md). The properties asserted here belong to the
+// session lifecycle and the exit contract.
 package e2e
 
 import (

@@ -1,7 +1,8 @@
-# kind topology for the launcher pass of the Go e2e suites
-# (.github/workflows/e2e.yml, job `launcher`, setec#197).
+# kind topology for the Go e2e suite (.github/workflows/exit-test-launcher.yml, job
+# `launcher`, setec#197).
 #
-# The runner exposes /dev/kvm, as for hack/kind-kvm.yaml. Here two workers
+# The job runs on a GitHub-hosted ubuntu-latest runner, which exposes
+# /dev/kvm (nested virtualization). Two workers
 # host machines, because one scenario drains a node and resumes its session
 # on the other node. Both carry the e2e-role label, and both mount the
 # runner's /dev: the KVM device plugin offers /dev/kvm and /dev/net/tun of
@@ -12,8 +13,12 @@
 # The gate is on by default from Kubernetes 1.35. The line below keeps it on
 # for an older node image.
 #
-# Calico replaces kindnet for the reason hack/kind-kvm.yaml gives: the
-# egress scenarios need a CNI that enforces NetworkPolicy.
+# Cilium replaces kindnet. It is the network plugin of every cluster that
+# runs setec (D76): the chart renders CiliumNetworkPolicy objects for its own
+# namespace, and the egress scenarios assert that a Sandbox cannot reach what
+# its NetworkPolicy denies. With kindnet, a Sandbox under mode=none still
+# reached 1.1.1.1:443 (setec#22). The workflow installs Cilium from the pinned
+# chart, with the pod CIDRs of the nodes (ipam mode kubernetes).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 featureGates:

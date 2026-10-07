@@ -31,7 +31,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,7 +40,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
-// Default eventual-consistency windows. Kata+Firecracker cold-starts take a
+// Default eventual-consistency windows. Firecracker cold-starts take a
 // few seconds on warm hosts but can take 30s+ on a cold one. We bias toward
 // longer polls since the cost of a slow happy path is far lower than the
 // cost of a flake.
@@ -59,30 +58,18 @@ const (
 // WHY THIS EXISTS (setec#330)
 //
 // KVM-capable metal is expensive, so operators reserve it with a
-// NoSchedule taint — and the nodes carrying that taint are the only ones
-// the runtime-agent ever labels `setec.zeroroot.ai/runtime.<backend>=true`,
-// which is the nodeSelector every RuntimeClass puts on a Sandbox Pod. That
-// pair is a contradiction the scheduler resolves by never scheduling: the
-// nodeSelector steers the Pod at the metal node and the taint forbids it
-// from landing. The Sandbox sits `Pending` until its timeout, and the only
-// evidence is a `FailedScheduling … had untolerated taint(s)` event on the
-// Pod (run 31918112679, every scenario in the `suites` job).
+// NoSchedule taint. A launcher Pod asks for the KVM device that only those
+// nodes offer, so without a matching toleration the scheduler never places
+// it. The Sandbox sits `Pending` until its timeout, and the only evidence
+// is a `FailedScheduling … had untolerated taint(s)` event on the Pod
+// (run 31918112679).
 //
 // # WHY IT IS AN ENV VAR AND NOT A CONSTANT
 //
-// The taint key is the cluster operator's choice, not setec's — the chart
-// makes the same call, shipping `runtimeClasses.*.scheduling.tolerations`
-// empty for exactly this reason. A hardcoded key would be right for the
-// zeroroot staging cluster and wrong for every other consumer of this
-// Apache-licensed suite.
-//
-// WHY THE SUITE CANNOT USE THE CHART'S MECHANISM
-//
-// `installChart` sets `runtimes.kata-fc.install=false` — kata-deploy owns
-// the RuntimeClass here, so the chart renders none and
-// `scheduling.tolerations` has nothing to land on. `SandboxClass.spec.
-// tolerations` (setec#115) is the only lever the suite actually holds,
-// which is why it is applied per-class below rather than once at install.
+// The taint key is the cluster operator's choice, not setec's. A hardcoded
+// key would be right for one cluster and wrong for every other consumer of
+// this Apache-licensed suite. `SandboxClass.spec.tolerations` (setec#115)
+// is the lever the suite holds, which is why it is applied per class below.
 //
 // Unset (the default) means "no tainted sandbox hosts" — kind, k3s, and
 // any single-pool cluster — and every helper below becomes a no-op.
@@ -243,7 +230,7 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 	// are tried on every poll.
 	deadline := time.Now().Add(8 * time.Second)
 	for attempt := 1; time.Now().Before(deadline); attempt++ {
-		for _, c := range []string{"workload", "setec-keepalive", launcherContainer} {
+		for _, c := range []string{launcherContainer} {
 			for _, extra := range [][]string{{}, {"--previous"}} {
 				args := append([]string{"logs", key.Name + "-vm", "-n", key.Namespace, "-c", c}, extra...)
 				out, _ := exec.Command("kubectl", args...).CombinedOutput()
@@ -291,7 +278,7 @@ func createAndCleanup(t *testing.T, sb *setecv1alpha1.Sandbox) {
 // TestSandbox_SuccessfulExit applies a minimal Sandbox whose workload exits
 // with code 0 and asserts the controller reports phase=Completed with
 // exitCode=0. This exercises the happy path end to end including Pod
-// scheduling on the Kata runtime and the microVM actually executing.
+// scheduling of the launcher Pod and the microVM actually executing.
 func TestSandbox_SuccessfulExit(t *testing.T) {
 	sb := newSandbox("e2e-success", minimalSpec("/bin/true"))
 	createAndCleanup(t, sb)
@@ -306,23 +293,16 @@ func TestSandbox_SuccessfulExit(t *testing.T) {
 		t.Fatalf("expected exitCode=0, got %d", *final.Status.ExitCode)
 	}
 
-	// The backing Pod must have used the Kata runtime class, or on the
-	// launcher the KVM device and no RuntimeClass.
+	// The backing Pod is a launcher Pod: the KVM device and no RuntimeClass.
 	var pod corev1.Pod
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: sandboxNamespace, Name: sb.Name + "-vm"}, &pod); err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
-	if onLauncher() {
-		if pod.Spec.RuntimeClassName != nil {
-			t.Fatalf("a launcher Pod has runtimeClassName=%q, want none", *pod.Spec.RuntimeClassName)
-		}
-		if _, ok := pod.Spec.Containers[0].Resources.Limits[launcherKVMResource]; !ok {
-			t.Fatalf("the launcher Pod asks for no %s", launcherKVMResource)
-		}
-		return
+	if pod.Spec.RuntimeClassName != nil {
+		t.Fatalf("a launcher Pod has runtimeClassName=%q, want none", *pod.Spec.RuntimeClassName)
 	}
-	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != kataRuntimeClass {
-		t.Fatalf("expected pod runtimeClassName=%q, got %v", kataRuntimeClass, pod.Spec.RuntimeClassName)
+	if _, ok := pod.Spec.Containers[0].Resources.Limits[launcherKVMResource]; !ok {
+		t.Fatalf("the launcher Pod asks for no %s", launcherKVMResource)
 	}
 }
 
@@ -414,7 +394,7 @@ func TestSandbox_DeleteMidRun(t *testing.T) {
 			return // fully garbage collected
 		}
 		if err == nil && pod.DeletionTimestamp != nil {
-			return // terminating; Kata is tearing down the microVM
+			return // terminating; the launcher is tearing down the microVM
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			t.Fatalf("get pod during teardown: %v", err)
@@ -479,7 +459,7 @@ func TestSandbox_OperatorRestartMidRun(t *testing.T) {
 // operatorLabels returns the label selector used to find the operator Pod.
 // All setec components share {app.kubernetes.io/name: setec,
 // app.kubernetes.io/instance: <release>}, so the name label alone also matches
-// the runtime-agent / frontend / node-agent Pods. The operator Deployment
+// the device-plugin / frontend / node-agent Pods. The operator Deployment
 // additionally carries app.kubernetes.io/component=operator, which uniquely
 // identifies it within the release's namespace.
 func operatorLabels() client.MatchingLabels {
@@ -519,89 +499,4 @@ func waitForNewOperatorLeader(prev string, timeout time.Duration) error {
 		time.Sleep(defaultPoll)
 	}
 	return fmt.Errorf("no new operator leader within %s: %s", timeout, last)
-}
-
-// -- Scenario 5 (runs last; mutates cluster RuntimeClass) --------------------
-
-// TestSandbox_NoRuntimeClass deletes the kata-fc RuntimeClass, applies a
-// Sandbox, and asserts the controller leaves it in phase=Pending while
-// emitting the RuntimeUnavailable event. The RuntimeClass is restored in a
-// t.Cleanup so the surrounding suite can continue unaffected. This test is
-// named with a `ZZ_` prefix so Go's default alphabetical ordering runs it
-// last; other scenarios depend on the RuntimeClass being present.
-func TestSandbox_ZZ_NoRuntimeClass(t *testing.T) {
-	ctx := context.Background()
-
-	// Capture the current RuntimeClass manifest so we can restore it
-	// byte-for-byte (minus the ResourceVersion, which the API server
-	// assigns).
-	var orig nodev1.RuntimeClass
-	if err := k8sClient.Get(ctx, client.ObjectKey{Name: kataRuntimeClass}, &orig); err != nil {
-		t.Fatalf("snapshot runtimeclass: %v", err)
-	}
-
-	// Delete it.
-	if err := k8sClient.Delete(ctx, &orig); err != nil {
-		t.Fatalf("delete runtimeclass: %v", err)
-	}
-
-	// Always restore — even if the test itself fails — so the suite
-	// doesn't leave the cluster in a broken state.
-	t.Cleanup(func() {
-		restore := &nodev1.RuntimeClass{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        orig.Name,
-				Labels:      orig.Labels,
-				Annotations: orig.Annotations,
-			},
-			Handler:    orig.Handler,
-			Overhead:   orig.Overhead,
-			Scheduling: orig.Scheduling,
-		}
-		// Wait for the delete to propagate, then recreate. Loop because
-		// object deletion is eventually-consistent.
-		deadline := time.Now().Add(30 * time.Second)
-		for time.Now().Before(deadline) {
-			err := k8sClient.Create(ctx, restore)
-			if err == nil {
-				return
-			}
-			if !apierrors.IsAlreadyExists(err) {
-				time.Sleep(defaultPoll)
-				continue
-			}
-			return
-		}
-		t.Logf("warning: could not restore RuntimeClass %q after test", kataRuntimeClass)
-	})
-
-	// Wait briefly to ensure the delete has propagated — the apiserver
-	// deletes synchronously but the controller's cache may still hold a
-	// stale copy.
-	time.Sleep(2 * time.Second)
-
-	sb := newSandbox("e2e-no-runtimeclass", minimalSpec("/bin/true"))
-	createAndCleanup(t, sb)
-
-	key := client.ObjectKeyFromObject(sb)
-
-	// Phase should stay Pending for long enough that a transient race
-	// isn't enough to pass. We wait the brief window and confirm Pending.
-	deadline := time.Now().Add(briefWait)
-	var observed setecv1alpha1.Sandbox
-	for time.Now().Before(deadline) {
-		if err := k8sClient.Get(ctx, key, &observed); err != nil {
-			t.Fatalf("get sandbox: %v", err)
-		}
-		if observed.Status.Phase != "" && observed.Status.Phase != setecv1alpha1.SandboxPhasePending {
-			t.Fatalf("expected Pending while RuntimeClass is absent, got %q", observed.Status.Phase)
-		}
-		time.Sleep(defaultPoll)
-	}
-
-	// And the RuntimeUnavailable event should have fired at least once.
-	if !waitForEvent(t, sb.Name, "RuntimeUnavailable", briefWait) {
-		dumpDiagnostics(t, key)
-		t.Fatalf("expected RuntimeUnavailable event on sandbox %q", sb.Name)
-	}
 }

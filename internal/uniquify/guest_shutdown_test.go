@@ -27,7 +27,7 @@ func (b *blockingIdentity) ApplyMachineID(string) error {
 }
 func (b *blockingIdentity) ApplyBootID(string) error   { return nil }
 func (b *blockingIdentity) ApplyHostname(string) error { return nil }
-func (b *blockingIdentity) Read() (string, string, string, error) {
+func (b *blockingIdentity) Read() (machineID, bootID, hostname string, err error) {
 	return "machine", "boot", "host", nil
 }
 

@@ -11,13 +11,11 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	corev1 "k8s.io/api/core/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/controller/testutil"
 	"github.com/zeroroot-ai/setec/internal/metrics"
-	"github.com/zeroroot-ai/setec/internal/snapshot/gate"
 )
 
 // The tests in this file pin the docs/design/isolation.md invariant-gate behavior at
@@ -26,131 +24,6 @@ import (
 
 // gateBreakage enumerates ways to strip one verification signal from
 // an otherwise fully-verified claim response.
-var gateBreakage = []struct {
-	name   string
-	mutate func(*setecgrpcv1.ClaimPoolEntryResponse)
-}{
-	{"reseed-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.EntropyReseeded = false }},
-	{"identity-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.Uniquified = false }},
-	{"provenance-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.ProvenanceVerified = false }},
-	{"atrest-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.EncryptedAtRest = false }},
-	// Invariant 1 has its own signal (the recorded secret-scan
-	// verdict, setec#206): losing it must reject the restore even
-	// when the provenance attestation (invariant 4) still holds —
-	// the gate never infers clean-base from provenance.
-	{"clean-base-unverified", func(r *setecgrpcv1.ClaimPoolEntryResponse) { r.CleanBaseVerified = false }},
-}
-
-// TestWarmStartFromPool_GateRejectsUnverifiedRestore asserts that a
-// node-side "successful" restore missing ANY per-restore verification
-// is rejected: outcome WarmStartRejected (the caller destroys the
-// sandbox — the VM already holds the unverified state, cold boot is
-// not a safe fallback), the VM is paused best-effort, and a typed
-// InvariantGateViolation event is emitted.
-func TestWarmStartFromPool_GateRejectsUnverifiedRestore(t *testing.T) {
-	for _, tc := range gateBreakage {
-		t.Run(tc.name, func(t *testing.T) {
-			res := verifiedClaimRes()
-			tc.mutate(res)
-			na := &fakeNodeAgentClient{
-				claimRes: res,
-				pauseRes: &setecgrpcv1.PauseSandboxResponse{Success: true},
-			}
-			coord, rec := newWarmStartCoord(t, na, nil)
-
-			outcome, entryID := coord.WarmStartFromPool(context.Background(), newSandboxForCoord(), newPreWarmClass())
-			if outcome != WarmStartRejected {
-				t.Fatalf("outcome = %q, want %q", outcome, WarmStartRejected)
-			}
-			if entryID != "entry-1" {
-				t.Fatalf("entryID = %q, want the consumed entry for the audit trail", entryID)
-			}
-			if na.lastPause == nil {
-				t.Fatal("expected the unverified VM to be paused before hand-back")
-			}
-			evs := strings.Join(drainEvents(rec), "\n")
-			if !strings.Contains(evs, EventReasonInvariantGateViolation) {
-				t.Fatalf("expected %s event, got:\n%s", EventReasonInvariantGateViolation, evs)
-			}
-			if strings.Contains(evs, EventReasonWarmStartRestored) {
-				t.Fatalf("a rejected restore must never emit %s:\n%s", EventReasonWarmStartRestored, evs)
-			}
-		})
-	}
-}
-
-// TestWarmStartFromPool_DevOptOutServesLoudly asserts the dev-mode
-// opt-out (class annotation + cluster dev label) serves the
-// unverified restore but emits the loud UnverifiedRestoreAllowed
-// warning.
-func TestWarmStartFromPool_DevOptOutServesLoudly(t *testing.T) {
-	res := verifiedClaimRes()
-	res.EntropyReseeded = false // one broken verification
-
-	rec := testutil.NewFakeEventsRecorder(32)
-	sb := newSandboxForCoord()
-	pod := newPodForSandbox(sb, "node-a")
-	cls := newPreWarmClass()
-	cls.Annotations = map[string]string{gate.AllowUnverifiedRestoresAnnotation: "true"}
-	devNS := &corev1.Namespace{
-		Name:   gate.DefaultGateNamespace,
-		Labels: map[string]string{gate.DefaultAllowDevLabel: "true"}}
-	c := newFakeClient(t, sb, pod, cls, devNS)
-	na := &fakeNodeAgentClient{claimRes: res}
-	coord := &Coordinator{
-		Client:   c,
-		Dialer:   &fakeDialer{client: na},
-		Recorder: rec,
-		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
-		Gate:     &gate.Gate{Reader: c},
-	}
-
-	outcome, _ := coord.WarmStartFromPool(context.Background(), sb, cls)
-	if outcome != WarmStartRestored {
-		t.Fatalf("outcome = %q, want %q under the dev opt-out", outcome, WarmStartRestored)
-	}
-	evs := strings.Join(drainEvents(rec), "\n")
-	if !strings.Contains(evs, EventReasonUnverifiedRestoreAllowed) {
-		t.Fatalf("dev opt-out must be loud (%s event), got:\n%s", EventReasonUnverifiedRestoreAllowed, evs)
-	}
-}
-
-// TestWarmStartFromPool_AnnotationAloneStillRejected pins that the
-// class annotation without the cluster-level dev label changes
-// nothing.
-func TestWarmStartFromPool_AnnotationAloneStillRejected(t *testing.T) {
-	res := verifiedClaimRes()
-	res.Uniquified = false
-
-	rec := testutil.NewFakeEventsRecorder(32)
-	sb := newSandboxForCoord()
-	pod := newPodForSandbox(sb, "node-a")
-	cls := newPreWarmClass()
-	cls.Annotations = map[string]string{gate.AllowUnverifiedRestoresAnnotation: "true"}
-	unlabeled := &corev1.Namespace{Name: gate.DefaultGateNamespace}
-	c := newFakeClient(t, sb, pod, cls, unlabeled)
-	na := &fakeNodeAgentClient{
-		claimRes: res,
-		pauseRes: &setecgrpcv1.PauseSandboxResponse{Success: true},
-	}
-	coord := &Coordinator{
-		Client:   c,
-		Dialer:   &fakeDialer{client: na},
-		Recorder: rec,
-		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),
-		Gate:     &gate.Gate{Reader: c},
-	}
-
-	outcome, _ := coord.WarmStartFromPool(context.Background(), sb, cls)
-	if outcome != WarmStartRejected {
-		t.Fatalf("outcome = %q, want %q (annotation alone must not opt out)", outcome, WarmStartRejected)
-	}
-}
-
-// TestRestoreSandbox_CrossSandboxRefusedBeforeRPC pins the pre-flight
-// half of the gate: restoring one sandbox's snapshot into a DIFFERENT
-// sandbox reuses session state across sessions (invariants 1/3/4), so
-// outside dev-mode it is refused before any state touches the target
 // VM.
 func TestRestoreSandbox_CrossSandboxRefusedBeforeRPC(t *testing.T) {
 	sb := newSandboxForCoord()
@@ -255,5 +128,18 @@ func TestRestoreSandbox_UnencryptedAtRestRefused(t *testing.T) {
 	}
 	if na.lastPause == nil {
 		t.Fatal("expected the unverified VM to be paused")
+	}
+}
+
+// drainEvents returns each event that the recorder holds now.
+func drainEvents(rec *testutil.FakeEventsRecorder) []string {
+	var out []string
+	for {
+		select {
+		case ev := <-rec.Events:
+			out = append(out, ev)
+		default:
+			return out
+		}
 	}
 }

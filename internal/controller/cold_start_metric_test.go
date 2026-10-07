@@ -14,11 +14,12 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/metrics"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 )
 
 // coldStartSamples returns the sample count and sum of
 // setec_sandbox_cold_start_seconds for the runtime label.
-func coldStartSamples(t *testing.T, reg *prometheus.Registry, runtime string) (uint64, float64) {
+func coldStartSamples(t *testing.T, reg *prometheus.Registry, runtime string) (count uint64, sum float64) {
 	t.Helper()
 	families, err := reg.Gather()
 	if err != nil {
@@ -75,14 +76,14 @@ func TestRecordTransitionObservesColdStartToContainerRunning(t *testing.T) {
 	curr := setecv1alpha1.SandboxStatus{
 		Phase:     setecv1alpha1.SandboxPhaseRunning,
 		StartedAt: &accepted,
-		Runtime:   &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-fc"},
+		Runtime:   &setecv1alpha1.SandboxRuntimeStatus{Chosen: "launcher"},
 	}
 
 	r.recordTransition(sb, cls, setecv1alpha1.SandboxPhasePending, curr, pod, "")
 
-	count, sum := coldStartSamples(t, reg, "kata-fc")
+	count, sum := coldStartSamples(t, reg, "launcher")
 	if count != 1 {
-		t.Fatalf("cold-start samples for kata-fc = %d, want 1", count)
+		t.Fatalf("cold-start samples for launcher = %d, want 1", count)
 	}
 	if sum != 2 {
 		t.Errorf("cold-start = %gs, want 2s (Sandbox creation to container running)", sum)
@@ -106,12 +107,12 @@ func TestRecordTransitionKeepsSubSecondColdStart(t *testing.T) {
 	}
 	curr := setecv1alpha1.SandboxStatus{
 		Phase:   setecv1alpha1.SandboxPhaseRunning,
-		Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "gvisor"},
+		Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher},
 	}
 
 	r.recordTransition(sb, nil, setecv1alpha1.SandboxPhasePending, curr, pod, "")
 
-	if count, _ := coldStartSamples(t, reg, "gvisor"); count != 1 {
-		t.Fatalf("cold-start samples for gvisor = %d, want 1", count)
+	if count, _ := coldStartSamples(t, reg, runtimepkg.BackendLauncher); count != 1 {
+		t.Fatalf("cold-start samples for the launcher = %d, want 1", count)
 	}
 }

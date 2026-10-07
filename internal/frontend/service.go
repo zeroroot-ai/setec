@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -46,10 +48,9 @@ const streamLogsPodPollInterval = 1 * time.Second
 // become loggable. 30s matches the Requirement 2.5 budget.
 const streamLogsPodPollTimeout = 30 * time.Second
 
-// workloadContainerName is the name the podspec builder assigns to the
-// workload container. Duplicated here (rather than imported) to keep
-// the frontend free of a dependency on the podspec package.
-const workloadContainerName = "workload"
+// workloadContainerName is the container whose log is the Sandbox log:
+// the launcher container, which writes the console of the machine.
+const workloadContainerName = podspec.LauncherContainerName
 
 // maxLogLineBytes caps one log line. It matches the kubelet's own log
 // line limit and is what keeps a workload that emits something huge on
@@ -162,8 +163,8 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 
 	// The lifecycle decides whether a command is required, so it is
 	// mapped first. An ephemeral Sandbox's command is its whole life. A
-	// session may omit it: the operator boots the setec keepalive and
-	// work arrives through Exec (setec#7).
+	// session may omit it: the machine then runs the entry point of the
+	// image, and work arrives through Exec (setec#7).
 	var lifecycle *setecv1alpha1.Lifecycle
 	if lc := req.GetLifecycle(); lc != nil {
 		spec, err := lifecycleFromRequest(lc)
@@ -192,7 +193,7 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 
 	if r := req.GetResources(); r != nil {
 		sb.Spec.Resources = setecv1alpha1.Resources{
-			VCPU: int32(r.GetVcpu()),
+			VCPU: int32Of(r.GetVcpu()),
 		}
 		if mem := r.GetMemory(); mem != "" {
 			q, err := resource.ParseQuantity(mem)
@@ -357,7 +358,7 @@ func (s *Service) Wait(ctx context.Context, req *setecv1grpc.WaitRequest) (*sete
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
+			return nil, errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-time.After(waitPollInterval):
 		}
 	}
@@ -474,7 +475,7 @@ func (s *Service) StreamLogs(req *setecv1grpc.StreamLogsRequest, stream setecv1g
 	// Serve the captured log instead.
 	follow := req.GetFollow() && !workloadContainerTerminated(pod)
 
-	window := logWindow{Follow: follow, Container: podContainer(pod)}
+	window := logWindow{Follow: follow, Container: workloadContainerName}
 	if tail > 0 {
 		window.TailLines = &tail
 	}
@@ -581,9 +582,8 @@ func clientsetLogOpener(cs kubernetes.Interface) podLogOpener {
 // logWindow selects which part of a container's log a read covers.
 // The zero value is the whole log the kubelet still holds, read to EOF.
 type logWindow struct {
-	// Container is the container to read. Empty reads the workload
-	// container of a RuntimeClass Pod; a launcher Pod sets "launcher",
-	// whose log is the console of the machine.
+	// Container is the container to read. The launcher Pod has one
+	// container, "launcher", whose log is the console of the machine.
 	Container string
 
 	// Follow keeps the read open for new lines after the existing ones.
@@ -645,31 +645,16 @@ func openWorkloadLogs(ctx context.Context, open podLogOpener, ns, podName string
 	return rc, nil
 }
 
-// workloadContainerTerminated reports whether the Pod's workload
-// podContainer is the container whose log is the Sandbox log: the
-// launcher container of a launcher Pod (the console of the machine), else
-// the workload container.
-func podContainer(pod *corev1.Pod) string {
-	if pod != nil {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == podspec.LauncherContainerName {
-				return c.Name
-			}
-		}
-	}
-	return workloadContainerName
-}
-
-// container has already exited, so following it would attach to
-// nothing. A Pod can still report Running while its single workload
-// container has terminated, so the container status is authoritative;
-// a terminal Pod phase without container statuses counts as
-// terminated.
+// workloadContainerTerminated reports whether the launcher container of
+// the Pod has already exited, so following it would attach to nothing.
+// A Pod can still report Running while its one container has
+// terminated, so the container status is authoritative. A terminal Pod
+// phase without container statuses counts as terminated.
 func workloadContainerTerminated(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	name := podContainer(pod)
+	name := workloadContainerName
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == name {
 			return cs.State.Terminated != nil
@@ -719,7 +704,7 @@ func (s *Service) waitForLoggablePod(ctx context.Context, ns, podName string, fo
 		}
 		select {
 		case <-ctx.Done():
-			return nil, status.FromContextError(ctx.Err()).Err()
+			return nil, errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-ticker.C:
 		}
 	}
@@ -917,19 +902,29 @@ func grpcCodeFor(err error) codes.Code {
 func networkAllowFromProto(a *setecv1grpc.NetworkAllow) setecv1alpha1.NetworkAllow {
 	out := setecv1alpha1.NetworkAllow{
 		Host: a.GetHost(),
-		Port: int32(a.GetPort()),
+		Port: int32Of(a.GetPort()),
 		CIDR: a.GetCidr(),
 	}
 	for _, p := range a.GetPorts() {
 		port := setecv1alpha1.NetworkAllowPort{
 			Protocol: corev1.Protocol(p.GetProtocol()),
-			Port:     int32(p.GetPort()),
+			Port:     int32Of(p.GetPort()),
 		}
 		if end := p.GetEndPort(); end != 0 {
-			endPort := int32(end)
+			endPort := int32Of(end)
 			port.EndPort = &endPort
 		}
 		out.Ports = append(out.Ports, port)
 	}
 	return out
+}
+
+// int32Of converts a wire value to the int32 of a CRD field. A value above
+// MaxInt32 saturates, and the CRD schema refuses it like any other value
+// out of its range.
+func int32Of(v uint32) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
 }

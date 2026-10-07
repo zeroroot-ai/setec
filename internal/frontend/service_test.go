@@ -24,6 +24,7 @@ import (
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -253,7 +254,7 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 		Spec: setecv1alpha1.SandboxSpec{SandboxClassName: testSandboxClass},
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:   setecv1alpha1.SandboxPhaseCompleted,
-			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: "kata-qemu"},
+			Runtime: &setecv1alpha1.SandboxRuntimeStatus{Chosen: runtimepkg.BackendLauncher},
 		},
 	}
 	c := newClient(t, sb)
@@ -265,8 +266,8 @@ func TestWait_ReportsChosenRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wait(): %v", err)
 	}
-	if resp.Runtime != "kata-qemu" {
-		t.Fatalf("runtime = %q, want kata-qemu", resp.Runtime)
+	if resp.Runtime != runtimepkg.BackendLauncher {
+		t.Fatalf("runtime = %q, want launcher", resp.Runtime)
 	}
 }
 
@@ -279,7 +280,7 @@ func TestWait_RuntimeEmptyWhenNeverResolved(t *testing.T) {
 		Name: "sb", Namespace: "team-a", UID: "u-1",
 		Status: setecv1alpha1.SandboxStatus{
 			Phase:  setecv1alpha1.SandboxPhaseFailed,
-			Reason: "RuntimeUnavailable",
+			Reason: "UnsupportedBackend",
 		},
 	}
 	c := newClient(t, sb)
@@ -695,7 +696,7 @@ func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
 	t.Parallel()
 	cls := &setecv1alpha1.SandboxClass{}
 	cls.Name = testSandboxClass
-	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "kata-fc"}
+	cls.Spec.Runtime = &setecv1alpha1.SandboxClassRuntime{Backend: "launcher"}
 	s := &Service{Client: newClient(t, cls), AuthDisabled: true, DefaultNamespace: "team-a"}
 
 	launch := func(class string) *setecv1grpc.LaunchResponse {
@@ -708,8 +709,8 @@ func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
 		}
 		return resp
 	}
-	if resp := launch(testSandboxClass); resp.GetSandboxClass() != testSandboxClass || resp.GetRuntime() != "kata-fc" {
-		t.Fatalf("response = class %q runtime %q, want %q and kata-fc", resp.GetSandboxClass(), resp.GetRuntime(), testSandboxClass)
+	if resp := launch(testSandboxClass); resp.GetSandboxClass() != testSandboxClass || resp.GetRuntime() != "launcher" {
+		t.Fatalf("response = class %q runtime %q, want %q and launcher", resp.GetSandboxClass(), resp.GetRuntime(), testSandboxClass)
 	}
 	if resp := launch("missing"); resp.GetRuntime() != "" {
 		t.Fatalf("runtime of an unresolved class = %q, want empty", resp.GetRuntime())

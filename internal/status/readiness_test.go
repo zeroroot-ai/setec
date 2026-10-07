@@ -12,12 +12,12 @@ import (
 )
 
 // withReadinessProbe gives the Pod's workload container a readiness
-// probe, as podspec does for a kata-fc session (setec#91).
+// probe, as podspec does for the launcher container.
 func withReadinessProbe(p *corev1.Pod) {
 	p.Spec.Containers = []corev1.Container{{
 		Name: "workload",
 		ReadinessProbe: &corev1.Probe{
-			Exec: &corev1.ExecAction{Command: []string{"/setec/keepalive/setec-keepalive", "--workspace-ready", "/workspace"}}},
+			Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/setec-launcher", "ready"}}},
 	}}
 }
 
@@ -30,9 +30,8 @@ func withRunning(ready corev1.ConditionStatus) func(*corev1.Pod) {
 
 // TestDerive_ProbedPodIsPendingUntilReady asserts that a Running Pod
 // whose container declares a readiness probe does not make the Sandbox
-// Running until the Pod is Ready. A kata-fc session mounts its
-// workspace after the container starts, and a turn that runs earlier
-// loses its writes.
+// Running until the Pod is Ready. The launcher container is Ready once
+// the guest agent answers, and a turn that runs earlier has no machine.
 func TestDerive_ProbedPodIsPendingUntilReady(t *testing.T) {
 	sb := newSandbox()
 

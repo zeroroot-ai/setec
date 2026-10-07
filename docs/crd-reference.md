@@ -1,16 +1,5 @@
 # Sandbox CRD Reference
 
-> **Status (2026-09-29): not available until after launch.** Snapshot
-> restore (`spec.snapshotRef`), session memory checkpoints
-> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
-> Snapshot creation, pause/resume and TTL expiry work. The API still
-> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
-> instead of restoring, and a checkpointed session cannot resume. The
-> reasons and the open design are in
-> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
-> and checkpoints) and
-> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
-
 `Sandbox` is the sole custom resource Setec defines. This document is the
 authoritative field reference. It is derived from the generated
 `config/crd/bases/setec.zeroroot.ai_sandboxes.yaml` and the Go types in
@@ -65,7 +54,7 @@ status:
 | `resources` | object | yes | — | CPU and memory budget for the microVM; see [`spec.resources`](#specresources) below. |
 | `resources.vcpu` | int32 (`1`–`32`) | yes | — | Number of virtual CPUs allocated to the microVM. |
 | `resources.memory` | resource.Quantity | yes | — | RAM allocated to the microVM (e.g. `512Mi`, `2Gi`). The API refuses more than `64Gi`. A class can lower the ceiling with `maxResources.memory`. |
-| `resources.scratch` | resource.Quantity | no | class `defaultResources.scratch`, else `10Gi` | Size limit of the scratch volume at `/tmp`. The Pod gets an ephemeral-storage limit of this value plus `1Gi`. The value must not exceed the class `maxResources.scratch`, else `10Gi`. The kubelet stops a Sandbox that writes past the limit. |
+| `resources.scratch` | resource.Quantity | no | class `defaultResources.scratch`, else `10Gi` | Size of the writable layer of the machine. The Pod gets an ephemeral-storage limit of this value plus `3Gi`: `2Gi` for the machine files and `1Gi` for logs. The value must not exceed the class `maxResources.scratch`, else `10Gi`. The kubelet stops a Sandbox that writes past the limit. |
 | `network` | object | no | class default, else `{mode: none}` | Egress policy for the microVM; see [`spec.network`](#specnetwork) below. |
 | `network.mode` | enum `external-only` \| `egress-allow-list` \| `none` | yes (when `network` set) | `none` | Egress posture. Every mode is enforced by a generated NetworkPolicy. |
 | `network.allow` | []object | no | `[]` | Permitted egress destinations. Meaningful only when `network.mode: egress-allow-list`. |
@@ -86,8 +75,9 @@ status:
 ### `spec.resources`
 
 Both `vcpu` and `memory` are required. The operator translates these into
-the Pod's container resource requests and limits; Kata honors them as the
-Firecracker microVM's CPU and memory envelope.
+the size of the Firecracker microVM. The launcher Pod asks for the same CPU,
+and for the memory plus 256Mi for Firecracker, the launcher and the page
+cache of a snapshot write.
 
 ### `spec.network`
 
@@ -167,18 +157,12 @@ Sandbox, or `Kill` on the gRPC frontend):
   `/workspace`. Data written there survives VM restart and node loss —
   on node failure the CSI driver re-attaches the claim to the failover
   node (docs/design/storage.md). Any CSI driver works; there is no cloud-specific
-  storage dependency. On the kata-fc backend the claim is `volumeMode:
-  Block` instead of the default `Filesystem`: Kata Containers +
-  Firecracker has no virtio-fs, so a filesystem-mode volume's guest
-  writes never reach the PVC, and a raw block device is the one volume
-  type Firecracker can attach to the guest. The workload container's
-  command becomes the static keepalive binary, which formats the device
-  as ext4 (once — never reformatting an existing filesystem), mounts it,
-  and then execs the Sandbox's own command (or falls into its usual
-  no-command reap loop), so the workload still just sees an ordinary
-  writable directory at `/workspace` (docs/design/storage.md addendum, setec#91).
-  gVisor and runc are unaffected and keep the filesystem-mode
-  claim.
+  storage dependency. The claim is `volumeMode: Block`: Firecracker has
+  no virtio-fs, and a raw block device is the one volume type it can
+  attach to the guest. The launcher formats a new workspace as ext4
+  (once, never reformatting an existing file system), and the guest agent
+  mounts it, so the workload sees an ordinary writable directory at
+  `/workspace` (docs/design/storage.md, setec#91, setec#193).
 - **VM restart, not completion.** The workload exiting (any exit code)
   does not finish a session. The controller deletes the dead Pod and
   recreates it; the fresh microVM re-mounts the workspace and continues.
@@ -221,12 +205,12 @@ deletes the backing Pod; status converges to `Failed` with
 | Field | Type | Description |
 |-------|------|-------------|
 | `phase` | enum `Pending` \| `Running` \| `Completed` \| `Failed` \| `Paused` \| `Snapshotting` \| `Restoring` \| `Suspended` | High-level lifecycle state. Terminal phases (`Completed`, `Failed`) never roll back. `Suspended` (session + class `sessionCheckpoint` only) means the microVM was checkpointed to the portable store and released; no Pod exists while suspended, and the workspace PVC plus the checkpoint survive. |
-| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, docs/design/lifecycles.md), `ImagePullFailure`, `RuntimeUnavailable`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
+| `reason` | string | Short, machine-readable explanation for the current phase. Populated on `Failed` with values such as `Timeout`, `IdleTimeout` (session idle eviction, docs/design/lifecycles.md), `ImagePullFailure`, `UnsupportedBackend`, `ContainerExitedNonZero`, `ClassNotFound` (see [Orphaned Sandboxes](#orphaned-sandboxes-classnotfound)); on a session Sandbox, `Pending`/`SessionVMRestarting` marks a VM being replaced after exit. |
 | `exitCode` | *int32 | Exit status of the workload container once the Sandbox is terminal. `nil` while the Sandbox is `Pending` or `Running`. |
 | `podName` | string | Name of the backing Pod created by the controller. Defaults to `<sandbox-name>-vm`. |
 | `startedAt` | `metav1.Time` | Time the underlying Pod first transitioned to `Running`. |
 | `lastTransitionTime` | `metav1.Time` | Timestamp of the most recent phase change. |
-| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (docs/design/lifecycles.md) for Sandboxes whose class declares `preWarmPoolSize > 0` and whose image equals the class `preWarmImage`. `outcome` is `PoolRestored` (started from a claimed pool entry, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
+| `warmStart` | object | Outcome of the one-shot pre-warm pool attempt (docs/design/lifecycles.md) for Sandboxes whose class declares `preWarmPoolSize > 0` and that ask for an image by digest with the default resources of the class. `outcome` is `PoolRestored` (started from a warm base, `entryID` set) or `ColdBoot` (`reason` = `miss` or `error`). `nil` when no attempt applied. A `ColdBoot` outcome is a fallback, never a failure. |
 | `checkpoint` | object | Session memory-checkpoint bookkeeping (session + class `sessionCheckpoint` only). `ref`/`backend`/`sequence`/`takenAt`/`sizeBytes` describe the single retained checkpoint (a new one replaces its predecessor; a restore consumes it). `pendingRestore` marks a fresh VM that must restore from `ref`. `lastRecovery` reports how the most recent VM (re)start recovered: `ResumedFromCheckpoint` (process continued) or `RestartedFromWorkspace` (the distinct degraded condition — the process restarted against the durable workspace; no data lost). While `Suspended`, `status.reason` is one of `SuspendedIdle`, `UserSuspended`, or `CheckpointOnDrain`. |
 
 ## Phase state machine
@@ -239,7 +223,7 @@ deletes the backing Pod; status converges to `Failed` with
                     |                                  |
          Pod fails to start                  +---------+---------+
          (ImagePullBackOff,                  |                   |
-          RuntimeUnavailable, ...)      exit code 0         exit != 0,
+          UnsupportedBackend, ...)      exit code 0         exit != 0,
                     |                        |              timeout,
                     v                        v              container crash
                +---------+             +-----------+        |
@@ -301,60 +285,21 @@ Administrators author classes; tenants reference them by name in
 
 ### Schema
 
-- `spec.runtime.backend` — enum: `kata-fc`, `kata-qemu`, `gvisor`, `runc`.
-  Required unless the deprecated `spec.vmm` is present (in which case
-  Setec's defaulting webhook translates it to `runtime.backend`).
-- `spec.runtime.fallback` — optional ordered list of backends to try
-  when `spec.runtime.backend` has no eligible Node **but another
-  candidate does**. Example: `[gvisor, runc]` under `backend: kata-fc`
-  means "prefer microVM, fall back to gvisor, then to runc on dev
-  clusters". When *no* candidate has an eligible Node the requested
-  backend is kept and the Pod is created anyway — see
-  [`status.runtime.chosen`](#sandboxstatusruntimechosen) — because a
-  fallback with no capable Node is exactly as unschedulable as the
-  primary with no capable Node.
-- `spec.runtime.params` — optional backend-specific tuning, as bare
-  keys. **Only `kata-qemu` consumes any**, and it accepts exactly two:
-
-  | key | effect |
-  |---|---|
-  | `vcpus` | `io.katacontainers.config.hypervisor.default_vcpus` |
-  | `memory` | `io.katacontainers.config.hypervisor.default_memory` |
-
-  `kata-fc`, `gvisor` and `runc` consume none, and the `SandboxClass`
-  webhook refuses a class that names params for them rather than
-  accepting a setting that cannot take effect. An unrecognized key for
-  `kata-qemu` is refused the same way.
-
-  This entry previously gave `kata-fc.snapshotEnabled: true` and
-  `gvisor.platform: ptrace|kvm` as examples, and the worked example below
-  carried a `params: {kata-fc: {snapshotEnabled: true}}` block. Neither
-  backend reads params, the nested `backend.key` form does not even
-  validate against the schema (`params` is `map[string]string`), and
-  until setec#121 the params never reached the Pod at all — the builder
-  passed `nil`. All of it would now be refused, correctly.
+- `spec.runtime.backend` — `launcher` or empty. Empty means `launcher`:
+  the launcher is the only runtime (setec#198). Each Sandbox of the class
+  is one Firecracker microVM in one launcher Pod.
 
 ### Validation rules (enforced by the SandboxClass webhook)
 
-- `spec.runtime.backend` must be in the cluster's enabled-backend set
-  (`runtime.<backend>.enabled=true` in Helm values). Attempting to use
-  a disabled backend fails admission.
-- A backend marked `devOnly` in Helm values (`runtimes.runc.devOnly=true`
-  by default) is rejected unless the `default` namespace carries the label
-  `setec.zeroroot.ai/allow-dev-runtimes=true`. That label is the cluster
-  operator's written consent to namespace-only isolation.
-- The same `devOnly` mark also bars the backend from
-  `defaults.runtime.backend` and `defaults.runtime.fallback`, and that
-  rule is **absolute** rather than gated by the consent label
-  (GHSA-q7hq-f8hm-wmjr). The cluster defaults apply to Sandboxes in every
-  namespace and never pass through the SandboxClass webhook, so no single
-  namespace's label would be the right consent to ask for. The chart
-  refuses to render and the operator refuses to start. To run such a
-  backend cluster-wide, set `runtimes.<backend>.devOnly=false` — a
-  deliberate statement that its isolation is acceptable, rather than a
-  side-effect of naming it in the defaults block.
-- `spec.vmm` and `spec.runtime.backend` are mutually exclusive; if both
-  are provided, admission fails. Migration: set one and delete the other.
+- `spec.runtime.backend` must be `launcher` or empty. A class that names a
+  removed backend (`kata-fc`, `kata-qemu`, `gvisor`, `runc`) fails
+  admission with a message that names setec#198. A class that skipped
+  admission cannot run a Sandbox either: the operator fails the Sandbox
+  with the reason `UnsupportedBackend`.
+- A class with `spec.preWarmPoolSize` needs `spec.defaultResources` and
+  `spec.preWarmImageSignature`, and a `spec.preWarmImage` by digest when
+  it names one. The signature is a keyless
+  `issuer` and `identity`, or a `publicKey`, not both.
 - `spec.requests.cpu` and `spec.requests.memory`, when set, must be
   positive and must not exceed `spec.maxResources` when the class
   states a ceiling.
@@ -363,7 +308,7 @@ Administrators author classes; tenants reference them by name in
   Sandbox side, `spec.desiredState: Suspended` is rejected unless the
   Sandbox is a session AND its class sets `spec.sessionCheckpoint`.
 
-### Example (multi-backend with fallback)
+### Example
 
 ```yaml
 apiVersion: setec.zeroroot.ai/v1alpha1
@@ -372,16 +317,7 @@ metadata:
   name: standard
 spec:
   runtime:
-    backend: kata-fc
-    fallback:
-      - kata-qemu
-      - gvisor
-    # No params here: kata-fc consumes none, and the webhook refuses a class
-    # that names them for a backend that reads none. On kata-qemu the form is
-    # bare keys, not a per-backend map:
-    #   params:
-    #     vcpus: "4"
-    #     memory: "2048"
+    backend: launcher
   defaultResources:
     vcpu: 2
     memory: 2Gi
@@ -393,23 +329,6 @@ spec:
     - egress-allow-list
   default: true
 ```
-
-### Example (dev-only runc class)
-
-```yaml
-apiVersion: setec.zeroroot.ai/v1alpha1
-kind: SandboxClass
-metadata:
-  name: dev-fast
-spec:
-  runtime:
-    backend: runc
-  defaultResources:
-    vcpu: 1
-    memory: 512Mi
-```
-
-(Requires Helm `runtime.runc.enabled=true` + `runtime.runc.devOnly=true`.)
 
 ### kubectl usage
 
@@ -423,36 +342,15 @@ kubectl get sandboxclasses.setec.zeroroot.ai
 
 ### Sandbox.status.runtime.chosen
 
-When a Sandbox schedules, the controller writes the actual backend it
-landed on to `status.runtime.chosen`. For fallback chains this lets you
-distinguish "scheduled on kata-fc as requested" from "fell back to
-kata-qemu because no kata-fc-capable Node was Ready".
+When a Sandbox schedules, the controller writes `launcher` to
+`status.runtime.chosen`.
 
-Two Pending reasons describe a Sandbox that has not placed yet, and they
-are not the same problem:
-
-- **`AwaitingCapableNode`** — the backend is enabled, but no Node
-  advertises `setec.zeroroot.ai/runtime.<backend>=true` yet. **The Pod is
-  created regardless.** That is deliberate: a cluster autoscaler provisions
-  in response to an unschedulable Pod and nothing else, so withholding the
-  Pod until a capable Node appears is what makes a scale-to-zero pool
-  deadlock — no Node means no Pod, and no Pod means nothing ever asks for a
-  Node. On a cluster with no autoscaler the Pod simply waits, carrying the
-  scheduler's own explanation of the constraint it failed, and schedules by
-  itself once an administrator adds a capable Node.
-- **`RuntimeNotEnabled`** — no backend in the chain is enabled on this
-  operator at all, so there is no Pod spec to build. No amount of Node
-  provisioning fixes this; enable the backend in the operator's runtime
-  config. It is still `Pending` rather than `Failed`, because doing so is a
-  live fix the next reconcile picks up.
-
-Neither is terminal, and neither needs a new Sandbox.
-
-If a Sandbox sits in `AwaitingCapableNode` and your autoscaler never
-provisions anything, the Pod is unschedulable in a way the node pool cannot
-satisfy — check the pool declares the `setec.zeroroot.ai/runtime.<backend>`
-label and that the SandboxClass tolerates the pool's taint. See
-[EKS: rolling your own NodePool](runtime-backends/eks.md#rolling-your-own-nodepool).
+A launcher Pod asks for the extended resources `setec.zeroroot.ai/kvm` and
+`setec.zeroroot.ai/tun`. If no Node offers them, the Pod stays
+unschedulable and the Sandbox stays `Pending`, with the scheduler's own
+explanation on the Pod. A cluster autoscaler provisions in response to
+that Pod. Check that the node pool exposes `/dev/kvm`, and that the
+SandboxClass tolerates the taint of the pool.
 
 ## Phase 3 extensions
 
@@ -474,14 +372,11 @@ metadata:
 spec:
   sourceSandbox: workload-a
   sandboxClass: standard
-  imageRef: ghcr.io/org/app:1.2.3
-  kernelVersion: "6.1.0"
-  vmm: firecracker
+  imageRef: ghcr.io/org/app@sha256:<digest>
   ttl: 168h
   storageBackend: local-disk
   storageRef: "tenant-a-my-state"
   size: 2147483648
-  sha256: "..."
   node: node-a
 status:
   phase: Ready
@@ -504,11 +399,20 @@ Three additive fields on `SandboxSpec`:
 
 ### SandboxClass extensions
 
-Four additive fields on `SandboxClassSpec`:
+These fields of `SandboxClassSpec` belong to the pool and the pause:
 
-- `preWarmPoolSize` (int; default 0)
-- `preWarmImage` (string; required when pool size is non-zero)
-- `preWarmTTL` (Go duration; default 24h at runtime)
+- `preWarmPoolSize` (int; default 0). The number of warm bases of each
+  pool image of the class: snapshots of a machine that booted the image
+  and ran no workload. A pool image is an image by digest that a Sandbox
+  of the class asked for with the default resources in the last 7 days.
+  Such a Sandbox loads a base instead of a boot.
+- `preWarmImage` (string, by digest; optional). A first pool image, warm
+  from the creation of the class.
+- `preWarmImageSignature` (object; required when pool size is non-zero).
+  The signer of each pool image: `issuer` and `identity` of a keyless
+  cosign signature, or a PEM `publicKey`. The operator builds no base from
+  an image without a signature of this signer, and sets the condition
+  `ImageNotVerified` on the class. See [snapshots](snapshots.md).
 - `maxPauseDuration` (Go duration; optional, must be positive when set —
   the webhook rejects zero or negative values). Bounds how long a
   Sandbox may hold a paused microVM (`phase=Paused`). Past the cap the

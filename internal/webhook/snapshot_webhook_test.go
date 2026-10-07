@@ -39,7 +39,6 @@ func mkSnapshotCR(ns, name string, ttl *time.Duration) *setecv1alpha1.Snapshot {
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass:   "standard",
 			ImageRef:       "img:v1",
-			VMM:            setecv1alpha1.VMMFirecracker,
 			StorageBackend: "local-disk",
 			StorageRef:     name,
 			Node:           "node-a",

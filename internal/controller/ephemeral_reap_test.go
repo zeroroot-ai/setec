@@ -46,8 +46,6 @@ func newEphemeralReapReconciler(
 		Client:             c,
 		Scheme:             scheme,
 		Recorder:           events.NewFakeRecorder(16),
-		Runtimes:           testRuntimeRegistry,
-		RuntimeCfg:         testRuntimeCfg,
 		ClassResolver:      class.NewResolver(c),
 		NetPol:             testNetPolConfig,
 		EphemeralRetention: retention,

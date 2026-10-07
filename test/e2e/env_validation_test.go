@@ -22,87 +22,46 @@ limitations under the License.
 package e2e
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/zeroroot-ai/setec/internal/runtimeagent"
 )
 
-// kataFCNodeLabel is the capability label the runtime-agent DaemonSet applies
-// to a node whose kata-fc stack probes healthy. It is the cluster-side
-// equivalent of "this box has /dev/kvm and can actually boot a microVM".
-const kataFCNodeLabel = "setec.zeroroot.ai/runtime.kata-fc"
+// kvmNodeWait bounds how long the guard waits for the device plugin to
+// offer the KVM device on a node. The device plugin registers with the
+// kubelet after it starts, so an instant check races it.
+const kvmNodeWait = 3 * time.Minute
 
-// TestEnv_KVMPresent is the loud-fail environment guard for the Phase 3
-// suite. Every Phase 3 scenario implicitly assumes a Firecracker microVM can
-// actually boot, because Kata Containers with Firecracker requires hardware
-// virtualization. Without this guard, an incapable environment makes the
-// Phase 3 scenarios all hit t.Skip() and the suite reports PASS with zero
-// meaningful coverage — a silent regression hiding underneath green CI.
+// TestEnv_KVMPresent is the loud-fail environment guard of the suite. Each
+// scenario assumes a Firecracker machine can boot, and Firecracker needs
+// hardware virtualization. Without this guard, an incapable environment
+// makes the scenarios skip and the suite reports PASS with no coverage.
 //
-// # Where the check has to look (setec#298)
-//
-// This guard used to stat /dev/kvm on the host running the test binary. That
-// was correct under the old model, where the suite ran on a self-hosted runner
-// that WAS the KVM box. Those runners are gone (#161). Today the binary runs in
-// an ARC pod in staging while the microVM boots on a separate metal node, so
-// /dev/kvm is legitimately absent from the test's own filesystem: the old check
-// would have failed every ARC run for the wrong reason, which is why wiring it
-// unchanged into CI would have produced a false alarm rather than a guard.
-//
-// So the guard asks the question where the answer lives:
-//
-//   - Running against a cluster (the ARC/CI case): at least one node must carry
-//     the runtime-agent's kata-fc capability label. This mirrors the
-//     `Preflight — a kata-fc-capable node exists` step in e2e.yml, but in Go,
-//     so it gates the suite rather than only the workflow.
-//   - Running locally on a KVM box (`make e2e`): /dev/kvm must exist. Kept
-//     because that is still a real workflow and a missing /dev/kvm there is a
-//     genuine misconfiguration.
-//
-// Set SETEC_E2E_KVM_LOCAL=1 to force the local check (useful when the test
-// binary and the sandbox host are deliberately the same machine).
+// Against a cluster, at least one node must offer the KVM device of the
+// device plugin: a launcher Pod runs nowhere else. Run locally on a KVM box
+// (SETEC_E2E_KVM_LOCAL=1, or no cluster), /dev/kvm must exist.
 func TestEnv_KVMPresent(t *testing.T) {
-	if os.Getenv("SETEC_E2E_KVM_LOCAL") == "1" {
+	if os.Getenv("SETEC_E2E_KVM_LOCAL") == "1" || k8sClient == nil {
 		requireLocalKVM(t)
 		return
 	}
-
-	// The suite binds k8sClient in TestMain for every cluster-backed run. If it
-	// is nil the suite is running without a cluster at all, in which case the
-	// local check is the only meaningful one.
-	if k8sClient == nil {
-		requireLocalKVM(t)
-		return
-	}
-	if onLauncher() {
-		requireLauncherNode(t)
-		return
-	}
-	requireKataFCCapableNode(t)
+	requireLauncherNode(t)
 }
 
 // requireLauncherNode fails unless a node offers the KVM device of the
-// device plugin within kataFCLabelWait: a launcher Pod runs nowhere else.
+// device plugin within kvmNodeWait.
 func requireLauncherNode(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(kataFCLabelWait)
+	deadline := time.Now().Add(kvmNodeWait)
 	for {
-		if nodes := sandboxCapableNodes(t, backendLauncher); len(nodes) > 0 {
+		if nodes := sandboxCapableNodes(t); len(nodes) > 0 {
 			t.Logf("nodes that offer %s: %v", launcherKVMResource, nodes)
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("FATAL: no node offers %s after %s. The device plugin found no /dev/kvm, "+
-				"so no launcher Sandbox can run. Do NOT bypass this check.", launcherKVMResource, kataFCLabelWait)
+				"so no launcher Sandbox can run. Do NOT bypass this check.", launcherKVMResource, kvmNodeWait)
 		}
 		time.Sleep(10 * time.Second)
 	}
@@ -114,7 +73,7 @@ func requireLocalKVM(t *testing.T) {
 	t.Helper()
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			t.Fatal("FATAL: /dev/kvm is missing on this host; Phase 3 cannot run. " +
+			t.Fatal("FATAL: /dev/kvm is missing on this host; no Sandbox can run. " +
 				"Install KVM modules (kvm_intel or kvm_amd) or run the suite " +
 				"on a bare-metal host. Do NOT bypass this check. " +
 				"(If the sandboxes are meant to run on a REMOTE cluster node, " +
@@ -122,68 +81,4 @@ func requireLocalKVM(t *testing.T) {
 		}
 		t.Fatalf("stat /dev/kvm: %v", err)
 	}
-}
-
-// requireKataFCCapableNode fails when no node in the target cluster advertises
-// the kata-fc capability label, which is what the runtime-agent sets once the
-// node's kata-fc stack probes healthy.
-// kataFCLabelWait bounds how long the guard waits for the runtime-agent to
-// label a node. The label is written by an asynchronous probe loop, so an
-// instant check races it: on a fresh node the agent's first probe can land
-// before the installer has registered kata-fc (observed on the kind e2e run
-// for setec#22), and the next probe is one probe interval later. The suites
-// job installs with a 30s interval. The wait covers a few probes, and a node
-// that never becomes capable still fails the guard.
-const kataFCLabelWait = 3 * time.Minute
-
-func requireKataFCCapableNode(t *testing.T) {
-	t.Helper()
-	ctx := context.Background()
-
-	deadline := time.Now().Add(kataFCLabelWait)
-	for {
-		var nodes corev1.NodeList
-		if err := k8sClient.List(ctx, &nodes, client.MatchingLabels{kataFCNodeLabel: "true"}); err != nil {
-			t.Fatalf("list nodes labeled %s=true: %v", kataFCNodeLabel, err)
-		}
-		if len(nodes.Items) > 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Second)
-	}
-
-	// Nothing is capable. Report what the cluster actually looks like, because
-	// the usual causes are distinguishable and lead to different places. The
-	// runtime-agent's probe annotation carries the reason for each backend.
-	var all corev1.NodeList
-	if err := k8sClient.List(ctx, &all); err != nil {
-		t.Fatalf("no node carries %s=true, and listing all nodes failed: %v", kataFCNodeLabel, err)
-	}
-	var detail strings.Builder
-	for _, n := range all.Items {
-		var runtimeLabels []string
-		for k, v := range n.Labels {
-			if strings.HasPrefix(k, "setec.zeroroot.ai/runtime.") {
-				runtimeLabels = append(runtimeLabels, fmt.Sprintf("%s=%s", k, v))
-			}
-		}
-		if len(runtimeLabels) == 0 {
-			runtimeLabels = []string{"<no setec runtime labels>"}
-		}
-		detail.WriteString(fmt.Sprintf("\n  %s: %s", n.Name, strings.Join(runtimeLabels, " ")))
-		if probe, ok := n.Annotations[runtimeagent.ResultAnnotation]; ok {
-			detail.WriteString(fmt.Sprintf("\n    %s: %s", runtimeagent.ResultAnnotation, probe))
-		}
-	}
-
-	t.Fatalf("FATAL: no node carries %s=true after %s, so no Firecracker microVM can boot and "+
-		"Phase 3 would silently skip into a green run. Do NOT bypass this check.\n"+
-		"Nodes seen (%d):%s\n"+
-		"Likely causes: no KVM node is in the cluster, the installer (or kata-deploy) has not "+
-		"registered kata-fc with containerd on it, or the runtime-agent probe cannot read that "+
-		"registration (see the probe annotation above).",
-		kataFCNodeLabel, kataFCLabelWait, len(all.Items), detail.String())
 }

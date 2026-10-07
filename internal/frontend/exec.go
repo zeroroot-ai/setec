@@ -15,18 +15,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	clientexec "k8s.io/client-go/util/exec"
+	"k8s.io/streaming/pkg/httpstream"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1grpc "github.com/zeroroot-ai/setec/api/grpc/v1"
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/podspec"
-	runtimepkg "github.com/zeroroot-ai/setec/internal/runtime"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,12 +61,10 @@ var errDuplicateStart = errors.New("exec stream carried a second start message")
 // the exit classification — are unit-testable without a live kubelet.
 //
 // The production implementation is the Kubernetes pods/exec
-// subresource: kubelet hands the request to the CRI runtime, which for
-// a kata-fc Sandbox is the Kata shim, which asks the in-guest
-// kata-agent to spawn the process inside the workload container's
-// namespaces. That IS the in-VM exec channel, and it lands in the same
-// mount namespace as the booted workload — which is why the durable
-// /workspace volume is visible to an exec'd command at all.
+// subresource on the launcher container. The launcher carries the
+// command into the machine, and the guest agent starts it next to the
+// workload, so the command sees the durable /workspace volume
+// (docs/design/runtime.md).
 type containerExecutor interface {
 	ExecInContainer(
 		ctx context.Context,
@@ -101,8 +99,7 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 	if err := s.checkTenantNamespace(ctx, start.GetTenant(), ns); err != nil {
 		return err
 	}
-	sb, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId())
-	if err != nil {
+	if _, err := s.resolveLiveSession(ctx, ns, name, uid, start.GetSandboxId()); err != nil {
 		return err
 	}
 
@@ -122,7 +119,7 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 		return err
 	}
 
-	container, command := execTarget(sb, start.GetCommand())
+	container, command := execTarget(start.GetCommand())
 	return s.runExec(ctx, stream, execer, ns, name, container, command)
 }
 
@@ -132,14 +129,10 @@ func (s *Service) Exec(stream setecv1grpc.SandboxService_ExecServer) error {
 // the launcher container; the relay only carries it into the machine.
 var LauncherExecCommand = []string{"/usr/local/bin/setec-launcher", "exec", "--"}
 
-// execTarget is the container and the command of an exec. A launcher
-// Sandbox runs the command in its machine through the relay; any other
-// Sandbox runs it in its workload container.
-func execTarget(sb *setecv1alpha1.Sandbox, command []string) (string, []string) {
-	if sb != nil && sb.Status.Runtime != nil && sb.Status.Runtime.Chosen == runtimepkg.BackendLauncher {
-		return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
-	}
-	return workloadContainerName, command
+// execTarget is the container and the command of an exec: the launcher
+// container, which carries the command into the machine of the Sandbox.
+func execTarget(command []string) (container string, argv []string) {
+	return podspec.LauncherContainerName, append(append([]string{}, LauncherExecCommand...), command...)
 }
 
 // recvExecStart reads the mandatory opening message and validates it.
@@ -152,7 +145,7 @@ func recvExecStart(stream setecv1grpc.SandboxService_ExecServer) (*setecv1grpc.S
 			return nil, status.Error(codes.InvalidArgument,
 				"exec stream closed before sending a start message")
 		}
-		return nil, err
+		return nil, errwrap.Wrap(err, "grpc.BidiStreamingServer.Recv")
 	}
 	start := first.GetStart()
 	if start == nil {
@@ -299,7 +292,7 @@ func (s *Service) classifyExecOutcome(
 // place a command could still be running, and why. A read failure is
 // deliberately NOT treated as gone: the frontend must not upgrade its
 // own API hiccup into "your sandbox died".
-func (s *Service) sessionGone(ctx context.Context, ns, name string) (bool, string) {
+func (s *Service) sessionGone(ctx context.Context, ns, name string) (gone bool, why string) {
 	sb := &setecv1alpha1.Sandbox{}
 	err := s.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sb)
 	switch {
@@ -405,7 +398,7 @@ func (s *Service) ensureSessionRunning(ctx context.Context, ns, name string) err
 		}
 		select {
 		case <-ctx.Done():
-			return status.FromContextError(ctx.Err()).Err()
+			return errwrap.Wrap(status.FromContextError(ctx.Err()).Err(), "status.Status.Err")
 		case <-time.After(execReadyPollInterval):
 		}
 	}
@@ -426,7 +419,7 @@ func (s *Service) requestSessionRunning(ctx context.Context, ns, name string) er
 	sb := &setecv1alpha1.Sandbox{
 		Namespace: ns, Name: name,
 	}
-	return s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body))
+	return errwrap.Wrap(s.Client.Patch(ctx, sb, client.RawPatch(types.MergePatchType, body)), "client.Writer.Patch")
 }
 
 // execReadyBudget is the configured readiness budget, or the default.
@@ -535,7 +528,7 @@ func (s *execSender) send(msg *setecv1grpc.SandboxServiceExecResponse) error {
 	}
 	if err := s.stream.Send(msg); err != nil {
 		s.sendErr = err
-		return err
+		return errwrap.Wrap(err, "grpc.BidiStreamingServer.Send")
 	}
 	return nil
 }
@@ -618,10 +611,10 @@ func (e *podSubresourceExecutor) ExecInContainer(
 		return fmt.Errorf("build exec: %w", err)
 	}
 
-	return exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	return errwrap.Wrap(exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:  stdin,
 		Stdout: stdout,
 		Stderr: stderr,
 		Tty:    false,
-	})
+	}), "remotecommand.Executor.StreamWithContext")
 }

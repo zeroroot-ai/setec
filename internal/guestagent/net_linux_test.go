@@ -52,13 +52,13 @@ func TestLinkConfigurer_TakesThePodIdentity(t *testing.T) {
 			t.Fatalf("no default route via %s in %v", id.Gateway, routes)
 		}
 	}
-	if host, _ := os.ReadFile(filepath.Join(root, "etc/hostname")); string(host) != "work-vm\n" {
+	if host, _ := os.ReadFile(filepath.Join(root, "etc", "hostname")); string(host) != "work-vm\n" {
 		t.Fatalf("/etc/hostname = %q", host)
 	}
 	if host, _ := os.Hostname(); host != "work-vm" {
 		t.Fatalf("the kernel hostname = %q", host)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "etc/resolv.conf"))
+	raw, err := os.ReadFile(filepath.Join(root, "etc", "resolv.conf"))
 	if err != nil || string(raw) != "nameserver 10.43.0.10\n" {
 		t.Fatalf("resolv.conf = %q, %v", raw, err)
 	}

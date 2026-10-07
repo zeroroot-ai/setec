@@ -6,26 +6,25 @@ as gibson's sole untrusted-execution boundary (docs/design/threat-model.md open-
 
 ## Ubiquitous language
 
-- **Sandbox** — a single untrusted-execution unit (a `Sandbox` CR → one Pod →
-  one microVM). The isolation boundary around one tool/agent run.
-- **SandboxClass** — a named runtime profile: which **Backend** (isolation
-  runtime) a Sandbox uses, plus resource/tuning params. Cluster-scoped.
-- **Backend** — the isolation runtime for a Sandbox: `kata-fc` (Kata +
-  Firecracker VMM), `kata-qemu` (Kata + QEMU VMM), `gvisor`, or `runc`. A
-  SandboxClass may declare an ordered fallback chain.
-- **VMM** — the virtual machine monitor under Kata: Firecracker, QEMU, or
-  Cloud Hypervisor. "Firecracker" ⇒ Backend `kata-fc`.
+- **Sandbox** — a single untrusted-execution unit (a `Sandbox` CR → one
+  launcher Pod → one Firecracker microVM). The isolation boundary around one
+  tool/agent run.
+- **SandboxClass** — a named runtime profile: resource ceilings, network
+  modes, the warm pool, and checkpoints. Cluster-scoped. Its
+  `runtime.backend` is `launcher` or empty.
+- **Launcher** — the one runtime (setec#198): a launcher Pod runs one
+  Firecracker machine from a signed image disk. The Kata, gVisor and runc
+  backends were removed.
 - **North star (2026-08-11)** — a real gibson-executor tool run executing
   inside a Firecracker microVM on an actual KVM (bare-metal) node in staging,
-  end-to-end: gibson dispatch → Sandbox → metal node → kata-fc → guest-agent →
+  end-to-end: gibson dispatch → Sandbox → KVM node → launcher → guest-agent →
   result. **Includes snapshot/restore** (warm per-run start), because per-run
   cold-boot latency caps throughput for a fresh-sandbox-per-tool model.
 - **Substrate** — the node microVMs run on: **x86** nodes with KVM (nested
-  virt ⇒ metal on EC2; x86 for tool-ecosystem compatibility and kata maturity).
-  The installer DaemonSet prepares each node: the Kata static release, the
-  devmapper thin-pool, the gVisor release, and the containerd handlers
-  (docs/design/runtime.md). A pre-baked AMI on a Karpenter NodePool is an optional profile
-  (`karpenter.enabled`, default false). arm64 is unsupported (see docs/design/runtime.md).
+  virt or metal). Nothing is installed on the node: the KVM device plugin
+  offers `/dev/kvm` and `/dev/net/tun`, and the launcher image carries
+  Firecracker, the guest kernel and the guest agent (docs/design/runtime.md).
+  arm64 is unsupported (see docs/design/runtime.md).
 - **Dispatch** — the gibson-daemon → setec-frontend hop. Every hop is mTLS,
   and a component uses exactly one credential source: PEM files (the default)
   or the SPIFFE Workload API socket (docs/design/threat-model.md). In SPIFFE mode the server
@@ -34,19 +33,16 @@ as gibson's sole untrusted-execution boundary (docs/design/threat-model.md open-
 
 ## Architecture decisions (the ADR files live in the `docs` repo)
 
-- **Runtime** — stock **Kata + Firecracker** (`kata-fc`); setec does not own a
-  shim or require a Kata fork (docs/design/runtime.md).
-- **Node-prep** — setec owns a portable **installer DaemonSet** (kata-deploy
-  style) that lays Kata+FC+devmapper on any x86 KVM node. Works on any cluster;
-  the EKS baked-AMI + Karpenter path is an *optional* profile, never required
-  (docs/design/runtime.md).
+- **Runtime** — one Firecracker machine in each launcher Pod, booted from a
+  squashfs disk that the disk builder made and signed for one image digest
+  (docs/design/runtime.md, setec#198).
+- **Node-prep** — none beyond `/dev/kvm`, `/dev/net/tun` and the traffic
+  control modules. Works on any cluster (docs/design/runtime.md).
 - **Warm-start** — a declarative SandboxClass knob (`PreWarmPoolSize`); setec
-  automates the whole snapshot pool. **Operator manages zero templates.**
-  Restore lands in a real `kata-fc` Pod via the node-agent's FC-socket path
-  (docs/design/lifecycles.md), gated on the isolation invariants (docs/design/isolation.md). **Status
-  (2026-09-28): not working, post-launch.** Firecracker loads a snapshot only
-  before its VM boots, so the FC-socket path cannot restore into a kata-booted
-  VM (setec#105); the pool is rebuilt on a working restore (setec#103).
+  keeps warm bases, snapshots of a machine that booted the image and ran no
+  workload. **Operator manages zero templates.** A Sandbox of the class loads
+  a base in its launcher Pod, gated on the isolation invariants
+  (docs/design/isolation.md).
 
 - **Lifecycle** — a Sandbox is **ephemeral** (run-to-completion, auto-destroy,
   stateless; snapshot fast-start) or **session** (long-lived, reattach by
@@ -55,15 +51,10 @@ as gibson's sole untrusted-execution boundary (docs/design/threat-model.md open-
   (never lose corpus/findings) plus **memory checkpoints** for suspend-idle and
   resume-on-node-loss (process continues). Isolation: **one session per VM,
   wiped at session end**; intra-session suspend/resume ok (docs/design/isolation.md/0146).
-  **Status (2026-09-28):** the durable workspace works (a session's files
-  survive a VM restart); memory-checkpoint resume does not and is
-  post-launch, since it restores through the same path (setec#105).
-- **Snapshot restore, checkpoints and the pool (post-launch).** Owner
-  decision 2026-09-29: the whole question waits until after launch,
-  including whether to remove `snapshotRef` and `sessionCheckpoint`. Restoring
-  a *running* sandbox needs kata to adopt a container it did not start, which
-  stock kata cannot do (docs/design/runtime.md); a *clean-base* snapshot (a VM just booted)
-  can serve fast starts. See setec#105 and setec#103.
+- **Snapshot restore, checkpoints and fork.** A launcher Pod loads a snapshot
+  before its machine runs, so a restore, a checkpoint resume and a fork all
+  take the same path: the node agent stages the files, and the launcher
+  reseeds and uniquifies the guest before it runs (setec#105).
 - **Storage** — durable workspace on a **portable CSI volume** (continuous data
   safety), memory checkpoints on **S3-compatible object storage** (S3 or MinIO;
   process continuity). Both node-independent and portable; no AWS lock (docs/design/storage.md).

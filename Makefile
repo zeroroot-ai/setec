@@ -84,17 +84,16 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 # End-to-end test suite. Gated behind the `e2e` build tag so the tests are
 # skipped from `make test` and `go test ./...` on GitHub-hosted runners (which
-# have no KVM). Run `make e2e` on a bare-metal host that has Kata Containers
-# installed (kata-deploy provisions the `kata-fc` RuntimeClass). See
-# test/e2e/ for the suite and .github/workflows/e2e.yml for the CI wiring.
+# have no KVM). Run `make e2e` against a cluster whose nodes expose /dev/kvm,
+# with the SETEC_E2E_LAUNCHER_* and SETEC_E2E_DISK_REPO environment set. See
+# test/e2e/ for the suite and .github/workflows/exit-test-launcher.yml for the CI wiring.
 
 # Timeout for the full suite. Each scenario waits up to a few minutes for the
 # microVM to boot/exit; the aggregate budget is tuned for a warm host.
 E2E_TIMEOUT ?= 30m
 
-# Chart path and runtime class exposed to the tests via environment variables.
+# Chart path exposed to the tests via an environment variable.
 SETEC_E2E_CHART ?= $(shell pwd)/charts/setec
-SETEC_E2E_RUNTIMECLASS ?= kata-fc
 
 # Credential guard. internal/credentials owns every mTLS credential in the
 # module; internal/credguard is what keeps that true. It walks the whole tree
@@ -113,7 +112,7 @@ guard-credentials: ## Fail if an mTLS credential is built outside internal/crede
 	go test ./internal/credguard/...
 
 .PHONY: e2e
-e2e: ## Run the hardware-gated e2e suite (requires KVM + Kata on the host).
+e2e: ## Run the hardware-gated e2e suite (requires KVM nodes).
 # This suite is DESTRUCTIVE: it helm-installs a setec release and creates a
 # namespace before the first test runs, against whatever kubeconfig context is
 # current. It therefore refuses to run unless you name the cluster you mean
@@ -125,7 +124,6 @@ e2e: ## Run the hardware-gated e2e suite (requires KVM + Kata on the host).
 # Both are passed through below; setting neither makes the suite exit with the
 # current context named, rather than installing into it.
 	SETEC_E2E_CHART="$(SETEC_E2E_CHART)" \
-	SETEC_E2E_RUNTIMECLASS="$(SETEC_E2E_RUNTIMECLASS)" \
 	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
 	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
 	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT)
@@ -175,15 +173,11 @@ lint-config-schema-refresh: ## Re-vendor the golangci-lint JSON schema for the p
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet build-pool-vm build-guest-agent ## Build manager binary.
+build: manifests generate fmt vet build-guest-agent ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
-.PHONY: build-pool-vm
-build-pool-vm: ## Build the setec-pool-vm launcher binary.
-	go build -o bin/setec-pool-vm ./cmd/setec-pool-vm
-
 .PHONY: build-guest-agent
-build-guest-agent: ## Build the static in-guest setec-guest-agent (bundle into microVM rootfs images).
+build-guest-agent: ## Build the static setec-guest-agent, the /init of the launcher machine (Dockerfile.launcher builds the published one).
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o bin/setec-guest-agent ./cmd/setec-guest-agent
 
 .PHONY: run
@@ -198,25 +192,6 @@ image: docker-build ## Uniform-contract alias for docker-build.
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} .
-
-.PHONY: installer-image
-installer-image: ## Build the setec-installer image with the kata pin from kata.env (setec#26).
-	$(CONTAINER_TOOL) build -f Dockerfile.installer \
-	  $$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /') \
-	  -t ghcr.io/zeroroot-ai/setec-installer:dev .
-
-.PHONY: installer-payload-guard
-installer-payload-guard: ## Prove the installer's payload gate: the plain gate stage builds, every mutated one fails (setec#17).
-	@args="$$(scripts/runtime-build-args.sh | sed 's/^/--build-arg /')"; \
-	$(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args -t setec-installer-payload-gate:check . >/dev/null; \
-	echo "payload gate: plain build passed"; \
-	for mutation in kata-junk-binary gvisor-planted; do \
-	  if $(CONTAINER_TOOL) build -f Dockerfile.installer --target payload-gate $$args --build-arg PAYLOAD_MUTATION=$$mutation . >/dev/null 2>&1; then \
-	    echo "payload gate CANNOT FAIL: the $$mutation payload built; the inventory guard is broken" >&2; exit 1; \
-	  fi; \
-	  echo "payload gate: mutation $$mutation refused"; \
-	done; \
-	echo "payload gate: every mutated build refused, the guard can fail"
 
 # ast-checks ships the per-declaration read counter behind #116. The version is
 # read from go.mod and never written here.
@@ -260,7 +235,7 @@ check-crd-field-consumers: unwired-version ## Fail if a served CRD field has no 
 	  -types api/v1alpha1 -exempt scripts/crd-field-consumers-exempt.txt -min-served 50
 
 .PHONY: check-runtime-pins
-check-runtime-pins: ## Fail if any consumer names a kata or gVisor version of its own, or if the installer image names gVisor (D70).
+check-runtime-pins: ## Fail if any consumer names a guest kernel or Firecracker version of its own.
 	bash scripts/check-runtime-pins.sh --selftest
 	bash scripts/check-runtime-pins.sh
 
@@ -278,6 +253,16 @@ check-go-comment-spelling: ## Fail on British spelling in a Go comment (setec#17
 check-trust-domain-literal: ## Fail on the SPIFFE trust domain of a real install as a literal (setec#169, ADR-0164).
 	bash scripts/check-no-trust-domain-literal.sh --selftest
 	bash scripts/check-no-trust-domain-literal.sh
+
+.PHONY: check-no-adr-citation
+check-no-adr-citation: ## Fail on an ADR citation in a Go file: a comment points to a design page (setec#240).
+	bash scripts/check-no-adr-citation.sh --selftest
+	bash scripts/check-no-adr-citation.sh
+
+.PHONY: check-one-backend
+check-one-backend: ## Fail on a second isolation backend: the launcher is the one backend (setec#198).
+	bash scripts/check-one-backend.sh --selftest
+	bash scripts/check-one-backend.sh
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -300,30 +285,6 @@ helm-lint: ## Lint the Setec Helm chart (requires helm CLI on PATH).
 	}
 	$(HELM) lint $(HELM_CHART_DIR)
 
-.PHONY: helm-verify
-helm-verify: ## Render the chart and assert its containment controls are present.
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-chart-security.sh $(HELM_CHART_DIR)
-
-.PHONY: helm-verify-credentials
-helm-verify-credentials: ## Render both credential modes and assert the install-wide switch (setec#183).
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-chart-credentials.sh $(HELM_CHART_DIR)
-
-.PHONY: verify-x86-substrate
-verify-x86-substrate: ## Assert the x86-only substrate (docs/design/runtime.md): amd64-only images + arch selectors.
-	@command -v $(HELM) >/dev/null 2>&1 || { \
-		echo "helm is not installed; install from https://helm.sh/docs/intro/install/"; \
-		exit 1; \
-	}
-	HELM="$(HELM)" ./hack/verify-x86-substrate.sh $(HELM_CHART_DIR)
-
 # check: org-contract CI-equivalent gate (gibson#171 slice 1.4 /
 # zeroroot-ai/.github#87). Runs the same targets CI executes on every PR.
 .PHONY: check
@@ -331,7 +292,7 @@ verify-x86-substrate: ## Assert the x86-only substrate (docs/design/runtime.md):
 # resident, a full core for minutes), and several of these repos share one
 # 8-core workstation. CI runs it directly (`go-ci.yml` calls `make lint`), so
 # nothing is lost here. Run `make lint` by hand when you want it.
-check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling check-trust-domain-literal ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard, trust domain literal guard — run 'make lint' separately).
+check: test guard-credentials check-runtime-pins check-scaffold-notes check-go-comment-spelling check-trust-domain-literal check-one-backend check-no-adr-citation ## Run the local gate (tests, credential guard, runtime pin guard, scaffold note guard, Go comment spelling guard, trust domain literal guard, one backend guard, ADR citation guard — run 'make lint' separately).
 
 ##@ Dependencies
 

@@ -15,11 +15,11 @@ import (
 )
 
 // TestSandboxClassWebhook_ValidateScratch covers the two scratch values of a
-// class (ADR-0146, setec#172).
+// class (docs/design/storage.md, setec#172).
 func TestSandboxClassWebhook_ValidateScratch(t *testing.T) {
 	t.Parallel()
 	mk := func(def, max *resource.Quantity) *setecv1alpha1.SandboxClass {
-		cls := mkSandboxClass("scratch", "", mkRuntime(setecruntime.BackendGVisor))
+		cls := mkSandboxClass("scratch", mkRuntime(setecruntime.BackendLauncher))
 		if def != nil {
 			cls.Spec.DefaultResources = &setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("1Gi"), Scratch: def}
 		}
@@ -47,7 +47,7 @@ func TestSandboxClassWebhook_ValidateScratch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := webhookWith(fakeClientWithNS(t, gateNamespaceUnlabeled()), baseConfig())
+			w := classWebhook(t)
 			_, err := w.ValidateCreate(context.Background(), tc.class)
 			switch {
 			case tc.wantMsg == "" && err != nil:

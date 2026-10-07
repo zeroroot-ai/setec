@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
+// Package testutil holds test doubles for the controller tests.
 package testutil
 
 import (
@@ -24,6 +25,6 @@ func NewFakeEventsRecorder(n int) *FakeEventsRecorder {
 
 var _ events.EventRecorder = (*FakeEventsRecorder)(nil)
 
-func (f *FakeEventsRecorder) Eventf(_ runtime.Object, _ runtime.Object, eventtype, reason, action, note string, args ...any) {
+func (f *FakeEventsRecorder) Eventf(_, _ runtime.Object, eventtype, reason, action, note string, args ...any) {
 	f.Events <- fmt.Sprintf("%s %s %s %s", eventtype, reason, action, fmt.Sprintf(note, args...))
 }

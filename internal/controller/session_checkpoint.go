@@ -177,7 +177,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	cls *setecv1alpha1.SandboxClass,
 	pod *corev1.Pod,
 	desired setecv1alpha1.SandboxStatus,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, handled bool, err error) {
 	policy := sessionCheckpointPolicy(sb, cls)
 	if policy == nil || r.Coordinator == nil {
 		return ctrl.Result{}, false, nil
@@ -204,10 +204,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// that wrote it. A stale cache can still show that Pod as Running
 	// after the suspend deleted it, while the Sandbox already shows the
 	// pending checkpoint (setec#220).
-	if ck := sb.Status.Checkpoint; ck != nil && ck.PendingRestore &&
-		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || isLauncherSandbox(sb)) &&
-		pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp.IsZero() &&
-		(ck.PodUID == "" || string(pod.UID) != ck.PodUID) {
+	if restoreDue(sb, pod, desired) {
 		return r.restorePendingCheckpoint(ctx, logger, sb, policy)
 	}
 
@@ -216,11 +213,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// Pod, so after nodeLossGrace it is removed with no grace, and the
 	// session resumes from its last checkpoint on another node.
 	if policy.Durable && pod.Spec.NodeName != "" && pod.Annotations[annotationSuspendedPod] == "" {
-		if lostFor, lost := r.nodeLostFor(ctx, pod.Spec.NodeName); lost {
-			if lostFor < nodeLossGrace {
-				return ctrl.Result{RequeueAfter: nodeLossGrace - lostFor}, true, nil
-			}
-			res, err := r.resumeAfterNodeLoss(ctx, logger, sb, pod)
+		if res, handled, err := r.handleNodeLoss(ctx, logger, sb, pod); handled {
 			return res, true, err
 		}
 	}
@@ -229,26 +222,33 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// drain, preemption) or its node was cordoned. Checkpoint while
 	// the VM is still alive and suspend; the resume policy brings the
 	// session back immediately on another node.
-	if desired.Phase == setecv1alpha1.SandboxPhaseRunning || desired.Phase == setecv1alpha1.SandboxPhasePaused {
-		// Only an eviction we did NOT initiate counts as a drain.
-		draining := !pod.DeletionTimestamp.IsZero()
-		if !draining && pod.Spec.NodeName != "" {
-			node := &corev1.Node{}
-			if err := r.Get(ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node); err == nil && node.Spec.Unschedulable {
-				draining = true
-			}
-		}
-		if draining {
-			res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonCheckpointOnDrain)
-			return res, true, err
-		}
+	if (desired.Phase == setecv1alpha1.SandboxPhaseRunning || desired.Phase == setecv1alpha1.SandboxPhasePaused) &&
+		r.draining(ctx, pod) {
+		res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonCheckpointOnDrain)
+		return res, true, err
 	}
 
+	// (d), (d2), (e): an explicit suspend request, a pause past the cap, or
+	// an idle deadline.
+	if reason := suspendReason(sb, cls, desired); reason != "" {
+		res, err := r.suspendSession(ctx, logger, sb, policy, pod, reason)
+		return res, true, err
+	}
+
+	// (f) Periodic checkpoint while Running.
+	if desired.Phase == setecv1alpha1.SandboxPhaseRunning && policy.EffectiveInterval() > 0 {
+		return r.periodicCheckpoint(ctx, logger, sb, policy)
+	}
+	return ctrl.Result{}, false, nil
+}
+
+// suspendReason is the reason to suspend a session now, or "" (steps d,
+// d2 and e).
+func suspendReason(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, desired setecv1alpha1.SandboxStatus) string {
 	// (d) Explicit suspend request.
 	if sb.Spec.DesiredState == setecv1alpha1.SandboxDesiredStateSuspended &&
 		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || desired.Phase == setecv1alpha1.SandboxPhasePaused) {
-		res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonUserSuspended)
-		return res, true, err
+		return reasonUserSuspended
 	}
 
 	// (d2) Pause-timeout suspend (setec#202): a session sitting Paused
@@ -259,8 +259,7 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// holds until desiredState returns to Running.
 	if desired.Phase == setecv1alpha1.SandboxPhasePaused {
 		if deadline, ok := status.PauseDeadline(desired, cls); ok && !time.Now().Before(deadline) {
-			res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonSuspendedPauseTimeout)
-			return res, true, err
+			return reasonSuspendedPauseTimeout
 		}
 	}
 
@@ -269,14 +268,18 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 	// checkpoints enabled the deadline suspends instead of evicting.
 	if desired.Phase == setecv1alpha1.SandboxPhaseRunning {
 		if deadline, ok := status.SessionIdleDeadline(sb, cls); ok && !time.Now().Before(deadline) {
-			res, err := r.suspendSession(ctx, logger, sb, policy, pod, reasonSuspendedIdle)
-			return res, true, err
+			return reasonSuspendedIdle
 		}
 	}
+	return ""
+}
 
-	// (f) Periodic checkpoint while Running.
-	if desired.Phase == setecv1alpha1.SandboxPhaseRunning &&
-		policy.EffectiveInterval() > 0 {
+// periodicCheckpoint takes the periodic checkpoint of a running session
+// when it is due, or requeues for the time it is due (step f).
+func (r *SandboxReconciler) periodicCheckpoint(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox, policy *setecv1alpha1.SessionCheckpointSpec,
+) (res ctrl.Result, handled bool, err error) {
+	{
 		due := true
 		if ck := sb.Status.Checkpoint; ck != nil && ck.TakenAt != nil {
 			due = time.Since(ck.TakenAt.Time) >= policy.EffectiveInterval()
@@ -297,8 +300,48 @@ func (r *SandboxReconciler) reconcileSessionCheckpoint(
 		next := max(time.Until(nextCheckpointDue(sb, policy)), time.Second)
 		return ctrl.Result{RequeueAfter: next}, false, nil
 	}
+}
 
-	return ctrl.Result{}, false, nil
+// restoreDue reports whether a new running Pod of the session should load
+// the pending checkpoint (step b). A checkpoint never loads into the Pod
+// that wrote it.
+func restoreDue(sb *setecv1alpha1.Sandbox, pod *corev1.Pod, desired setecv1alpha1.SandboxStatus) bool {
+	ck := sb.Status.Checkpoint
+	return ck != nil && ck.PendingRestore &&
+		(desired.Phase == setecv1alpha1.SandboxPhaseRunning || isLauncherSandbox(sb)) &&
+		pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp.IsZero() &&
+		(ck.PodUID == "" || string(pod.UID) != ck.PodUID)
+}
+
+// handleNodeLoss waits out the grace of a lost node, then resumes the
+// session on another node (step c0). handled is false when the node is
+// not lost.
+func (r *SandboxReconciler) handleNodeLoss(
+	ctx context.Context, logger logr.Logger, sb *setecv1alpha1.Sandbox, pod *corev1.Pod,
+) (res ctrl.Result, handled bool, err error) {
+	lostFor, lost := r.nodeLostFor(ctx, pod.Spec.NodeName)
+	if !lost {
+		return ctrl.Result{}, false, nil
+	}
+	if lostFor < nodeLossGrace {
+		return ctrl.Result{RequeueAfter: nodeLossGrace - lostFor}, true, nil
+	}
+	res, err = r.resumeAfterNodeLoss(ctx, logger, sb, pod)
+	return res, true, err
+}
+
+// draining reports whether the Pod is being evicted, or its node is
+// cordoned (step c). Only an eviction that setec did not start counts.
+func (r *SandboxReconciler) draining(ctx context.Context, pod *corev1.Pod) bool {
+	if !pod.DeletionTimestamp.IsZero() {
+		return true
+	}
+	if pod.Spec.NodeName == "" {
+		return false
+	}
+	node := &corev1.Node{}
+	err := r.Get(ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node)
+	return err == nil && node.Spec.Unschedulable
 }
 
 // nextCheckpointDue computes when the next periodic checkpoint is due.
@@ -464,7 +507,7 @@ func (r *SandboxReconciler) restorePendingCheckpoint(
 	logger logr.Logger,
 	sb *setecv1alpha1.Sandbox,
 	policy *setecv1alpha1.SessionCheckpointSpec,
-) (ctrl.Result, bool, error) {
+) (res ctrl.Result, handled bool, err error) {
 	ck := sb.Status.Checkpoint
 	recovery := setecv1alpha1.SessionRecoveryResumedFromCheckpoint
 

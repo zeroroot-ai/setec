@@ -5,13 +5,13 @@ A Sandbox runs code that `setec` does not trust. This page lists each control th
 
 ## The Pod
 
-`internal/podspec/builder.go` builds every Sandbox Pod with these settings:
+`internal/podspec/launcher.go` (`BuildLauncher`) builds every Sandbox Pod: one launcher container that runs one Firecracker machine. The workload runs in the guest, behind the guest kernel and KVM, not in the container.
 
-- The workload runs as user and group 65532, with `runAsNonRoot`.
-- The root filesystem is read-only. The only writable path is the scratch volume at `/tmp` ([storage](storage.md)).
-- `allowPrivilegeEscalation` is false. The container drops every capability and adds `NET_RAW` and `NET_ADMIN` only.
+- The container runs as root with no other privilege. It drops every capability and adds `NET_ADMIN` only, for the tap device and the traffic redirects. Root is needed because that one capability is effective only for root without ambient capabilities.
+- `allowPrivilegeEscalation` is false, and the root filesystem of the container is read-only. The launcher writes only to its `emptyDir` work volume ([storage](storage.md)).
+- `/dev/kvm` and `/dev/net/tun` come from the device plugin as the resources `setec.zeroroot.ai/kvm` and `setec.zeroroot.ai/tun`. The Pod has no `hostPath` volume and no host namespace.
 - The seccomp profile is `RuntimeDefault`.
-- No ServiceAccount token is mounted (`automountServiceAccountToken: false`).
+- No ServiceAccount token is mounted (`automountServiceAccountToken: false`), and no Service environment variables are set.
 - The Pod uses the resolvers that the operator is configured with (`dnsPolicy: None`), so it cannot look up in-cluster Service names.
 
 ## The network

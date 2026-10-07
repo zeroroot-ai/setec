@@ -91,11 +91,9 @@ spec:
                   are passed verbatim; no shell interpretation occurs.
 
                   Required for the ephemeral lifecycle: that one command is the whole
-                  life of the Sandbox (docs/design/lifecycles.md). A session may leave it empty. The
-                  operator then boots the setec keepalive, a process that reaps
-                  orphans and never exits on its own, so the session outlives every
-                  command sent through Exec. The keepalive never depends on a shell
-                  or a sleep binary in the image.
+                  life of the Sandbox (docs/design/lifecycles.md). A session may
+                  leave it empty. The machine then runs the entry point and the
+                  command of the image, and work arrives through Exec.
                 items:
                   type: string
                 type: array
@@ -459,8 +457,9 @@ spec:
                     - type: integer
                     - type: string
                     description: |-
-                      Scratch is the size limit of the writable scratch volume at /tmp.
-                      The Pod also gets an ephemeral-storage limit of Scratch plus 1 GiB.
+                      Scratch is the size of the writable layer of the machine. The Pod
+                      gets an ephemeral-storage limit of Scratch plus 3 GiB: 2 GiB for the
+                      machine files and 1 GiB for logs.
                       Unset takes the class default (defaultResources.scratch), else
                       10 GiB. A Sandbox may ask for less than its class permits
                       (maxResources.scratch, else 10 GiB), never for more.
@@ -728,7 +727,7 @@ spec:
                 description: |-
                   Reason is a short, machine-readable explanation for the current
                   phase. Populated on Failed (e.g. "Timeout", "ImagePullFailure",
-                  "RuntimeUnavailable", "ContainerExitedNonZero").
+                  "UnsupportedBackend", "ContainerExitedNonZero").
                 type: string
               runtime:
                 description: |-
@@ -736,10 +735,7 @@ spec:
                   Populated by the reconciler after backend selection; nil while Pending.
                 properties:
                   chosen:
-                    description: |-
-                      Chosen is the name of the backend selected after evaluating the
-                      SandboxClass's primary backend and any fallback chain. One of
-                      kata-fc, kata-qemu, gvisor, or runc.
+                    description: 'Chosen is the backend of the Sandbox: launcher.'
                     type: string
                 type: object
               startedAt:
@@ -764,8 +760,9 @@ spec:
                     type: string
                   outcome:
                     description: |-
-                      Outcome is PoolRestored when the Sandbox started from a pool
-                      entry, ColdBoot otherwise.
+                      Outcome is PoolRestored when the Sandbox loaded a base, ColdBoot
+                      when the pool had none, and Rejected when a loaded base failed the
+                      invariant gate.
                     enum:
                     - PoolRestored
                     - ColdBoot

@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // Reason names why a launch failed. It is the first word of the
@@ -105,40 +108,13 @@ type Launcher struct {
 // the machine and removes the network join. It returns the exit code of
 // the workload. Each path out of Run leaves no process and no device.
 func (l *Launcher) Run(ctx context.Context) (code int, err error) {
-	if err := l.Spec.Validate(); err != nil {
-		return LaunchFailedExit, fail(ReasonBadSpec, err)
+	if err := l.prepare(); err != nil {
+		return LaunchFailedExit, err
 	}
-	if err := os.MkdirAll(l.Spec.WorkDir, 0o700); err != nil {
-		return LaunchFailedExit, fail(ReasonDisks, err)
-	}
-	// The kubelet pulled the disk into the image volume of the Pod on the
-	// node, outside the Pod network. The launcher reaches no registry.
-	if l.CheckDisk != nil {
-		if err := l.CheckDisk(l.Spec); err != nil {
-			return LaunchFailedExit, fail(ReasonDisks, fmt.Errorf("check the image disk: %w", err))
-		}
-	}
-	// A restore waits for the node agent: it stages the state, the memory
-	// and the writable layer, so the disks are ready only after that.
 	snap := l.Spec.Source.Snapshot
-	start := Booted
-	if snap != nil {
-		start = Loaded
-	}
-	if snap != nil && snap.Staged != "" {
-		wctx, cancel := context.WithTimeout(ctx, stagedWait)
-		err := waitFile(wctx, snap.Staged)
-		cancel()
-		if err != nil {
-			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("wait for the staged snapshot: %w", err)))
-		}
-		marker, err := os.ReadFile(snap.Staged)
-		if err != nil {
-			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("read the staged marker: %w", err)))
-		}
-		if strings.TrimSpace(string(marker)) == StagedNoReseed {
-			start = LoadedNoReseed
-		}
+	start, err := l.startKind(ctx)
+	if err != nil {
+		return LaunchFailedExit, err
 	}
 	defer func() {
 		if lerr := l.Net.Leave(); lerr != nil && err == nil {
@@ -164,30 +140,15 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	// The identity of the Sandbox (setec#235): the guest asks for a token
 	// over vsock, and the launcher signs it with a key that the machine
 	// never sees.
-	if id := l.Spec.Identity; id != nil {
-		signer, err := newIdentitySigner(id)
-		if err != nil {
-			return LaunchFailedExit, fail(ReasonBadSpec, err)
-		}
-		idL, err := listenIdentity(l.Spec.WorkDir)
-		if err != nil {
-			return LaunchFailedExit, fail(ReasonVMMStart, err)
-		}
-		idCtx, stopIdentity := context.WithCancel(ctx)
-		defer stopIdentity()
-		go serveIdentity(idCtx, idL, signer)
+	stopIdentity, err := l.startIdentity(ctx)
+	if err != nil {
+		return LaunchFailedExit, err
 	}
+	defer stopIdentity()
 
-	configFile := ""
-	if b := l.Spec.Source.Boot; b != nil {
-		configFile = filepath.Join(l.Spec.WorkDir, "vm.json")
-		raw, err := json.Marshal(l.Spec.bootConfig(pn.MAC))
-		if err != nil {
-			return LaunchFailedExit, fail(ReasonVMMStart, err)
-		}
-		if err := os.WriteFile(configFile, raw, 0o600); err != nil {
-			return LaunchFailedExit, fail(ReasonVMMStart, err)
-		}
+	configFile, err := l.writeBootConfig(pn)
+	if err != nil {
+		return LaunchFailedExit, err
 	}
 	if err := l.VMM.Start(ctx, l.Spec.WorkDir, configFile, l.Console); err != nil {
 		return LaunchFailedExit, fail(ReasonVMMStart, err)
@@ -215,28 +176,126 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
 		}
 	}
+	if err := l.finishRestore(start); err != nil {
+		return LaunchFailedExit, err
+	}
+	return l.waitExit(ctx, exitL, stop, func() { stopped = true })
+}
+
+// prepare checks the spec, makes the work directory and checks the image
+// disk.
+func (l *Launcher) prepare() error {
+	if err := l.Spec.Validate(); err != nil {
+		return fail(ReasonBadSpec, err)
+	}
+	if err := os.MkdirAll(l.Spec.WorkDir, 0o700); err != nil {
+		return fail(ReasonDisks, err)
+	}
+	// The kubelet pulled the disk into the image volume of the Pod on the
+	// node, outside the Pod network. The launcher reaches no registry.
+	if l.CheckDisk != nil {
+		if err := l.CheckDisk(l.Spec); err != nil {
+			return fail(ReasonDisks, fmt.Errorf("check the image disk: %w", err))
+		}
+	}
+	return nil
+}
+
+// startKind is how the machine starts. A restore waits for the node agent:
+// it stages the state, the memory and the writable layer, so the disks are
+// ready only after that.
+func (l *Launcher) startKind(ctx context.Context) (Start, error) {
+	snap := l.Spec.Source.Snapshot
+	if snap == nil {
+		return Booted, nil
+	}
+	if snap.Staged == "" {
+		return Loaded, nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, stagedWait)
+	err := waitFile(wctx, snap.Staged)
+	cancel()
+	if err != nil {
+		return Loaded, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("wait for the staged snapshot: %w", err)))
+	}
+	marker, err := os.ReadFile(snap.Staged)
+	if err != nil {
+		return Loaded, l.failRestore(fail(ReasonSourceFailed, fmt.Errorf("read the staged marker: %w", err)))
+	}
+	if strings.TrimSpace(string(marker)) == StagedNoReseed {
+		return LoadedNoReseed, nil
+	}
+	return Loaded, nil
+}
+
+// startIdentity serves the identity of the Sandbox (setec#235): the guest
+// asks for a token over vsock, and the launcher signs it with a key that
+// the machine never sees. The returned func stops the service.
+func (l *Launcher) startIdentity(ctx context.Context) (func(), error) {
+	id := l.Spec.Identity
+	if id == nil {
+		return func() {}, nil
+	}
+	signer, err := newIdentitySigner(id)
+	if err != nil {
+		return nil, fail(ReasonBadSpec, err)
+	}
+	idL, err := listenIdentity(l.Spec.WorkDir)
+	if err != nil {
+		return nil, fail(ReasonVMMStart, err)
+	}
+	idCtx, stopIdentity := context.WithCancel(ctx)
+	go serveIdentity(idCtx, idL, signer)
+	return stopIdentity, nil
+}
+
+// writeBootConfig writes the Firecracker config of a booted machine and
+// returns its path. A restore has no config file, so the path is "".
+func (l *Launcher) writeBootConfig(pn PodNet) (string, error) {
+	if l.Spec.Source.Boot == nil {
+		return "", nil
+	}
+	configFile := filepath.Join(l.Spec.WorkDir, "vm.json")
+	raw, err := json.Marshal(l.Spec.bootConfig(pn.MAC))
+	if err != nil {
+		return "", fail(ReasonVMMStart, err)
+	}
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		return "", fail(ReasonVMMStart, err)
+	}
+	return configFile, nil
+}
+
+// finishRestore connects a loaded machine and writes the restore evidence.
+func (l *Launcher) finishRestore(start Start) error {
+	snap := l.Spec.Source.Snapshot
 	switch start {
 	case Loaded:
 		// A loaded machine joins the Pod network only after the guest
 		// agent confirmed fresh randomness, the clock and a new identity.
 		// Until then its frames reach nothing (setec#105).
 		if err := l.Net.Connect(); err != nil {
-			return LaunchFailedExit, l.failRestore(fail(ReasonNetwork, err))
+			return l.failRestore(fail(ReasonNetwork, err))
 		}
 		if err := writeEvidence(snap.Evidence, RestoreEvidence{EntropyReseeded: true, Uniquified: true, ClockSet: true}); err != nil {
-			return LaunchFailedExit, fail(ReasonSourceFailed, err)
+			return fail(ReasonSourceFailed, err)
 		}
 	case LoadedNoReseed:
 		// No fresh randomness, so no network. The evidence tells the
 		// operator gate, which refuses the restore.
 		if err := writeEvidence(snap.Evidence, RestoreEvidence{Uniquified: true, ClockSet: true}); err != nil {
-			return LaunchFailedExit, fail(ReasonSourceFailed, err)
+			return fail(ReasonSourceFailed, err)
 		}
 	case Booted:
 	}
+	return nil
+}
 
-	// The exit report ends the run. A Firecracker process that ends with
-	// no report, and a stop of the Pod, end it too.
+// waitExit waits for the end of the run. The exit report ends it. A
+// Firecracker process that ends with no report, and a stop of the Pod, end
+// it too. stop stops the machine, and exited records that it stopped by
+// itself.
+func (l *Launcher) waitExit(ctx context.Context, exitL net.Listener, stop, exited func()) (int, error) {
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	vmmDone := make(chan error, 1)
@@ -256,7 +315,7 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		stop()
 		return r.ExitCode, nil
 	case werr := <-vmmDone:
-		stopped = true
+		exited()
 		// A late report can still be in the socket.
 		select {
 		case r := <-reportC:
@@ -266,7 +325,7 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		return LaunchFailedExit, fail(ReasonVMMExited, errors.Join(errors.New("firecracker ended before the guest reported an exit"), werr))
 	case <-ctx.Done():
 		stop()
-		return LaunchFailedExit, ctx.Err()
+		return LaunchFailedExit, errwrap.Wrap(ctx.Err(), "context.Context.Err")
 	case err := <-errC:
 		stop()
 		return LaunchFailedExit, fail(ReasonVMMExited, err)
@@ -290,13 +349,13 @@ func writeEvidence(path string, ev RestoreEvidence) error {
 	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "json.Marshal")
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
+		return errwrap.Wrap(err, "os.WriteFile")
 	}
-	return os.Rename(tmp, path)
+	return errwrap.Wrap(os.Rename(tmp, path), "os.Rename")
 }
 
 // stagedPoll is the interval at which the launcher looks for the staged
@@ -313,11 +372,11 @@ func waitFile(ctx context.Context, path string) error {
 		if _, err := os.Stat(path); err == nil {
 			return nil
 		} else if !os.IsNotExist(err) {
-			return err
+			return errwrap.Wrap(err, "os.Stat")
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errwrap.Wrap(ctx.Err(), "context.Context.Err")
 		case <-time.After(stagedPoll):
 		}
 	}

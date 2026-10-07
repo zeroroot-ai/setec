@@ -39,23 +39,6 @@ func verifiedRestoreRes() *setecgrpcv1.RestoreSandboxResponse {
 	}
 }
 
-// verifiedClaimRes is the pool-claim counterpart of
-// verifiedRestoreRes.
-// entryID is fixed: every caller claims the same fixture entry.
-func verifiedClaimRes() *setecgrpcv1.ClaimPoolEntryResponse {
-	const entryID = "entry-1"
-	return &setecgrpcv1.ClaimPoolEntryResponse{
-		Claimed:            true,
-		Success:            true,
-		EntryId:            entryID,
-		EntropyReseeded:    true,
-		Uniquified:         true,
-		ProvenanceVerified: true,
-		EncryptedAtRest:    true,
-		CleanBaseVerified:  true,
-	}
-}
-
 // fakeNodeAgentClient records the most recent request and returns
 // the configured response/error. Individual test cases swap the
 // response or error via the constructor.
@@ -79,10 +62,6 @@ type fakeNodeAgentClient struct {
 	lastRestore *setecgrpcv1.RestoreSandboxRequest
 	lastPause   *setecgrpcv1.PauseSandboxRequest
 	lastResume  *setecgrpcv1.ResumeSandboxRequest
-
-	claimRes  *setecgrpcv1.ClaimPoolEntryResponse
-	claimErr  error
-	lastClaim *setecgrpcv1.ClaimPoolEntryRequest
 }
 
 func (f *fakeNodeAgentClient) CreateSnapshot(_ context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
@@ -106,13 +85,6 @@ func (f *fakeNodeAgentClient) PauseSandbox(_ context.Context, in *setecgrpcv1.Pa
 func (f *fakeNodeAgentClient) ResumeSandbox(_ context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
 	f.lastResume = in
 	return f.resumeRes, f.resumeErr
-}
-func (f *fakeNodeAgentClient) QueryPool(_ context.Context, _ *setecgrpcv1.QueryPoolRequest) (*setecgrpcv1.QueryPoolResponse, error) {
-	return nil, nil
-}
-func (f *fakeNodeAgentClient) ClaimPoolEntry(_ context.Context, in *setecgrpcv1.ClaimPoolEntryRequest) (*setecgrpcv1.ClaimPoolEntryResponse, error) {
-	f.lastClaim = in
-	return f.claimRes, f.claimErr
 }
 func (f *fakeNodeAgentClient) DeleteSnapshot(_ context.Context, _ *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
 	return f.deleteRes, f.deleteErr
@@ -208,7 +180,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	c := newFakeClient(t, sb, pod)
 	na := &fakeNodeAgentClient{
 		createResp: &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: "t-a-snap-1", SizeBytes: 1024, Sha256: "cafe",
+			StorageRef: "t-a-snap-1", SizeBytes: 1024,
 		},
 	}
 	coord := newCoord(c, &fakeDialer{client: na})
@@ -224,7 +196,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if na.lastCreate.SandboxId != "t-a/s" {
 		t.Fatalf("sandbox_id = %q", na.lastCreate.SandboxId)
 	}
-	// The node-agent resolves the kata socket itself; the operator
+	// The node-agent resolves the Firecracker socket itself. The operator
 	// names the Pod by UID (setec#19).
 	if na.lastCreate.GetSourcePodUid() != string(pod.UID) {
 		t.Fatalf("source_pod_uid = %q, want the Pod UID %q", na.lastCreate.GetSourcePodUid(), pod.UID)
@@ -235,7 +207,7 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "t-a", Name: "snap-1"}, got); err != nil {
 		t.Fatalf("get Snapshot: %v", err)
 	}
-	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 1024 || got.Spec.SHA256 != "cafe" {
+	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 1024 {
 		t.Fatalf("snapshot fields wrong: %#v", got.Spec)
 	}
 	if got.Spec.Node != "node-a" {
@@ -253,7 +225,7 @@ func TestCreateSnapshot_NameConflict(t *testing.T) {
 		Namespace: "t-a", Name: "snap-1",
 		Spec: setecv1alpha1.SnapshotSpec{
 			SandboxClass: "standard", ImageRef: "x", StorageBackend: "local-disk",
-			StorageRef: "x", Node: "node-a", VMM: setecv1alpha1.VMMFirecracker,
+			StorageRef: "x", Node: "node-a",
 		},
 	}
 	c := newFakeClient(t, sb, pod, existing)
@@ -324,7 +296,7 @@ func TestCreateSnapshot_ReportsCreatingDuringWrite(t *testing.T) {
 	var duringErr error
 	na := &fakeNodeAgentClient{
 		createResp: &setecgrpcv1.CreateSnapshotResponse{
-			StorageRef: "t-a-snap-1", SizeBytes: 4096, Sha256: "deadbeef",
+			StorageRef: "t-a-snap-1", SizeBytes: 4096,
 		},
 		onCreate: func() {
 			mid := &setecv1alpha1.Snapshot{}
@@ -356,7 +328,7 @@ func TestCreateSnapshot_ReportsCreatingDuringWrite(t *testing.T) {
 	if got.Status.Phase != setecv1alpha1.SnapshotPhaseReady {
 		t.Fatalf("final phase = %q, want Ready", got.Status.Phase)
 	}
-	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 4096 || got.Spec.SHA256 != "deadbeef" {
+	if got.Spec.StorageRef != "t-a-snap-1" || got.Spec.Size != 4096 {
 		t.Fatalf("backend result not recorded on the CR: %#v", got.Spec)
 	}
 }
@@ -457,7 +429,6 @@ func TestRestoreSandbox_Happy(t *testing.T) {
 			SourceSandbox: "s",
 			SandboxClass:  "standard", ImageRef: "ghcr.io/org/app:v1",
 			Node: "node-a", StorageBackend: "local-disk", StorageRef: "t-a-snap-1",
-			VMM: setecv1alpha1.VMMFirecracker,
 		},
 	}
 	c := newFakeClient(t, sb, pod, snap)
@@ -618,7 +589,6 @@ func TestRestoreSandbox_EmitsEntropyReseededEvent(t *testing.T) {
 			SourceSandbox: "s",
 			SandboxClass:  "standard", Node: "node-a",
 			StorageBackend: "local-disk", StorageRef: "t-a-snap-1",
-			VMM: setecv1alpha1.VMMFirecracker,
 		},
 	}
 	c := newFakeClient(t, sb, pod, snap)

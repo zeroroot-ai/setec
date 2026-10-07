@@ -56,7 +56,7 @@ func TestPauseTimeout_PausedSandboxFails(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "pausy", cls.Name)
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 
 	// Pause on user request; pausedAt is stamped here.
 	patchDesiredState(g, ns, sb.Name, setecv1alpha1.SandboxDesiredStatePaused)
@@ -106,7 +106,7 @@ func TestPauseTimeout_UnboundedWithoutCap(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "parked", cls.Name)
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 
 	patchDesiredState(g, ns, sb.Name, setecv1alpha1.SandboxDesiredStatePaused)
 	g.Eventually(func() string {
@@ -136,7 +136,7 @@ func TestPauseTimeout_CheckpointSessionSuspends(t *testing.T) {
 
 	sb := newSandboxWithClass(ns, "parked", cls.Name, asSession(""))
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
-	firstPod := runSessionVM(g, t, ns, sb.Name)
+	firstPod := runSessionVM(t, g, ns, sb.Name)
 
 	patchDesiredState(g, ns, sb.Name, setecv1alpha1.SandboxDesiredStatePaused)
 	g.Eventually(func() string {
@@ -173,7 +173,7 @@ func TestPauseTimeout_CheckpointSessionSuspends(t *testing.T) {
 		p, err := getPod(testCtx, ns, sb.Name+podspec.PodNameSuffix)
 		return err == nil && p.DeletionTimestamp == nil
 	}, convergeTimeout, convergeInterval).Should(BeTrue(), "desiredState=Running must recreate the VM Pod")
-	runSessionVM(g, t, ns, sb.Name)
+	runSessionVM(t, g, ns, sb.Name)
 
 	g.Eventually(func() string {
 		got, err := getSandbox(testCtx, ns, sb.Name)

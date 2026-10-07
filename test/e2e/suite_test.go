@@ -23,11 +23,11 @@ limitations under the License.
 //
 // Every file in this package carries the `e2e` build tag so that
 // `go test ./...` never compiles or runs these tests. The suite is intended
-// to run only on a self-hosted CI runner with KVM, Kata Containers, and the
-// `kata-fc` RuntimeClass installed. See .github/workflows/e2e.yml.
+// to run only on a cluster whose nodes expose /dev/kvm. See
+// .github/workflows/exit-test-launcher.yml.
 //
 // The suite installs the charts/setec Helm chart into a throwaway namespace,
-// runs the 6 scenarios from design.md against real Kata+Firecracker, and then
+// runs the scenarios against real Firecracker machines in launcher Pods, and then
 // uninstalls. Assertions are expressed through controller-runtime's typed
 // client against the live cluster; cluster mutation (install/uninstall) goes
 // through helm and kubectl subprocesses since that is idiomatic for E2E
@@ -48,7 +48,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,8 +72,8 @@ var (
 
 	// chartFullname is the chart's `setec.fullname` for helmReleaseName:
 	// the prefix of every object the release renders (the operator
-	// Deployment is the fullname itself, then <fullname>-runtime-agent,
-	// <fullname>-node-agent, <fullname>-installer, <fullname>-webhook). It
+	// Deployment is the fullname itself, then <fullname>-device-plugin,
+	// <fullname>-node-agent, <fullname>-webhook). It
 	// equals the release name only when that name contains "setec"; the
 	// chain-6 job's chain6-exit renders chain6-exit-setec. Derived by
 	// internal/chartname, which is unit-tested against the chart.
@@ -118,26 +117,9 @@ var (
 	// the repo-relative path but callers can override for out-of-tree runs.
 	chartPath string
 
-	// kataRuntimeClass is the RuntimeClass the operator is configured to
-	// target. It must already exist on the cluster (kata-deploy provisions
-	// it). Scenario 5 temporarily removes and restores this resource.
-	kataRuntimeClass string
-
-	// kataOverhead is the kata-fc RuntimeClass's pod overhead, read from the
-	// live cluster in preflight. installChart passes it to the chart so the
-	// operator stamps Sandbox pods with overhead that matches the
-	// RuntimeClass (the admission controller requires exact equality).
-	kataOverhead corev1.ResourceList
-
-	// backendOverheads maps each enabled backend (kata-fc, kata-qemu, gvisor)
-	// to its live RuntimeClass pod overhead, captured in preflight and applied
-	// to runtimes.<backend>.defaultOverhead at install.
-	backendOverheads map[string]corev1.ResourceList
-
 	// imageTag is the tag of the locally-built setec component images that
 	// the E2E workflow builds from the working tree and imports into the
-	// cluster's container runtime. Every component (operator, runtime-agent)
-	// shares this tag. Defaults to "dev", matching development/k3s. The chart
+	// cluster's container runtime. Every component shares this tag. Defaults to "dev", matching development/k3s. The chart
 	// repositories are left at their defaults; only the tag is overridden,
 	// and pullPolicy defaults to Never so a missed import fails loud
 	// (ErrImageNeverPull) instead of silently pulling a stale/absent image.
@@ -151,23 +133,10 @@ var (
 	// SETEC_E2E_IMAGE_PULL_POLICY=IfNotPresent there.
 	imagePullPolicy string
 
-	// imageRepo / runtimeAgentImageRepo override the chart's image
-	// repositories. Needed whenever the images under test are not the
-	// chart defaults — e.g. a PR build pushed to a sha-tagged ghcr repo.
-	imageRepo             string
-	runtimeAgentImageRepo string
-
-	// installerEnabled turns the portable node installer DaemonSet on in
-	// the base install (SETEC_E2E_INSTALLER=1), with the same tag and pull
-	// policy as every other component and installerImageRepo as its
-	// repository. On a kata-deploy node the installer supplies the
-	// devmapper thin-pool and snapshotter the fc handler asks for and
-	// nobody else configures (setec#9); without it every kata-fc Sandbox
-	// there dies in containerd with "snapshotter must be provided to
-	// unpack". Off by default because the image has to exist in the
-	// cluster's runtime: the chain-6 kind job builds the operator only.
-	installerEnabled   bool
-	installerImageRepo string
+	// imageRepo overrides the chart's operator image repository. Needed
+	// whenever the image under test is not the chart default, for example
+	// a build pushed to a sha-tagged ghcr repo.
+	imageRepo string
 
 	// webhookEnabled controls whether the throwaway release installs the
 	// admission webhook. The ValidatingWebhookConfiguration is
@@ -196,7 +165,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(setecv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(nodev1.AddToScheme(scheme))
 }
 
 // TestMain bootstraps the E2E environment before running any test function,
@@ -215,22 +183,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	chartPath = envOr("SETEC_E2E_CHART", resolveChartPath())
-	kataRuntimeClass = envOr("SETEC_E2E_RUNTIMECLASS", "kata-fc")
 	imageTag = envOr("SETEC_E2E_IMAGE_TAG", "dev")
 	imagePullPolicy = envOr("SETEC_E2E_IMAGE_PULL_POLICY", "Never")
 	imageRepo = os.Getenv("SETEC_E2E_IMAGE_REPO")
-	runtimeAgentImageRepo = os.Getenv("SETEC_E2E_RUNTIME_AGENT_IMAGE_REPO")
-	installerEnabled = os.Getenv("SETEC_E2E_INSTALLER") == "1"
-	installerImageRepo = os.Getenv("SETEC_E2E_INSTALLER_IMAGE_REPO")
 	webhookEnabled = envOr("SETEC_E2E_WEBHOOK", "1") != "0"
-	sandboxBackend = envOr("SETEC_E2E_BACKEND", "kata-fc")
 
 	var err error
-	if onLauncher() {
-		if launcherCfg, err = loadLauncherConfig(); err != nil {
-			fmt.Fprintf(os.Stderr, "e2e: launcher configuration is incomplete: %v\n", err)
-			os.Exit(1)
-		}
+	if launcherCfg, err = loadLauncherConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: launcher configuration is incomplete: %v\n", err)
+		os.Exit(1)
 	}
 	if sessionS3, err = loadSessionS3Config(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: session-checkpoint S3 configuration is incomplete: %v\n", err)
@@ -392,7 +353,7 @@ func (c sessionS3Config) helmArgs() []string {
 	args := []string{
 		// The checkpoint backend lives in the node-agent, and the whole
 		// snapshots subtree (including the operator's node-agent dialer
-		// and its mTLS) is gated behind snapshots.enabled — which
+		// and its SPIFFE allow-lists) is gated behind snapshots.enabled — which
 		// snapshotsEnabled() turns on for this axis, in installChart, so
 		// there is exactly one place that decides it.
 		"--set", "nodeAgent.enabled=true",
@@ -405,12 +366,6 @@ func (c sessionS3Config) helmArgs() []string {
 		"--set-string", fmt.Sprintf("snapshots.s3.endpoint=%s", c.endpoint),
 		// Real S3 rejects path-style addressing; MinIO requires it.
 		"--set", fmt.Sprintf("snapshots.s3.pathStyle=%t", c.endpoint != ""),
-		// The operator<->node-agent channel is mTLS, and the chart's
-		// certManager path stays OFF here: it needs the right to create
-		// an Issuer, which the ARC runner does not hold. installChart
-		// mints all three Secrets from one CA instead and confirms the
-		// CA with caProvided (see nodeagentcert_test.go).
-		"--set", "snapshots.mTLS.certManager.enabled=false",
 	}
 	if c.nodeAgentImageRepo != "" {
 		args = append(args, "--set-string",
@@ -551,50 +506,6 @@ func preflight() error {
 		clusterDNSIP = dns.Spec.ClusterIP
 	}
 
-	// The launcher needs no RuntimeClass: its Pod asks for the KVM device.
-	backendOverheads = map[string]corev1.ResourceList{}
-	if onLauncher() {
-		return nil
-	}
-
-	// The kata-fc RuntimeClass is required for all scenarios except #5,
-	// which temporarily deletes and restores it.
-	var rc nodev1.RuntimeClass
-	if err := k8sClient.Get(ctx, client.ObjectKey{Name: kataRuntimeClass}, &rc); err != nil {
-		return fmt.Errorf("RuntimeClass %q not found on cluster: %w (install kata-deploy before running E2E)",
-			kataRuntimeClass, err)
-	}
-
-	// Capture the RuntimeClass's pod overhead. The operator stamps Sandbox
-	// VM pods with the chart's runtimes.<backend>.defaultOverhead, and the
-	// RuntimeClass admission controller rejects any pod whose overhead does
-	// not EQUAL the RuntimeClass's own overhead ("Pod's Overhead doesn't
-	// match RuntimeClass's defined Overhead"). The chart default (128Mi)
-	// will not match a kata-deploy-provisioned RuntimeClass (130Mi), so we
-	// read the live overhead here and pass it through to helm (installChart)
-	// instead of hard-coding a value that drifts with kata-deploy.
-	if rc.Overhead != nil {
-		kataOverhead = rc.Overhead.PodFixed
-	}
-
-	// Capture overhead for the other backends the suite enables (kata-qemu,
-	// gvisor) so TestRuntimeBackends_Smoke's Sandboxes pass the same overhead
-	// equality check. A backend whose RuntimeClass is absent or carries no
-	// overhead simply gets no override.
-	if kataOverhead != nil {
-		backendOverheads["kata-fc"] = kataOverhead
-	}
-	for _, b := range []string{"kata-qemu", "gvisor"} {
-		var brc nodev1.RuntimeClass
-		if err := k8sClient.Get(ctx, client.ObjectKey{Name: b}, &brc); err != nil {
-			continue
-		}
-		if brc.Overhead != nil {
-			backendOverheads[b] = brc.Overhead.PodFixed
-		} else {
-			backendOverheads[b] = corev1.ResourceList{}
-		}
-	}
 	return nil
 }
 
@@ -615,16 +526,8 @@ func preflight() error {
 // stale class from a previous run cannot silently govern this one.
 func ensureDefaultSandboxClass() error {
 	ctx := context.Background()
-	runtimeClassName := kataRuntimeClass
-	var classRuntime *setecv1alpha1.SandboxClassRuntime
-	if onLauncher() {
-		runtimeClassName = ""
-		classRuntime = &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher}
-	}
 	desired := newSandboxClass(e2eDefaultClassName, setecv1alpha1.SandboxClassSpec{
-		VMM:              setecv1alpha1.VMMFirecracker,
-		RuntimeClassName: runtimeClassName,
-		Runtime:          classRuntime,
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
 		// Generous ceiling: this class exists to carry a toleration, not to
 		// constrain anything. Scenarios that test ceilings build their own.
 		MaxResources: &setecv1alpha1.Resources{
@@ -693,19 +596,15 @@ func installChart() error {
 	}
 	// The launcher keeps its warm pool in a Sandbox namespace of its own,
 	// and signs each disk with a key that the run makes.
-	sandboxNamespaces := []string{sandboxNamespace}
-	var diskPublicKey string
-	if onLauncher() {
-		poolNs := &corev1.Namespace{}
-		poolNs.Name = launcherCfg.warmPoolNamespace
-		if err := k8sClient.Create(ctx, poolNs); err != nil {
-			return fmt.Errorf("create the warm pool namespace %q: %w", poolNs.Name, err)
-		}
-		sandboxNamespaces = append(sandboxNamespaces, poolNs.Name)
-		var err error
-		if diskPublicKey, err = createDiskSigningSecret(ctx); err != nil {
-			return err
-		}
+	poolNs := &corev1.Namespace{}
+	poolNs.Name = launcherCfg.warmPoolNamespace
+	if err := k8sClient.Create(ctx, poolNs); err != nil {
+		return fmt.Errorf("create the warm pool namespace %q: %w", poolNs.Name, err)
+	}
+	sandboxNamespaces := []string{sandboxNamespace, poolNs.Name}
+	diskPublicKey, err := createDiskSigningSecret(ctx)
+	if err != nil {
+		return err
 	}
 
 	// Provision the webhook serving cert before install so the operator can
@@ -723,16 +622,11 @@ func installChart() error {
 		}
 	}
 
-	// Same story one layer down: with snapshots on, the chart mounts three
-	// operator<->node-agent mTLS Secrets it does not fully create, and
-	// `helm --wait` blocks forever on a Pod whose Secret volume never
-	// resolves. Mint them here, from ONE CA, before the install. See
-	// nodeagentcert_test.go for why the suite does this rather than the
-	// chart's cert-manager path (setec#320: the ARC runner cannot create an
-	// Issuer, and issuing both leaves from a selfsigned ClusterIssuer gives
-	// them no shared trust root anyway).
+	// With snapshots on, the operator and the node-agent authenticate
+	// each other with SVIDs from the SPIFFE Workload API (setec#175), so
+	// SPIRE runs before the install (spire_test.go).
 	if snapshotsEnabled() {
-		if err := createNodeAgentMTLSSecrets(ctx, chartFullname, testNamespace); err != nil {
+		if err := installSPIRE(ctx); err != nil {
 			return err
 		}
 	}
@@ -753,39 +647,14 @@ func installChart() error {
 		"install", helmReleaseName, chartPath,
 		"--namespace", testNamespace,
 		"--set", fmt.Sprintf("namespace=%s", testNamespace),
-		// runtimes.kata-fc.runtimeClassName, not the removed top-level
-		// runtimeClassName: that value was accepted and ignored for every chart
-		// install, and the chart now fails the render rather than letting the
-		// setting stay silently inert (setec#115).
-		"--set", fmt.Sprintf("runtimes.kata-fc.runtimeClassName=%s", kataRuntimeClass),
-		// The E2E cluster gets its kata-fc RuntimeClass from kata-deploy
-		// (preflight requires it to pre-exist; scenario 5 deletes/restores
-		// it). The chart must therefore NOT render its own kata-fc
-		// RuntimeClass — otherwise helm refuses the install with an
-		// ownership conflict ("cannot be imported into the current release"
-		// because the object is already owned by the kata-deploy release).
-		// runtimes.<backend>.install=false is the chart's documented knob
-		// for "an external process owns the RuntimeClass lifecycle".
-		"--set", "runtimes.kata-fc.install=false",
 		// The component images are built from the working tree and imported
 		// into the cluster runtime by the E2E workflow (there is no registry
 		// to pull them from on the bare-metal runner). Point every deployed
 		// component at the locally-built tag and force pullPolicy=Never so a
 		// missed import fails loud instead of silently pulling from a
-		// registry. node-agent is disabled by default, so only the operator
-		// (image.*) and runtime-agent (runtimeAgent.image.*) need overriding.
+		// registry. The launcher images take their tag in launcherHelmArgs.
 		"--set", fmt.Sprintf("image.tag=%s", imageTag),
 		"--set", fmt.Sprintf("image.pullPolicy=%s", imagePullPolicy),
-		"--set", fmt.Sprintf("runtimeAgent.image.tag=%s", imageTag),
-		"--set", fmt.Sprintf("runtimeAgent.image.pullPolicy=%s", imagePullPolicy),
-		// The portable installer DaemonSet (docs/design/runtime.md) joins the base install
-		// under SETEC_E2E_INSTALLER=1. kata-deploy owns the kata-fc handler
-		// on the metal node and the installer leaves it alone, but the
-		// handler asks for the devmapper snapshotter and kata-deploy
-		// configures no thin-pool and no snapshotter (setec#9). The
-		// installer supplies exactly that, before any scenario runs, and
-		// waitForInstallReady gates on its outcome.
-		"--set", fmt.Sprintf("installer.enabled=%t", installerEnabled),
 		// The Sandbox namespace, declared to the chart (setec#10). The
 		// release binds the operator's Pod-write RBAC there and covers it
 		// with the baseline default-deny NetworkPolicy and the host-access
@@ -813,8 +682,8 @@ func installChart() error {
 		// ownership metadata at all, so a throwaway release rendering them
 		// is refused ("exists and cannot be imported into the current
 		// release"). Nothing is lost: every scenario in this suite builds
-		// its own SandboxClass (e2e-tight, runc-dev-cls, fallback-test-cls,
-		// e2e-session-checkpoint-*, …) and none references the chart's.
+		// its own SandboxClass (e2e-tight, e2e-session-checkpoint-*, …)
+		// and none references the chart's.
 		// Same opt-out the roundtrip job takes, for the same reason.
 		"--set", "sandboxClasses.enabled=false",
 		// No --wait (setec#12). helm's wait calls a DaemonSet ready only at
@@ -838,25 +707,8 @@ func installChart() error {
 	// verified none of them. That is the failure mode TestEnv_KVMPresent exists
 	// to prevent, arriving through a different door.
 	if snapshotsEnabled() {
-		args = append(args,
-			"--set", "snapshots.enabled=true",
-			// The acknowledgment the chart requires (setec#326): it refuses
-			// to render a release that mounts snapshots.mTLS.caSecret without
-			// someone declaring the Secret exists, because a non-optional
-			// missing Secret wedges the Pods and surfaces as an opaque
-			// "context deadline exceeded" ten minutes into the install.
-			//
-			// setec#331 spelled out what that leaves outstanding: the chart
-			// refuses to render, but it does not conjure a CA, so turning
-			// snapshots on still needs somebody to create setec-nodeagent-ca
-			// signing BOTH leaves — with a selfsigned issuer each leaf is its
-			// own root and the two sides do not trust each other — and to pass
-			// this flag. "Somebody" is now this suite: createNodeAgentMTLSSecrets
-			// a few lines above mints exactly that, one CA and both leaves from
-			// it, which is the part the chart's own cert-manager path cannot do
-			// (setec#320, still open for the chart-managed CA Issuer).
-			"--set", "snapshots.mTLS.caProvided=true",
-		)
+		args = append(args, "--set", "snapshots.enabled=true")
+		args = append(args, spireHelmArgs(chartFullname, testNamespace)...)
 	}
 
 	// Enable the SandboxClass/Sandbox admission webhook with the
@@ -876,69 +728,16 @@ func installChart() error {
 	if imageRepo != "" {
 		args = append(args, "--set-string", fmt.Sprintf("image.repository=%s", imageRepo))
 	}
-	if runtimeAgentImageRepo != "" {
-		args = append(args, "--set-string", fmt.Sprintf("runtimeAgent.image.repository=%s", runtimeAgentImageRepo))
-	}
-	if installerEnabled {
-		args = append(args,
-			"--set", fmt.Sprintf("installer.image.tag=%s", imageTag),
-			"--set", fmt.Sprintf("installer.image.pullPolicy=%s", imagePullPolicy),
-		)
-		if installerImageRepo != "" {
-			args = append(args, "--set-string", fmt.Sprintf("installer.image.repository=%s", installerImageRepo))
-		}
-	}
 	args = append(args, sessionS3.helmArgs()...)
-	if onLauncher() {
-		args = append(args, launcherHelmArgs(diskPublicKey)...)
-	}
-
-	// Enable every backend TestRuntimeBackends_Smoke exercises (kata-fc is
-	// already enabled by default). With the webhook on, the vsandboxclass
-	// validator rejects a SandboxClass whose backend is not enabled. Their
-	// RuntimeClasses are provisioned externally (kata-deploy / gvisor install),
-	// so install=false avoids the same ownership conflict as kata-fc. Match
-	// each backend's stamped Sandbox overhead to its live RuntimeClass overhead
-	// (captured in preflight) so the RuntimeClass admission controller accepts
-	// the Sandbox pods.
-	for _, b := range []string{"kata-fc", "kata-qemu", "gvisor"} {
-		ovh, ok := backendOverheads[b]
-		if !ok {
-			continue // backend's RuntimeClass not present on this cluster
-		}
-		if b != "kata-fc" {
-			args = append(args,
-				"--set", fmt.Sprintf("runtimes.%s.enabled=true", b),
-				"--set", fmt.Sprintf("runtimes.%s.install=false", b),
-			)
-		}
-		if len(ovh) == 0 {
-			// RuntimeClass declares no overhead (e.g. gvisor's runsc sentry is
-			// not a VMM). The chart still defaults a non-zero defaultOverhead,
-			// which the operator would stamp — and the admission controller
-			// rejects "Pod Overhead set without corresponding RuntimeClass
-			// defined Overhead". Null it so the operator stamps none.
-			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead=null", b))
-			continue
-		}
-		if cpu, ok := ovh[corev1.ResourceCPU]; ok {
-			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.cpu=%s", b, cpu.String()))
-		}
-		if mem, ok := ovh[corev1.ResourceMemory]; ok {
-			args = append(args, "--set", fmt.Sprintf("runtimes.%s.defaultOverhead.memory=%s", b, mem.String()))
-		}
-	}
+	args = append(args, launcherHelmArgs(diskPublicKey)...)
 
 	args = append(args, crdInstallArgs()...)
 
 	// SETEC_E2E_EXTRA_SET is a comma-separated list of extra `--set` values,
 	// appended LAST so it can override anything above.
 	//
-	// It exists for the chain-6 exit test, which must run without staging or
-	// prod: on a kind cluster there is no KVM, so the sandbox runs on the
-	// `runc` backend, and the settings that enable it are per-run rather than
-	// a property of this suite. Hard-coding a second backend here would mean
-	// every metal run also carried it.
+	// It carries the settings of one cluster, such as the node selector of
+	// the kind job, which are per-run rather than a property of this suite.
 	//
 	// Deliberately not a values FILE: a file makes it easy to smuggle in a
 	// whole alternate configuration, and a short --set list stays legible in
@@ -1022,11 +821,10 @@ const operatorRolloutStable = 30 * time.Second
 // operatorRolloutStable with no container restarting. It returns the
 // last unmet condition on timeout.
 //
-// A restart that happened before the window is not a failure: the
-// installer restarts containerd on the node while the operator starts,
-// which restarts every container there once (runs 36453858768 and
-// 36474786195). A crash loop restarts again inside the window, and a
-// container in CrashLoopBackOff is not Ready, so both still fail.
+// A restart that happened before the window is not a failure: a slow
+// first start can restart a container once. A crash loop restarts again
+// inside the window, and a container in CrashLoopBackOff is not Ready, so
+// it still fails.
 func waitForOperatorRollout(ctx context.Context, snapshots bool) error {
 	var stableSince time.Time
 	var baseline map[string]int32
@@ -1167,10 +965,8 @@ func helmRevision(t *testing.T) int {
 }
 
 // installReadyTimeout bounds the post-install readiness gate. Ten minutes,
-// not five: the suites job pre-warms a metal node BEFORE installing
-// (TestEnv_KVMPresent has to see a kata-fc-capable node), so the
-// runtime-agent has to roll out onto an m5zn.metal that came up minutes ago
-// with none of the images cached. Run 31916255452 died at five.
+// not five: the agents roll out onto nodes with none of the images cached.
+// Run 31916255452 died at five.
 const installReadyTimeout = 10 * time.Minute
 
 // waitForInstallReady is the readiness gate that replaces `helm --wait`
@@ -1179,20 +975,14 @@ const installReadyTimeout = 10 * time.Minute
 //
 //   - the operator Deployment rolled out, with the snapshots flag matching
 //     the install, and holds Ready with no restart (waitForOperatorRollout);
-//   - every runtime-agent pod whose node the cluster reports Ready is
+//   - every device-plugin pod whose node the cluster reports Ready is
 //     itself Ready, with at least one such pod. Pods pinned to a node the
 //     cluster does not report Ready are named and excluded, out loud,
 //     rather than waited on: their node is gone, not slow;
-//   - the same for the node-agent DaemonSet when the install renders it,
-//     and for the installer DaemonSet when the install renders it. The
-//     installer goes first: its readiness is a deliberate outcome
-//     (converged, converged-devmapper, or a stand-down), and it may restart
-//     containerd on the metal node once, which the agent gate must not
-//     watch mid-restart.
+//   - the same for the node-agent DaemonSet when the install renders it.
 //
-// A DaemonSet the scheduler places on no node at all (desired 0, as on the
-// chain-6 kind cluster, which pins the runtime-agent to an unmatched
-// selector) has nothing to gate on and passes.
+// A DaemonSet the scheduler places on no node at all (desired 0) has
+// nothing to gate on and passes.
 func waitForInstallReady(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(parent, installReadyTimeout)
 	defer cancel()
@@ -1200,16 +990,9 @@ func waitForInstallReady(parent context.Context) error {
 	if err := waitForOperatorRollout(ctx, snapshotsEnabled()); err != nil {
 		return err
 	}
-	var components []string
-	if installerEnabled {
-		components = append(components, "installer")
-	}
-	components = append(components, "runtime-agent")
+	components := []string{"device-plugin"}
 	if sessionS3.enabled {
 		components = append(components, "node-agent")
-	}
-	if onLauncher() {
-		components = append(components, "device-plugin")
 	}
 	for _, c := range components {
 		if err := waitForAgentsOnReadyNodes(ctx, c); err != nil {
@@ -1426,7 +1209,7 @@ func snapshotsEnabled() bool {
 // The cost of skipping is stated out loud rather than left implicit: a run
 // that skips CRDs exercises the CLUSTER's CRD schema, not this PR's. A PR
 // that changes an API type is not covered by such a run. That caveat was
-// already true and already documented in .github/workflows/e2e.yml; what was
+// already true and already documented in .github/workflows/exit-test-launcher.yml; what was
 // missing is anything that says so at the point it applies.
 func crdInstallArgs() []string {
 	out, err := exec.Command("kubectl", "get", "crd",
@@ -1484,7 +1267,9 @@ func waitForWebhookReady(ctx context.Context) error {
 	deadline := time.Now().Add(2 * time.Minute)
 	probe := &setecv1alpha1.SandboxClass{}
 	probe.Name = "webhook-readiness-probe"
-	probe.Spec = setecv1alpha1.SandboxClassSpec{VMM: setecv1alpha1.VMMFirecracker}
+	probe.Spec = setecv1alpha1.SandboxClassSpec{
+		Runtime: &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
+	}
 	for {
 		err := k8sClient.Create(ctx, probe)
 		if err == nil {
@@ -1520,10 +1305,7 @@ func uninstallChart() error {
 	// Delete both namespaces (ignore not-found; helm uninstall removes
 	// neither). The Sandbox namespace goes first so its Pods are gone before
 	// the operator that reaps them is.
-	namespaces := []string{sandboxNamespace, testNamespace}
-	if onLauncher() {
-		namespaces = []string{launcherCfg.warmPoolNamespace, sandboxNamespace, testNamespace}
-	}
+	namespaces := []string{launcherCfg.warmPoolNamespace, sandboxNamespace, testNamespace}
 	for _, ns := range namespaces {
 		delCmd := exec.Command("kubectl", "delete", "namespace", ns, "--wait=true", "--ignore-not-found=true", "--timeout=2m")
 		delCmd.Stdout = os.Stdout

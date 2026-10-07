@@ -6,209 +6,186 @@
 # This file only shrinks. Adding an entry means accepting a declaration
 # nothing reads, so put the reason on a # line above it.
 #
-# measured 2026-10-02: 88 of 1205 declarations across 97 packages and 225 files
+# measured 2026-10-06: 147 of 1283 declarations across 89 packages and 225 files
 
-const metrics.LabelNode	# internal/metrics/collectors.go:47
 const netpol.BaselineManagedByLabel	# internal/netpol/baseline.go:17
+# Map keys of the launcher Pod limits; the measurer counts a map key as a write.
+const podspec.KVMResource	# internal/podspec/launcher.go:32
+const podspec.TunResource	# internal/podspec/launcher.go:33
 const snapshot.NodeAgentComponentLabel	# internal/snapshot/pod_resolver.go:27
-const v1alpha1.VMMCloudHypervisor	# api/v1alpha1/sandboxclass_types.go:26
-field controller.SandboxClassReconciler.Scheme	# internal/controller/sandboxclass_controller.go:49
-field controller.SnapshotReconciler.Scheme	# internal/controller/snapshot_controller.go:50
-field credguard.Report.Exempted	# internal/credguard/credguard.go:220
-field main.readyzBody.KataCapableNodes	# cmd/main.go:92
-field main.readyzBody.KataRuntimeAvailable	# cmd/main.go:91
-field main.readyzBody.PrereqCheckComplete	# cmd/main.go:93
-field main.readyzBody.Warnings	# cmd/main.go:94
-field nodeagent.Config.SampleInterval	# internal/nodeagent/thinpool.go:51
-field pool.Entry.ClassName	# internal/nodeagent/pool/manager.go:50
-field pool.Manager.FirecrackerFactory	# internal/nodeagent/pool/manager.go:90
-field pool.Manager.NodeName	# internal/nodeagent/pool/manager.go:100
-field pool.Manager.Storage	# internal/nodeagent/pool/manager.go:83
-field poolentry.Provenance.KernelPath	# internal/nodeagent/poolentry/poolentry.go:85
-field poolentry.Provenance.RootfsPath	# internal/nodeagent/poolentry/poolentry.go:86
-field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:73
-field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:529
-field v1alpha1.SandboxClassStatus.ObservedGeneration	# api/v1alpha1/sandboxclass_types.go:403
-field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:580
-field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:575
-field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:585
-field v1alpha1.SnapshotSpec.KernelVersion	# api/v1alpha1/snapshot_types.go:81
-field v1alpha1.SnapshotSpec.SHA256	# api/v1alpha1/snapshot_types.go:128
-field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:153
-func chartname.Fullname	# internal/chartname/chartname.go:29
-func credguard.Check	# internal/credguard/credguard.go:234
-func credguard.Exemptions	# internal/credguard/exemptions.go:30
-func podspec.WithRuntimeSelection	# internal/podspec/builder.go:595
-func runtimeagent.HasSetecLabel	# internal/runtimeagent/labels.go:203
-func testutil.NewFakeEventsRecorder	# internal/controller/testutil/fake_events_recorder.go:21
-method atrest.decryptingReader.Read	# internal/snapshot/atrest/atrest.go:285
-method controller.SandboxClassReconciler.Reconcile	# internal/controller/sandboxclass_controller.go:64
-method controller.SandboxReconciler.Reconcile	# internal/controller/sandbox_controller.go:371
-method controller.WarmPoolReconciler.Reconcile	# internal/controller/warm_pool.go
-method controller.SnapshotReconciler.Reconcile	# internal/controller/snapshot_controller.go:72
-method credentials.spiffeSource.OnX509ContextUpdate	# internal/credentials/spiffe.go:227
-method credentials.spiffeSource.OnX509ContextWatchError	# internal/credentials/spiffe.go:250
-method credguard.Violation.String	# internal/credguard/credguard.go:205
-method frontend.LeaseService.Exec	# internal/frontend/leaseservice.go:249
-method frontend.LeaseService.Lease	# internal/frontend/leaseservice.go:168
-method frontend.LeaseService.PoolStatus	# internal/frontend/leaseservice.go:218
-method frontend.LeaseService.Release	# internal/frontend/leaseservice.go:198
-method frontend.Service.Attach	# internal/frontend/attach.go:47
-method frontend.Service.Exec	# internal/frontend/exec.go:87
-method frontend.Service.Fork	# internal/frontend/fork.go
-method frontend.Service.Keep	# internal/frontend/keep.go
-method frontend.Service.Kill	# internal/frontend/service.go:350
-method frontend.Service.Launch	# internal/frontend/service.go:160
-method frontend.Service.Pin	# internal/frontend/keep.go
-method frontend.Service.Resume	# internal/frontend/suspend.go
-method frontend.Service.Snapshot	# internal/frontend/snapshot.go
-method frontend.Service.StreamLogs	# internal/frontend/service.go:400
-method frontend.Service.Suspend	# internal/frontend/suspend.go
-method frontend.Service.Wait	# internal/frontend/service.go:301
-method frontend.execStreamWriter.Write	# internal/frontend/exec.go:538
-method grpcserver.Server.QueryPool	# internal/nodeagent/grpcserver/server.go:559
-method grpcserver.multiReadCloser.Close	# internal/nodeagent/grpcserver/server.go:901
-method grpcserver.multiReadCloser.Read	# internal/nodeagent/grpcserver/server.go:900
-method main.probeServer.NeedLeaderElection	# cmd/main.go:733
-method main.probeServer.Start	# cmd/main.go:729
-method main.repeatedString.Set	# cmd/node-agent/main.go:662
-method main.repeatedString.Set	# cmd/node-agent/main.go:662
-method main.repeatedString.String	# cmd/node-agent/main.go:660
-method main.repeatedString.String	# cmd/node-agent/main.go:660
-method metrics.Collectors.RecordDuration	# internal/metrics/collectors.go:222
-method netpol.Config.Generate	# internal/netpol/generator.go:275
-method pool.Manager.CountClass	# internal/nodeagent/pool/manager.go:516
-method pool.Manager.Release	# internal/nodeagent/pool/manager.go:453
-method pool.Manager.SetClock	# internal/nodeagent/pool/manager.go:166
-method pool.Manager.Size	# internal/nodeagent/pool/manager.go:505
-method runtime.ConfigValidationError.Error	# internal/runtime/config.go:124
-method snapshot.GRPCDialer.Close	# internal/snapshot/dialer.go:199
-method snapshot.grpcShim.QueryPool	# internal/snapshot/dialer.go:187
-method storage.countingReader.Read	# internal/snapshot/storage/s3.go:600
-method storage.decryptReadCloser.Close	# internal/snapshot/storage/encrypted.go:327
-method storage.verifyingReadCloser.Close	# internal/snapshot/storage/s3.go:629
-method storage.verifyingReadCloser.Read	# internal/snapshot/storage/s3.go:615
-method testutil.FakeEventsRecorder.Eventf	# internal/controller/testutil/fake_events_recorder.go:27
-method uniquify.CIDAllocator.Active	# internal/uniquify/cid.go:101
-method uniquify.CIDAllocator.Owner	# internal/uniquify/cid.go:93
-method webhook.SandboxClassWebhook.Default	# internal/webhook/sandboxclass_webhook.go:97
-method webhook.SandboxClassWebhook.ValidateCreate	# internal/webhook/sandboxclass_webhook.go:121
-method webhook.SandboxClassWebhook.ValidateDelete	# internal/webhook/sandboxclass_webhook.go:134
-method webhook.SandboxClassWebhook.ValidateUpdate	# internal/webhook/sandboxclass_webhook.go:128
-method webhook.SandboxValidator.ValidateCreate	# internal/webhook/sandbox_webhook.go:120
-method webhook.SandboxValidator.ValidateDelete	# internal/webhook/sandbox_webhook.go:142
-method webhook.SandboxValidator.ValidateUpdate	# internal/webhook/sandbox_webhook.go:130
-method webhook.SnapshotValidator.ValidateCreate	# internal/webhook/snapshot_webhook.go:58
-method webhook.SnapshotValidator.ValidateDelete	# internal/webhook/snapshot_webhook.go:70
-method webhook.SnapshotValidator.ValidateUpdate	# internal/webhook/snapshot_webhook.go:65
-var frontend.ErrNoPeerCert	# internal/frontend/auth.go:23
-
-# The kubelet calls these through the gRPC DevicePluginServer interface
-# (RegisterDevicePluginServer), which the measurer does not follow (setec#187).
-method deviceplugin.Plugin.Allocate	# internal/deviceplugin/plugin.go
-method deviceplugin.Plugin.GetDevicePluginOptions	# internal/deviceplugin/plugin.go
-method deviceplugin.Plugin.GetPreferredAllocation	# internal/deviceplugin/plugin.go
-method deviceplugin.Plugin.ListAndWatch	# internal/deviceplugin/plugin.go
-method deviceplugin.Plugin.PreStartContainer	# internal/deviceplugin/plugin.go
-
-# The Firecracker config of the launcher (setec#188). Firecracker reads these
-# JSON fields; the measurer counts only reads in Go.
-field launcher.bootSource.BootArgs	# internal/launcher/vmconfig.go
-field launcher.bootSource.InitrdPath	# internal/launcher/vmconfig.go
-field launcher.bootSource.Kernel	# internal/launcher/vmconfig.go
-field launcher.drive.DriveID	# internal/launcher/vmconfig.go
-field launcher.drive.IsReadOnly	# internal/launcher/vmconfig.go
-field launcher.drive.IsRootDevice	# internal/launcher/vmconfig.go
-field launcher.drive.PathOnHost	# internal/launcher/vmconfig.go
-field launcher.machine.MemSizeMiB	# internal/launcher/vmconfig.go
-field launcher.machine.SMT	# internal/launcher/vmconfig.go
-field launcher.machine.VCPUCount	# internal/launcher/vmconfig.go
-field launcher.netIface.GuestMAC	# internal/launcher/vmconfig.go
-field launcher.netIface.HostDevName	# internal/launcher/vmconfig.go
-field launcher.netIface.IfaceID	# internal/launcher/vmconfig.go
-field launcher.vmConfig.BootSource	# internal/launcher/vmconfig.go
-field launcher.vmConfig.Drives	# internal/launcher/vmconfig.go
-field launcher.vmConfig.MachineConfig	# internal/launcher/vmconfig.go
-field launcher.vmConfig.NetworkInterfaces	# internal/launcher/vmconfig.go
-field launcher.vmConfig.Vsock	# internal/launcher/vmconfig.go
-field launcher.vsockDevice.GuestCID	# internal/launcher/vmconfig.go
-field launcher.vsockDevice.UDSPath	# internal/launcher/vmconfig.go
-# Called through the error interface by errors.As and errors.Unwrap.
-method launcher.Error.Error	# internal/launcher/run.go
-method launcher.Error.Unwrap	# internal/launcher/run.go
-# The copy-out client reads this; it comes with the file copy of the API.
-field guestagent.Response.Size	# internal/guestagent/protocol.go
+field controller.SandboxClassReconciler.Scheme	# internal/controller/sandboxclass_controller.go:50
+field controller.SnapshotReconciler.Scheme	# internal/controller/snapshot_controller.go:57
+field credguard.Report.Exempted	# internal/credguard/credguard.go:222
 # The disk builder writes the image config into the disk as JSON, and the
 # guest agent in the machine reads it (guestagent.WithImageDefaults, setec#190).
-field diskbuilder.ImageConfig.Cmd	# internal/diskbuilder/diskbuilder.go
-field diskbuilder.ImageConfig.Entrypoint	# internal/diskbuilder/diskbuilder.go
-field diskbuilder.ImageConfig.Env	# internal/diskbuilder/diskbuilder.go
-field diskbuilder.ImageConfig.User	# internal/diskbuilder/diskbuilder.go
-field diskbuilder.ImageConfig.WorkingDir	# internal/diskbuilder/diskbuilder.go
-
-# The launcher spec JSON that the operator writes into the launcher Pod; the
-# launcher reads it (TestBuildLauncher_SpecIsTheLauncherSpec ties both sides).
-field podspec.launcherSpec.DiskKeys	# internal/podspec/launcher.go
-field podspec.launcherBoot.BootArgs	# internal/podspec/launcher.go
-field podspec.launcherBoot.Initrd	# internal/podspec/launcher.go
-field podspec.launcherBoot.Kernel	# internal/podspec/launcher.go
-field podspec.launcherProcess.Argv	# internal/podspec/launcher.go
-field podspec.launcherSource.Boot	# internal/podspec/launcher.go
-field podspec.launcherSpec.DiskSignature	# internal/podspec/launcher.go
-field podspec.launcherSpec.ImageDisk	# internal/podspec/launcher.go
-field podspec.launcherSpec.ImageRef	# internal/podspec/launcher.go
-field podspec.launcherSpec.MemoryMiB	# internal/podspec/launcher.go
-field podspec.launcherSpec.VCPU	# internal/podspec/launcher.go
-field podspec.launcherSpec.WorkDir	# internal/podspec/launcher.go
-field podspec.launcherSpec.WritableBytes	# internal/podspec/launcher.go
-field podspec.launcherSpec.WritableDisk	# internal/podspec/launcher.go
-# Map keys of the launcher Pod limits; the measurer counts a map key as a write.
-const podspec.KVMResource	# internal/podspec/launcher.go
-const podspec.TunResource	# internal/podspec/launcher.go
-# Called through the error interface when the controller logs the failure.
-method controller.diskBuildError.Error	# internal/controller/launcher_disk.go
-# Wire fields of the launcher restore (setec#105): JSON that the operator
-# writes for the launcher, that the launcher writes for the node agent, and
-# that the launcher writes for Firecracker. Their readers decode JSON.
-field launcher.RestoreEvidence.ClockSet	# internal/launcher/spec.go
-field launcher.RestoreEvidence.EntropyReseeded	# internal/launcher/spec.go
-field launcher.RestoreEvidence.Error	# internal/launcher/spec.go
-field launcher.RestoreEvidence.Uniquified	# internal/launcher/spec.go
-field launcher.machine.TrackDirtyPages	# internal/launcher/vmconfig.go
-field podspec.launcherSnapshot.Evidence	# internal/podspec/launcher.go
-field podspec.launcherSnapshot.Memory	# internal/podspec/launcher.go
-field podspec.launcherSnapshot.Staged	# internal/podspec/launcher.go
-field podspec.launcherSnapshot.State	# internal/podspec/launcher.go
-field podspec.launcherSource.Snapshot	# internal/podspec/launcher.go
-field podspec.launcherSnapshot.TakenAt	# internal/podspec/launcher.go
-field launcher.vmConfig.CPUConfig	# internal/launcher/vmconfig.go
-field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go
-# The warm pool of a launcher class (setec#103): a wire field of the
-# launcher spec, and two status fields whose reader is a print column.
-field podspec.launcherSpec.Base	# internal/podspec/launcher.go
-field v1alpha1.SandboxClassWarmPoolStatus.Key	# api/v1alpha1/sandboxclass_types.go
-field v1alpha1.SandboxClassWarmPoolStatus.Ready	# api/v1alpha1/sandboxclass_types.go
-# The session workspace of a launcher Pod (setec#193): a wire field of the
-# launcher spec.
-field podspec.launcherSpec.WorkspaceDevice	# internal/podspec/launcher.go
+field diskbuilder.ImageConfig.Cmd	# internal/diskbuilder/diskbuilder.go:43
+field diskbuilder.ImageConfig.Entrypoint	# internal/diskbuilder/diskbuilder.go:42
+field diskbuilder.ImageConfig.Env	# internal/diskbuilder/diskbuilder.go:44
+field diskbuilder.ImageConfig.User	# internal/diskbuilder/diskbuilder.go:45
+field diskbuilder.ImageConfig.WorkingDir	# internal/diskbuilder/diskbuilder.go:46
+# The copy-out client reads this; it comes with the file copy of the API.
+field guestagent.Response.Size	# internal/guestagent/protocol.go:86
 # The sandbox identity (setec#235). These are JSON fields on the wire:
 # the launcher writes IdentityResponse, the guest agent reads it as
 # TokenResponse and hands it to the workload, and the launcher reads
 # launcherIdentitySpec as its IdentitySpec. Claims.Client and header.Typ
 # are claims of the token for a verifier outside setec. The two methods
 # are reached through the gRPC and HTTP interfaces.
-field guestagent.TokenResponse.Expires	# internal/guestagent/identity.go
-field guestagent.TokenResponse.Token	# internal/guestagent/identity.go
-field launcher.IdentityResponse.Error	# internal/launcher/identity.go
-field launcher.IdentityResponse.Expires	# internal/launcher/identity.go
-field launcher.IdentityResponse.Token	# internal/launcher/identity.go
-field podspec.launcherIdentitySpec.Client	# internal/podspec/launcher.go
-field podspec.launcherIdentitySpec.Generation	# internal/podspec/launcher.go
-field podspec.launcherIdentitySpec.GenerationFile	# internal/podspec/launcher.go
-field podspec.launcherIdentitySpec.KeyFile	# internal/podspec/launcher.go
-field podspec.launcherIdentitySpec.SandboxID	# internal/podspec/launcher.go
-field podspec.launcherIdentitySpec.Tenant	# internal/podspec/launcher.go
-field sandboxid.Claims.Client	# internal/sandboxid/token.go
-field sandboxid.header.Typ	# internal/sandboxid/token.go
-method frontend.Service.VerifySandboxIdentity	# internal/frontend/identity.go
-method guestagent.IdentityProxy.ServeHTTP	# internal/guestagent/identity.go
+field guestagent.TokenResponse.Expires	# internal/guestagent/identity.go:40
+field guestagent.TokenResponse.Token	# internal/guestagent/identity.go:39
+field launcher.IdentityResponse.Error	# internal/launcher/identity.go:59
+field launcher.IdentityResponse.Expires	# internal/launcher/identity.go:58
+field launcher.IdentityResponse.Token	# internal/launcher/identity.go:57
+# Wire fields of the launcher restore (setec#105): JSON that the operator
+# writes for the launcher, that the launcher writes for the node agent, and
+# that the launcher writes for Firecracker. Their readers decode JSON.
+field launcher.RestoreEvidence.ClockSet	# internal/launcher/spec.go:111
+field launcher.RestoreEvidence.EntropyReseeded	# internal/launcher/spec.go:109
+field launcher.RestoreEvidence.Error	# internal/launcher/spec.go:112
+field launcher.RestoreEvidence.Uniquified	# internal/launcher/spec.go:110
+# The Firecracker config of the launcher (setec#188). Firecracker reads these
+# JSON fields; the measurer counts only reads in Go.
+field launcher.bootSource.BootArgs	# internal/launcher/vmconfig.go:45
+field launcher.bootSource.InitrdPath	# internal/launcher/vmconfig.go:44
+field launcher.bootSource.Kernel	# internal/launcher/vmconfig.go:43
+field launcher.drive.DriveID	# internal/launcher/vmconfig.go:49
+field launcher.drive.IsReadOnly	# internal/launcher/vmconfig.go:52
+field launcher.drive.IsRootDevice	# internal/launcher/vmconfig.go:51
+field launcher.drive.PathOnHost	# internal/launcher/vmconfig.go:50
+field launcher.machine.MemSizeMiB	# internal/launcher/vmconfig.go:57
+field launcher.machine.SMT	# internal/launcher/vmconfig.go:58
+field launcher.machine.TrackDirtyPages	# internal/launcher/vmconfig.go:61
+field launcher.machine.VCPUCount	# internal/launcher/vmconfig.go:56
+field launcher.netIface.GuestMAC	# internal/launcher/vmconfig.go:67
+field launcher.netIface.HostDevName	# internal/launcher/vmconfig.go:66
+field launcher.netIface.IfaceID	# internal/launcher/vmconfig.go:65
+field launcher.vmConfig.BootSource	# internal/launcher/vmconfig.go:33
+field launcher.vmConfig.CPUConfig	# internal/launcher/vmconfig.go:39
+field launcher.vmConfig.Drives	# internal/launcher/vmconfig.go:34
+field launcher.vmConfig.MachineConfig	# internal/launcher/vmconfig.go:35
+field launcher.vmConfig.NetworkInterfaces	# internal/launcher/vmconfig.go:36
+field launcher.vmConfig.Vsock	# internal/launcher/vmconfig.go:37
+field launcher.vsockDevice.GuestCID	# internal/launcher/vmconfig.go:71
+field launcher.vsockDevice.UDSPath	# internal/launcher/vmconfig.go:72
+field podspec.launcherBoot.BootArgs	# internal/podspec/launcher.go:240
+field podspec.launcherBoot.Initrd	# internal/podspec/launcher.go:239
+field podspec.launcherBoot.Kernel	# internal/podspec/launcher.go:238
+field podspec.launcherIdentitySpec.Client	# internal/podspec/launcher.go:197
+field podspec.launcherIdentitySpec.Generation	# internal/podspec/launcher.go:200
+field podspec.launcherIdentitySpec.GenerationFile	# internal/podspec/launcher.go:201
+field podspec.launcherIdentitySpec.KeyFile	# internal/podspec/launcher.go:199
+field podspec.launcherIdentitySpec.SandboxID	# internal/podspec/launcher.go:196
+field podspec.launcherIdentitySpec.Tenant	# internal/podspec/launcher.go:198
+field podspec.launcherProcess.Argv	# internal/podspec/launcher.go:244
+field podspec.launcherSnapshot.Evidence	# internal/podspec/launcher.go:233
+field podspec.launcherSnapshot.Memory	# internal/podspec/launcher.go:231
+field podspec.launcherSnapshot.Staged	# internal/podspec/launcher.go:232
+field podspec.launcherSnapshot.State	# internal/podspec/launcher.go:230
+field podspec.launcherSnapshot.TakenAt	# internal/podspec/launcher.go:234
+field podspec.launcherSource.Boot	# internal/podspec/launcher.go:225
+field podspec.launcherSource.Snapshot	# internal/podspec/launcher.go:226
+# The warm pool of a launcher class (setec#103): a wire field of the
+# launcher spec, and two status fields whose reader is a print column.
+field podspec.launcherSpec.Base	# internal/podspec/launcher.go:216
+field podspec.launcherSpec.CPUTemplate	# internal/podspec/launcher.go:214
+# The launcher spec JSON that the operator writes into the launcher Pod; the
+# launcher reads it (TestBuildLauncher_SpecIsTheLauncherSpec ties both sides).
+field podspec.launcherSpec.DiskKeys	# internal/podspec/launcher.go:211
+field podspec.launcherSpec.DiskSignature	# internal/podspec/launcher.go:213
+field podspec.launcherSpec.ImageDisk	# internal/podspec/launcher.go:212
+field podspec.launcherSpec.ImageRef	# internal/podspec/launcher.go:210
+field podspec.launcherSpec.MemoryMiB	# internal/podspec/launcher.go:209
+field podspec.launcherSpec.VCPU	# internal/podspec/launcher.go:208
+field podspec.launcherSpec.WorkDir	# internal/podspec/launcher.go:219
+# The session workspace of a launcher Pod (setec#193): a wire field of the
+# launcher spec.
+field podspec.launcherSpec.WorkspaceDevice	# internal/podspec/launcher.go:215
+field podspec.launcherSpec.WritableBytes	# internal/podspec/launcher.go:218
+field podspec.launcherSpec.WritableDisk	# internal/podspec/launcher.go:217
+field sandboxid.Claims.Client	# internal/sandboxid/token.go:45
+field sandboxid.header.Typ	# internal/sandboxid/token.go:57
+field snapshot.Coordinator.Storage	# internal/snapshot/coordinator.go:72
+# spiffetest serves a fake SPIFFE Workload API to the tests of the packages
+# that build credentials (setec#175). Only _test.go files read it, and the
+# measurer does not count them.
+field spiffetest.WorkloadAPI.Addr	# internal/credentials/spiffetest/spiffetest.go:113
+field v1alpha1.SandboxCheckpointStatus.SizeBytes	# api/v1alpha1/sandbox_types.go:622
+# A status field for the operator of the cluster. kubectl reads it through
+# the Pool-Ready print column of SandboxClass, a JSONPath the measurer
+# does not follow. It replaces SandboxClassWarmPoolStatus.Ready.
+field v1alpha1.SandboxClassWarmPoolImage.Ready	# api/v1alpha1/sandboxclass_types.go:451
+field v1alpha1.SandboxWarmStartStatus.EntryID	# api/v1alpha1/sandbox_types.go:701
+field v1alpha1.SandboxWarmStartStatus.Outcome	# api/v1alpha1/sandbox_types.go:696
+field v1alpha1.SandboxWarmStartStatus.Reason	# api/v1alpha1/sandbox_types.go:706
+field v1alpha1.SnapshotStatus.LastTransitionTime	# api/v1alpha1/snapshot_types.go:183
+func chartname.Fullname	# internal/chartname/chartname.go:29
+func credguard.Check	# internal/credguard/credguard.go:236
+func credguard.Exemptions	# internal/credguard/exemptions.go:30
+# signtest signs a test image with a new key, as cosign does. The unit
+# tests of the disk builder and the e2e suite read it; the measurer does
+# not count _test.go files.
+func signtest.SignWithNewKey	# internal/diskbuilder/signtest/signtest.go:32
+func spiffetest.NewCA	# internal/credentials/spiffetest/spiffetest.go:39
+func spiffetest.Start	# internal/credentials/spiffetest/spiffetest.go:123
+func testutil.NewFakeEventsRecorder	# internal/controller/testutil/fake_events_recorder.go:22
+method atrest.decryptingReader.Read	# internal/snapshot/atrest/atrest.go:286
+method controller.SandboxClassReconciler.Reconcile	# internal/controller/sandboxclass_controller.go:65
+method controller.SandboxReconciler.Reconcile	# internal/controller/sandbox_controller.go:379
+method controller.SnapshotReconciler.Reconcile	# internal/controller/snapshot_controller.go:79
+method controller.WarmPoolReconciler.Reconcile	# internal/controller/warm_pool.go:135
+# Called through the error interface when the controller logs the failure.
+method controller.diskBuildError.Error	# internal/controller/launcher_disk.go:118
+method credentials.spiffeSource.OnX509ContextUpdate	# internal/credentials/spiffe.go:225
+method credentials.spiffeSource.OnX509ContextWatchError	# internal/credentials/spiffe.go:248
+method credguard.Violation.String	# internal/credguard/credguard.go:207
+# The kubelet calls these through the gRPC DevicePluginServer interface
+# (RegisterDevicePluginServer), which the measurer does not follow (setec#187).
+method deviceplugin.Plugin.Allocate	# internal/deviceplugin/plugin.go:129
+method deviceplugin.Plugin.GetDevicePluginOptions	# internal/deviceplugin/plugin.go:96
+method deviceplugin.Plugin.GetPreferredAllocation	# internal/deviceplugin/plugin.go:150
+method deviceplugin.Plugin.ListAndWatch	# internal/deviceplugin/plugin.go:103
+method deviceplugin.Plugin.PreStartContainer	# internal/deviceplugin/plugin.go:157
+method frontend.Service.Attach	# internal/frontend/attach.go:48
+method frontend.Service.Exec	# internal/frontend/exec.go:87
+method frontend.Service.Fork	# internal/frontend/fork.go:40
+method frontend.Service.Keep	# internal/frontend/keep.go:26
+method frontend.Service.Kill	# internal/frontend/service.go:378
+method frontend.Service.Launch	# internal/frontend/service.go:148
+method frontend.Service.Pin	# internal/frontend/keep.go:57
+method frontend.Service.Resume	# internal/frontend/suspend.go:29
+method frontend.Service.Snapshot	# internal/frontend/snapshot.go:46
+method frontend.Service.StreamLogs	# internal/frontend/service.go:428
+method frontend.Service.Suspend	# internal/frontend/suspend.go:21
+method frontend.Service.VerifySandboxIdentity	# internal/frontend/identity.go:26
+method frontend.Service.Wait	# internal/frontend/service.go:329
+method frontend.execStreamWriter.Write	# internal/frontend/exec.go:551
+method grpcserver.multiReadCloser.Close	# internal/nodeagent/grpcserver/launcher_frame.go:327
+method grpcserver.multiReadCloser.Read	# internal/nodeagent/grpcserver/launcher_frame.go:325
+method guestagent.IdentityProxy.ServeHTTP	# internal/guestagent/identity.go:51
+# Called through the error interface by errors.As and errors.Unwrap.
+method launcher.Error.Error	# internal/launcher/run.go:66
+method launcher.Error.Unwrap	# internal/launcher/run.go:67
+method main.probeServer.NeedLeaderElection	# cmd/main.go:595
+method main.probeServer.Start	# cmd/main.go:591
+method main.repeatedString.Set	# cmd/node-agent/main.go:258
+method main.repeatedString.Set	# cmd/node-agent/main.go:258
+method main.repeatedString.String	# cmd/node-agent/main.go:256
+method main.repeatedString.String	# cmd/node-agent/main.go:256
+method snapshot.GRPCDialer.Close	# internal/snapshot/dialer.go:193
+method spiffetest.CA.Pool	# internal/credentials/spiffetest/spiffetest.go:66
+method spiffetest.WorkloadAPI.FetchX509SVID	# internal/credentials/spiffetest/spiffetest.go:175
+method storage.countingReader.Read	# internal/snapshot/storage/s3.go:600
+method storage.decryptReadCloser.Close	# internal/snapshot/storage/encrypted.go:328
+method storage.verifyingReadCloser.Close	# internal/snapshot/storage/s3.go:629
+method storage.verifyingReadCloser.Read	# internal/snapshot/storage/s3.go:615
+method testutil.FakeEventsRecorder.Eventf	# internal/controller/testutil/fake_events_recorder.go:28
+method webhook.SandboxClassWebhook.Default	# internal/webhook/sandboxclass_webhook.go:51
+method webhook.SandboxClassWebhook.ValidateCreate	# internal/webhook/sandboxclass_webhook.go:61
+method webhook.SandboxClassWebhook.ValidateDelete	# internal/webhook/sandboxclass_webhook.go:74
+method webhook.SandboxClassWebhook.ValidateUpdate	# internal/webhook/sandboxclass_webhook.go:68
+method webhook.SandboxValidator.ValidateCreate	# internal/webhook/sandbox_webhook.go:121
+method webhook.SandboxValidator.ValidateDelete	# internal/webhook/sandbox_webhook.go:143
+method webhook.SandboxValidator.ValidateUpdate	# internal/webhook/sandbox_webhook.go:131
+method webhook.SnapshotValidator.ValidateCreate	# internal/webhook/snapshot_webhook.go:63
+method webhook.SnapshotValidator.ValidateDelete	# internal/webhook/snapshot_webhook.go:75
+method webhook.SnapshotValidator.ValidateUpdate	# internal/webhook/snapshot_webhook.go:70

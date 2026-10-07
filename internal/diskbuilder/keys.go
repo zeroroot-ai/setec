@@ -6,9 +6,12 @@ package diskbuilder
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // ReadPrivateKey reads an ed25519 seed (32 bytes, base64) from path. The
@@ -16,7 +19,7 @@ import (
 func ReadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // a mounted Secret
 	if err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "os.ReadFile")
 	}
 	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
 	if err != nil || len(seed) != ed25519.SeedSize {
@@ -38,7 +41,7 @@ func ParsePublicKeys(encoded []string) ([]ed25519.PublicKey, error) {
 		keys = append(keys, ed25519.PublicKey(k))
 	}
 	if len(keys) == 0 {
-		return nil, fmt.Errorf("diskbuilder: no public key to check a disk with")
+		return nil, errors.New("diskbuilder: no public key to check a disk with")
 	}
 	return keys, nil
 }

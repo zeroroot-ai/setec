@@ -8,16 +8,15 @@
 // reaching into global state.
 //
 // Label cardinality note: every metric uses a fixed label set
-// (tenant, sandbox_class, phase, vmm, runtime). "tenant" is always the
+// (tenant, sandbox_class, phase, runtime). "tenant" is always the
 // empty string in single-tenant mode to avoid the Prometheus anti-pattern
 // of sometimes-present labels. Cardinality therefore scales with
 // (tenants x classes x phases) = O(small) for typical deployments.
 // Do NOT add high-cardinality labels such as Sandbox name or UID without a
 // compelling reason.
 //
-// Runtime values are bounded: "firecracker", "kata", "gvisor", "native".
-// Backend/reason values for probe-error metrics are also bounded — see
-// IncNodeProbeError for the enumerated reason values.
+// The runtime label value is always "launcher": the launcher is the only
+// runtime (setec#198).
 package metrics
 
 import (
@@ -36,15 +35,12 @@ const (
 	LabelTenant       = "tenant"
 	LabelSandboxClass = "sandbox_class"
 	LabelPhase        = "phase"
-	// LabelRuntime is the canonical replacement for LabelVMM. Bounded values:
-	// "firecracker", "kata", "gvisor", "native".
+	// LabelRuntime is the runtime of a Sandbox. Its one value is
+	// "launcher" (setec#198).
 	LabelRuntime = "runtime"
 	// LabelOperation is the Phase 3 snapshot operation label:
 	// "create", "restore", "delete", "pause", "resume".
 	LabelOperation = "operation"
-	// LabelNode is the node name label used for pool-fill gauges so
-	// operators can pinpoint an under-provisioned node.
-	LabelNode = "node"
 )
 
 // Collectors bundles the Phase 2+ metrics. Callers receive this via
@@ -56,14 +52,9 @@ type Collectors struct {
 	// the total number of sandboxes observed at each phase.
 	SandboxTotal *prometheus.CounterVec
 
-	// SandboxDuration observes the time a sandbox spent in each phase
-	// (or in the whole reconcile, depending on caller semantics).
-	SandboxDuration *prometheus.HistogramVec
-
 	// SandboxColdStart observes the time from Sandbox creation to the
-	// moment its Pod transitioned to Running. Both runtime and vmm labels
-	// are present during the dual-write transition period so existing
-	// dashboards keep working.
+	// moment its Pod transitioned to Running, labeled by runtime and
+	// class.
 	SandboxColdStart *prometheus.HistogramVec
 
 	// SandboxActive gauges the current number of active Sandboxes per
@@ -75,38 +66,20 @@ type Collectors struct {
 	// Phase 3 only.
 	SnapshotDuration *prometheus.HistogramVec
 
-	// WarmStartTotal counts pool warm-start attempts by outcome.
-	// Bounded outcome values: "restored" (claimed + restored),
-	// "miss" (no compatible pool entry; cold boot), "error" (claim or
-	// restore failed; cold boot). The per-node pool-fill gauge
-	// (setec_prewarm_pool_entries) lives on the node-agent's own
-	// registry — the pool is node-local state and the node-agent is
-	// the only process that knows it.
+	// WarmStartTotal counts warm-start attempts by outcome.
+	// Bounded outcome values: "restored" (loaded a warm base),
+	// "miss" (no Ready base; cold boot), "error" (the load failed;
+	// cold boot).
 	WarmStartTotal *prometheus.CounterVec
 
 	// WarmPoolReady gauges the Ready bases of the launcher warm pool of
 	// each SandboxClass (setec#103).
 	WarmPoolReady *prometheus.GaugeVec
 
-	// FallbackTotal counts runtime fallback events. Labels:
-	//   from — the runtime that was attempted (bounded: see LabelRuntime)
-	//   to   — the runtime that was substituted (bounded: see LabelRuntime)
-	FallbackTotal *prometheus.CounterVec
-
-	// NodeRuntimeAvailable gauges whether a given runtime is available on
-	// the node (1 = available, 0 = unavailable). Label: runtime (bounded).
-	NodeRuntimeAvailable *prometheus.GaugeVec
-
-	// NodeRuntimeProbeErrors counts probe failures per backend and reason.
-	// Labels:
-	//   backend — runtime backend being probed (bounded: see LabelRuntime)
-	//   reason  — failure category; bounded values:
-	//               "binary_missing"    — executable not found on node
-	//               "exec_failed"       — binary present but execution failed
-	//               "timeout"           — probe did not complete within deadline
-	//               "permission_denied" — insufficient privilege to run probe
-	//               "unknown"           — uncategorized error (catch-all)
-	NodeRuntimeProbeErrors *prometheus.CounterVec
+	// WarmPoolTarget gauges the bases the warm pool of each SandboxClass
+	// wants: PreWarmPoolSize, or 0 for an idle or inactive pool. The
+	// underfilled alert compares the two gauges.
+	WarmPoolTarget *prometheus.GaugeVec
 }
 
 // NewCollectors constructs a fresh Collectors bundle and registers every
@@ -128,14 +101,6 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			prometheus.CounterOpts{
 				Name: "setec_sandbox_total",
 				Help: "Total number of Sandbox phase transitions observed.",
-			},
-			[]string{LabelPhase, LabelTenant, LabelSandboxClass},
-		),
-		SandboxDuration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "setec_sandbox_duration_seconds",
-				Help:    "Time (s) spent in each Sandbox phase.",
-				Buckets: prometheus.DefBuckets,
 			},
 			[]string{LabelPhase, LabelTenant, LabelSandboxClass},
 		),
@@ -176,34 +141,19 @@ func NewCollectorsWith(reg prometheus.Registerer) *Collectors {
 			},
 			[]string{LabelSandboxClass},
 		),
-		FallbackTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "setec_sandbox_fallback_total",
-				Help: "Total number of runtime fallback events (from one backend to another).",
-			},
-			[]string{"from", "to"},
-		),
-		NodeRuntimeAvailable: prometheus.NewGaugeVec(
+		WarmPoolTarget: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "setec_node_runtime_available",
-				Help: "Whether a runtime backend is available on this node (1 = available, 0 = unavailable).",
+				Name: "setec_warm_pool_target_bases",
+				Help: "Bases the launcher warm pool of each SandboxClass wants.",
 			},
-			[]string{LabelRuntime},
-		),
-		NodeRuntimeProbeErrors: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "setec_node_runtime_probe_errors_total",
-				Help: "Total number of runtime probe errors. See label 'reason' for bounded failure categories.",
-			},
-			[]string{"backend", "reason"},
+			[]string{LabelSandboxClass},
 		),
 	}
 
 	if reg != nil {
 		reg.MustRegister(
-			c.SandboxTotal, c.SandboxDuration, c.SandboxColdStart, c.SandboxActive,
-			c.SnapshotDuration, c.WarmStartTotal, c.WarmPoolReady,
-			c.FallbackTotal, c.NodeRuntimeAvailable, c.NodeRuntimeProbeErrors,
+			c.SandboxTotal, c.SandboxColdStart, c.SandboxActive,
+			c.SnapshotDuration, c.WarmStartTotal, c.WarmPoolReady, c.WarmPoolTarget,
 		)
 	}
 
@@ -227,21 +177,8 @@ func (c *Collectors) RecordPhaseTransition(tenant, class string, phase setecv1al
 	c.SandboxTotal.WithLabelValues(string(phase), normalizeTenantLabel(tenant), class).Inc()
 }
 
-// RecordDuration observes the given duration into SandboxDuration.
-// Phase is stringified by the caller so this function stays pure Go
-// without importing the v1alpha1 phase enum at every call site.
-func (c *Collectors) RecordDuration(tenant, class, phase string, d time.Duration) {
-	if c == nil {
-		return
-	}
-	c.SandboxDuration.WithLabelValues(phase, normalizeTenantLabel(tenant), class).Observe(d.Seconds())
-}
-
 // ObserveColdStart observes a Sandbox's time-to-Running into the cold-start
-// histogram with explicit runtime and vmm labels for the dual-write period.
-// runtime is the canonical label (bounded: "firecracker", "kata", "gvisor",
-// "native"). The deprecated "vmm" label it dual-wrote alongside is gone
-// (setec#115).
+// histogram. runtime is always "launcher" (setec#198).
 func (c *Collectors) ObserveColdStart(runtime, class string, d time.Duration) {
 	if c == nil {
 		return
@@ -280,49 +217,12 @@ func (c *Collectors) IncWarmStart(outcome, class string) {
 	c.WarmStartTotal.WithLabelValues(outcome, class).Inc()
 }
 
-// SetWarmPoolReady sets the Ready bases of the warm pool of a class.
-func (c *Collectors) SetWarmPoolReady(class string, n int) {
+// SetWarmPool sets the Ready bases and the wanted bases of the warm pool
+// of a class.
+func (c *Collectors) SetWarmPool(class string, ready, target int) {
 	if c == nil {
 		return
 	}
-	c.WarmPoolReady.WithLabelValues(class).Set(float64(n))
-}
-
-// IncFallback increments FallbackTotal for the given from/to runtime pair.
-// Both from and to must be bounded runtime values: "firecracker", "kata",
-// "gvisor", "native".
-func (c *Collectors) IncFallback(from, to string) {
-	if c == nil {
-		return
-	}
-	c.FallbackTotal.WithLabelValues(from, to).Inc()
-}
-
-// SetNodeRuntimeAvailable sets the NodeRuntimeAvailable gauge for the given
-// runtime to 1 (available) or 0 (unavailable). runtime must be a bounded
-// value: "firecracker", "kata", "gvisor", "native".
-func (c *Collectors) SetNodeRuntimeAvailable(runtime string, available bool) {
-	if c == nil {
-		return
-	}
-	v := 0.0
-	if available {
-		v = 1.0
-	}
-	c.NodeRuntimeAvailable.WithLabelValues(runtime).Set(v)
-}
-
-// IncNodeProbeError increments NodeRuntimeProbeErrors for the given backend
-// and reason. backend is a bounded runtime value; reason must be one of:
-//
-//	"binary_missing"    — executable not found on node
-//	"exec_failed"       — binary present but execution failed
-//	"timeout"           — probe did not complete within deadline
-//	"permission_denied" — insufficient privilege to run probe
-//	"unknown"           — uncategorized error (catch-all)
-func (c *Collectors) IncNodeProbeError(backend, reason string) {
-	if c == nil {
-		return
-	}
-	c.NodeRuntimeProbeErrors.WithLabelValues(backend, reason).Inc()
+	c.WarmPoolReady.WithLabelValues(class).Set(float64(ready))
+	c.WarmPoolTarget.WithLabelValues(class).Set(float64(target))
 }

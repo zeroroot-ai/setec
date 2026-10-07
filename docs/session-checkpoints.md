@@ -1,16 +1,5 @@
 # Session checkpoints on real infrastructure
 
-> **Status (2026-09-29): not available until after launch.** Snapshot
-> restore (`spec.snapshotRef`), session memory checkpoints
-> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
-> Snapshot creation, pause/resume and TTL expiry work. The API still
-> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
-> instead of restoring, and a checkpointed session cannot resume. The
-> reasons and the open design are in
-> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
-> and checkpoints) and
-> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
-
 How to run the session-lifecycle e2e against a
 real cluster and a real object store, and what each scenario costs.
 
@@ -29,7 +18,7 @@ and today only one of them has a CI job.
 `TestSession_ReattachByHandle` needs a session-mode Sandbox with a
 workspace PVC and an in-process `frontend.Service`. It needs no bucket
 and no node-agent. It runs in the `suites` job of
-`.github/workflows/e2e.yml`, on a kind cluster inside a GitHub-hosted
+`.github/workflows/exit-test-launcher.yml`, on a kind cluster inside a GitHub-hosted
 runner with nested KVM.
 
 The two checkpoint scenarios had a `session-checkpoint` job that ran on
@@ -39,9 +28,9 @@ removed. The path back to CI is the same kind cluster with an in-cluster
 MinIO as the object store. setec#16 tracks it. Checkpoints also need the
 operator to reach the node-agent, which setec#92 blocks today.
 
-All three need the `kata-fc` backend. Memory checkpointing drives the
-Firecracker API socket directly, so `kata-qemu` cannot serve these
-scenarios however healthy the node looks.
+All three run on the one backend, the launcher. Memory checkpointing
+drives the Firecracker API socket of the launcher Pod directly, so each
+node must offer the `setec.zeroroot.ai/kvm` device resource.
 
 Every scenario that cannot run **skips loudly**: it prints a banner naming
 what is missing and what would satisfy it. The `e2e` workflow fails any
@@ -150,8 +139,7 @@ nodes, so **the ceiling is not raised permanently**.
 A second `m5zn.metal` costs roughly **$4/hour on-demand in us-east-1**
 (48 vCPU, 192 GiB, bare metal), billed from the moment Karpenter
 provisions it until consolidation reclaims it. A drain run occupies it for
-a few minutes, but node provisioning and kata-deploy installation add
-10–20 minutes on top, so budget on the order of **$1–2 per run** and treat
+a few minutes, but node provisioning adds 10–20 minutes on top, so budget on the order of **$1–2 per run** and treat
 a forgotten ceiling as roughly **$100/day**.
 
 The scenario is therefore an explicit, temporary opt-in rather than an
@@ -162,10 +150,9 @@ automatic capability probe:
    the apply run. This is a Terraform change, not a `kubectl patch` — the
    cluster is GitOps-driven and a hand-patched NodePool is reverted by the
    next reconcile.
-2. Wait for the second node to join and to carry
-   `setec.zeroroot.ai/runtime.kata-fc=true`. Both the label AND
-   `katacontainers.io/kata-runtime=true` matter: the capability label
-   alone can appear before kata is actually installed.
+2. Wait for the second node to join and to offer an allocatable
+   `setec.zeroroot.ai/kvm` resource. The KVM device plugin offers it
+   only after it finds `/dev/kvm` on the node.
 3. Run with `SETEC_E2E_SESSION_DRAIN=1`.
 4. **Revert the ceiling PR.** Consolidation reclaims the node once it is
    idle and back under the limit.
@@ -178,10 +165,10 @@ was paid for; a silent skip there would mean full cost and zero coverage.
 
 Attribute the failure before filing it against the session path.
 
-- **Sandbox stuck Pending, no node has `runtime.kata-fc=true`** — the
-  runtime-agent's node probe, not the session code. The known instance
-  was a probe that did not follow containerd's `imports` array.
-  `TestEnv_KVMPresent` prints each node's probe result, reason included.
+- **Sandbox stuck Pending, no node offers `setec.zeroroot.ai/kvm`** —
+  the KVM device plugin or the node, not the session code. Check that
+  the node exposes `/dev/kvm` and that the device plugin Pod runs on it.
+  `TestEnv_KVMPresent` prints the nodes that offer the resource.
 - **`AccessDenied` in the node-agent log** — IAM or KMS, not the
   checkpoint code. The bucket's default encryption is SSE-KMS, so the role
   needs a KMS grant as well as the S3 statement; without it every

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Setec Documentation
 
-Setec is a Kubernetes-native operator that runs workloads inside Firecracker microVMs via Kata Containers, cloud-agnostic and self-hostable. For the 30-second pitch, the install command, and a short example, see the [project README](../README.md).
+Setec is a Kubernetes-native operator that runs each workload in its own Firecracker microVM, one machine in each launcher Pod, cloud-agnostic and self-hostable. For the 30-second pitch, the install command, and a short example, see the [project README](../README.md).
 
 This page is the hub. Every doc in this directory is linked below, grouped by what you are trying to do.
 
@@ -9,7 +9,7 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 
 - [Quickstart](./quickstart.md) &mdash; terse command list. Install, run one Sandbox, tear it down.
 - [Getting Started](./getting-started.md) &mdash; the same territory as the quickstart but narrative, with prose explaining what is happening at each step and what you should observe.
-- [Prerequisites](./prerequisites.md) &mdash; KVM, kernel, Kata Containers, Firecracker, and Kubernetes requirements on the host.
+- [Prerequisites](./prerequisites.md) &mdash; KVM, kernel, registry and Kubernetes requirements.
 
 ## Design
 
@@ -17,13 +17,13 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 - [Isolation](./design/isolation.md) &mdash; the Pod, the network, the namespace, and the checks on a restored Sandbox.
 - [Lifecycles](./design/lifecycles.md) &mdash; ephemeral and session Sandboxes, idle eviction, suspend, limits, and the warm pool.
 - [Storage](./design/storage.md) &mdash; the scratch volume, the session workspace, the snapshot store, and the encryption rule of each.
-- [Runtime](./design/runtime.md) &mdash; the four backends, their selection, and the node preparation.
-- [Threat model](./design/threat-model.md) &mdash; what each backend protects, and who may call `setec`.
+- [Runtime](./design/runtime.md) &mdash; the launcher runtime, its parts, and the node preparation.
+- [Threat model](./design/threat-model.md) &mdash; what the machine boundary protects, and who may call `setec`.
 
 ## User Guides
 
 - [Multi-tenancy](./multitenancy.md) &mdash; tenant labels, per-tenant policies, namespace scoping.
-- [Snapshots](./snapshots.md) &mdash; point-in-time capture and pause/resume. Restore and the pre-warm pool are not available yet.
+- [Snapshots](./snapshots.md) &mdash; point-in-time capture, restore, fork and pause/resume.
 - [Observability](./observability.md) &mdash; metrics, traces, dashboard, and alerting.
 - [gRPC Frontend API](./frontend-api.md) &mdash; the external API used by programmatic consumers.
 - [Node Agent](./node-agent.md) &mdash; what runs on each node and how it interacts with the operator.
@@ -34,10 +34,8 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 
 ## Operations
 
-- [Prerequisites](./prerequisites.md) &mdash; per-backend, per-platform host requirements.
-- [Runtime Backends](./runtime-backends/README.md) &mdash; the four backends (`kata-fc`, `kata-qemu`, `gvisor`, `runc`), isolation / CVE-surface / overhead matrix, and managed-K8s playbooks for [EKS](./runtime-backends/eks.md), [AKS](./runtime-backends/aks.md), [GKE](./runtime-backends/gke.md).
-- [Kata + Firecracker Integration](./kata-firecracker-integration.md) &mdash; deep dive on the default `kata-fc` backend's internals.
-- [Dev Smoke Test](./dev-smoke-test.md) &mdash; the scripted run maintainers perform before tagging a release.
+- [Prerequisites](./prerequisites.md) &mdash; host and cluster requirements.
+- [Idle footprint](./idle-footprint.md) &mdash; how to measure the memory of a long-lived Sandbox.
 - [Developer Notes](./developer-notes.md) &mdash; contributor-facing naming and layout conventions.
 
 ## Community

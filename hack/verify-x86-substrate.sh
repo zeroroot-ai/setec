@@ -33,10 +33,12 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The launcher values that the chart requires (hack/chart-launcher-values.yaml).
+LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 WORKFLOW_DIR=".github/workflows"
 # The files a person builds an image from by hand. Only the fixture in
 # hack/verify-x86-substrate.test.sh sets X86_BUILD_FILES.
-BUILD_FILES="${X86_BUILD_FILES:-Makefile Dockerfile Dockerfile.installer}"
+BUILD_FILES="${X86_BUILD_FILES:-Makefile Dockerfile Dockerfile.launcher Dockerfile.disk-builder}"
 
 fail_count=0
 
@@ -135,25 +137,17 @@ trap 'rm -rf "$workdir"' EXIT
 render() {
 	local out="$1"
 	shift
-	"$HELM" template setec "$CHART_DIR" \
+	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={sandbox-workloads}" \
 		"$@" >"$out"
 }
 
-note "runtime-agent DaemonSet arch gating"
-render "$workdir/runtime-agent.yaml" \
-	--show-only templates/runtime-agent-daemonset.yaml
-assert_contains "$workdir/runtime-agent.yaml" "runtime-agent pins amd64" \
+note "device plugin DaemonSet arch gating"
+render "$workdir/device-plugin.yaml" \
+	--show-only templates/device-plugin-daemonset.yaml
+assert_contains "$workdir/device-plugin.yaml" "device plugin pins amd64" \
 	"kubernetes.io/arch: amd64"
-
-render "$workdir/runtime-agent-override.yaml" \
-	--set-string 'runtimeAgent.nodeSelector.kubernetes\.io/arch=arm64' \
-	--show-only templates/runtime-agent-daemonset.yaml
-assert_contains "$workdir/runtime-agent-override.yaml" "runtime-agent arch selector survives a values override" \
-	"kubernetes.io/arch: amd64"
-assert_absent "$workdir/runtime-agent-override.yaml" "runtime-agent arch selector cannot be overridden to arm64" \
-	"arm64"
 
 note "node-agent DaemonSet arch gating"
 render "$workdir/node-agent.yaml" \
@@ -161,25 +155,6 @@ render "$workdir/node-agent.yaml" \
 	--show-only templates/daemonset.yaml
 assert_contains "$workdir/node-agent.yaml" "node-agent pins amd64" \
 	"kubernetes.io/arch: amd64"
-
-# ---------------------------------------------------------------------------
-# 3. Karpenter NodePool provisions amd64 only.
-#
-# Sandbox Pods carry a required kubernetes.io/arch=amd64 affinity; a pool
-# that provisions any other arch can never satisfy them.
-# ---------------------------------------------------------------------------
-note "Karpenter NodePool arch requirement"
-render "$workdir/nodepool.yaml" \
-	--set karpenter.enabled=true \
-	--set karpenter.role=guard-test \
-	--set-json 'karpenter.subnetSelectorTerms=[{"tags":{"karpenter.sh/discovery":"guard"}}]' \
-	--set-json 'karpenter.securityGroupSelectorTerms=[{"tags":{"karpenter.sh/discovery":"guard"}}]' \
-	--show-only templates/karpenter/nodepool.yaml
-assert_contains "$workdir/nodepool.yaml" "NodePool requires amd64" \
-	"kubernetes.io/arch" \
-	"amd64"
-assert_absent "$workdir/nodepool.yaml" "NodePool never provisions arm64" \
-	"arm64"
 
 if [ "$fail_count" -gt 0 ]; then
 	printf 'verify-x86-substrate: %d assertion(s) FAILED\n' "$fail_count" >&2

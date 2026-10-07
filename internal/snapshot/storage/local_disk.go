@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // LocalDiskBackend persists snapshot state files under a per-node
@@ -66,7 +68,7 @@ func (b *LocalDiskBackend) statfs(path string, stat *syscall.Statfs_t) error {
 	if b.StatfsFn != nil {
 		return b.StatfsFn(path, stat)
 	}
-	return syscall.Statfs(path, stat)
+	return errwrap.Wrap(syscall.Statfs(path, stat), "syscall.Statfs")
 }
 
 // ValidateSnapshotID rejects unsafe identifiers. It keeps the
@@ -114,9 +116,9 @@ func (b *LocalDiskBackend) checkFillThreshold() error {
 // Save consumes state, streams it to ROOT/<snapshotID>/state.bin with
 // mode 0600, and writes a hex SHA256 digest alongside. Double-save
 // against an existing snapshotID returns ErrAlreadyExists.
-func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, "", err
+		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
@@ -139,7 +141,7 @@ func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io
 	statePath := b.statePath(snapshotID)
 	// O_EXCL guards against concurrent Save of the same ID racing
 	// past the os.Stat check above.
-	f, err := os.OpenFile(statePath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(statePath)), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return 0, "", ErrAlreadyExists
@@ -174,7 +176,7 @@ func (b *LocalDiskBackend) Save(ctx context.Context, snapshotID string, state io
 // ErrCorrupted; a missing snapshot returns ErrNotFound.
 func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
@@ -182,7 +184,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 	statePath := b.statePath(storageRef)
 	shaPath := b.sha256Path(storageRef)
 
-	expected, err := os.ReadFile(shaPath)
+	expected, err := os.ReadFile(filepath.Clean(shaPath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
@@ -190,7 +192,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 		return nil, fmt.Errorf("storage: read sha256 sidecar: %w", err)
 	}
 
-	f, err := os.Open(statePath)
+	f, err := os.Open(filepath.Clean(statePath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
@@ -227,7 +229,7 @@ func (b *LocalDiskBackend) Open(ctx context.Context, storageRef string) (io.Read
 // deleted".
 func (b *LocalDiskBackend) Delete(ctx context.Context, storageRef string) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
@@ -270,9 +272,9 @@ func overwriteWithZeros(path string, size int64) error {
 	if size <= 0 {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Clean(filepath.Clean(path)), os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.OpenFile")
 	}
 	defer func() { _ = f.Close() }()
 
@@ -282,18 +284,18 @@ func overwriteWithZeros(path string, size int64) error {
 		chunk := min(size-written, int64(len(buf)))
 		n, werr := f.Write(buf[:chunk])
 		if werr != nil {
-			return werr
+			return errwrap.Wrap(werr, "os.File.Write")
 		}
 		written += int64(n)
 	}
-	return f.Sync()
+	return errwrap.Wrap(f.Sync(), "os.File.Sync")
 }
 
 // Stat returns the size and existence of the persisted state.
 // A non-existent snapshot returns (0, false, nil).
-func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, false, err
+		return 0, false, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return 0, false, err

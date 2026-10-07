@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // SnapshotResourceName is the ResourceQuota counter name that
@@ -129,7 +130,7 @@ func (v *SnapshotValidator) validate(ctx context.Context, snap *setecv1alpha1.Sn
 // takes the pinned Snapshots of the namespace above PinnedLimitBytes.
 func (v *SnapshotValidator) checkPin(ctx context.Context, snap *setecv1alpha1.Snapshot) error {
 	if !snap.Spec.Kept {
-		return fmt.Errorf("spec.pinned: only a kept Snapshot can be pinned")
+		return errors.New("spec.pinned: only a kept Snapshot can be pinned")
 	}
 	if v.Client == nil {
 		return nil
@@ -178,8 +179,8 @@ func (v *SnapshotValidator) checkQuota(ctx context.Context, snap *setecv1alpha1.
 		}
 		// Quantity.Value() rounds up for counts — exact conversion is
 		// fine because count/* values are required to be whole numbers.
-		max := limit.Value()
-		if current+1 > max {
+		maxCount := limit.Value()
+		if current+1 > maxCount {
 			return fmt.Errorf(
 				"ResourceQuota %q in namespace %q caps %q at %s; current=%d",
 				q.Name, snap.Namespace, SnapshotResourceName, quantityString(limit), current)
@@ -196,9 +197,9 @@ func quantityString(q resource.Quantity) string {
 
 // SetupWebhookWithManager registers the Snapshot validating webhook.
 func (v *SnapshotValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Snapshot{}).
+	return errwrap.Wrap(ctrl.NewWebhookManagedBy(mgr, &setecv1alpha1.Snapshot{}).
 		WithValidator(v).
-		Complete()
+		Complete(), "builder.WebhookBuilder.Complete")
 }
 
 // errMinSnapshotTTL is a sentinel so tests can errors.Is against

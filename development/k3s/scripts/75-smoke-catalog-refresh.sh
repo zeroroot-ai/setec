@@ -16,11 +16,11 @@
 #      env, and the resulting DiscoveryResult lands in Neo4j.
 #
 # Prerequisites:
-#   - make up (k3s + kata + devmapper + Setec running)
+#   - make up (k3s + disk registry + Setec running)
 #   - Kind cluster 'gibson' up
 #   - Gibson Helm release deployed with tool_runner.enabled=true and
 #     tool_runner.images=[<runner tag>]
-#   - Dev PKI present under ../pki/
+#   - The dev client SVID under ../pki/ (35-mint-client-svid.sh)
 #
 # sudo is required for `k3s ctr images import` when loading a local image.
 

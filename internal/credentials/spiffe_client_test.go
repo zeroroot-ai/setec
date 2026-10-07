@@ -9,11 +9,9 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"math/big"
 	"net"
 	"net/url"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,8 +19,6 @@ import (
 	grpccreds "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-
-	"github.com/zeroroot-ai/setec/internal/credentials"
 )
 
 // Client-side authorization in SPIFFE mode.
@@ -136,44 +132,6 @@ func TestSPIFFEClientCredentials_RefusesPlaintextServer(t *testing.T) {
 	}
 }
 
-// TestFileClientCredentials_StillChecksTheServerName pins that the
-// replacement is scoped to sources whose certificates carry no name.
-// File mode keeps Go's hostname check, and a certificate for the wrong
-// name is refused even though it chains perfectly.
-func TestFileClientCredentials_StillChecksTheServerName(t *testing.T) {
-	t.Parallel()
-	ca := newCA(t)
-	dir := t.TempDir()
-
-	// A server certificate valid for a name this client is not dialing.
-	certPath, keyPath := ca.issueNamed(t, dir, "elsewhere", "elsewhere.invalid")
-	keypair, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		t.Fatalf("load server keypair: %v", err)
-	}
-	addr := serveWith(t, grpccreds.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{keypair},
-		MinVersion:   tls.VersionTLS13,
-	}))
-
-	clientCert, clientKey := ca.issue(t, dir, "client", clientLeaf)
-	p, err := credentials.New(credentials.Config{Files: &credentials.FileSource{
-		CertFile: clientCert,
-		KeyFile:  clientKey,
-		CAFile:   ca.writeBundle(t, dir+"/ca.pem"),
-	}})
-	if err != nil {
-		t.Fatalf("credentials.New: %v", err)
-	}
-	creds, err := p.ClientCredentials(t.Context())
-	if err != nil {
-		t.Fatalf("ClientCredentials: %v", err)
-	}
-	if err := dialHealth(t, addr, creds); err == nil {
-		t.Fatal("dial to a server certificate issued for another name: want refusal, got success")
-	}
-}
-
 // ---------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------
@@ -215,40 +173,6 @@ func serveWith(t *testing.T, creds grpccreds.TransportCredentials) string {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()
-}
-
-// issueNamed writes a CA-signed server keypair valid only for dnsName —
-// no loopback IP SAN — so a client dialing 127.0.0.1 must reject it on
-// the name. testCA.issue deliberately includes the loopback address,
-// which is what makes every other handshake test work.
-func (ca *testCA) issueNamed(t *testing.T, dir, name, dnsName string) (certPath, keyPath string) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("leaf key: %v", err)
-	}
-	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: name},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{dnsName},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatalf("leaf cert: %v", err)
-	}
-	certPath = filepath.Join(dir, name+".crt")
-	keyPath = filepath.Join(dir, name+".key")
-	writePEM(t, certPath, "CERTIFICATE", der)
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal leaf key: %v", err)
-	}
-	writePEM(t, keyPath, "EC PRIVATE KEY", keyDER)
-	return certPath, keyPath
 }
 
 // issueNamelessSVID signs a leaf carrying id as its sole URI SAN and no

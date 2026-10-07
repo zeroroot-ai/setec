@@ -147,7 +147,30 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 
 	// The node side: the kubelet unpacks the one layer into an image
 	// volume, and the launcher checks the two files.
-	art, err := remote.Image(tag1)
+	art := checkDiskArtifact(t, tag1)
+	mnt := t.TempDir()
+	untar(t, mutate.Extract(art), mnt)
+	disk, sigFile := filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile)
+	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{pub}); err != nil {
+		t.Fatalf("VerifyMounted with the right key: %v", err)
+	}
+	other, _, _ := ed25519.GenerateKey(nil)
+	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("VerifyMounted with a wrong key = %v, want ErrBadSignature", err)
+	}
+	if err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
+	}
+	if got, err := DiskRef(b.DiskRepo, ref); err != nil || got != tag1.String() {
+		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
+	}
+}
+
+// checkDiskArtifact checks that the disk at tag is one OCI layer of gzip
+// bytes, and returns it.
+func checkDiskArtifact(t *testing.T, tag name.Tag) v1.Image {
+	t.Helper()
+	art, err := remote.Image(tag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,22 +196,7 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	if err != nil || magic[0] != 0x1f || magic[1] != 0x8b {
 		t.Fatalf("the stored layer is not gzip: % x, %v", magic, err)
 	}
-	mnt := t.TempDir()
-	untar(t, mutate.Extract(art), mnt)
-	disk, sigFile := filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile)
-	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{pub}); err != nil {
-		t.Fatalf("VerifyMounted with the right key: %v", err)
-	}
-	other, _, _ := ed25519.GenerateKey(nil)
-	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
-		t.Fatalf("VerifyMounted with a wrong key = %v, want ErrBadSignature", err)
-	}
-	if err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
-		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
-	}
-	if got, err := DiskRef(b.DiskRepo, ref); err != nil || got != tag1.String() {
-		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
-	}
+	return art
 }
 
 // untar writes the files of a tar stream into dir.

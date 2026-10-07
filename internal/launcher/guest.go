@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/zeroroot-ai/setec/internal/entropy"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/guestagent"
 	"github.com/zeroroot-ai/setec/internal/uniquify"
 )
@@ -49,20 +50,20 @@ func (g *Guest) dial(ctx context.Context, port int) (net.Conn, *bufio.Reader, er
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", g.UDS)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errwrap.Wrap(err, "net.Dialer.DialContext")
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl)
 	}
 	if _, err := fmt.Fprintf(c, "CONNECT %d\n", port); err != nil {
 		_ = c.Close()
-		return nil, nil, err
+		return nil, nil, errwrap.Wrap(err, "fmt.Fprintf")
 	}
 	r := bufio.NewReader(c)
 	line, err := r.ReadString('\n')
 	if err != nil || !strings.HasPrefix(line, "OK ") {
 		_ = c.Close()
-		return nil, nil, fmt.Errorf("vsock CONNECT %d: %q %v", port, line, err)
+		return nil, nil, fmt.Errorf("vsock CONNECT %d: %q %w", port, line, err)
 	}
 	return c, r, nil
 }
@@ -162,7 +163,7 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 	}
 }
 
-// uniquify gives a loaded guest a new identity (ADR-0145 invariant 2).
+// uniquify gives a loaded guest a new identity (check 2 of docs/design/isolation.md).
 func (g *Guest) uniquify(ctx context.Context, pn PodNet) error {
 	u := g.Uniquifier
 	if u == nil {
@@ -189,7 +190,7 @@ func (g *Guest) tellResumed(ctx context.Context) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return errwrap.Wrap(err, "os.ReadFile")
 	}
 	ns, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
 	if err != nil {
@@ -260,14 +261,16 @@ func (g *Guest) Exec(ctx context.Context, p guestagent.Process, stdin io.Reader,
 		switch t {
 		case guestagent.FrameStdout:
 			if _, err := stdout.Write(data); err != nil {
-				return 0, err
+				return 0, errwrap.Wrap(err, "io.Writer.Write")
 			}
 		case guestagent.FrameStderr:
 			if _, err := stderr.Write(data); err != nil {
-				return 0, err
+				return 0, errwrap.Wrap(err, "io.Writer.Write")
 			}
 		case guestagent.FrameExit:
 			return guestagent.ExitCode(data), nil
+		case guestagent.FrameStdin, guestagent.FrameStdinEOF:
+			// The guest never sends stdin frames to the host. Skip one.
 		}
 	}
 }

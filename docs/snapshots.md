@@ -1,22 +1,11 @@
 # Snapshots, Restore, and Pause/Resume (Phase 3)
 
-> **Status (2026-09-29): not available until after launch.** Snapshot
-> restore (`spec.snapshotRef`), session memory checkpoints
-> (`spec.sessionCheckpoint`) and the pre-warm pool do not work yet.
-> Snapshot creation, pause/resume and TTL expiry work. The API still
-> accepts the fields: a Sandbox that names a `snapshotRef` boots fresh
-> instead of restoring, and a checkpointed session cannot resume. The
-> reasons and the open design are in
-> [setec#105](https://github.com/zeroroot-ai/setec/issues/105) (restore
-> and checkpoints) and
-> [setec#103](https://github.com/zeroroot-ai/setec/issues/103) (pool).
-
-Phase 3 adds first-class Firecracker snapshot and restore to Setec,
-exposed as Kubernetes-native primitives. Users capture a running
-microVM's state, restore from that state into a new Sandbox, pause
-and resume Sandboxes without tearing down VM state, and configure
-per-SandboxClass pools of pre-warmed microVMs for sub-100ms cold
-starts.
+Setec captures the state of a running Firecracker machine as a
+`Snapshot`, restores that state into a new Sandbox, forks one Sandbox
+into several, and pauses and resumes a Sandbox. A SandboxClass can keep
+a warm pool: snapshots of a machine that booted an image of the class,
+which a new Sandbox loads instead of a boot. The launcher loads each
+snapshot (docs/design/runtime.md).
 
 All Phase 3 features are opt-in via Helm values. A default install
 renders Phase 2-equivalent manifests.
@@ -30,9 +19,10 @@ renders Phase 2-equivalent manifests.
 - **Pause / Resume**: `Sandbox.spec.desiredState` flips between
   `Running` and `Paused`. A paused microVM consumes near-zero CPU and
   retains memory until resumed.
-- **Pre-warm pool**: a SandboxClass may declare
-  `spec.preWarmPoolSize=N` to keep N paused microVMs per eligible
-  node, ready for on-demand restore.
+- **Warm pool**: a SandboxClass may declare
+  `spec.preWarmPoolSize=N` to keep N warm bases of each image that its
+  Sandboxes ask for, each on another node. A base is a full snapshot of a
+  machine that booted the image and ran no workload.
 
 ## Enabling Phase 3
 
@@ -45,33 +35,21 @@ snapshots:
   localDisk:
     root: /var/lib/setec/snapshots
     fillThreshold: 0.85
-  mTLS:
-    operatorCertSecret: setec-nodeagent-client-tls
-    nodeAgentCertSecret: setec-nodeagent-server-tls
-    caSecret: setec-nodeagent-ca
-    certManager:
-      enabled: true
-      issuerRef:
-        kind: ClusterIssuer
-        name: selfsigned
+credentials:
+  spiffe:
+    authorizedIDs:
+      nodeAgentClients: [spiffe://example.org/ns/setec-system/sa/setec]
+      nodeAgentServers: [spiffe://example.org/ns/setec-system/sa/setec-node-agent]
 ```
 
 The node-agent DaemonSet must also be enabled
 (`nodeAgent.enabled=true`) because snapshot persistence happens on
 the node where the VM lives.
 
-With `certManager.enabled: true` the chart issues the whole mTLS
-channel from one trust root. The `issuerRef` above is the bootstrap
-issuer that signs a CA `Certificate` into `caSecret`. A namespaced
-`Issuer` of kind `ca` reads that Secret and issues both leaves, so the
-operator and the node-agent verify each other against one CA. The
-workloads mount only the `ca.crt` key of `caSecret`. The CA private key
-stays in the Secret.
-
-With `certManager.enabled: false` you create all three Secrets out of
-band from one CA and set `caProvided: true` to confirm the CA exists.
-The chart refuses to render without that confirmation, because a
-missing non-optional Secret wedges the pods with no useful error.
+The operator and the node-agent authenticate each other with SVIDs from
+the SPIFFE Workload API, the one credential source of setec. The two
+allow-lists name the SPIFFE ID of each side. See
+[Operator → node-agent credentials](#operator--node-agent-credentials).
 
 ## Creating a snapshot
 
@@ -153,7 +131,7 @@ checkpoint retained, microVM released, `phase=Suspended` with
 returns to `Running` (docs/design/lifecycles.md). Unset means pauses are unbounded;
 the webhook rejects zero or negative values.
 
-## Pre-warmed pool
+## Warm pool
 
 Declare a pool on a SandboxClass:
 
@@ -163,72 +141,82 @@ kind: SandboxClass
 metadata:
   name: fast
 spec:
-  vmm: firecracker
-  runtimeClassName: kata-fc
-  preWarmPoolSize: 8
-  preWarmImage: ghcr.io/org/app:1.2.3
-  preWarmTTL: 24h
+  runtime:
+    backend: launcher
+  defaultResources:
+    vcpu: 2
+    memory: 2Gi
+  preWarmPoolSize: 3
+  preWarmImage: ghcr.io/org/app@sha256:<digest>
+  preWarmImageSignature:
+    issuer: https://token.actions.githubusercontent.com
+    identity: https://github.com/org/app/.github/workflows/release.yml@refs/tags/v1.2.3
 ```
 
-The node-agent on each eligible node maintains 8 paused microVMs
-running the pool image. Before booting a pool entry, the node-agent
-prefetches the OCI image into the node's containerd content store via
-the real containerd client (see `--containerd-socket` and
-`--containerd-namespace` flags). Registry credentials can be supplied
-via `--containerd-auth-file` pointing at a Docker config.json. A
-pulled image already present in the store produces a cache hit and no
-network traffic.
+A base is a full Snapshot of a launcher machine that booted a pool
+image with the default resources of the class and ran no workload
+(`internal/controller/warm_pool.go`). A pool image is an image by digest
+that a Sandbox of the class asked for with the default resources, so
+each catalog tool image that the Sandboxes of a class run joins the pool
+on its first request (setec#238). `preWarmImage` is optional: it is a
+first pool image that the pool warms from the creation of the class.
 
-When a Sandbox with matching class and image lands, the operator
-claims a pool entry and the cold-start latency drops to well under
-100ms. Pool entries older than `preWarmTTL` are recycled automatically.
-Pull failures are classified into typed sentinels and surfaced via the
-`setec_node_image_prefetch_errors_total{reason}` counter (reasons:
-`containerd_unreachable`, `image_not_found`, `auth_required`,
-`pull_failed`) so operators can alert on non-transient misconfiguration.
+The operator keeps `preWarmPoolSize` Ready bases of each pool image, each
+on another node, in the namespace of the pool. It drops an image, and its
+bases, 7 days after the last Sandbox that asked for it. A class keeps at
+most 32 pool images, the most recent ones. `status.warmPool.images` lists
+each pool image with its last request, its key and its Ready bases.
 
-Pool entries are invisible as Snapshot CRs — they are node-agent
-internal state. The `setec_prewarm_pool_entries{node,sandbox_class}`
-gauge exposes fill level per node.
+The admission webhook refuses a class with `preWarmPoolSize > 0` and no
+`defaultResources` or no `preWarmImageSignature`, and a `preWarmImage`
+with no digest. A base belongs to one image digest, and it boots with the
+default resources.
 
-The admission webhook enforces coherence of the declarative trio:
+### The signature of the pool image
 
-- `preWarmPoolSize > 0` requires `preWarmImage` (the node-agent bakes
-  pool entries from the class image).
-- `preWarmTTL`, when set, must be a positive duration.
-- An active pool requires the `kata-fc` backend — pool restore drives
-  the Kata VM's Firecracker socket, which no other backend exposes.
+The operator builds no base from an image that it cannot check. Before
+the first base of each pool image, a Job of the disk builder checks the
+cosign signature of the image (`internal/diskbuilder/imagesig`). cosign v3 attaches
+the signature as a Sigstore bundle, an OCI referrer of the image.
+`preWarmImageSignature` names the signer in one of two ways:
+
+- `issuer` and `identity`: a keyless signature. The certificate of the
+  signature must carry exactly this OIDC issuer and identity, for
+  example the release workflow of the image owner. The check reads the
+  Sigstore public-good trusted root through TUF, so the Job needs to
+  reach `tuf-repo-cdn.sigstore.dev`.
+- `publicKey`: a PEM public key, for an image signed with a key. The
+  check needs no outside service, so it suits an air-gapped install.
+
+An image with no signature of the named signer gets no base, and the
+pool drops each base of it. The condition `ImageNotVerified=True` on the
+class names each such image. The check runs again when its Job expires, and when the image
+or the signer changes.
 
 ### Warm-start flow
 
-When an ephemeral Sandbox of a pool-declaring class (running exactly
-the class `preWarmImage`, without an explicit `spec.snapshotRef`)
-first transitions to `Running`, the operator makes a single warm-start
-attempt: it dials the node-agent on the Pod's node, atomically claims
-a matching pool entry (`ClaimPoolEntry` RPC), and restores the paused
-VM state into the Pod's Firecracker socket. Restored guests receive
-the same fail-closed entropy reseed as named-snapshot restores.
+A Sandbox can warm start when its class keeps a pool, it asks for an
+image by digest with the default resources of the class, it is not a
+session, and it names no snapshot. Its request also stamps the image in
+the pool. Before the operator creates the Pod, it selects a Ready base
+and records it in the `setec.zeroroot.ai/warm-base` annotation. The Pod
+lands on the node of the base. The launcher loads the base instead of
+a boot, gives the guest a new identity and fresh entropy, and then
+starts the workload of the Sandbox. Restored guests get the same
+fail-closed checks as a named-snapshot restore.
 
-The outcome is recorded once in `status.warmStart`:
-
-- `outcome: PoolRestored` with `entryID` — the Sandbox started from
-  the pool, inside a real `kata-fc` Pod (CNI, NetworkPolicy, and
-  observability all apply as usual).
-- `outcome: ColdBoot` with `reason: miss` or `reason: error` — no
-  compatible entry, an unreachable node-agent, or a failed restore.
-  The Sandbox continues its normal cold boot; a warm-start failure
-  never fails the Sandbox.
-
-Events `WarmStartRestored` / `WarmStartColdBoot` narrate the attempt
-on the Sandbox. A claimed entry is consumed even when its restore
-fails — pool state is never restored twice (docs/design/isolation.md) — and the pool
-reconciler reprovisions the missing entry on its next tick. Deleting
-the SandboxClass (or setting `preWarmPoolSize: 0`) drains the pool;
-no operator-managed template objects exist anywhere in the flow.
+A warm start that finds no Ready base boots the Sandbox cold. A failed
+load never fails the Sandbox. The `setec_warmstart_total{outcome}`
+counter records `restored`, `miss` and `error`. The
+`setec_warm_pool_ready_bases` and `setec_warm_pool_target_bases`
+gauges show the fill level of each class. Setting `preWarmPoolSize: 0` or deleting the class drains the pool.
 
 ## Storage backend
 
-Phase 3 ships one backend: local-disk. State files live under
+Snapshots have two backends. The local disk of a node holds a
+snapshot that loads on that node only. The S3-compatible store
+(`snapshots.s3`) holds a kept snapshot and a session checkpoint, which
+load on any node. On the local disk, state files live under
 `/var/lib/setec/snapshots/<namespace>-<snapshot>/state.bin` with
 mode 0600 and a hex SHA256 sidecar at `state.bin.sha256`.
 
@@ -237,10 +225,8 @@ Every artifact is **encrypted at rest** — always, with no opt-out
 key. The data key is sealed with a node-local key file
 (`snapshots.keysDir`, default `/var/lib/setec/keys`) and stored
 OUTSIDE the artifact tree, so a copy or backup of the snapshot
-directory carries ciphertext only, with no key material. Pre-warm pool
-entries get the same treatment: `setec-pool-vm` encrypts the entry's
-state/memory pair in place and seals the per-entry key against the
-entry's identity and provenance.
+directory carries ciphertext only, with no key material. A base of the
+warm pool is a Snapshot, so it gets the same treatment.
 
 Delete destroys the sealed data key first — zero-overwrite, sync,
 unlink — and then reclaims the ciphertext. The key destruction IS the
@@ -253,10 +239,9 @@ key and are treated as destroyed: restore refuses them, delete still
 reclaims them. Rebuild pools and re-create snapshots after upgrade;
 there is no plaintext read path.
 
-Future backends (object-store, content-addressable) slot in behind
-the `storage.StorageBackend` interface without operator changes; the
-encryption wrapper composes over any of them, and keys stay on the
-node.
+Both backends implement the `storage.StorageBackend` interface
+(`internal/snapshot/storage/interface.go`), and the encryption wrapper
+composes over each one.
 
 ## Session memory checkpoints (S3-compatible backend)
 
@@ -339,34 +324,21 @@ checkpoint the session ever wrote, wherever the bucket is replicated.
   a namespace `ResourceQuota` to cap snapshots per tenant. The
   admission webhook enforces the quota at create time.
 - **mTLS**: the operator-to-node-agent channel is always mTLS —
-  mandatory, with no fallback. Both the operator and node-agent
-  refuse to start without their TLS cert/key/client-ca triple, and
-  the Helm chart always renders the corresponding Secret mounts.
+  mandatory, with no fallback. Both the operator and the node-agent
+  refuse to start without their Workload API socket and allow-list.
 
 ## Operator → node-agent credentials
 
 The operator drives snapshots by dialling each node-agent over mTLS.
-It runs in exactly one credential mode, selected the same way and with
-the same failure semantics as every setec server surface — configuring
-both or neither is a startup error naming the cause, and there is no
-fallback between them.
-
-**File mode (default).** `--nodeagent-tls-cert`, `--nodeagent-tls-key`
-and `--nodeagent-ca`. The operator presents a client certificate and
-accepts any node-agent whose certificate the configured CA issued and
-whose name matches the dial target.
-
-**SPIFFE mode.** `--nodeagent-spiffe-socket` plus one or more
-`--nodeagent-spiffe-authorized-id` flags. The operator's identity comes
-from the Workload API and rotates in-process, and — the part that
-differs from a server surface — it authorizes the *node-agent's* SPIFFE
-ID rather than checking a hostname. An X509-SVID carries no DNS name, so
+Its credentials come from the SPIFFE Workload API (setec#175):
+`--nodeagent-spiffe-socket` plus one or more
+`--nodeagent-spiffe-authorized-id` flags. The operator's identity
+rotates in-process, and it authorizes the *node-agent's* SPIFFE ID
+rather than checking a hostname. An X509-SVID carries no DNS name, so
 the identity check replaces the hostname check rather than being added
-alongside it; chaining to the trust bundle is not sufficient on its own.
-An empty allow-list is a startup error.
-
-The selected mode is logged at startup
-(`Resolved node-agent client credentials mode=file`).
+alongside it. Chaining to the trust bundle is not sufficient on its
+own. An empty allow-list is a startup error, and an operator that
+cannot reach its Workload API fails to boot.
 
 ## Snapshot security
 
@@ -396,15 +368,14 @@ hardening invariants (docs/design/threat-model.md; full detail in `SECURITY.md`)
   ```
 
 - **Entropy reseed on restore** is enforced fail-closed by default
-  (`snapshots.entropyReseed: require`): after every `LoadSnapshot` the
-  node-agent pushes fresh entropy to the in-guest `setec-guest-agent`
-  over vsock and refuses to report the restore successful until the
-  guest acknowledges it with a digest-verified ack. Guest images must
-  bundle `setec-guest-agent` (published as
-  `ghcr.io/zeroroot-ai/setec-guest-agent`; also `make build-guest-agent`).
-  `snapshots.entropyReseed: off` is the explicit opt-out for agent-less
-  images — restored clones then rely on the passive virtio-rng
-  mechanism only. See `SECURITY.md` ("Entropy reseed on restore").
+  (`snapshots.entropyReseed: require`): after every snapshot load the
+  launcher pushes fresh entropy to the guest agent over vsock and
+  refuses to report the restore successful until the guest
+  acknowledges it with a digest-verified ack. The guest agent is the
+  `/init` of the initrd in the launcher image, so a Sandbox image needs
+  no agent of its own. `snapshots.entropyReseed: off` is the explicit
+  opt-out: restored clones then rely on the passive virtio-rng
+  mechanism only. See `docs/design/isolation.md`.
 
 ## Metrics reference
 
@@ -413,18 +384,15 @@ Phase 3 adds these collectors to the existing Prometheus suite:
 - `setec_snapshot_duration_seconds{operation,sandbox_class}` —
   histogram of snapshot operation durations. `operation` is one of
   `create`, `restore`, `delete`, `pause`, `resume`.
-- `setec_prewarm_pool_entries{node,sandbox_class}` — gauge of
-  currently-paused pool entries per node/class, exported by the
-  node-agent after every pool reconcile tick.
-- `setec_prewarm_pool_claims_total{outcome}` — node-agent counter of
-  pool claim attempts; `outcome` is `restored`, `miss`, or
-  `restore_failed`.
 - `setec_warmstart_total{outcome,sandbox_class}` — operator counter of
   warm-start attempts; `outcome` is `restored`, `miss`, or `error`.
-- `setec_node_entropy_reseed_total{outcome}` — counter of post-restore
-  entropy reseed attempts on the node-agent, `outcome` is `success` or
-  `failure`. A `failure` always corresponds to a restore that failed
-  closed (the sandbox was never handed over).
+- `setec_warm_pool_ready_bases{sandbox_class}` and
+  `setec_warm_pool_target_bases{sandbox_class}` — gauges of the Ready
+  bases of each warm pool and of the number that the pool keeps.
+
+The launcher reseeds and uniquifies each loaded guest itself, and it
+writes the result as restore evidence that the invariant gate reads. A
+failed step fails the restore closed, and the Sandbox Events name it.
 
 ## Troubleshooting
 
@@ -442,5 +410,5 @@ Phase 3 adds these collectors to the existing Prometheus suite:
   the node and is Running and Ready, and that `--nodeagent-namespace`
   matches the namespace the DaemonSet runs in.
 
-See the kata-firecracker integration doc for details on how Setec
-drives the underlying VMM.
+See [the runtime design](design/runtime.md) for how setec drives
+Firecracker in a launcher Pod.

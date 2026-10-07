@@ -26,7 +26,6 @@ func TestValidate(t *testing.T) {
 		return &setecv1alpha1.SandboxClass{
 			Name: "standard",
 			Spec: setecv1alpha1.SandboxClassSpec{
-				VMM: setecv1alpha1.VMMFirecracker,
 				MaxResources: &setecv1alpha1.Resources{
 					VCPU:   4,
 					Memory: qty("8Gi"),
@@ -226,7 +225,7 @@ func TestConstraintViolation_String(t *testing.T) {
 	}
 }
 
-// TestValidate_Scratch covers the scratch ceiling (ADR-0146, setec#172): the
+// TestValidate_Scratch covers the scratch ceiling (docs/design/storage.md, setec#172): the
 // default ceiling, a class override, a request below the class and a
 // request above it.
 func TestValidate_Scratch(t *testing.T) {

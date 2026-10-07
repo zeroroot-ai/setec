@@ -51,17 +51,17 @@ body:
     validations:
       required: true
   - type: input
-    id: kata-version
+    id: launcher-image
     attributes:
-      label: Kata Containers version
-      description: Output of `kata-runtime --version` on a node, or the kata-deploy image tag.
-      placeholder: 3.7.0
+      label: Launcher image
+      description: The image of the launcher container of a Sandbox Pod (`kubectl get pod <sandbox>-vm -o jsonpath='{.spec.containers[0].image}'`).
+      placeholder: ghcr.io/zeroroot-ai/setec-launcher:v0.122.0
   - type: input
-    id: firecracker-version
+    id: node-type
     attributes:
-      label: Firecracker version
-      description: Output of `firecracker --version` on a node.
-      placeholder: 1.7.0
+      label: Node type
+      description: The instance type or host model of the node that runs the Sandbox. The node must expose /dev/kvm.
+      placeholder: m8i.xlarge
   - type: textarea
     id: logs
     attributes:

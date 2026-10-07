@@ -29,6 +29,8 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The launcher values that the chart requires (hack/chart-launcher-values.yaml).
+LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 NS_A="sandbox-workloads"
 NS_B="sandbox-tenants"
 
@@ -69,7 +71,7 @@ assert_absent() {
 render() {
 	local out="$1"
 	shift
-	"$HELM" template setec "$CHART_DIR" \
+	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 		"$@" >"$out"
@@ -145,17 +147,6 @@ assert_contains "$workdir/default.yaml" "baseline policy selects every Pod" \
 	"podSelector: {}"
 
 # ---------------------------------------------------------------------------
-# runtime-agent least privilege (GHSA-p8f8-3qpw-7h93).
-#
-# The agent's `nodes: patch` grant is only tolerable because admission
-# narrows it. If the policy stopped rendering, or nodes/status came back,
-# the chart would still install and the narrowing would be gone.
-# ---------------------------------------------------------------------------
-render "$workdir/agent-rbac.yaml" --show-only templates/runtime-agent-rbac.yaml
-render "$workdir/agent-ds.yaml" --show-only templates/runtime-agent-daemonset.yaml
-render "$workdir/agent-guard.yaml" --show-only templates/runtime-agent-node-guard.yaml
-
-# ---------------------------------------------------------------------------
 # Operator event RBAC.
 #
 # controller-runtime records events through the events.k8s.io API group. A
@@ -169,43 +160,6 @@ strip_comments "$workdir/manager-rbac.yaml" "$workdir/manager-rbac.stripped.yaml
 note "operator can record events (events.k8s.io)"
 assert_contains "$workdir/manager-rbac.stripped.yaml" "manager ClusterRole grants events.k8s.io events" \
 	"- events.k8s.io"
-
-note "runtime-agent least privilege (GHSA-p8f8-3qpw-7h93)"
-# The rule, not the prose: the ClusterRole comment explains why the grant
-# was dropped, so a bare substring match would fail on its own rationale.
-assert_absent "$workdir/agent-rbac.yaml" "agent holds no nodes/status grant" \
-	'resources: ["nodes/status"]'
-assert_contains "$workdir/agent-ds.yaml" "agent runs as a verified non-root user" \
-	"runAsNonRoot: true" \
-	"runAsUser: 65532" \
-	"type: RuntimeDefault"
-assert_absent "$workdir/agent-ds.yaml" "agent is not permitted to run as root" \
-	"runAsNonRoot: false"
-assert_contains "$workdir/agent-guard.yaml" "node-write guard is rendered and denies" \
-	"kind: ValidatingAdmissionPolicy" \
-	"name: setec-runtime-agent-node-guard" \
-	"- Deny"
-assert_contains "$workdir/agent-guard.yaml" "guard is scoped to the agent ServiceAccount" \
-	"system:serviceaccount:setec-system:setec-runtime-agent"
-assert_contains "$workdir/agent-guard.yaml" "guard pins the writable key set" \
-	"'setec.zeroroot.ai/runtime.'" \
-	"'setec.zeroroot.ai/runtime-probe'" \
-	"object.spec == oldObject.spec"
-assert_contains "$workdir/agent-guard.yaml" "guard checks node identity when the cluster supplies it" \
-	"authentication.kubernetes.io/node-name"
-
-# requireNodeIdentity must flip the expression from opportunistic to
-# mandatory. A toggle that renders the same policy either way is worse
-# than no toggle: it reads as a control and is not one.
-render "$workdir/agent-guard-strict.yaml" \
-	--set runtimeAgent.nodeGuard.requireNodeIdentity=true \
-	--show-only templates/runtime-agent-node-guard.yaml
-assert_absent "$workdir/agent-guard-strict.yaml" "requireNodeIdentity removes the absent-claim escape" \
-	"!has(request.userInfo.extra)"
-
-render "$workdir/guard-off-agent.yaml" --set runtimeAgent.nodeGuard.enabled=false
-assert_absent "$workdir/guard-off-agent.yaml" "node guard is omitted when disabled" \
-	"setec-runtime-agent-node-guard"
 
 # ---------------------------------------------------------------------------
 # KVM device plugin (setec#187). It is a named exception to the secure pod
@@ -230,38 +184,60 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Portable node installer (docs/design/runtime.md, setec#187).
+# The node agent has no Kubernetes credentials (setec#198).
 #
-# The installer is privileged by design (it writes host files and
-# restarts containerd — that is the product). What bounds its blast
-# radius is that it carries NO Kubernetes credentials: a compromised
-# installer pod is one node, never the cluster API. These assertions
-# pin that property, plus the containment of hostNetwork.
+# The agent is root and privileged: it reads and writes the work volumes of
+# the launcher Pods on the host. What bounds it is that it calls no
+# Kubernetes API, so it has no token and no RBAC, and it mounts no more of
+# the host than the kubelet Pod directory and its own snapshot directories.
 # ---------------------------------------------------------------------------
-render "$workdir/installer.yaml" --show-only templates/installer-daemonset.yaml
-
-note "portable node installer (docs/design/runtime.md, setec#187)"
-assert_contains "$workdir/installer.yaml" "installer DaemonSet is rendered by default" \
-	"kind: DaemonSet" \
-	"app.kubernetes.io/component: installer"
-assert_contains "$workdir/installer.yaml" "installer mounts no ServiceAccount token" \
-	"automountServiceAccountToken: false"
-assert_absent "$workdir/installer.yaml" "installer names no ServiceAccount" \
-	"serviceAccountName:"
-assert_contains "$workdir/installer.yaml" "installer stays off the host network" \
+render "$workdir/nodeagent.yaml" --set nodeAgent.enabled=true --set snapshots.enabled=true \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}' \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}' \
+	--show-only templates/daemonset.yaml
+strip_comments "$workdir/nodeagent.yaml" "$workdir/nodeagent.stripped.yaml"
+note "node agent has no Kubernetes credentials (setec#198)"
+assert_contains "$workdir/nodeagent.stripped.yaml" "the node agent mounts no ServiceAccount token" \
+	"automountServiceAccountToken: false" \
 	"hostNetwork: false"
-assert_contains "$workdir/installer.yaml" "installer targets x86 Linux nodes only" \
-	"kubernetes.io/arch: amd64" \
-	"kubernetes.io/os: linux"
+assert_absent "$workdir/nodeagent.stripped.yaml" "the node agent has no ClusterRole" "kind: ClusterRole"
+assert_absent "$workdir/nodeagent.stripped.yaml" "the node agent does not mount the host /dev" "path: /dev"
+# The Workload API socket directory under /run/spire is the one mount of
+# /run, so the check matches the whole path, not a prefix.
+if grep -qE '^[[:space:]]*path: /run/?$' "$workdir/nodeagent.stripped.yaml"; then
+	fail "the node agent does not mount the host /run — unexpectedly present: path: /run"
+else
+	pass "the node agent does not mount the host /run"
+fi
 
-# The installer's ServiceAccount-less-ness only matters if no RBAC
-# object sneaks in for it either.
-assert_absent "$workdir/default.yaml" "no RBAC object exists for the installer" \
-	"setec-installer-role"
-
-render "$workdir/installer-off.yaml" --set installer.enabled=false
-assert_absent "$workdir/installer-off.yaml" "installer is omitted when disabled" \
-	"app.kubernetes.io/component: installer"
+# ---------------------------------------------------------------------------
+# The launcher is the only runtime (setec#198).
+#
+# The Kata, gVisor and runc backends and the node installer were removed.
+# None of their objects may come back in a render: a RuntimeClass, an
+# installer or runtime-agent DaemonSet, or a runtimes ConfigMap.
+# ---------------------------------------------------------------------------
+note "the launcher is the only runtime (setec#198)"
+render "$workdir/all-on.yaml" --set nodeAgent.enabled=true --set snapshots.enabled=true \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}' \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}' \
+	--set webhook.enabled=true
+for needle in "kind: RuntimeClass" "app.kubernetes.io/component: installer" \
+	"app.kubernetes.io/component: runtime-agent" "setec-runtimes" "--runtimes-config"; do
+	assert_absent "$workdir/all-on.yaml" "a render has no object of a removed backend" "$needle"
+done
+assert_contains "$workdir/all-on.yaml" "the operator gets the launcher flags" \
+	"--launcher-image=" \
+	"--disk-repo=" \
+	"--disk-public-key="
+if "$HELM" template setec "$CHART_DIR" \
+	--set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	>/dev/null 2>&1; then
+	fail "a render without the launcher values must fail: each launcher needs a disk repository and its keys"
+else
+	pass "a render without the launcher values fails"
+fi
 
 # ---------------------------------------------------------------------------
 # Leader-election RBAC (setec#217, granted by #219).
@@ -334,15 +310,19 @@ assert_absent "$workdir/le-off.yaml" "no leader-elect flag when disabled" \
 # gone: two pairs of client and tenant must never share a namespace.
 # ---------------------------------------------------------------------------
 note "frontend enrollment (setec#168)"
-FE_TLS=(--set frontend.enabled=true
-	--set frontend.tlsCertSecretName=fe-tls
-	--set frontend.tlsClientCASecretName=fe-ca
+FE=(--set frontend.enabled=true
+	--set credentials.spiffe.trustDomain=example.org
 	--set 'frontend.clients[0].name=saas'
 	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon'
 	--set 'frontend.clients[1].name=onprem'
-	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon')
+	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
+	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443'
+	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server'
+	--set 'systemPolicy.frontendCallers[0].namespace=gibson'
+	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
+	--set 'systemPolicy.frontendCallers[1].cidr=203.0.113.0/24')
 
-render "$workdir/fe-default.yaml" "${FE_TLS[@]}" \
+render "$workdir/fe-default.yaml" "${FE[@]}" \
 	--show-only templates/frontend.yaml
 strip_comments "$workdir/fe-default.yaml" "$workdir/fe-default.stripped.yaml"
 assert_contains "$workdir/fe-default.stripped.yaml" "each enrolled client reaches the frontend" \
@@ -353,7 +333,7 @@ assert_absent "$workdir/fe-default.stripped.yaml" "no fixed shared namespace" \
 assert_absent "$workdir/fe-default.stripped.yaml" "no tenant label override" \
 	"--tenant-namespace-label"
 
-render "$workdir/fe-scope.yaml" "${FE_TLS[@]}"
+render "$workdir/fe-scope.yaml" "${FE[@]}"
 strip_comments "$workdir/fe-scope.yaml" "$workdir/fe-scope.stripped.yaml"
 assert_contains "$workdir/fe-scope.stripped.yaml" "the frontend gets the pair grants and the scope policy (setec#207)" \
 	"--pair-namespace-grant=setec-sandbox-namespace=" \
@@ -361,30 +341,28 @@ assert_contains "$workdir/fe-scope.stripped.yaml" "the frontend gets the pair gr
 	"name: setec-frontend-scope" \
 	"name: setec-sandbox-host-guard-pairs" \
 	"setec.zeroroot.ai/sandbox-namespace: \"true\""
-if "$HELM" template setec "$CHART_DIR" --set webhook.certManager.enabled=true "${FE_TLS[@]}" >/dev/null 2>&1; then
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true "${FE[@]}" >/dev/null 2>&1; then
 	pass "a frontend install renders with no static sandboxNamespaces"
 else
 	fail "a frontend install must render with no static sandboxNamespaces: the frontend makes the pair namespaces"
 fi
 
-if "$HELM" template setec "$CHART_DIR" \
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
-	--set frontend.tlsCertSecretName=fe-tls \
-	--set frontend.tlsClientCASecretName=fe-ca \
+	--set credentials.spiffe.trustDomain=example.org \
 	>/dev/null 2>&1; then
 	fail "a frontend with no enrolled client must fail the render"
 else
 	pass "a frontend with no enrolled client fails the render"
 fi
 
-if "$HELM" template setec "$CHART_DIR" \
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
-	--set frontend.tlsCertSecretName=fe-tls \
-	--set frontend.tlsClientCASecretName=fe-ca \
+	--set credentials.spiffe.trustDomain=example.org \
 	--set 'frontend.clients[0].name=saas' \
 	--set 'frontend.clients[0].spiffeID=https://zeroroot.ai/gibson' \
 	>/dev/null 2>&1; then
@@ -414,7 +392,7 @@ assert_contains "$workdir/operator.stripped.yaml" "default reserved list reaches
 	"ff00::/8" \
 	"169.254.0.0/16"
 
-if "$HELM" template setec "$CHART_DIR" \
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'netpol.reservedCIDRs={10.0.0.0/8,169.254.0.0/16}' \
@@ -424,7 +402,7 @@ else
 	pass "an IPv4-only reserved list fails the render"
 fi
 
-if "$HELM" template setec "$CHART_DIR" \
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'netpol.reservedCIDRs={fc00::/7,fe80::/10}' \
@@ -485,7 +463,7 @@ assert_no_clusterwide_exec() {
 	pass "$desc"
 }
 
-render "$workdir/fe-rbac.yaml" "${FE_TLS[@]}" --show-only templates/frontend.yaml
+render "$workdir/fe-rbac.yaml" "${FE[@]}" --show-only templates/frontend.yaml
 strip_comments "$workdir/fe-rbac.yaml" "$workdir/fe-rbac.stripped.yaml"
 assert_no_clusterwide_exec "$workdir/fe-rbac.stripped.yaml" "no ClusterRoleBinding grants pods/exec by default"
 if rbac_index "$workdir/fe-rbac.stripped.yaml" | grep -q "^ClusterRole setec-frontend-exec - - exec$"; then
@@ -503,7 +481,7 @@ done
 
 # The cluster-wide form must exist only under the explicit toggle, so the
 # toggle is proven wired and the default is proven to be the narrow one.
-render "$workdir/fe-rbac-wide.yaml" "${FE_TLS[@]}" \
+render "$workdir/fe-rbac-wide.yaml" "${FE[@]}" \
 	--set rbac.allowClusterWideSandboxWrite=true \
 	--show-only templates/frontend.yaml
 strip_comments "$workdir/fe-rbac-wide.yaml" "$workdir/fe-rbac-wide.stripped.yaml"
@@ -512,129 +490,6 @@ if rbac_index "$workdir/fe-rbac-wide.stripped.yaml" | grep -q "^ClusterRoleBindi
 else
 	fail "rbac.allowClusterWideSandboxWrite=true must bind pods/exec with a ClusterRoleBinding"
 fi
-
-# ---------------------------------------------------------------------------
-# Operator<->node-agent mTLS channel is issued from one trust root (setec#14).
-#
-# snapshots.enabled=true mounts three Secrets across two workloads, none of
-# them optional. The chart used to issue only the two leaves, each its own
-# root, and never the CA both workloads mount, so no values combination could
-# install. cert-manager mode must now issue a CA Certificate into caSecret, a
-# namespaced Issuer over it, and both leaves from that Issuer. The workloads
-# must mount only ca.crt, because the CA Secret also holds the CA key.
-# ---------------------------------------------------------------------------
-note "node-agent mTLS channel from one CA (setec#14)"
-SNAP_CM=(--set snapshots.enabled=true
-	--set nodeAgent.enabled=true
-	--set snapshots.mTLS.certManager.enabled=true)
-
-render "$workdir/na-certs.yaml" "${SNAP_CM[@]}" --show-only templates/nodeagent-certificates.yaml
-strip_comments "$workdir/na-certs.yaml" "$workdir/na-certs.stripped.yaml"
-assert_contains "$workdir/na-certs.stripped.yaml" "cert-manager mode issues the CA into caSecret" \
-	"kind: Certificate" \
-	"name: setec-nodeagent-ca" \
-	"isCA: true" \
-	"secretName: setec-nodeagent-ca"
-assert_contains "$workdir/na-certs.stripped.yaml" "a namespaced CA Issuer reads caSecret" \
-	"kind: Issuer" \
-	"    secretName: setec-nodeagent-ca"
-# Both leaves must chain to the CA Issuer, never to the bootstrap issuer.
-leaf_refs="$(awk '/^kind: Certificate/ {c=1} /^---/ {c=0} c && /^  issuerRef:/ {r=1; next} r && /^    (kind|name):/ {sub(/^ +/, ""); print; next} r && !/^    / {r=0}' "$workdir/na-certs.stripped.yaml" | sort | uniq -c | sed 's/^ *//')"
-if [ "$leaf_refs" = "$(printf '1 kind: ClusterIssuer\n2 kind: Issuer\n1 name: selfsigned\n2 name: setec-nodeagent-ca')" ]; then
-	pass "both leaves chain to the CA Issuer and only the CA uses the bootstrap issuer"
-else
-	fail "leaf issuerRefs are wrong (want two Issuer/setec-nodeagent-ca, one bootstrap for the CA); got: $(printf '%s' "$leaf_refs" | tr '\n' ';')"
-fi
-
-# Every Secret a workload mounts for the channel must be one the chart issues.
-render "$workdir/na-operator.yaml" "${SNAP_CM[@]}" --show-only templates/deployment.yaml
-render "$workdir/na-agent.yaml" "${SNAP_CM[@]}" --show-only templates/daemonset.yaml
-issued="$(sed 's/[[:space:]]*#.*$//' "$workdir/na-certs.yaml" | awk '/^  secretName:/ {print $2}' | sort -u)"
-for f in na-operator na-agent; do
-	strip_comments "$workdir/$f.yaml" "$workdir/$f.stripped.yaml"
-	mounted="$(awk '/^        - name: nodeagent-(tls|ca)$/ {m=1; next} m && /secretName:/ {print $2; m=0}' "$workdir/$f.stripped.yaml" | sort -u)"
-	missing=""
-	for s in $mounted; do
-		printf '%s\n' "$issued" | grep -qx "$s" || missing="$missing $s"
-	done
-	if [ -n "$mounted" ] && [ -z "$missing" ]; then
-		pass "$f mounts only Secrets the chart issues ($(printf '%s' "$mounted" | tr '\n' ' '))"
-	else
-		fail "$f mounts a Secret the chart does not issue:${missing:- (no nodeagent mounts found)}"
-	fi
-	if awk '/^        - name: nodeagent-ca$/ {m=1; next} m && /^        - name:/ {exit 1} m && /key: ca.crt/ {found=1} END {exit !found}' "$workdir/$f.stripped.yaml"; then
-		pass "$f mounts only ca.crt from the CA Secret"
-	else
-		fail "$f must mount only the ca.crt item of the CA Secret (it also holds the CA key)"
-	fi
-done
-
-if "$HELM" template setec "$CHART_DIR" \
-	--set webhook.certManager.enabled=true \
-	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	"${SNAP_CM[@]}" --set snapshots.mTLS.caProvided=true \
-	>/dev/null 2>&1; then
-	fail "caProvided=true with certManager.enabled=true must fail the render (the knob would be ignored)"
-else
-	pass "caProvided=true with certManager.enabled=true fails the render"
-fi
-
-if "$HELM" template setec "$CHART_DIR" \
-	--set webhook.certManager.enabled=true \
-	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	--set snapshots.enabled=true --set nodeAgent.enabled=true \
-	>/dev/null 2>&1; then
-	fail "snapshots without cert-manager and without caProvided must fail the render"
-else
-	pass "snapshots without cert-manager and without caProvided fails the render"
-fi
-
-# ---------------------------------------------------------------------------
-# Session keepalive image reaches the operator (setec#7).
-#
-# A session Sandbox with no spec.command boots the setec keepalive, which
-# the operator pulls from this image. Without the flag the operator refuses
-# every such Sandbox, so a chart that drops the argument turns a documented
-# default into a Pod-create failure.
-# ---------------------------------------------------------------------------
-note "session keepalive image (setec#7)"
-render "$workdir/keepalive.yaml" --show-only templates/deployment.yaml
-strip_comments "$workdir/keepalive.yaml" "$workdir/keepalive.stripped.yaml"
-assert_contains "$workdir/keepalive.stripped.yaml" "operator receives the session keepalive image" \
-	"--session-keepalive-image=ghcr.io/zeroroot-ai/setec-keepalive:"
-if "$HELM" template setec "$CHART_DIR" \
-	--set webhook.certManager.enabled=true \
-	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	--set sessionKeepalive.image.repository="" \
-	>/dev/null 2>&1; then
-	fail "an empty sessionKeepalive.image.repository must fail the render"
-else
-	pass "an empty sessionKeepalive.image.repository fails the render"
-fi
-
-# --- RuntimeClass scheduling.tolerations ------------------------------------
-# The RuntimeClass admission controller injects scheduling.tolerations into
-# every Pod naming the class, which is the ONLY path that reaches the per-run
-# SandboxClasses an e2e harness creates. Nodes hosting a VMM runtime are
-# normally tainted (KVM metal is expensive), so if this block stops rendering
-# the nodeSelector still steers Sandbox Pods at nodes they are then forbidden
-# to land on — they wait forever, and the chart installs cleanly while
-# dispatch is dead. Assert both directions.
-RC_TOL=$(mktemp)
-trap 'rm -f "$RC_TOL"' EXIT
-
-render "$RC_TOL" \
-	--set 'runtimes.kata-fc.scheduling.tolerations[0].key=example.io/dedicated' \
-	--set 'runtimes.kata-fc.scheduling.tolerations[0].operator=Equal' \
-	--set 'runtimes.kata-fc.scheduling.tolerations[0].value=yes' \
-	--set 'runtimes.kata-fc.scheduling.tolerations[0].effect=NoSchedule'
-assert_contains "$RC_TOL" "RuntimeClass publishes configured scheduling.tolerations" \
-	'key: example.io/dedicated' \
-	'effect: NoSchedule'
-
-render "$RC_TOL"
-assert_absent "$RC_TOL" "RuntimeClass omits tolerations when none are configured" \
-	'example.io/dedicated'
 
 # ---------------------------------------------------------------------------
 # SandboxClass egress allowance by selector (setec#76).
@@ -653,12 +508,12 @@ sandboxClasses:
   classes:
     - name: tool
       spec:
-        runtime: {backend: kata-fc}
+        runtime: {backend: launcher}
         defaultNetworkMode: external-only
         default: true
     - name: agent
       spec:
-        runtime: {backend: kata-fc}
+        runtime: {backend: launcher}
         defaultNetworkMode: external-only
         egressAllowSelectors:
           - namespaceSelector:
@@ -702,7 +557,7 @@ allowance_refused() {
 	local desc="$1" entries="$2"
 	printf 'sandboxClasses:\n  classes:\n    - name: t\n      spec:\n        defaultNetworkMode: none\n        egressAllowSelectors: %s\n' \
 		"$entries" >"$workdir/allowance-bad.yaml"
-	if "$HELM" template setec "$CHART_DIR" \
+	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 		-f "$workdir/allowance-bad.yaml" >/dev/null 2>&1; then
@@ -719,6 +574,61 @@ allowance_refused "a port with no port value fails the render" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"TCP"}]}]'
 allowance_refused "a port with an unknown protocol fails the render" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"ICMP","port":53}]}]'
+
+# ---------------------------------------------------------------------------
+# The setec namespace has its own network policy (D76): a default deny with
+# DNS, and one allow for each component (templates/system-namespace-policy.yaml).
+# hack/check-system-policy.py checks the render. Each fixture below is a
+# render with one piece removed, and the checker must refuse it.
+# ---------------------------------------------------------------------------
+note "the setec namespace network policy"
+SP_ALL=("${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
+	--set snapshots.s3.bucket=setec-snapshots
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}')
+render "$workdir/sp-all.yaml" "${SP_ALL[@]}"
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec-system >"$workdir/sp-all.out"; then
+	pass "each component of the setec namespace has an allow, under a default deny with DNS"
+else
+	fail "the setec namespace policy is incomplete: $(cat "$workdir/sp-all.out")"
+fi
+render "$workdir/sp-default.yaml"
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-default.yaml" setec-system >"$workdir/sp-default.out"; then
+	pass "the default install has the default deny and the operator allow"
+else
+	fail "the default install policy is incomplete: $(cat "$workdir/sp-default.out")"
+fi
+python3 - "$workdir/sp-all.yaml" "$workdir" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+def drop(pred, name):
+    yaml.safe_dump_all([d for d in docs if not pred(d)], open(f"{sys.argv[2]}/sp-{name}.yaml", "w"))
+drop(lambda d: d.get("kind") == "CiliumClusterwideNetworkPolicy", "no-deny")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-node-agent"), "no-node-agent")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-frontend"), "no-frontend")
+PY
+for fx in no-deny no-node-agent no-frontend; do
+	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-$fx.yaml" setec-system >/dev/null; then
+		fail "fixture $fx: the checker passed a render with a missing policy"
+	else
+		pass "fixture $fx: the checker refuses it"
+	fi
+done
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set frontend.enabled=true --set frontend.tlsCertSecretName=fe-tls --set frontend.tlsClientCASecretName=fe-ca \
+	--set 'frontend.clients[0].name=saas' \
+	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
+	>/dev/null 2>"$workdir/sp-nocaller.err"; then
+	fail "a frontend with no systemPolicy.frontendCallers must fail the render"
+elif grep -qF "systemPolicy.frontendCallers" "$workdir/sp-nocaller.err"; then
+	pass "a frontend with no systemPolicy.frontendCallers fails the render"
+else
+	fail "a frontend with no callers failed for another reason: $(tail -n1 "$workdir/sp-nocaller.err")"
+fi
+grep -q "port: \"50051\"" "$workdir/sp-all.yaml" && grep -q "k8s:io.kubernetes.pod.namespace: gibson" "$workdir/sp-all.yaml" \
+	&& grep -q -- "- 203.0.113.0/24" "$workdir/sp-all.yaml" \
+	&& pass "the frontend gRPC port admits the named caller and the named range" \
+	|| fail "the frontend gRPC port does not admit the named caller and range"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then

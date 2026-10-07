@@ -15,13 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zeroroot-ai/setec/internal/nodeagent/katasandbox"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 )
 
 // launcherPaths makes the work volume of one launcher Pod.
-func launcherPaths(t *testing.T) katasandbox.Paths {
+func launcherPaths(t *testing.T) launchersandbox.Paths {
 	t.Helper()
 	pods := t.TempDir()
 	const uid = "0a1b2c3d-0000-4000-8000-0000000000aa"
@@ -68,7 +67,7 @@ func framed(t *testing.T, state, memory string) *os.File {
 
 // fakeLauncher plays the launcher: it waits for the staged marker, checks
 // the files, and writes ev.
-func fakeLauncher(t *testing.T, p katasandbox.Paths, ev podspec.RestoreEvidence) <-chan string {
+func fakeLauncher(t *testing.T, p launchersandbox.Paths, ev podspec.RestoreEvidence) <-chan string {
 	t.Helper()
 	sawState := make(chan string, 1)
 	go func() {
@@ -142,7 +141,7 @@ func TestRestoreLauncher_ReseedModeReachesTheLauncher(t *testing.T) {
 	fakeLauncher(t, p, noReseed)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	require := &Server{Reseeder: &recordingReseeder{}}
+	require := &Server{}
 	resp, err := require.restoreLauncher(ctx, p, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
 	if err == nil || resp.GetSuccess() {
 		t.Fatalf("require mode accepted a guest with no reseed: %+v", resp)
@@ -153,7 +152,7 @@ func TestRestoreLauncher_ReseedModeReachesTheLauncher(t *testing.T) {
 
 	q := launcherPaths(t)
 	fakeLauncher(t, q, noReseed)
-	resp, err = (&Server{}).restoreLauncher(ctx, q, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
+	resp, err = (&Server{EntropyReseedOff: true}).restoreLauncher(ctx, q, framed(t, "S", "M"), memBackend{encrypted: true}, 0)
 	if err != nil || !resp.GetSuccess() || resp.GetEntropyReseeded() || !resp.GetUniquified() {
 		t.Fatalf("off mode = %+v, %v; want a success that reports no reseed", resp, err)
 	}
@@ -168,7 +167,7 @@ type memBackend struct {
 	blobs     map[string][]byte
 }
 
-func (m memBackend) Save(_ context.Context, id string, r io.Reader) (int64, string, error) {
+func (m memBackend) Save(_ context.Context, id string, r io.Reader) (size int64, storageRef string, err error) {
 	b, err := io.ReadAll(r)
 	m.blobs[id] = b
 	return int64(len(b)), id, err
@@ -181,7 +180,7 @@ func (m memBackend) Open(_ context.Context, ref string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 func (m memBackend) Delete(context.Context, string) error { return nil }
-func (m memBackend) Stat(_ context.Context, ref string) (int64, bool, error) {
+func (m memBackend) Stat(_ context.Context, ref string) (size int64, exists bool, err error) {
 	return int64(len(m.blobs[ref])), true, nil
 }
 func (m memBackend) EncryptedAtRest() bool { return m.encrypted }

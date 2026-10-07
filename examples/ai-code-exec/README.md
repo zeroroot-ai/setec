@@ -15,7 +15,7 @@ This is the smallest demonstration of the "LLM wrote some code; run it safely" p
 ## Prerequisites
 
 - A running Setec cluster with the gRPC frontend enabled (`frontend.enabled=true` in Helm values).
-- Client TLS material (cert, key, and the CA that signed the frontend's certificate). See [`docs/frontend-api.md`](../../docs/frontend-api.md).
+- The X509-SVID of the caller, its key, and the trust bundle. See [`docs/frontend-api.md`](../../docs/frontend-api.md).
 - Go 1.23 or later to build the client.
 - A KVM-capable worker node for the microVM.
 
@@ -35,7 +35,8 @@ echo 'print(sum(range(1000000)))' | ./ai-code-exec \
   --addr=setec-frontend.example.com:8443 \
   --client-cert=./client.crt \
   --client-key=./client.key \
-  --ca=./ca.crt
+  --ca=./ca.crt \
+  --server-spiffe-id=spiffe://example.org/ns/setec-system/sa/setec-frontend
 ```
 
 Expected output:

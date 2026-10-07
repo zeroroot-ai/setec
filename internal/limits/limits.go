@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Package limits holds the disk limits of a Sandbox (ADR-0146): the scratch
+// Package limits holds the disk limits of a Sandbox (docs/design/storage.md): the scratch
 // size and the ephemeral-storage limit of its Pod.
 package limits
 
@@ -11,7 +11,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 )
 
-// The disk limits of a Sandbox (ADR-0146). A SandboxClass changes the
+// The disk limits of a Sandbox (docs/design/storage.md). A SandboxClass changes the
 // scratch values; the headroom is fixed.
 var (
 	// DefaultScratch is the scratch size limit when neither the Sandbox nor

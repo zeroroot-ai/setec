@@ -6,7 +6,7 @@
 package e2e
 
 // The abilities that only the launcher has (setec#197): a restore with the
-// five isolation invariants of ADR-0145, the warm pool, a fork into three
+// five isolation checks of docs/design/isolation.md, the warm pool, a fork into three
 // Sandboxes and a kept snapshot. Suspend, resume and a resume on another
 // node after a drain are the scenarios of session_checkpoint_test.go, run
 // on the launcher backend. Each scenario here runs only on that backend.
@@ -43,15 +43,6 @@ var launcherImage = func() string { return testImage("docker.io/library/alpine:3
 // launcherResources is the machine size of each launcher scenario.
 func launcherResources() setecv1alpha1.Resources {
 	return setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("512Mi")}
-}
-
-// requireLauncher skips a scenario of the launcher on another backend. The
-// launcher pass never skips: it runs on the launcher backend only.
-func requireLauncher(t *testing.T) {
-	t.Helper()
-	if !onLauncher() {
-		t.Skipf("a launcher scenario; SETEC_E2E_BACKEND=%s", sandboxBackend)
-	}
 }
 
 // launcherSandbox returns a Sandbox of the suite class that runs cmd.
@@ -111,7 +102,7 @@ func sandboxEventReasons(t *testing.T, ns, name string) []string {
 	return strings.Fields(string(out))
 }
 
-// assertRestoredGuest checks invariant 2 of ADR-0145 on a restored
+// assertRestoredGuest verifies check 2 of docs/design/isolation.md on a restored
 // Sandbox: the gate saw fresh randomness and a new identity, nothing was
 // served without that evidence, and the guest has its own machine-id,
 // randomness and clock and sees the address of its own Pod. Invariant 5
@@ -216,7 +207,6 @@ func waitRunning(t *testing.T, sb *setecv1alpha1.Sandbox, timeout time.Duration)
 // the restore passes invariant 2 and 5. Invariant 3: another Sandbox of the
 // namespace and a Sandbox of another tenant cannot load the snapshot.
 func TestLauncher_SnapshotRestore(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("lr-src", "echo before-snapshot > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)
@@ -284,32 +274,35 @@ func waitGone(t *testing.T, key client.ObjectKey, timeout time.Duration) {
 }
 
 // waitForWarmPoolReady waits until the warm pool of a class has a Ready
-// base and returns the class.
+// base of image.
 func waitForWarmPoolReady(
-	ctx context.Context, t *testing.T, class string, timeout time.Duration,
-) *setecv1alpha1.SandboxClass {
+	ctx context.Context, t *testing.T, class, image string, timeout time.Duration,
+) *setecv1alpha1.SandboxClassWarmPoolImage {
 	t.Helper()
-	return waitForWarmPool(ctx, t, class, timeout, func(*setecv1alpha1.SandboxClassWarmPoolStatus) bool { return true })
+	return waitForWarmPool(ctx, t, class, image, timeout, func(*setecv1alpha1.SandboxClassWarmPoolImage) bool { return true })
 }
 
-// waitForWarmPool waits until the warm pool of a class has a Ready base
-// for which ok holds.
-func waitForWarmPool(ctx context.Context, t *testing.T, class string, timeout time.Duration,
-	ok func(*setecv1alpha1.SandboxClassWarmPoolStatus) bool,
-) *setecv1alpha1.SandboxClass {
+// waitForWarmPool waits until the warm pool of a class has a Ready base of
+// image for which ok holds, and returns the pool of the image.
+func waitForWarmPool(ctx context.Context, t *testing.T, class, image string, timeout time.Duration,
+	ok func(*setecv1alpha1.SandboxClassWarmPoolImage) bool,
+) *setecv1alpha1.SandboxClassWarmPoolImage {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	cls := &setecv1alpha1.SandboxClass{}
 	for time.Now().Before(deadline) {
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: class}, cls); err == nil {
-			if ws := cls.Status.WarmPool; ws != nil && ws.Ready >= 1 && ok(ws) {
-				return cls
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: class}, cls); err == nil && cls.Status.WarmPool != nil {
+			for i := range cls.Status.WarmPool.Images {
+				im := &cls.Status.WarmPool.Images[i]
+				if im.Image == image && im.Ready >= 1 && ok(im) {
+					return im
+				}
 			}
 		}
 		time.Sleep(5 * time.Second)
 	}
 	out, _ := exec.Command("kubectl", "-n", launcherCfg.warmPoolNamespace, "get", "pods,snapshots,events").CombinedOutput()
-	t.Fatalf("the warm pool of %s has no Ready base after %s; status %+v\n%s", class, timeout, cls.Status.WarmPool, out)
+	t.Fatalf("the warm pool of %s has no Ready base of %s after %s; status %+v\n%s", class, image, timeout, cls.Status.WarmPool, out)
 	return nil
 }
 
@@ -329,16 +322,17 @@ func poolBases(t *testing.T, class string) []setecv1alpha1.Snapshot {
 // on the base and invariant 2 on each warm start. It reports the time of a
 // warm start next to a cold start: a number never fails the test (D58).
 func TestLauncher_WarmPool(t *testing.T) {
-	requireLauncher(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	res := launcherResources()
 	clsName := "e2e-pool-" + testNamespace
+	poolImage, signer := signedPoolImage(ctx, t, launcherImage())
 	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
-		Runtime:          &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
-		PreWarmPoolSize:  1,
-		PreWarmImage:     launcherImage(),
-		DefaultResources: &res,
+		Runtime:               &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
+		PreWarmPoolSize:       1,
+		PreWarmImage:          poolImage,
+		PreWarmImageSignature: signer,
+		DefaultResources:      &res,
 	})
 	if err := k8sClient.Create(ctx, cls); err != nil {
 		t.Fatalf("create %s: %v", clsName, err)
@@ -346,8 +340,8 @@ func TestLauncher_WarmPool(t *testing.T) {
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), cls) })
 
 	start := time.Now()
-	ready := waitForWarmPoolReady(ctx, t, clsName, 15*time.Minute)
-	key := ready.Status.WarmPool.Key
+	ready := waitForWarmPoolReady(ctx, t, clsName, poolImage, 15*time.Minute)
+	key := ready.Key
 	t.Logf("first base Ready in %s, key %s", time.Since(start).Round(time.Second), key)
 
 	// Invariant 1 and 4: each base comes from the class image, in the pool
@@ -368,6 +362,7 @@ func TestLauncher_WarmPool(t *testing.T) {
 		name := fmt.Sprintf("wp-warm-%d", i)
 		warm := launcherSandbox(name, "sleep 600")
 		warm.Spec.SandboxClassName = clsName
+		warm.Spec.Image = poolImage
 		createAndCleanup(t, warm)
 		warmTook := waitRunning(t, warm, launcherRestoreWait)
 		got, err := getSandboxE2E(client.ObjectKeyFromObject(warm))
@@ -384,7 +379,7 @@ func TestLauncher_WarmPool(t *testing.T) {
 			t.Errorf("%s has the hostname %q", name, seen[len(seen)-1].hostname)
 		}
 		if i == 0 {
-			waitForWarmPoolReady(ctx, t, clsName, 15*time.Minute)
+			waitForWarmPoolReady(ctx, t, clsName, poolImage, 15*time.Minute)
 		}
 	}
 
@@ -396,8 +391,8 @@ func TestLauncher_WarmPool(t *testing.T) {
 	if err := k8sClient.Patch(ctx, cls, patch); err != nil {
 		t.Fatalf("change the size of %s: %v", clsName, err)
 	}
-	waitForWarmPool(ctx, t, clsName, 15*time.Minute,
-		func(ws *setecv1alpha1.SandboxClassWarmPoolStatus) bool { return ws.Key != "" && ws.Key != key })
+	waitForWarmPool(ctx, t, clsName, poolImage, 15*time.Minute,
+		func(im *setecv1alpha1.SandboxClassWarmPoolImage) bool { return im.Key != "" && im.Key != key })
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		stale := 0
@@ -420,7 +415,6 @@ func TestLauncher_WarmPool(t *testing.T) {
 // has the state of the source and its own identity, and the forks diverge.
 // The source ends with its snapshot.
 func TestLauncher_ForkIntoThree(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("fk-src", "echo source-state > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)
@@ -466,7 +460,6 @@ func TestLauncher_ForkIntoThree(t *testing.T) {
 // normal Sandbox cannot load it. A review Sandbox with no network can. A
 // pin stops the expiry, and after the unpin the snapshot expires.
 func TestLauncher_KeptSnapshot(t *testing.T) {
-	requireLauncher(t)
 	src := launcherSandbox("kp-src", "echo kept-state > /tmp/marker; sleep 3600")
 	createAndCleanup(t, src)
 	waitRunning(t, src, defaultWait)

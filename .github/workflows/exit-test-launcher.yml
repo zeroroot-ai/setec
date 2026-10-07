@@ -1,0 +1,497 @@
+# End-to-end: the Go e2e suite in test/e2e, run against real Firecracker
+# machines in launcher Pods on a kind cluster inside a GitHub-hosted runner.
+#
+# WHERE THE MICROVMS RUN
+#
+# A GitHub-hosted ubuntu-latest runner exposes /dev/kvm (nested
+# virtualization, measured 2026-09-27: 4 vCPU, 15 GB, kvm_amd loaded,
+# KVM_GET_API_VERSION 12). The `launcher` job creates a kind cluster on that
+# runner. The workers mount the runner's /dev, so the device plugin offers
+# /dev/kvm and /dev/net/tun to the launcher Pods. The cluster runs Cilium, the
+# network plugin of every cluster that runs setec (D76): NetworkPolicy is
+# enforced, and the chart's CiliumNetworkPolicy objects of its own namespace
+# install.
+# hack/kind-launcher.yaml has the details. No metal node, no AWS account.
+#
+# The launcher is the only runtime. The Kata, gVisor and runc backends, the
+# node installer and their `suites` job were removed (setec#198).
+#
+# The chain-6 exit test (two commands in one session see one machine and
+# one /workspace) runs in the same job, with its failing fixture. It used to
+# have a workflow of its own on the runc backend.
+#
+# Triggers: the nightly schedule and manual `workflow_dispatch`. The suite
+# takes tens of minutes, so it does not gate a merge (exit tests run on main
+# and on a schedule, never on a pull request).
+
+name: exit-test-launcher
+
+on:
+  workflow_dispatch:
+  # Nightly. The suite is too long for the merge gate, but "not on every
+  # merge" must not mean "never" (setec#298).
+  schedule:
+    - cron: '0 4 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------------
+  # build-images — GitHub-hosted (no metal needed to build a Go
+  # binary + container image, only to run it). Publishes sha-tagged images
+  # that the `launcher` job installs, so the suite exercises this commit's
+  # exact build.
+  # ----------------------------------------------------------------------
+  build-images:
+    runs-on: ubuntu-latest
+    # The launcher image builds the guest kernel, which takes most of this.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write   # pushes sha-tagged images to ghcr
+    outputs:
+      sha_tag: ${{ steps.tags.outputs.sha_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          sha_tag="sha-${GITHUB_SHA::12}"
+          echo "sha_tag=${sha_tag}" >> "$GITHUB_OUTPUT"
+          echo "manager_image=ghcr.io/zeroroot-ai/setec:${sha_tag}" >> "$GITHUB_OUTPUT"
+          echo "node_agent_image=ghcr.io/zeroroot-ai/setec-node-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build + push manager (CMD=manager)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          build-args: CMD=manager
+          push: true
+          tags: ${{ steps.tags.outputs.manager_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The node-agent takes the Firecracker snapshots, so the suite runs
+      # this build of it.
+      - name: Build + push node-agent (CMD=node-agent)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          build-args: CMD=node-agent
+          push: true
+          tags: ${{ steps.tags.outputs.node_agent_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Dockerfile.launcher takes the Firecracker pin as build args, from
+      # firecracker.env, as images.yml does.
+      - name: Read the runtime pins
+        id: pins
+        run: |
+          set -euo pipefail
+          . ./firecracker.env
+          test -n "${FIRECRACKER_VERSION}" || { echo "::error::firecracker.env sets no FIRECRACKER_VERSION"; exit 1; }
+          {
+            echo "firecracker_version=${FIRECRACKER_VERSION}"
+            echo "firecracker_sha256=${FIRECRACKER_SHA256}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The launcher job runs this build of the three images
+      # of the launcher runtime: the device plugin, the disk builder, and
+      # the launcher with Firecracker, the guest kernel and the guest agent.
+      - name: Build + push device-plugin (CMD=setec-device-plugin)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          build-args: CMD=setec-device-plugin
+          push: true
+          tags: ghcr.io/zeroroot-ai/setec-device-plugin:${{ steps.tags.outputs.sha_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push disk-builder (Dockerfile.disk-builder)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.disk-builder
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/zeroroot-ai/setec-disk-builder:${{ steps.tags.outputs.sha_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push launcher (Dockerfile.launcher)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.launcher
+          platforms: linux/amd64
+          build-args: |
+            FIRECRACKER_VERSION=${{ steps.pins.outputs.firecracker_version }}
+            FIRECRACKER_SHA256=${{ steps.pins.outputs.firecracker_sha256 }}
+          push: true
+          tags: ghcr.io/zeroroot-ai/setec-launcher:${{ steps.tags.outputs.sha_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ----------------------------------------------------------------------
+  # launcher: the scenarios on the launcher runtime  # ----------------------------------------------------------------------
+  # launcher: the scenarios on the launcher runtime (setec#197).
+  #
+  # Every Sandbox of this job is a Firecracker machine in a launcher Pod. The
+  # job runs the whole suite: a sandbox, a session, exec, egress, suspend and
+  # resume, a drain, admission, snapshots, and the launcher abilities
+  # (test/e2e/launcher_test.go): a restore with the invariants of docs/design/isolation.md, an
+  # unverified restore that fails closed, the warm pool, a fork into three
+  # and a kept snapshot. Then it runs the chain-6 exit test and its failing
+  # fixture.
+  #
+  # Two workers host machines, so the drain scenario resumes its session on
+  # the other node (hack/kind-launcher.yaml). Two containers on the kind
+  # network stand in for the services of a real install: a registry for the
+  # signed disks, and an S3-compatible store for the checkpoints. Both live
+  # only for this job.
+  # ----------------------------------------------------------------------
+  launcher:
+    name: launcher
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      KIND_CLUSTER: setec-launcher
+      SETEC_E2E_ALLOW_ANY_CLUSTER: "1"
+      SETEC_E2E_NAMESPACE: setec-e2e-launcher
+      SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-launcher-sandboxes
+      SETEC_E2E_RELEASE: setec-e2e-launcher
+      SETEC_E2E_WORKSPACE_STORAGE_CLASS: setec-e2e-workspace-block
+      SETEC_E2E_IMAGE_TAG: ${{ needs.build-images.outputs.sha_tag }}
+      SETEC_E2E_IMAGE_PULL_POLICY: IfNotPresent
+      SETEC_E2E_IMAGE_REPO: ghcr.io/zeroroot-ai/setec
+      SETEC_E2E_NODE_AGENT_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-node-agent
+      SETEC_E2E_LAUNCHER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-launcher
+      SETEC_E2E_DISK_BUILDER_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-disk-builder
+      SETEC_E2E_DEVICE_PLUGIN_IMAGE_REPO: ghcr.io/zeroroot-ai/setec-device-plugin
+      SETEC_E2E_WEBHOOK: "1"
+      SETEC_E2E_SNAPSHOTS: "1"
+      # The store of the "Start the disk registry and the S3 store" step.
+      # The keys exist only in this job's throwaway container.
+      SETEC_E2E_S3: "1"
+      SETEC_E2E_S3_BUCKET: setec-e2e
+      SETEC_E2E_S3_ACCESS_KEY_ID: setec-e2e
+      SETEC_E2E_S3_SECRET_ACCESS_KEY: setec-e2e-only
+      # The drain scenario: two workers host machines here.
+      SETEC_E2E_SESSION_DRAIN: "1"
+      # The node agent runs on each worker that hosts machines.
+      SETEC_E2E_EXTRA_SET: >-
+        nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host
+      # The guard and the chain-6 exit test run in steps of their own.
+      SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity)$'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+
+      - name: Install helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Make /dev/kvm usable and load the network modules
+        # The launcher Pod joins its machine to the Pod network with a tap
+        # device and two tc redirects. The kind nodes share the kernel of
+        # the runner, so the runner loads the modules.
+        run: |
+          set -euo pipefail
+          sudo chmod 666 /dev/kvm
+          python3 - <<'PY2'
+          import fcntl, os
+          fd = os.open("/dev/kvm", os.O_RDWR)
+          version = fcntl.ioctl(fd, 0xAE00)  # KVM_GET_API_VERSION
+          print("KVM API version:", version)
+          assert version == 12, "unexpected KVM API version"
+          PY2
+          for m in tun sch_ingress cls_matchall act_mirred; do sudo modprobe "$m"; done
+          test -c /dev/net/tun
+
+      - name: Create the kind cluster
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          config: hack/kind-launcher.yaml
+          wait: 0s
+
+      - name: Install Cilium
+        # The pin equals the one of the Gibson clusters (hosted
+        # bootstrap/cilium/VERSION) and of development/k3s.
+        env:
+          CILIUM_VERSION: 1.20.2
+        run: |
+          set -euo pipefail
+          helm upgrade --install cilium oci://quay.io/cilium/charts/cilium \
+            --version "${CILIUM_VERSION}" --namespace kube-system \
+            --set ipam.mode=kubernetes \
+            --set operator.replicas=1 \
+            --set envoy.enabled=false \
+            --set hubble.enabled=false \
+            --wait --timeout 10m
+          kubectl -n kube-system rollout status daemonset/cilium --timeout=300s
+          kubectl get crd ciliumnetworkpolicies.cilium.io
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          kubectl version
+
+      - name: Start the disk registry and the S3 store
+        # The disk builder pushes each signed disk to the registry, and the
+        # kubelet pulls it as an image volume. A plain HTTP registry on a
+        # private address: the disk builder uses HTTP for an RFC 1918
+        # address, and containerd on each node gets a hosts.toml for it.
+        # The node agents keep the checkpoints in the S3 store. Both
+        # images are pinned by digest.
+        env:
+          REGISTRY_IMAGE: docker.io/library/registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          S3_IMAGE: docker.io/chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+        run: |
+          set -euo pipefail
+          docker run -d --name setec-disks --network kind "${REGISTRY_IMAGE}"
+          docker run -d --name setec-s3 --network kind "${S3_IMAGE}" server -s3
+          addr_of() { docker inspect -f '{{ (index .NetworkSettings.Networks "kind").IPAddress }}' "$1"; }
+          reg="$(addr_of setec-disks):5000"
+          s3="http://$(addr_of setec-s3):8333"
+          echo "SETEC_E2E_DISK_REPO=${reg}/setec-disks" >> "$GITHUB_ENV"
+          echo "SETEC_E2E_S3_ENDPOINT=${s3}" >> "$GITHUB_ENV"
+          for node in $(kind get nodes --name "${KIND_CLUSTER}"); do
+            docker exec "$node" mkdir -p "/etc/containerd/certs.d/${reg}"
+            printf 'server = "http://%s"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "$reg" "$reg" \
+              | docker exec -i "$node" tee "/etc/containerd/certs.d/${reg}/hosts.toml" >/dev/null
+            docker exec "$node" chmod 0755 /etc/containerd
+          done
+          for i in $(seq 1 60); do
+            curl -fsS "http://${reg}/v2/" >/dev/null && break
+            [ "$i" = 60 ] && { echo "::error::the disk registry never answered"; exit 1; }
+            sleep 2
+          done
+          for i in $(seq 1 60); do
+            curl -fsS -X PUT "${s3}/${SETEC_E2E_S3_BUCKET}" >/dev/null && break
+            [ "$i" = 60 ] && { echo "::error::the S3 store never made the bucket"; docker logs setec-s3 | tail -40; exit 1; }
+            sleep 2
+          done
+
+      - name: Provision Block-mode PersistentVolumes for the session workspaces
+        # A launcher session workspace is a Block PVC (setec#91). The
+        # loop devices are devices of the runner, and both workers mount the
+        # runner's /dev, so each volume names both workers: the drain
+        # scenario resumes a session with its workspace on the other node.
+        # Ten volumes: each session scenario uses one and never reuses it.
+        run: |
+          set -euo pipefail
+          workers="$(kubectl get nodes -l setec.zeroroot.ai/e2e-role=sandbox-host -o jsonpath='{.items[*].metadata.name}')"
+          values="$(tr ' ' '\n' <<< "$workers" | sed 's/^/                          - /')"
+          backing_dir="/var/lib/setec-e2e-block-pv"
+          sudo mkdir -p "${backing_dir}"
+          for i in $(seq 0 9); do
+            img="${backing_dir}/vol${i}.img"
+            sudo truncate -s 1200M "${img}"
+            dev="$(sudo losetup --show -f "${img}")"
+            for w in $workers; do
+              docker exec "$w" test -b "${dev}" || { echo "::error::${dev} is not a block device on ${w}"; exit 1; }
+            done
+            cat <<PV | kubectl apply -f -
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: setec-e2e-workspace-block-${i}
+          spec:
+            capacity:
+              storage: 1200Mi
+            volumeMode: Block
+            accessModes:
+              - ReadWriteOnce
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+            local:
+              path: ${dev}
+            nodeAffinity:
+              required:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+          ${values}
+          PV
+          done
+          cat <<SC | kubectl apply -f -
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: ${SETEC_E2E_WORKSPACE_STORAGE_CLASS}
+          provisioner: kubernetes.io/no-provisioner
+          volumeBindingMode: WaitForFirstConsumer
+          SC
+          kubectl get pv -o wide
+
+      - name: The KVM guard
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-launcher-guard
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-launcher-guard-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-launcher-guard
+          SETEC_E2E_WARM_POOL_NAMESPACE: setec-e2e-launcher-guard-pool
+        run: |
+          set +e
+          set -uo pipefail
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 20m \
+            -run '^TestEnv_KVMPresent$' 2>&1 | tee guard.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "The KVM guard (launcher)" guard.log "$status"
+
+      - name: The launcher scenarios
+        run: |
+          set +e
+          set -uo pipefail
+          (
+            while sleep 60; do
+              echo "--- $(date -u +%H:%M:%S)"
+              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=node-agent \
+                --all-containers --since=65s --tail=-1 --prefix 2>&1
+              kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=operator \
+                --all-containers --since=65s --tail=-1 --prefix 2>&1
+            done
+          ) > agents.log &
+          sampler=$!
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 170m \
+            -skip "${SKIP_PATTERN}" 2>&1 | tee launcher.log
+          status="${PIPESTATUS[0]}"
+          kill "${sampler}" 2>/dev/null
+          scripts/e2e-summary.sh "The launcher scenarios" launcher.log "$status"
+
+      - name: The chain-6 exit test
+        # Two commands in one session reach the same machine and see the
+        # same /workspace (gibson#1183, gibson#1450, setec#239). Its own
+        # release and namespaces, so a failure names this run only.
+        env:
+          SETEC_E2E_NAMESPACE: chain6-exit
+          SETEC_E2E_SANDBOX_NAMESPACE: chain6-exit-sandboxes
+          SETEC_E2E_RELEASE: chain6-exit
+          SETEC_E2E_WARM_POOL_NAMESPACE: chain6-exit-pool
+        run: |
+          # `set +e` is REQUIRED: the runner starts the step with errexit on,
+          # so a failing `go test` would skip the summary below.
+          set +e
+          set -uo pipefail
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
+            -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "The chain-6 exit test" chain6.log "$status"
+
+      - name: FAILING FIXTURE — with affinity broken, the chain-6 test must FAIL
+        # The guard on the guard. This run deletes the session Pod between
+        # the two commands, so the session is broken on purpose, and the
+        # step REQUIRES a non-zero exit. If this `go test` ever PASSES, the
+        # exit test is not asserting what it claims.
+        env:
+          SETEC_E2E_NAMESPACE: chain6-fixture
+          SETEC_E2E_SANDBOX_NAMESPACE: chain6-fixture-sandboxes
+          SETEC_E2E_RELEASE: chain6-fixture
+          SETEC_E2E_WARM_POOL_NAMESPACE: chain6-fixture-pool
+          SETEC_E2E_CHAIN6_BREAK: relaunch
+        run: |
+          set +e
+          set -uo pipefail
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
+            -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
+          status="${PIPESTATUS[0]}"
+          if grep -q -- '--- SKIP' chain6-fixture.log; then
+            echo "::error::the fixture SKIPPED — it proves nothing about whether the exit test can fail"
+            exit 1
+          fi
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the chain-6 exit test PASSED with session affinity broken on purpose. It is not asserting what it claims."
+            exit 1
+          fi
+          echo "the fixture failed as required (go test exit ${status}): the exit test can detect a broken session"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          set -uo pipefail
+          kubectl get nodes -o wide --show-labels || true
+          kubectl describe nodes | grep -A8 -E '^(Allocatable|Allocated resources)' || true
+          kubectl get sandboxclasses,sandboxes,snapshots -A -o wide || true
+          kubectl get pv,pvc -A -o wide || true
+          kubectl get pods,jobs -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -120 || true
+          docker logs setec-disks 2>&1 | tail -40 || true
+          docker logs setec-s3 2>&1 | tail -40 || true
+
+      - name: Upload the test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: e2e-launcher-logs
+          path: |
+            guard.log
+            launcher.log
+            agents.log
+            chain6.log
+            chain6-fixture.log
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # notify — make a red nightly loud.
+  #
+  # The suite runs on a schedule, and a scheduled workflow that fails is the
+  # quietest thing in GitHub: no PR turns red, no merge is blocked, and the
+  # only trace is a row in a list nobody opens. So the run files its own
+  # report. Deduplicated by the title: a suite that stays broken for a week
+  # updates one issue rather than opening seven.
+  # ----------------------------------------------------------------------
+  notify:
+    needs: [launcher]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: 'e2e: the nightly run is failing'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
+          # printf rather than a heredoc: a heredoc terminator must sit at
+          # column 0, and a line at column 0 would end this YAML block scalar.
+          # Leading whitespace also has to stay out of the body itself — an
+          # indented line renders as a code block in a GitHub issue.
+          body="$(printf '%s\n' \
+            "The nightly \`e2e / launcher\` run failed: ${RUN_URL}" \
+            "" \
+            "These are the Go e2e scenarios: the docs/design/isolation.md invariants," \
+            "egress confinement, the session lifecycle, the chain-6 exit test, and" \
+            "the \`TestEnv_KVMPresent\` guard. A red run here means one of those" \
+            "invariants is unverified, not that CI is untidy." \
+            "" \
+            "Check the job summary for the PASS/FAIL/SKIP list before triaging: a SKIP" \
+            "is also a failure of coverage, and the run warns on one.")"
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${body}"
+          fi

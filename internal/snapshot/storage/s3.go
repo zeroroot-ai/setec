@@ -20,9 +20,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
 // S3Config carries the connection parameters for an S3-compatible
@@ -132,9 +133,9 @@ func (b *S3Backend) dekKey(snapshotID string) string {
 // on the way through, then writes the sha256 sidecar. A snapshot that
 // already exists returns ErrAlreadyExists without touching the
 // object.
-func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader) (int64, string, error) {
+func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader) (size int64, storageRef string, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, "", err
+		return 0, "", errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return 0, "", err
@@ -150,8 +151,7 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	h := sha256.New()
 	counter := &countingReader{inner: io.TeeReader(state, h)}
 
-	uploader := manager.NewUploader(b.Client)
-	if _, err := uploader.Upload(ctx, &s3.PutObjectInput{
+	if _, err := transfermanager.New(b.Client).UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket: aws.String(b.Bucket),
 		Key:    aws.String(b.stateKey(snapshotID)),
 		Body:   counter,
@@ -183,7 +183,7 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 // is part of the snapshot).
 func (b *S3Backend) Open(ctx context.Context, storageRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return nil, err
@@ -233,7 +233,7 @@ func (b *S3Backend) Open(ctx context.Context, storageRef string) (io.ReadCloser,
 // contract.
 func (b *S3Backend) Delete(ctx context.Context, storageRef string) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return err
@@ -254,9 +254,9 @@ func (b *S3Backend) Delete(ctx context.Context, storageRef string) error {
 }
 
 // Stat reports the payload's size via HeadObject.
-func (b *S3Backend) Stat(ctx context.Context, storageRef string) (int64, bool, error) {
+func (b *S3Backend) Stat(ctx context.Context, storageRef string) (size int64, exists bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return 0, false, err
+		return 0, false, errwrap.Wrap(err, "context.Context.Err")
 	}
 	if err := ValidateSnapshotID(storageRef); err != nil {
 		return 0, false, err
@@ -600,7 +600,7 @@ type countingReader struct {
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.inner.Read(p)
 	c.n += int64(n)
-	return n, err
+	return n, err //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
 }
 
 // verifyingReadCloser hashes the payload as it streams and compares
@@ -623,10 +623,10 @@ func (v *verifyingReadCloser) Read(p []byte) (int, error) {
 			return n, fmt.Errorf("%w: s3 payload digest mismatch", ErrCorrupted)
 		}
 	}
-	return n, err
+	return n, err //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
 }
 
-func (v *verifyingReadCloser) Close() error { return v.inner.Close() }
+func (v *verifyingReadCloser) Close() error { return v.inner.Close() } //nolint:wrapcheck // an io.Reader or io.Closer returns io.EOF and its peers as is
 
 // Compile-time interface assertions.
 var (

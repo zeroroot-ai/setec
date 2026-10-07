@@ -228,7 +228,7 @@ type fakeVsockMux struct {
 	handler *GuestHandler
 }
 
-func startFakeVsockMux(t *testing.T, dir string, mode string, h *GuestHandler) string {
+func startFakeVsockMux(t *testing.T, dir, mode string, h *GuestHandler) string {
 	t.Helper()
 	path := filepath.Join(dir, "fc-vsock.sock")
 	ln, err := net.Listen("unix", path)
@@ -355,30 +355,6 @@ func TestVsockReseeder_FailsClosedOnDigestMismatch(t *testing.T) {
 	defer cancel()
 	if err := r.Reseed(ctx, path); err == nil {
 		t.Fatal("Reseed must fail when the ack digest does not match the sent payload")
-	}
-}
-
-func TestReseedFirst_TriesCandidatesInOrder(t *testing.T) {
-	pool := &fakePool{}
-	dir := t.TempDir()
-	good := startFakeVsockMux(t, dir, "", &GuestHandler{Pool: pool})
-	missing := filepath.Join(dir, "missing.sock")
-
-	r := NewVsockReseeder()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := ReseedFirst(ctx, r, []string{missing, good}); err != nil {
-		t.Fatalf("ReseedFirst: %v", err)
-	}
-	if len(pool.received()) != 1 {
-		t.Fatal("the good candidate must have been reseeded")
-	}
-
-	if err := ReseedFirst(ctx, r, []string{missing}); err == nil {
-		t.Fatal("ReseedFirst must fail when every candidate fails")
-	}
-	if err := ReseedFirst(ctx, r, nil); err == nil {
-		t.Fatal("ReseedFirst must fail on an empty candidate list")
 	}
 }
 

@@ -20,9 +20,6 @@ import (
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 )
 
-// ErrNoPeerCert is returned when a call carries no TLS peer certificate.
-var ErrNoPeerCert = errors.New("frontend: no TLS peer certificate")
-
 // Enrollment is the list of client clusters that may call the frontend
 // (docs/design/isolation.md). Each entry joins a client name to the SPIFFE ID of the daemon
 // of that cluster. The frontend refuses a caller whose SPIFFE ID is not in

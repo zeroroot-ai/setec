@@ -35,18 +35,14 @@ const workloadAPITimeout = 30 * time.Second
 // SPIFFESource obtains the component's identity and trust anchors from
 // the SPIFFE Workload API, and authorizes the peer by SPIFFE ID.
 //
-// It differs from FileSource in two ways that matter. The identity is
-// attested rather than possessed — it is issued to this workload by the
-// local SPIRE agent instead of being read from a file anything in the
-// container could read — and it rotates in-process, so a handshake uses
-// the SVID as it stands at that moment rather than the one that existed
-// at boot.
+// The identity is attested rather than possessed: the local SPIRE agent
+// issues it to this workload, and no file in the container holds it. It
+// rotates in-process, so a handshake uses the SVID as it stands at that
+// moment rather than the one that existed at boot.
 //
-// The second difference is authorization. File mode accepts any peer
-// the configured CA issued a certificate to; SPIFFE mode additionally
-// requires the peer's SPIFFE ID to appear in AuthorizedIDs. That is why
-// the allow-list is mandatory: a SPIFFE mode without it would prove
-// exactly what file mode proves while reading like an upgrade.
+// A peer must chain to the trust bundle, and its SPIFFE ID must also be
+// in AuthorizedIDs. That is why the allow-list is mandatory: without it,
+// any certificate of the trust domain would be accepted.
 type SPIFFESource struct {
 	// SocketPath is the Workload API endpoint, either a filesystem
 	// path to the agent's socket ("/run/spire/agent-sockets/api.sock")
@@ -194,11 +190,13 @@ func (s *spiffeSource) start(ctx context.Context) error {
 	}
 	// The client outlives the startup context: that context bounds how
 	// long boot waits, not how long the watch runs.
-	client, err := workloadapi.New(context.Background(), workloadapi.WithAddr(s.addr))
+	client, err := workloadapi.New(context.WithoutCancel(ctx), workloadapi.WithAddr(s.addr))
 	if err != nil {
 		return fmt.Errorf("SPIFFE credential source: Workload API client for %s: %w", s.addr, err)
 	}
-	go func() { _ = client.WatchX509Context(context.Background(), s) }()
+	// The watch runs until the client closes, not until the startup
+	// context ends.
+	go func() { _ = client.WatchX509Context(context.WithoutCancel(ctx), s) }()
 
 	select {
 	case <-s.firstSVID:
@@ -226,7 +224,7 @@ func (s *spiffeSource) lastErrSuffix() string {
 // delivered. It implements workloadapi.X509ContextWatcher.
 func (s *spiffeSource) OnX509ContextUpdate(x509Context *workloadapi.X509Context) {
 	if len(x509Context.SVIDs) == 0 {
-		s.reportError(errors.New("Workload API delivered no X509-SVID"))
+		s.reportError(errors.New("the Workload API delivered no X509-SVID"))
 		return
 	}
 	s.mu.Lock()
@@ -292,7 +290,7 @@ func (s *spiffeSource) identity(ctx context.Context) (tls.Certificate, error) {
 // will even parse a chain for.
 //
 // A fleet serves many enrolled clusters, each in its own trust domain
-// (ADR-0164). A domain whose federated bundle is missing is reported and
+// (docs/frontend-api.md, Authentication). A domain whose federated bundle is missing is reported and
 // left out: its peers are refused, and every other domain keeps working.
 // Failing the whole pool would let one cluster with broken federation stop
 // the fleet for all of them. A pool with no authority at all is an error.
@@ -349,22 +347,3 @@ func (s *spiffeSource) authorizePeer(verified [][]*x509.Certificate) error {
 	}
 	return fmt.Errorf("SPIFFE peer authorization: peer %q is not an authorized SPIFFE ID", id)
 }
-
-// rotates reports that this source maintains its material in-process.
-func (s *spiffeSource) rotates() bool { return true }
-
-// namesPeer reports that an X509-SVID carries no name the standard
-// hostname check can use.
-//
-// An SVID identifies its holder by URI SAN and nothing else: there is
-// no DNS SAN for Go to match against the dial target. Saying so here is
-// what makes the Provider replace the hostname check with the SPIFFE-ID
-// check on the client side, rather than skip verification or fail every
-// handshake on a name that was never going to be there.
-//
-// AuthorizedIDs means the same thing in both directions — the peers
-// this component completes a handshake with. On a server that is the
-// set of callers; on a client it is the set of servers worth talking
-// to, which is the check that makes chaining to the trust bundle
-// insufficient.
-func (s *spiffeSource) namesPeer() bool { return false }

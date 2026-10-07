@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise the Setec example client (examples/ai-code-exec) end-to-end against
-# the local k3s install, dialling the NodePort with the dev mTLS client cert.
+# the local k3s install, dialling the NodePort with the SVID of the dev client.
 
 set -eo pipefail
 
@@ -27,7 +27,10 @@ dump_diagnostics() {
 }
 trap dump_diagnostics ERR
 
-green "Dialling Setec at ${ADDR} as tenant gibson-dev (CN of client cert)"
+# A fresh SVID of the dev client (it lives a few hours).
+"${ROOT}/scripts/35-mint-client-svid.sh"
+
+green "Dialling Setec at ${ADDR} as the enrolled client dev"
 LOG=$(mktemp)
 # ai-code-exec reads the Python source to execute from stdin (runs it as
 # `python3 -c <stdin>`). Pipe the test snippet in; no --command flag exists.
@@ -37,6 +40,7 @@ LOG=$(mktemp)
     --client-cert="${PKI}/client.crt" \
     --client-key="${PKI}/client.key" \
     --ca="${PKI}/ca.crt" \
+    --server-spiffe-id=spiffe://dev.local/ns/setec-system/sa/setec-frontend \
     --image=docker.io/library/python:3.12-slim ) | tee "${LOG}"
 
 if grep -q 'hello from microvm' "${LOG}"; then

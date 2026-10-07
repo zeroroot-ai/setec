@@ -16,6 +16,7 @@ import (
 
 	"github.com/mdlayher/vsock"
 
+	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/guestagent"
 	"github.com/zeroroot-ai/setec/internal/launcher"
 	"github.com/zeroroot-ai/setec/internal/uniquify"
@@ -50,7 +51,7 @@ func prepareMachine() error {
 	// Ctrl-Alt-Del from the launcher then reaches the agent as SIGINT, and
 	// the agent ends the machine itself (endMachine). The first real boot
 	// showed that a stop otherwise took the full grace period now and then.
-	return syscall.Reboot(syscall.LINUX_REBOOT_CMD_CAD_OFF)
+	return errwrap.Wrap(syscall.Reboot(syscall.LINUX_REBOOT_CMD_CAD_OFF), "syscall.Reboot")
 }
 
 // endMachine flushes the writable layer and resets the machine. With the
@@ -84,7 +85,7 @@ func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
 		ReportExit: func(code int) error {
 			c, err := vsock.Dial(guestagent.HostCID, launcher.ExitPort, nil)
 			if err != nil {
-				return err
+				return errwrap.Wrap(err, "vsock.Dial")
 			}
 			defer func() { _ = c.Close() }()
 			return guestagent.WriteLine(c, launcher.ExitReport{ExitCode: code})
