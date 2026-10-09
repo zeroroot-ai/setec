@@ -606,8 +606,16 @@ def drop(pred, name):
 drop(lambda d: d.get("kind") == "CiliumClusterwideNetworkPolicy", "no-deny")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-node-agent"), "no-node-agent")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-frontend"), "no-frontend")
+# A metrics peer of the operator that pins no namespace (setec#252).
+for d in docs:
+    if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-operator"):
+        for rule in d["spec"].get("ingress") or []:
+            for peer in rule.get("fromEndpoints") or []:
+                peer.get("matchLabels", {}).pop("k8s:io.kubernetes.pod.namespace", None)
+                peer["matchExpressions"] = [{"key": "k8s:io.kubernetes.pod.namespace", "operator": "Exists"}]
+yaml.safe_dump_all(docs, open(f"{sys.argv[2]}/sp-any-namespace.yaml", "w"))
 PY
-for fx in no-deny no-node-agent no-frontend; do
+for fx in no-deny no-node-agent no-frontend any-namespace; do
 	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-$fx.yaml" setec-system >/dev/null; then
 		fail "fixture $fx: the checker passed a render with a missing policy"
 	else
@@ -629,6 +637,17 @@ grep -q "port: \"50051\"" "$workdir/sp-all.yaml" && grep -q "k8s:io.kubernetes.p
 	&& grep -q -- "- 203.0.113.0/24" "$workdir/sp-all.yaml" \
 	&& pass "the frontend gRPC port admits the named caller and the named range" \
 	|| fail "the frontend gRPC port does not admit the named caller and range"
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
+	--set 'systemPolicy.metricsScrapers[0].namespace=' \
+	--set 'systemPolicy.metricsScrapers[0].podLabels.app\.kubernetes\.io/name=prometheus' \
+	>/dev/null 2>"$workdir/sp-noscrapens.err"; then
+	fail "a metrics scraper with no namespace must fail the render"
+elif grep -qF "systemPolicy.metricsScrapers" "$workdir/sp-noscrapens.err"; then
+	pass "a metrics scraper with no namespace fails the render"
+else
+	fail "a scraper with no namespace failed for another reason: $(tail -n1 "$workdir/sp-noscrapens.err")"
+fi
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then

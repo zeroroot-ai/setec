@@ -8,7 +8,12 @@ Reads one rendered chart and fails when:
   - a Deployment or DaemonSet of the namespace (except the device plugin,
     which talks to the kubelet over a unix socket) has no CiliumNetworkPolicy
     that selects its component,
-  - the operator or the frontend policy has no kube-apiserver egress.
+  - the operator or the frontend policy has no kube-apiserver egress,
+  - an ingress peer of a namespace policy (fromEndpoints) widens its
+    namespace with a matchExpression on k8s:io.kubernetes.pod.namespace.
+    Cilium scopes a peer with no namespace label to the namespace of the
+    policy, and a matchLabels entry pins one namespace. A Pod label alone is
+    not proof: the person who creates a Pod chooses its labels (setec#252).
 
   check-system-policy.py RENDER NS   exit 1 on a finding
 """
@@ -43,6 +48,11 @@ def judge(docs, ns):
                 out.append(f"{d['kind']}/{d['metadata']['name']} ({comp}) has no CiliumNetworkPolicy, so the default deny cuts it off")
             elif comp in NEEDS_API and not any("kube-apiserver" in (e.get("toEntities") or []) for e in cnp[comp]["spec"].get("egress") or []):
                 out.append(f"the {comp} policy has no kube-apiserver egress")
+    for comp, d in cnp.items():
+        for rule in d["spec"].get("ingress") or []:
+            for peer in rule.get("fromEndpoints") or []:
+                if any(e.get("key") == "k8s:io.kubernetes.pod.namespace" for e in peer.get("matchExpressions") or []):
+                    out.append(f"the {comp} policy admits a peer from more than one namespace: {peer}")
     return out
 
 
