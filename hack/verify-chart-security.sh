@@ -606,6 +606,7 @@ def drop(pred, name):
 drop(lambda d: d.get("kind") == "CiliumClusterwideNetworkPolicy", "no-deny")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-node-agent"), "no-node-agent")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-frontend"), "no-frontend")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-builder-jobs"), "no-builder-jobs")
 # A metrics peer of the operator that pins no namespace (setec#252).
 for d in docs:
     if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-operator"):
@@ -615,7 +616,7 @@ for d in docs:
                 peer["matchExpressions"] = [{"key": "k8s:io.kubernetes.pod.namespace", "operator": "Exists"}]
 yaml.safe_dump_all(docs, open(f"{sys.argv[2]}/sp-any-namespace.yaml", "w"))
 PY
-for fx in no-deny no-node-agent no-frontend any-namespace; do
+for fx in no-deny no-node-agent no-frontend no-builder-jobs any-namespace; do
 	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-$fx.yaml" setec-system >/dev/null; then
 		fail "fixture $fx: the checker passed a render with a missing policy"
 	else

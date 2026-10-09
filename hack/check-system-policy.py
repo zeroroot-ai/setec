@@ -9,6 +9,11 @@ Reads one rendered chart and fails when:
     which talks to the kubelet over a unix socket) has no CiliumNetworkPolicy
     that selects its component,
   - the operator or the frontend policy has no kube-apiserver egress,
+  - the render has no CiliumNetworkPolicy for the Job pods that the operator
+    makes at run time (BUILDER_JOBS), or that policy has no egress to the
+    world on port 443. A Job is not in the render, so the Deployment loop
+    above cannot see it. Without the allow the disk builder cannot reach a
+    registry and every launcher Sandbox ends in DiskBuildFailed,
   - an ingress peer of a namespace policy (fromEndpoints) widens its
     namespace with a matchExpression on k8s:io.kubernetes.pod.namespace.
     Cilium scopes a peer with no namespace label to the namespace of the
@@ -23,6 +28,29 @@ import yaml
 
 NO_NETWORK = {"device-plugin"}
 NEEDS_API = {"operator", "frontend"}
+# The component label of the Job pods that the operator makes
+# (internal/controller/launcher_disk.go and pool_verify.go).
+BUILDER_JOBS = {"disk-builder", "image-verify"}
+
+
+def selected_components(cnp):
+    sel = cnp["spec"].get("endpointSelector") or {}
+    comps = set()
+    comp = (sel.get("matchLabels") or {}).get("app.kubernetes.io/component")
+    if comp:
+        comps.add(comp)
+    for e in sel.get("matchExpressions") or []:
+        if e.get("key") == "app.kubernetes.io/component" and e.get("operator") == "In":
+            comps.update(e.get("values") or [])
+    return comps
+
+
+def reaches_world_443(cnp):
+    for e in cnp["spec"].get("egress") or []:
+        if "world" in (e.get("toEntities") or []) and any(
+                p.get("port") == "443" for tp in e.get("toPorts") or [] for p in tp.get("ports") or []):
+            return True
+    return False
 
 
 def judge(docs, ns):
@@ -48,6 +76,13 @@ def judge(docs, ns):
                 out.append(f"{d['kind']}/{d['metadata']['name']} ({comp}) has no CiliumNetworkPolicy, so the default deny cuts it off")
             elif comp in NEEDS_API and not any("kube-apiserver" in (e.get("toEntities") or []) for e in cnp[comp]["spec"].get("egress") or []):
                 out.append(f"the {comp} policy has no kube-apiserver egress")
+    for job in sorted(BUILDER_JOBS):
+        covering = [d for d in docs if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"].get("namespace") == ns
+                    and job in selected_components(d)]
+        if not covering:
+            out.append(f"the Job pods of the operator ({job}) have no CiliumNetworkPolicy, so the default deny cuts them off")
+        elif not any(reaches_world_443(d) for d in covering):
+            out.append(f"the policy of the {job} Job pods has no egress to the world on port 443")
     for comp, d in cnp.items():
         for rule in d["spec"].get("ingress") or []:
             for peer in rule.get("fromEndpoints") or []:
