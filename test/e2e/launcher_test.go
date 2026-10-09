@@ -302,6 +302,11 @@ func waitForWarmPool(ctx context.Context, t *testing.T, class, image string, tim
 		time.Sleep(5 * time.Second)
 	}
 	out, _ := exec.Command("kubectl", "-n", launcherCfg.warmPoolNamespace, "get", "pods,snapshots,events").CombinedOutput()
+	// A base Snapshot ends Failed or stays Creating for a reason that only the
+	// operator and the node agent say.
+	dumpSetecLogs(t)
+	snaps, _ := exec.Command("kubectl", "-n", launcherCfg.warmPoolNamespace, "get", "snapshots", "-o", "yaml").CombinedOutput()
+	t.Logf("--- base snapshots ---\n%s", snaps)
 	t.Fatalf("the warm pool of %s has no Ready base of %s after %s; status %+v\n%s", class, image, timeout, cls.Status.WarmPool, out)
 	return nil
 }
