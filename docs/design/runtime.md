@@ -22,6 +22,16 @@
 
 The substrate is x86 with KVM. Each published image is `linux/amd64`, and every launcher Pod has a node affinity for `kubernetes.io/arch=amd64`. Each node that runs Sandboxes needs `/dev/kvm`, either bare metal or a VM with nested virtualization. Kubernetes is 1.35 or later, because the launcher Pod mounts its disk as an image volume.
 
+## CPU templates
+
+A snapshot holds the CPU state of its machine, so it loads only where the guest sees the same CPU features. A class fixes them with a Firecracker custom CPU template: `spec.cpuTemplate` names a file of `/opt/setec/cpu-templates/` in the launcher image, without `.json` (`internal/podspec/launcher.go`, `LauncherCPUTemplateDir`). The launcher passes it to Firecracker as the CPU configuration of the machine (`internal/launcher/vmconfig.go`). A class with a template also names the instance type of its nodes in `spec.nodeSelector`, because a template matches one CPU.
+
+| Template | Instance types | Host kernel |
+|---|---|---|
+| `m8i` | m8i: Intel Xeon 6 (Granite Rapids) | 5.17 or later |
+
+Firecracker has no static template for Granite Rapids. `m8i` is the custom template that Firecracker tests on that CPU, from the release that `firecracker.env` pins: it turns off the features that the T2 template turns off, so each m8i node shows one feature set. The file, its source and its license are in `cpu-templates/`. `TestCPUTemplates_AreValid` checks the format of each template, and the e2e scenario `TestLauncher_CPUTemplateSnapshotLoads` loads a snapshot in a class with the template on m8i nodes.
+
 ## Node preparation
 
 A node needs `/dev/kvm` and `/dev/net/tun`, and the kernel modules `tun`, `sch_ingress`, `cls_matchall` and `act_mirred` for the tap device and the traffic redirects of the launcher. Nothing else is installed on the node: Firecracker, the guest kernel and the guest agent come in the launcher image. `firecracker.env` and `kernel/kernel.env` pin their releases.

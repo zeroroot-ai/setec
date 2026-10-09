@@ -24,3 +24,8 @@
 !kernel/kernel.env
 !kernel/x86_64.defconfig
 !scripts/build-guest-kernel.sh
+
+# Re-include the custom Firecracker CPU templates and their source note.
+# Dockerfile.launcher copies both (cpu-templates/README.md).
+!cpu-templates/*.json
+!cpu-templates/README.md

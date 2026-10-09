@@ -5,6 +5,8 @@ package podspec
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -288,6 +290,37 @@ func TestBuildLauncher_CPUTemplateAndInstanceType(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the Pod is not kept on the instance type of the source")
+	}
+}
+
+// TestBuildLauncher_ShippedCPUTemplatePath pins the m8i class value to a file
+// that the launcher image holds (setec#239): the podspec maps the value to
+// LauncherCPUTemplateDir, the repository ships cpu-templates/m8i.json, and
+// Dockerfile.launcher copies cpu-templates/*.json to that directory.
+func TestBuildLauncher_ShippedCPUTemplatePath(t *testing.T) {
+	opts := launcherOpts()
+	opts.CPUTemplate = "m8i"
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := LauncherCPUTemplateDir + "/m8i.json"; s.CPUTemplate != want {
+		t.Fatalf("cpu template = %q, want %q", s.CPUTemplate, want)
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", "cpu-templates", "m8i.json")); err != nil {
+		t.Fatalf("the repository ships no m8i template: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile.launcher"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copyLine := "COPY cpu-templates/*.json " + LauncherCPUTemplateDir + "/"; !strings.Contains(string(dockerfile), copyLine) {
+		t.Fatalf("Dockerfile.launcher has no %q", copyLine)
 	}
 }
 
