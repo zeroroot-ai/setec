@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.127.0](https://github.com/zeroroot-ai/setec/compare/v0.126.0...v0.127.0) (2026-10-09)
+
+
+### Features
+
+* **launcher:** ship a custom CPU template for m8i ([#258](https://github.com/zeroroot-ai/setec/issues/258)) ([dc5a61e](https://github.com/zeroroot-ai/setec/commit/dc5a61e5200049fbe555f5009c313dd8ea31bfa4))
+
+
+### Bug Fixes
+
+* **chart:** pin the namespace of each metrics scraper ([#261](https://github.com/zeroroot-ai/setec/issues/261)) ([0acd9da](https://github.com/zeroroot-ai/setec/commit/0acd9da47fc7a452049682dd7dbe835f29ce9ee6)), closes [#252](https://github.com/zeroroot-ai/setec/issues/252)
+* **controller:** the disk builder pod carries the component label of its Job ([#259](https://github.com/zeroroot-ai/setec/issues/259)) ([44add64](https://github.com/zeroroot-ai/setec/commit/44add64c2beb7db80fc01d9036c1ad3d5bf7cccc))
+* **images:** upgrade the Alpine packages of the launcher and disk builder ([#262](https://github.com/zeroroot-ai/setec/issues/262)) ([51048d6](https://github.com/zeroroot-ai/setec/commit/51048d6e99bc2e34350ef6ae2695bc42811e2fde)), closes [#97](https://github.com/zeroroot-ai/setec/issues/97)
+
 ## [0.126.0](https://github.com/zeroroot-ai/setec/compare/v0.125.0...v0.126.0) (2026-10-07)
 
 
