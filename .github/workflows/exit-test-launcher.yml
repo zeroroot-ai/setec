@@ -195,8 +195,11 @@ jobs:
       # The node agent runs on each worker that hosts machines.
       SETEC_E2E_EXTRA_SET: >-
         nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host
-      # The guard and the chain-6 exit test run in steps of their own.
-      SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity)$'
+      # The guard and the chain-6 exit test run in steps of their own. The
+      # CPU template scenario needs nodes of the instance family of the
+      # template (m8i), which the runners are not. `make e2e-cpu-template`
+      # runs it on a cluster with m8i nodes (setec#239).
+      SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity|TestLauncher_CPUTemplateSnapshotLoads)$'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

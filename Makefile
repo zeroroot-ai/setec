@@ -128,6 +128,20 @@ e2e: ## Run the hardware-gated e2e suite (requires KVM nodes).
 	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
 	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT)
 
+.PHONY: e2e-cpu-template
+e2e-cpu-template: ## Run the CPU template snapshot test on m8i nodes (setec#239).
+# The one e2e scenario that exit-test-launcher skips: the runners are not m8i.
+# It loads a snapshot in a class with the m8i template, so it needs nodes of
+# that instance family. Run it against a named cluster with m8i nodes, for
+# example the rebuilt staging (release/final-session.md):
+#
+#     SETEC_E2E_CONTEXT=<kubectl context> make e2e-cpu-template
+	SETEC_E2E_CHART="$(SETEC_E2E_CHART)" \
+	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
+	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
+	SETEC_E2E_CPU_TEMPLATE=m8i \
+	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT) -run '^TestLauncher_CPUTemplateSnapshotLoads$$'
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run

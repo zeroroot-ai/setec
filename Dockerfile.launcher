@@ -61,8 +61,9 @@ COPY --from=builder /out/setec-launcher /usr/local/bin/setec-launcher
 COPY --from=builder /out/initrd.cpio /opt/setec/initrd.cpio
 COPY --from=kernel /out/vmlinux /opt/setec/vmlinux
 # Custom Firecracker CPU templates, one <name>.json each, that a
-# SandboxClass names in spec.cpuTemplate. An image built on this one adds
-# them.
-RUN mkdir -p /opt/setec/cpu-templates
+# SandboxClass names in spec.cpuTemplate (cpu-templates/README.md). An
+# image built on this one can add more.
+COPY cpu-templates/*.json /opt/setec/cpu-templates/
+COPY cpu-templates/README.md /licenses/cpu-templates.md
 COPY LICENSE /licenses/LICENSE
 ENTRYPOINT ["/usr/local/bin/setec-launcher"]
