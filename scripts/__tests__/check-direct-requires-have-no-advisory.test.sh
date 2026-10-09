@@ -207,17 +207,22 @@ fi
 
 echo "== live OSV case (the API shape this guard depends on)"
 
-# The real endpoint, the real advisory, the exact version #81 introduced. This
-# is not a nicety: if OSV renames `results[]` or `vulns[]`, every stubbed case
-# above still passes and the gate in CI silently stops finding anything.
+# The real endpoint and a real advisory. This is not a nicety: if OSV renames
+# `results[]` or `vulns[]`, every stubbed case above still passes and the gate
+# in CI silently stops finding anything.
+#
+# The case names an old advisory with a settled range. OSV revised the range of
+# GO-2026-6443 on 2026-10-07, and grpc v1.84.0, the version #81 introduced, no
+# longer reads as affected. A recent advisory can move. GO-2023-2153 (grpc
+# before v1.56.3) has stayed put for years.
 repo="$(mktree "rlive$RANDOM")"
-mod "$repo/examples/one" example.test/one "google.golang.org/grpc v1.84.0"
+mod "$repo/examples/one" example.test/one "google.golang.org/grpc v1.56.2"
 gitx "$repo" add -A >/dev/null 2>&1
 out="$(bash "$GUARD" --root "$repo" 2>&1)"; rc=$?
-if [ "$rc" = "1" ] && [ "${out#*GO-2026-6443}" != "$out" ]; then
-  PASS=$((PASS+1)); echo "  ok   live OSV reports grpc v1.84.0 as affected by GO-2026-6443"
+if [ "$rc" = "1" ] && [ "${out#*GO-2023-2153}" != "$out" ]; then
+  PASS=$((PASS+1)); echo "  ok   live OSV reports grpc v1.56.2 as affected by GO-2023-2153"
 else
-  FAIL=$((FAIL+1)); echo "  FAIL live OSV did not report grpc v1.84.0 (rc=$rc)"
+  FAIL=$((FAIL+1)); echo "  FAIL live OSV did not report grpc v1.56.2 (rc=$rc)"
   printf '%s\n' "$out" | sed 's/^/       /'
 fi
 
