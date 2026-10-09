@@ -29,8 +29,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,89 +58,6 @@ func phase3Enabled(t *testing.T) bool {
 		t.Fatalf("read the operator Deployment: %v", err)
 	}
 	return operatorHasArg(dep.Spec.Template.Spec, snapshotsEnabledArg)
-}
-
-// TestPhase3_SnapshotRoundtrip creates a Sandbox that writes a marker
-// file, snapshots it, then launches a new Sandbox from the resulting
-// Snapshot and asserts the marker is present (proving memory + disk
-// state was restored).
-func TestPhase3_SnapshotRoundtrip(t *testing.T) {
-	if !envtestOK(t) {
-		// Requires a cluster with Setec installed.
-		t.Skip("Phase 3 E2E requires a Setec-installed cluster")
-	}
-	if !phase3Enabled(t) {
-		// Feature-flag guard: the snapshot subsystem only wires
-		// when the chart was installed with snapshots.enabled=true.
-		t.Skip("Phase 3 disabled (snapshots.enabled=false); skipping roundtrip test")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultWait)
-	defer cancel()
-
-	ns := "p3-roundtrip"
-	createTenantNamespace(ctx, t, ns)
-
-	// Source sandbox writes a marker and stays up for snapshot
-	// capture.
-	source := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "source"},
-		Spec: setecv1alpha1.SandboxSpec{
-			Image:   testImage("docker.io/library/alpine:3.19"),
-			Command: []string{"sh", "-c", "echo hello > /tmp/marker && sleep 60"},
-			Resources: setecv1alpha1.Resources{
-				VCPU:   1,
-				Memory: resource.MustParse("512Mi"),
-			},
-			Snapshot: &setecv1alpha1.SandboxSnapshotSpec{
-				Create: true,
-				Name:   "roundtrip-snap",
-			},
-		},
-	}
-	if err := k8sClient.Create(ctx, source); err != nil {
-		t.Fatalf("create source sandbox: %v", err)
-	}
-
-	// Wait for Snapshot CR Ready.
-	deadline := time.Now().Add(3 * time.Minute)
-	for time.Now().Before(deadline) {
-		snap := &setecv1alpha1.Snapshot{}
-		if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "roundtrip-snap"}, snap); err == nil {
-			if snap.Status.Phase == setecv1alpha1.SnapshotPhaseReady {
-				break
-			}
-		}
-		time.Sleep(3 * time.Second)
-	}
-
-	// Restore into a new Sandbox.
-	restored := &setecv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "restored"},
-		Spec: setecv1alpha1.SandboxSpec{
-			Image:   testImage("docker.io/library/alpine:3.19"),
-			Command: []string{"sh", "-c", "cat /tmp/marker && sleep 5"},
-			Resources: setecv1alpha1.Resources{
-				VCPU:   1,
-				Memory: resource.MustParse("512Mi"),
-			},
-			SnapshotRef: &setecv1alpha1.SandboxSnapshotRef{Name: "roundtrip-snap"},
-		},
-	}
-	if err := k8sClient.Create(ctx, restored); err != nil {
-		t.Fatalf("create restored sandbox: %v", err)
-	}
-
-	// Wait for the restored pod to exit Completed.
-	waitForPhaseCtx(ctx, t, ns, "restored", setecv1alpha1.SandboxPhaseCompleted, 2*time.Minute)
-
-	// Fetch logs and assert the marker is present.
-	logs, err := exec.Command("kubectl", "-n", ns, "logs", "restored-vm").CombinedOutput()
-	if err != nil {
-		t.Fatalf("kubectl logs: %v (%s)", err, logs)
-	}
-	if !strings.Contains(string(logs), "hello") {
-		t.Fatalf("marker not present in restored sandbox logs: %s", string(logs))
-	}
 }
 
 // TestPhase3_SnapshotTTL creates a Snapshot with a short TTL and
@@ -272,7 +187,7 @@ func TestPhase3_StorageFillProtection(t *testing.T) {
 //
 // The node-agent DaemonSet stays out. The suite installs it only under
 // SETEC_E2E_S3, and a snapshot write needs it. This scenario proves the
-// upgrade boundary. TestPhase3_SnapshotRoundtrip proves the snapshot path
+// upgrade boundary. TestLauncher_KeptSnapshot proves the snapshot path
 // on a snapshots-enabled install.
 func TestPhase3_UpgradeFromPhase2(t *testing.T) {
 	if !envtestOK(t) {

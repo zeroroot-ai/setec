@@ -299,10 +299,27 @@ func scanSparseFiles(paths []string) error {
 			return fmt.Errorf("%s: %w", filepath.Base(p), err)
 		}
 		if len(findings) > 0 {
-			return fmt.Errorf("%s: %w (%d findings)", filepath.Base(p), secretscan.ErrSecretsFound, len(findings))
+			return fmt.Errorf("%s: %w (%d findings: %s)", filepath.Base(p), secretscan.ErrSecretsFound,
+				len(findings), describeFindings(findings))
 		}
 	}
 	return nil
+}
+
+// describeFindings names the rule, the offset and the redacted excerpt of the
+// first findings. The excerpt masks the secret body, so the text is safe in an
+// error and a log: the finding of a base is only fixed when someone sees what
+// matched.
+func describeFindings(findings []secretscan.Finding) string {
+	const shown = 3
+	parts := make([]string, 0, shown)
+	for i, f := range findings {
+		if i == shown {
+			break
+		}
+		parts = append(parts, f.String())
+	}
+	return strings.Join(parts, "; ")
 }
 
 // writeN copies n bytes of r to a new file at path.

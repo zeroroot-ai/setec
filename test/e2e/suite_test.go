@@ -701,8 +701,8 @@ func installChart() error {
 	// half. phase3Enabled() greps the operator Deployment for
 	// `--snapshots-enabled`, which the chart only renders under
 	// snapshots.enabled; left off, every Phase 3 scenario calls t.Skip —
-	// including BOTH docs/design/isolation.md invariants (TestPhase3_RestoredClonesDivergeInRNG,
-	// TestPhase3_RestoredClonesHaveUniqueIdentity) and
+	// including the docs/design/isolation.md invariants of a restore (TestLauncher_ForkIntoThree,
+	// TestLauncher_SandboxIdentity) and
 	// TestGate_UnverifiedWarmStartFailsClosed — and the run reports PASS having
 	// verified none of them. That is the failure mode TestEnv_KVMPresent exists
 	// to prevent, arriving through a different door.
