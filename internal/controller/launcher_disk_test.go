@@ -59,6 +59,10 @@ func TestEnsureLauncherDisk_OneJobPerDigest(t *testing.T) {
 		t.Fatalf("the Job pod = %+v", job.Spec.Template.Spec)
 	}
 
+	if got := job.Spec.Template.Labels["app.kubernetes.io/component"]; got != "disk-builder" {
+		t.Fatalf("the Job pod component label = %q; the e2e diagnostics select the pod by it", got)
+	}
+
 	if done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 		t.Fatalf("a running Job = %t, %v; want a wait", done, err)
 	}

@@ -157,6 +157,7 @@ func builderJob(cfg DiskBuilderConfig, name, component string, args []string, en
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
+				Labels: map[string]string{"app.kubernetes.io/component": component},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: new(false),
