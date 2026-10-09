@@ -13,6 +13,10 @@ enforces it.
                    and its metrics port from the scrapers.
   4. node-agent    its gRPC port from the operator when snapshots are on, the
                    snapshot store out, and its metrics port from the scrapers.
+  5. builder jobs  the disk builder Job and the image verify Job of the
+                   operator. Each reaches the registry of the Sandbox image
+                   and the disk registry, on port 443 of the world, and the
+                   disk registry on its own address when it has one.
 
 The device plugin gets no allow: it talks to the kubelet over a unix socket.
 
@@ -230,4 +234,42 @@ spec:
               protocol: TCP
     {{- end }}
   {{- end }}
+{{- end }}
+{{- with .Values.launcher.diskRepo }}
+{{- $registry := first (splitList "/" .) }}
+{{- $parts := splitList ":" $registry }}
+{{- $host := first $parts }}
+{{- $port := ternary (last $parts) "443" (gt (len $parts) 1) }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-builder-jobs
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  description: "The disk builder Job and the image verify Job reach the image registries and the disk registry."
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - disk-builder
+          - image-verify
+  egress:
+    - toEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
+    - toCIDR:
+        - {{ printf "%s/32" $host }}
+      toPorts:
+        - ports:
+            - port: {{ $port | quote }}
+              protocol: TCP
+    {{- end }}
 {{- end }}
