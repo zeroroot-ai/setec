@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.127.1](https://github.com/zeroroot-ai/setec/compare/v0.127.0...v0.127.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **chart:** the disk builder and image verify Jobs get an egress allow ([#265](https://github.com/zeroroot-ai/setec/issues/265)) ([82596fc](https://github.com/zeroroot-ai/setec/commit/82596fc52401f71906cd45dc43d790c00f25e235)), closes [#264](https://github.com/zeroroot-ai/setec/issues/264)
+
 ## [0.127.0](https://github.com/zeroroot-ai/setec/compare/v0.126.0...v0.127.0) (2026-10-09)
 
 
