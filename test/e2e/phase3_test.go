@@ -383,5 +383,7 @@ func waitForPhaseCtx(ctx context.Context, t *testing.T, ns, name string, want se
 		}
 		time.Sleep(2 * time.Second)
 	}
+	dumpDiagnostics(t, types.NamespacedName{Namespace: ns, Name: name})
+	dumpSetecLogs(t)
 	t.Fatalf("Sandbox %q did not reach phase %q within %s", name, want, timeout)
 }

@@ -437,6 +437,10 @@ jobs:
           kubectl get pv,pvc -A -o wide || true
           kubectl get pods,jobs -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -120 || true
+          # The operator and the node agents say why a snapshot or a restore
+          # failed. The Snapshot objects say which one failed.
+          kubectl get snapshots -A -o yaml | grep -E '^    (name|namespace):|^  (phase|reason|message):|phase:|reason:' || true
+          kubectl -n "$SETEC_E2E_NAMESPACE" logs -l app.kubernetes.io/name=setec --all-containers --prefix --tail=300 --max-log-requests=20 || true
           docker logs setec-disks 2>&1 | tail -40 || true
           docker logs setec-s3 2>&1 | tail -40 || true
 

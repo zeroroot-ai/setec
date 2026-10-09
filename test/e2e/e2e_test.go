@@ -500,3 +500,13 @@ func waitForNewOperatorLeader(prev string, timeout time.Duration) error {
 	}
 	return fmt.Errorf("no new operator leader within %s: %s", timeout, last)
 }
+
+// dumpSetecLogs prints the logs of every Pod of the release (the operator, the
+// node agents and the device plugin). A failure of a snapshot or of a restore
+// shows in these logs and nowhere else.
+func dumpSetecLogs(t *testing.T) {
+	t.Helper()
+	out, _ := exec.Command("kubectl", "logs", "-l", operatorLabel, "-n", testNamespace,
+		"--all-containers", "--prefix", "--tail=300", "--max-log-requests=20").CombinedOutput()
+	t.Logf("--- kubectl logs of the Pods of the release in %s ---\n%s", testNamespace, out)
+}
