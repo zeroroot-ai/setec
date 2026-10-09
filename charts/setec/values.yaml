@@ -251,10 +251,14 @@ systemPolicy:
   #    podLabels:
   #      app.kubernetes.io/component: daemon
   #  - cidr: 203.0.113.0/24
-  # metricsScrapers are the labels of the Pods that may scrape the metrics
-  # ports, in any namespace.
+  # metricsScrapers are the Pods that may scrape the metrics ports. Each
+  # entry is a namespace and the labels of its Pods. Both are required: the
+  # person who creates a Pod chooses its labels, so the namespace is pinned
+  # too. The default is the kube-prometheus-stack Prometheus.
   metricsScrapers:
-    - app.kubernetes.io/name: prometheus
+    - namespace: monitoring
+      podLabels:
+        app.kubernetes.io/name: prometheus
 
 # -- netpol defines the egress posture every generated NetworkPolicy is
 # built from. Both lists are validated at operator startup and at render

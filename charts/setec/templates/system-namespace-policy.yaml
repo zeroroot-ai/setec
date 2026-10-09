@@ -21,9 +21,21 @@ runs setec (D76); development/k3s installs it too.
 hack/verify-chart-security.sh renders this file and fails when a Pod of the
 namespace has no allow it needs, or when the default deny is missing.
 */}}
+{{- define "setec.metricsScraperPeers" -}}
+{{- range $c := .metricsScrapers }}
+- matchLabels:
+    k8s:io.kubernetes.pod.namespace: {{ $c.namespace | quote }}
+    {{- toYaml (omit $c.podLabels "k8s:io.kubernetes.pod.namespace") | nindent 4 }}
+{{- end }}
+{{- end }}
 {{- $ns := .Values.namespace }}
 {{- $fn := include "setec.fullname" . }}
 {{- $sp := .Values.systemPolicy }}
+{{- range $c := $sp.metricsScrapers }}
+{{- if not (and $c.namespace $c.podLabels) }}
+{{- fail "systemPolicy.metricsScrapers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the scraper is pinned too." }}
+{{- end }}
+{{- end }}
 {{- if and .Values.frontend.enabled .Values.frontend.clients (not $sp.frontendCallers) }}
 {{- fail "systemPolicy.frontendCallers must not be empty when frontend.enabled=true: the namespace policy allows the frontend gRPC port only from these Pods. Name the namespace and the Pod labels of each caller (the Gibson daemon)." }}
 {{- end }}
@@ -94,13 +106,7 @@ spec:
             - port: "9443"
               protocol: TCP
     - fromEndpoints:
-        {{- range $l := $sp.metricsScrapers }}
-        - matchLabels:
-            {{- toYaml $l | nindent 12 }}
-          matchExpressions:
-            - key: k8s:io.kubernetes.pod.namespace
-              operator: Exists
-        {{- end }}
+        {{- include "setec.metricsScraperPeers" $sp | trim | nindent 8 }}
       toPorts:
         - ports:
             - port: {{ .Values.metricsPort | quote }}
@@ -157,13 +163,7 @@ spec:
               protocol: TCP
     {{- end }}
     - fromEndpoints:
-        {{- range $l := $sp.metricsScrapers }}
-        - matchLabels:
-            {{- toYaml $l | nindent 12 }}
-          matchExpressions:
-            - key: k8s:io.kubernetes.pod.namespace
-              operator: Exists
-        {{- end }}
+        {{- include "setec.metricsScraperPeers" $sp | trim | nindent 8 }}
       toPorts:
         - ports:
             - port: {{ .Values.frontend.metricsPort | quote }}
@@ -196,13 +196,7 @@ spec:
               protocol: TCP
     {{- end }}
     - fromEndpoints:
-        {{- range $l := $sp.metricsScrapers }}
-        - matchLabels:
-            {{- toYaml $l | nindent 12 }}
-          matchExpressions:
-            - key: k8s:io.kubernetes.pod.namespace
-              operator: Exists
-        {{- end }}
+        {{- include "setec.metricsScraperPeers" $sp | trim | nindent 8 }}
       toPorts:
         - ports:
             - port: "9090"
