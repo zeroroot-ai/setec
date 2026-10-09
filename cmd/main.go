@@ -453,7 +453,6 @@ func runMain() int {
 		snapshotCtrlRecorder := mgr.GetEventRecorder("snapshot-controller")
 		if err := (&controller.SnapshotReconciler{
 			Client:      mgr.GetClient(),
-			Scheme:      mgr.GetScheme(),
 			Recorder:    snapshotCtrlRecorder,
 			Coordinator: coordinator,
 		}).SetupWithManager(mgr); err != nil {
@@ -466,7 +465,6 @@ func runMain() int {
 	// condition (UnverifiedRestoresAllowed) truthful on every class.
 	if err := (&controller.SandboxClassReconciler{
 		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
 		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to set up SandboxClassReconciler")

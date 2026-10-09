@@ -100,7 +100,7 @@ SETEC_E2E_CHART ?= $(shell pwd)/charts/setec
 # — including the separate Go modules under examples/, which the root module's
 # tooling cannot otherwise reach — and fails on a hand-built tls.Config, a
 # hand-assembled trust pool, a gRPC TLS-credential constructor, or a go-spiffe
-# import outside the allow-list in internal/credguard/exemptions.go. It also
+# import outside the allow-list in internal/credguard/exemptions_test.go. It also
 # fails on an empty or missing scan root, so it can never pass having examined
 # nothing.
 #
@@ -232,13 +232,15 @@ unwired-version:
 	  *) echo "::error::no ast-checks version in go.mod, so the unwired baseline has no pinned measurer" >&2; exit 1 ;; \
 	esac
 
+# -tags e2e loads the e2e suite, whose tests are the consumers of the
+# test-support package internal/chartname.
 .PHONY: lint-unwired
 lint-unwired: unwired-version ## Fail if a declaration nothing reads is added (#116). Baseline only shrinks.
-	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -baseline .unwired-baseline.txt
+	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -tags e2e -baseline .unwired-baseline.txt
 
 .PHONY: lint-unwired-write
 lint-unwired-write: unwired-version ## Re-measure #116 and rewrite the baseline.
-	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -baseline .unwired-baseline.txt -write
+	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -tags e2e -baseline .unwired-baseline.txt -write
 
 # The gate is ast-checks/cmd/crdfields, at the version go.mod pins. It was a
 # shell script here and a copy in gibson, and the copies drifted (ast-checks#20).

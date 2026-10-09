@@ -1,46 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Package credguard fails the build when an mTLS credential is
-// assembled anywhere but internal/credentials.
-//
-// Four setec surfaces — the frontend server, the node-agent server, the
-// snapshot dialer and the tracing exporter — each grew their own
-// tls.Config by hand. Nothing stopped the fourth. internal/credentials
-// now owns all four; this package is what stops the fifth. It is the
-// difference between a state of the tree and a property of it.
-//
-// # What it looks at
-//
-// Every .go file under the scan root, parsed for references to the
-// packages an mTLS credential can only be built out of. It resolves
-// each file's imports first, so the check is on the *package* a symbol
-// came from and not on the spelling of the qualifier: importing
-// crypto/tls under another name, or dot-importing it, does not evade
-// the guard.
-//
-// No type checking and no build is involved, so the guard sees the
-// examples/ directories too, which are separate Go modules the root
-// module's tooling cannot otherwise reach.
-//
-// # Tests are in scope
-//
-// A _test.go file is scanned exactly like production code. Exempting
-// tests as a class would leave the obvious hole open: a helper that
-// builds a bypassing tls.Config lives in a _test.go file, production
-// code grows a caller, and the guard never had an opinion. The two
-// test files that legitimately hand-build a client config are exempt
-// by name, in Exemptions, with a reason each.
-//
-// # Failing closed
-//
-// A guard that passes having examined nothing is worse than no guard,
-// because it also reports success. Scan therefore treats each of these
-// as an error rather than a pass: a scan root that does not exist or is
-// not a directory, a root holding no Go files at all, a root where
-// every Go file is exempt, a file that will not parse, an exemption
-// naming a path that is not there, and an exemption that no longer
-// covers anything the guard would have flagged.
 package credguard
 
 import (
