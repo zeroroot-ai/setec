@@ -6,7 +6,7 @@
 # kernel/kernel.env. The build args carry no default, so a build that forgets
 # them fails here.
 
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 # GOTOOLCHAIN=local makes a toolchain mismatch fail the build instead of
 # downloading a toolchain.
 ARG GOTOOLCHAIN=local
@@ -27,14 +27,14 @@ RUN apt-get update -qq && apt-get install -y -qq cpio >/dev/null && \
 
 # The guest kernel, from kernel/kernel.env and kernel/x86_64.defconfig. The
 # build cache keeps this stage until one of the two files changes.
-FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS kernel
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS kernel
 RUN apt-get update -qq && apt-get install -y -qq bc bison flex libelf-dev libssl-dev dwarves xz-utils >/dev/null
 WORKDIR /src
 COPY kernel/ kernel/
 COPY scripts/build-guest-kernel.sh scripts/
 RUN bash scripts/build-guest-kernel.sh /out
 
-FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.1@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS firecracker
+FROM ghcr.io/zeroroot-ai/mirror/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS firecracker
 ARG FIRECRACKER_VERSION
 ARG FIRECRACKER_SHA256
 RUN set -eu; \
