@@ -62,6 +62,25 @@ assert() {
   fi
 }
 
+echo "--- the shrink-only unwired baseline ---"
+
+# A main commit adds code and a baseline entry for it. A later PR deletes the
+# entry only (the declaration is read now): that is the baseline shrinking.
+r="$(fresh baseline-shrink)"
+printf '# unwired baseline\n\nfunc main.helper\t# main.go:3\n' > "$r/.unwired-baseline.txt"
+printf 'package main\n\nfunc helper() {}\n' > "$r/helper.go"
+commit "$r" "feat: add a helper"
+git -C "$r" update-ref refs/remotes/origin/main HEAD
+git -C "$r" checkout -q -b pr
+printf '# unwired baseline\n\n' > "$r/.unwired-baseline.txt"
+commit "$r" "chore(unwired): the helper is read"
+assert "removing an unwired baseline entry a main commit added → not a revert" pass "$r"
+
+# The same PR deleting the helper too is an undo of the commit's code.
+git -C "$r" rm -q helper.go
+commit "$r" "chore: delete the helper"
+assert "MUTATION deleting the code a main commit added, beside its baseline entry" fail "$r"
+
 echo "--- required red: undeclared reverts ---"
 
 r="$(fresh silent-file-delete)"
