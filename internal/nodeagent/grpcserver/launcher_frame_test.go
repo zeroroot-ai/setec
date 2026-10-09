@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
@@ -151,7 +152,12 @@ func TestScanSparseFiles_FindsASecretInADataExtent(t *testing.T) {
 	}
 	dirty := filepath.Join(dir, "dirty")
 	sparseFile(t, dirty, 256<<20, map[int64][]byte{200 << 20: []byte("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n")})
-	if err := scanSparseFiles([]string{clean, dirty}); !errors.Is(err, secretscan.ErrSecretsFound) {
+	err := scanSparseFiles([]string{clean, dirty})
+	if !errors.Is(err, secretscan.ErrSecretsFound) {
 		t.Fatalf("a key in a data extent = %v, want ErrSecretsFound", err)
+	}
+	// The error names the rule, so a failed base says what matched.
+	if !strings.Contains(err.Error(), "pem-private-key") {
+		t.Fatalf("the error does not name the rule: %v", err)
 	}
 }
