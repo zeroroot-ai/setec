@@ -9,7 +9,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -47,7 +46,6 @@ const (
 // the resolver; this controller only owns the loud status surface.
 type SandboxClassReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
 
 	// Gate resolves the cluster-level half of the dev-mode opt-out
 	// (the dev label on the gate namespace). Nil means the opt-out can

@@ -165,7 +165,6 @@ func newCoord(c client.Client, dialer NodeAgentDialer) *Coordinator {
 	rec := testutil.NewFakeEventsRecorder(32)
 	return &Coordinator{
 		Client:   c,
-		Storage:  nil, // operator-side Coordinator doesn't call Save/Open
 		Dialer:   dialer,
 		Recorder: rec,
 		Metrics:  metrics.NewCollectorsWith(prometheus.NewRegistry()),

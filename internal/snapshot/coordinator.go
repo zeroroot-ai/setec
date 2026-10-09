@@ -65,12 +65,6 @@ type Coordinator struct {
 	// Sandbox/Snapshot CRs and Pods.
 	Client client.Client
 
-	// Storage is consulted for Stat calls from the operator side
-	// (e.g. "does this storage ref still exist before we attempt
-	// restore?"). The operator is NOT expected to Save/Open through
-	// this — those calls run on the node-agent side only.
-	Storage storage.StorageBackend
-
 	// Dialer resolves node names to NodeAgentClients.
 	Dialer NodeAgentDialer
 

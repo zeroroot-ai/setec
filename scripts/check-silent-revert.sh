@@ -31,6 +31,11 @@
 # Only exact content reversal fires. A PR that changes a line a recent
 # commit added to something new is not a revert of that commit.
 #
+# One file is outside the comparison: .unwired-baseline.txt. Its own gate
+# (make lint-unwired) refuses an added entry, so the file only shrinks, and
+# removing an entry that a commit added is the point of that file, not an
+# undo of the commit (setec#116).
+#
 # Usage: check-silent-revert.sh [--base <ref>] [--head <ref>] [--upstream <ref>]
 #        exit 1 on an undeclared revert
 #   WINDOW_DAYS  how far back on main to look (default 30)
@@ -81,7 +86,8 @@ is_declared() {
 lines_of() {
   git diff --no-color --unified=0 --find-renames --no-ext-diff "$1" "$2" \
     | awk '
-      /^diff --git / { file = substr($0, index($0, " b/") + 3); hunk = 0; next }
+      /^diff --git / { file = substr($0, index($0, " b/") + 3); hunk = 0; skip = (file == ".unwired-baseline.txt"); next }
+      skip              { next }
       /^(\+\+\+|---) /  { next }
       /^@@ /            { hunk++; next }
       /^Binary files /  { next }

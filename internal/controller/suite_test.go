@@ -304,7 +304,6 @@ func TestMain(m *testing.M) {
 
 	snapshotReconciler := &SnapshotReconciler{
 		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
 		Recorder:    mgr.GetEventRecorder("snapshot-controller"),
 		Coordinator: testCoordinator,
 	}
@@ -316,7 +315,6 @@ func TestMain(m *testing.M) {
 
 	classReconciler := &SandboxClassReconciler{
 		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
 		Gate:   &gate.Gate{Reader: mgr.GetClient()},
 	}
 	if err := classReconciler.SetupWithManager(mgr); err != nil {
