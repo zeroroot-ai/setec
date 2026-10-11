@@ -32,20 +32,24 @@ import (
 // the node with the credentials of the node, and the Pod network policy
 // never has to allow the registry. The kubelet also keeps the disk in the
 // image store of the node for the next Sandbox of the same digest. Its tag
-// is the hex of the image digest, so one digest has one disk.
+// is the hex of the image digest and the id of the signing key
+// (<digest hex>-<KeyID>), so one digest has one disk for each signing key. A
+// rotation of the seed builds and signs a new disk, and the immutable tag of
+// the disk of the previous seed never blocks it (setec#272).
 const (
 	// DiskFile and SignatureFile are the two files of the layer.
 	DiskFile      = "disk.sqfs"
 	SignatureFile = "disk.sig.json"
 )
 
-// DiskRef returns the reference of the disk of an image digest in repo.
-func DiskRef(repo, imageRef string) (string, error) {
+// DiskRef returns the reference of the disk of an image digest in repo that
+// the key keyID signed.
+func DiskRef(repo, imageRef, keyID string) (string, error) {
 	d, err := ParseDigestRef(imageRef)
 	if err != nil {
 		return "", err
 	}
-	tag, err := diskTag(repo, d)
+	tag, err := diskTag(repo, d, keyID)
 	if err != nil {
 		return "", err
 	}
@@ -56,8 +60,12 @@ func DiskRef(repo, imageRef string) (string, error) {
 type Builder struct {
 	// DiskRepo is the repository of the disks, e.g. ghcr.io/org/setec-disks.
 	DiskRepo string
-	// Key signs each new disk.
+	// Key signs each new disk. Its KeyID is part of the tag.
 	Key ed25519.PrivateKey
+	// WantKeyID, when set, is the KeyID that the caller expects. Ensure
+	// refuses a Key with a different id, because the caller then looks for
+	// a tag that this build never writes.
+	WantKeyID string
 	// Pack makes the disk of an image. Nil uses Pack (mksquashfs).
 	Pack func(ctx context.Context, img v1.Image, out string) error
 	// Options go to each registry call, e.g. credentials and transport.
@@ -66,9 +74,12 @@ type Builder struct {
 	TempDir string
 }
 
-func diskTag(repo string, d name.Digest) (name.Tag, error) {
+func diskTag(repo string, d name.Digest, keyID string) (name.Tag, error) {
+	if !validKeyID(keyID) {
+		return name.Tag{}, fmt.Errorf("diskbuilder: %q is not a signing key id", keyID)
+	}
 	hexPart := strings.TrimPrefix(d.DigestStr(), "sha256:")
-	tag, err := name.NewTag(repo + ":" + hexPart)
+	tag, err := name.NewTag(repo + ":" + hexPart + "-" + keyID)
 	return tag, errwrap.Wrap(err, "name.NewTag")
 }
 
@@ -79,7 +90,16 @@ func (b *Builder) Ensure(ctx context.Context, ref string) (name.Tag, error) {
 	if err != nil {
 		return name.Tag{}, err
 	}
-	tag, err := diskTag(b.DiskRepo, d)
+	pub, ok := b.Key.Public().(ed25519.PublicKey)
+	if !ok || len(b.Key) != ed25519.PrivateKeySize {
+		return name.Tag{}, errors.New("diskbuilder: no signing key")
+	}
+	keyID := KeyID(pub)
+	if b.WantKeyID != "" && b.WantKeyID != keyID {
+		return name.Tag{}, fmt.Errorf("diskbuilder: the signing seed has key id %s, the caller expects %s",
+			keyID, b.WantKeyID)
+	}
+	tag, err := diskTag(b.DiskRepo, d, keyID)
 	if err != nil {
 		return name.Tag{}, err
 	}

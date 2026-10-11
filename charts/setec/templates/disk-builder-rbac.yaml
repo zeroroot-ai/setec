@@ -3,6 +3,11 @@
 The operator runs setec-disk-builder as a Job in its own namespace, once for
 each image digest (docs/design/storage.md). It needs get and create on Jobs
 there and nowhere else. The Job Pod has no ServiceAccount token.
+
+The operator also reads the signing Secret, and only that Secret: the key id
+of its seed names the tag of each disk, so a rotated seed builds a new disk
+(setec#272). The operator already mounts the same Secret into each builder
+Job, so the read adds no reach.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -15,6 +20,10 @@ rules:
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: [get, create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ .diskBuilder.signingSecret | quote }}]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

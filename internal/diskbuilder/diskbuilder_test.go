@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -161,8 +162,125 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	if err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
 	}
-	if got, err := DiskRef(b.DiskRepo, ref); err != nil || got != tag1.String() {
+	if got, err := DiskRef(b.DiskRepo, ref, KeyID(pub)); err != nil || got != tag1.String() {
 		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
+	}
+}
+
+// immutableTags refuses a push of a manifest tag that already exists, as an
+// ECR repository with immutable tags does (D85).
+func immutableTags(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/manifests/") {
+			rec := httptest.NewRecorder()
+			next.ServeHTTP(rec, httptest.NewRequestWithContext(r.Context(), http.MethodHead, r.URL.Path, nil))
+			if rec.Code == http.StatusOK {
+				http.Error(w, `{"errors":[{"code":"TAG_INVALID","message":"the tag is immutable"}]}`, http.StatusBadRequest)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// TestBuilder_ANewSeedSignsANewDisk is setec#272: after a rotation of the
+// signing seed, the builder must not reuse the disk of the previous key. It
+// builds a new disk under a new tag, beside the old one, in a registry with
+// immutable tags. A launcher that trusts only the new key accepts the new
+// disk, and the disk of the previous key stays for the launchers that still
+// trust it.
+func TestBuilder_ANewSeedSignsANewDisk(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(immutableTags(registry.New()))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
+	img := testImage(t)
+	if err := remote.Write(src, img); err != nil {
+		t.Fatal(err)
+	}
+	dg, _ := img.Digest()
+	ref := u.Host + "/tools/scanner@" + dg.String()
+	repo := u.Host + "/setec-disks"
+
+	oldPub, oldKey, _ := ed25519.GenerateKey(nil)
+	newPub, newKey, _ := ed25519.GenerateKey(nil)
+	var packs atomic.Int32
+	oldBuilder := &Builder{DiskRepo: repo, Key: oldKey, Pack: tarPack(&packs), TempDir: t.TempDir()}
+	oldTag, err := oldBuilder.Ensure(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("Ensure with the previous seed: %v", err)
+	}
+	newTag, err := (&Builder{
+		DiskRepo: repo, Key: newKey, WantKeyID: KeyID(newPub), Pack: tarPack(&packs), TempDir: t.TempDir(),
+	}).Ensure(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("Ensure with the new seed: %v", err)
+	}
+	if newTag == oldTag {
+		t.Fatalf("the new seed reused the tag %s of the previous seed", oldTag)
+	}
+	if packs.Load() != 2 {
+		t.Fatalf("packs = %d, want 2: a new seed builds a new disk", packs.Load())
+	}
+	if !strings.HasSuffix(newTag.TagStr(), "-"+KeyID(newPub)) || !strings.HasSuffix(oldTag.TagStr(), "-"+KeyID(oldPub)) {
+		t.Fatalf("tags %s and %s do not name their keys", oldTag, newTag)
+	}
+	if got, err := DiskRef(repo, ref, KeyID(newPub)); err != nil || got != newTag.String() {
+		t.Fatalf("DiskRef of the new key = %q, %v; want %q", got, err, newTag)
+	}
+
+	for _, c := range []struct {
+		tag  name.Tag
+		keys []ed25519.PublicKey
+		ok   bool
+	}{
+		{newTag, []ed25519.PublicKey{newPub}, true},         // after the retire step
+		{newTag, []ed25519.PublicKey{newPub, oldPub}, true}, // during the rotation
+		{oldTag, []ed25519.PublicKey{newPub, oldPub}, true}, // a launcher of an old disk, during the rotation
+		{oldTag, []ed25519.PublicKey{newPub}, false},        // after the retire step
+		{newTag, []ed25519.PublicKey{oldPub}, false},        // a launcher that does not trust the new key yet
+	} {
+		mnt := t.TempDir()
+		untar(t, mutate.Extract(checkDiskArtifact(t, c.tag)), mnt)
+		err := VerifyMounted(filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile), ref, c.keys)
+		if (err == nil) != c.ok {
+			t.Fatalf("VerifyMounted(%s, %d keys) = %v, want ok=%v", c.tag.TagStr(), len(c.keys), err, c.ok)
+		}
+	}
+
+	// A seed that is not the one the operator expects is refused, so the
+	// operator never waits for a tag that no build writes.
+	oldBuilder.WantKeyID = KeyID(newPub)
+	_, err = oldBuilder.Ensure(t.Context(), ref)
+	if err == nil || !strings.Contains(err.Error(), "the caller expects") {
+		t.Fatalf("Ensure with an unexpected seed = %v, want a refusal", err)
+	}
+}
+
+func TestDiskRef_RefusesABadKeyID(t *testing.T) {
+	t.Parallel()
+	ref := "registry.test/tools/scanner@sha256:" + strings.Repeat("a", 64)
+	for _, id := range []string{"", "abc", strings.Repeat("A", 16), strings.Repeat("g", 16), strings.Repeat("a", 17)} {
+		if _, err := DiskRef("registry.test/setec-disks", ref, id); err == nil {
+			t.Errorf("DiskRef accepted the key id %q", id)
+		}
+	}
+	got, err := DiskRef("registry.test/setec-disks", ref, strings.Repeat("0", 16))
+	if err != nil || got != "registry.test/setec-disks:"+strings.Repeat("a", 64)+"-"+strings.Repeat("0", 16) {
+		t.Fatalf("DiskRef = %q, %v", got, err)
+	}
+}
+
+func TestKeyID_IsStableAndShort(t *testing.T) {
+	t.Parallel()
+	pub := ed25519.PublicKey(make([]byte, ed25519.PublicKeySize))
+	// The SHA-256 of 32 zero bytes starts with 66687aadf862bd77.
+	if got := KeyID(pub); got != "66687aadf862bd77" {
+		t.Fatalf("KeyID = %q", got)
+	}
+	if k, err := ParsePrivateKey([]byte("not base64!")); err == nil || k != nil {
+		t.Fatal("ParsePrivateKey accepted a bad seed")
 	}
 }
 

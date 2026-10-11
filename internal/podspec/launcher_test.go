@@ -94,7 +94,8 @@ func TestBuildLauncher_HasExactlyOneCapability(t *testing.T) {
 func TestBuildLauncher_MountsTheDiskAsAnImageVolume(t *testing.T) {
 	t.Parallel()
 	pod := launcherOrFatal(t)
-	want := "ghcr.io/zeroroot-ai/setec-disks:" + strings.Repeat("7", 64)
+	// The tag names the key of the signing seed (setec#272).
+	want := "ghcr.io/zeroroot-ai/setec-disks:" + strings.Repeat("7", 64) + "-0123456789abcdef"
 	var found bool
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == launcherDiskVolume {
@@ -126,6 +127,11 @@ func TestBuildLauncher_RefusesAnIncompleteSandbox(t *testing.T) {
 	if _, err := BuildLauncher(nil, LauncherOptions{Image: "x"}); err == nil {
 		t.Fatal("BuildLauncher accepted a nil Sandbox")
 	}
+	noKeyID := launcherOpts()
+	noKeyID.DiskKeyID = ""
+	if _, err := BuildLauncher(launcherSandbox(), noKeyID); err == nil {
+		t.Fatal("BuildLauncher accepted no disk key id: the Pod would mount a disk of no known key")
+	}
 }
 
 func launcherSandbox() *setecv1alpha1.Sandbox {
@@ -140,6 +146,7 @@ func launcherOpts() LauncherOptions {
 	return LauncherOptions{
 		Image: "ghcr.io/zeroroot-ai/setec-launcher:test", DiskRepo: "ghcr.io/zeroroot-ai/setec-disks",
 		DiskKeys:    []string{"MCowBQYDK2VwAyEAexampleexampleexampleexampleexampleexa="},
+		DiskKeyID:   "0123456789abcdef",
 		ResolverIPs: []string{"1.1.1.1"},
 	}
 }

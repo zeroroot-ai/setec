@@ -1469,7 +1469,8 @@ func (r *SandboxReconciler) createPod(
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("select Sandbox resolvers: %w", err))
 	}
-	if proceed, res, derr := r.waitForLauncherDisk(ctx, sb); !proceed {
+	diskKeyID, proceed, res, derr := r.waitForLauncherDisk(ctx, sb)
+	if !proceed {
 		return res, derr
 	}
 	if err := r.markPoolUsed(ctx, sb, cls); err != nil {
@@ -1503,7 +1504,7 @@ func (r *SandboxReconciler) createPod(
 		// value, else the class default, else 10 GiB (setec#172).
 		Scratch:  limits.EffectiveScratch(sb, cls),
 		Requests: classRequests(cls),
-		Image:    r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, ResolverIPs: resolvers,
+		Image:    r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, DiskKeyID: diskKeyID, ResolverIPs: resolvers,
 		Restore:     (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") || pendingCheckpoint(sb),
 		NodeName:    nodeName,
 		FromBase:    sb.Annotations[WarmBaseAnnotation] != "",
