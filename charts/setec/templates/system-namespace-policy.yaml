@@ -306,8 +306,8 @@ spec:
 {{- if not $src.registry }}
 {{- fail "each launcher.imageSources entry needs a registry" }}
 {{- end }}
-{{- if and (not $src.hosts) (ne $src.registry $registry) }}
-{{- fail (printf "launcher.imageSources entry %q needs its hosts (the registry host and the hosts that serve its blobs). Only the registry of launcher.diskRepo may list none: the disk Jobs reach it already" $src.registry) }}
+{{- if and (not $src.hosts) (not (and $isIP (eq $src.registry $registry))) }}
+{{- fail (printf "launcher.imageSources entry %q needs its hosts (the registry host and the hosts that serve its blobs, which a registry such as ECR sends a download to). Only a disk registry at an IP address may list none: the disk Jobs reach it already, and it sends no download elsewhere" $src.registry) }}
 {{- end }}
 {{- end }}
 {{- $disk := dict "isIP" $isIP "host" $host "port" $port }}

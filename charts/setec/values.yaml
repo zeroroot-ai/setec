@@ -78,8 +78,8 @@ launcher:
   # these entries, by name (systemPolicy, D76). hosts lists the registry
   # host and each host that serves its blobs: a registry often sends a
   # blob download to another host. A host that starts with "*." matches
-  # one more name level. The registry of diskRepo may list no hosts: the
-  # disk Jobs reach it already.
+  # one more name level. Only a disk registry at an IP address (a local
+  # registry) may list no hosts: the disk Jobs reach it already.
   imageSources:
     - registry: ghcr.io
       hosts:

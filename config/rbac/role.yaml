@@ -49,6 +49,7 @@ rules:
   - jobs
   verbs:
   - create
+  - delete
   - get
 - apiGroups:
   - networking.k8s.io

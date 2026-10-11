@@ -15,6 +15,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -247,6 +248,34 @@ func TestEnsureLauncherDisk_TheOperatorSignsAndThePublishJobHasNoSeed(t *testing
 	completeJob(t, r, pubName)
 	if keyID, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || !done || keyID != testDiskKeyID {
 		t.Fatalf("after the publish = %q, %t, %v; want done", keyID, done, err)
+	}
+}
+
+// A complete build Job whose Pod is gone (Pod GC, a lost node) is deleted,
+// so the next pass builds again. It is not a failed disk.
+func TestEnsureLauncherDisk_ABuildJobWithNoPodBuildsAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("56", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
+	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	buildName, _ := diskJobName(image, testDiskKeyID)
+	completeJob(t, r, buildName)
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+		t.Fatalf("= %t, %v; want a wait and no error", done, err)
+	}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: buildName}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the build Job with no Pod: %v, want it deleted", err)
+	}
+	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: buildName}, &batchv1.Job{}); err != nil {
+		t.Fatalf("the next pass made no build Job: %v", err)
 	}
 }
 

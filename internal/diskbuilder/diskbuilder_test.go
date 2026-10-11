@@ -236,12 +236,12 @@ func TestPublisher_RefusesASignatureOfAnotherDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &Publisher{DiskRepo: repo, TempDir: t.TempDir()}
-	for name, sig := range map[string]Signature{
+	for what, sig := range map[string]Signature{
 		"another image": SignDigest(key, "sha256:"+strings.Repeat("b", 64), res.DiskSHA256),
 		"another disk":  SignDigest(key, dg.String(), strings.Repeat("c", 64)),
 	} {
 		if _, err := p.Publish(t.Context(), ref, KeyID(pub), res, sig); !errors.Is(err, ErrBadSignature) {
-			t.Errorf("%s: Publish = %v, want ErrBadSignature", name, err)
+			t.Errorf("%s: Publish = %v, want ErrBadSignature", what, err)
 		}
 	}
 	if _, err := p.Publish(t.Context(), ref, KeyID(pub), BuildResult{Exists: true}, SignDigest(key, dg.String(), res.DiskSHA256)); !errors.Is(err, ErrBadBuildResult) {
@@ -265,7 +265,7 @@ func TestParseBuildResult_IsStrict(t *testing.T) {
 	if got, err := ParseBuildResult([]byte(`{"exists":true,"layer":{"digest":"","diffID":"","size":0}}`)); err != nil || !got.Exists {
 		t.Fatalf("ParseBuildResult(exists) = %+v, %v", got, err)
 	}
-	for name, mut := range map[string]func(*BuildResult){
+	for what, mut := range map[string]func(*BuildResult){
 		"short digest":   func(r *BuildResult) { r.Layer.Digest = "sha256:abc" },
 		"bad diff id":    func(r *BuildResult) { r.Layer.DiffID = "md5:" + strings.Repeat("b", 64) },
 		"no size":        func(r *BuildResult) { r.Layer.Size = 0 },
@@ -276,7 +276,7 @@ func TestParseBuildResult_IsStrict(t *testing.T) {
 		mut(&r)
 		raw, _ := json.Marshal(r)
 		if _, err := ParseBuildResult(raw); !errors.Is(err, ErrBadBuildResult) {
-			t.Errorf("%s: err %v, want ErrBadBuildResult", name, err)
+			t.Errorf("%s: err %v, want ErrBadBuildResult", what, err)
 		}
 	}
 	if _, err := ParseBuildResult([]byte(`{"diskSHA256":"` + strings.Repeat("c", 64) + `","extra":1}`)); !errors.Is(err, ErrBadBuildResult) {

@@ -2,7 +2,7 @@
 {{- /*
 The operator runs setec-disk-builder as two Jobs in its own namespace, a build
 Job and a publish Job for each image digest (docs/design/runtime.md). It needs
-get and create on Jobs there and nowhere else. The Job Pods have no
+get, create and delete on Jobs there and nowhere else. The Job Pods have no
 ServiceAccount token. The operator reads the build report from the
 termination message of the build Pod, through its cluster-wide Pod read.
 
@@ -19,9 +19,11 @@ metadata:
   labels:
     {{- include "setec.labels" $ | nindent 4 }}
 rules:
+  # delete: a complete build Job whose Pod is gone is deleted, so the next
+  # pass builds again.
   - apiGroups: ["batch"]
     resources: [jobs]
-    verbs: [get, create]
+    verbs: [get, create, delete]
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [{{ .diskBuilder.signingSecret | quote }}]

@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
+	ggcrname "github.com/google/go-containerregistry/pkg/name"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,7 +27,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
 
 // DiskBuilderConfig is how the operator runs setec-disk-builder: a build Job
 // and a publish Job for each image digest, in the namespace of the operator
@@ -67,6 +68,8 @@ const (
 	componentImageVerify   = "image-verify"
 	// builderContainer is the one container of each Job pod.
 	builderContainer = "disk-builder"
+	// tempDirFlag names the work directory of setec-disk-builder.
+	tempDirFlag = "--temp-dir"
 	// builderWorkDir is the emptyDir of a disk builder Job.
 	builderWorkDir    = "/work"
 	diskBuildRequeue  = 5 * time.Second
@@ -108,7 +111,7 @@ func checkImageRegistry(allowed []string, image string) error {
 	host := d.RegistryStr()
 	for _, a := range allowed {
 		// The name form of a registry: docker.io is index.docker.io.
-		reg, err := name.NewRegistry(strings.TrimSpace(a))
+		reg, err := ggcrname.NewRegistry(strings.TrimSpace(a))
 		if err == nil && strings.EqualFold(reg.RegistryStr(), host) {
 			return nil
 		}
@@ -200,6 +203,12 @@ func ensureDisk(
 		})
 	}
 	res, err := buildResult(ctx, reader, cfg.Namespace, buildName)
+	if errors.Is(err, errNoBuildPod) {
+		// The Pod is gone (Pod GC, a lost node) and the Job stays. Delete
+		// the Job, so the next pass builds again; the build finds a disk
+		// that a publish already wrote.
+		return keyID, false, deleteJob(ctx, c, cfg.Namespace, buildName)
+	}
 	if err != nil {
 		return "", false, &diskBuildError{job: buildName, msg: err.Error()}
 	}
@@ -304,7 +313,20 @@ func buildResult(ctx context.Context, reader client.Reader, namespace, name stri
 			}
 		}
 	}
-	return diskbuilder.BuildResult{}, fmt.Errorf("the build Job %s has no Pod with a build result", name)
+	return diskbuilder.BuildResult{}, fmt.Errorf("%w: %s", errNoBuildPod, name)
+}
+
+// errNoBuildPod is a complete build Job whose Pod is gone.
+var errNoBuildPod = errors.New("no succeeded Pod holds the build result of the Job")
+
+// deleteJob deletes the Job jobName and its Pods.
+func deleteJob(ctx context.Context, c client.Client, namespace, jobName string) error {
+	job := &batchv1.Job{Name: jobName, Namespace: namespace}
+	err := c.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete the build Job %s: %w", jobName, err)
+	}
+	return nil
 }
 
 type diskBuildError struct{ job, msg string }
@@ -320,7 +342,7 @@ func (e *diskBuildError) Error() string {
 // the push credential of the disk registry, and no signing seed.
 func diskJob(cfg DiskBuilderConfig, diskRepo, name, image, keyID string) *batchv1.Job {
 	return builderJob(cfg, name, componentDiskBuilder, []string{"--disk-repo", diskRepo,
-		"--key-id", keyID, "--temp-dir", builderWorkDir, "build", image}, nil, true)
+		"--key-id", keyID, tempDirFlag, builderWorkDir, "build", image}, nil, true)
 }
 
 // publishJob is the publish Job of the disk of image: it gets the build
@@ -336,7 +358,7 @@ func publishJob(
 		{Name: "SETEC_DISK_SIGNATURE", Value: string(sigJSON)},
 	}
 	return builderJob(cfg, name, componentDiskPublisher, []string{"--disk-repo", diskRepo,
-		"--key-id", keyID, "--temp-dir", builderWorkDir, "publish", image}, env, true)
+		"--key-id", keyID, tempDirFlag, builderWorkDir, "publish", image}, env, true)
 }
 
 // builderJob is a Job of the setec-disk-builder image with args. push
