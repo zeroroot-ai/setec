@@ -198,8 +198,10 @@ jobs:
       # The guard and the chain-6 exit test run in steps of their own. The
       # CPU template scenario needs nodes of the instance family of the
       # template (m8i), which the runners are not. `make e2e-cpu-template`
-      # runs it on a cluster with m8i nodes (setec#239).
-      SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity|TestLauncher_CPUTemplateSnapshotLoads)$'
+      # runs it on a cluster with m8i nodes (setec#239). The upgrade
+      # scenario needs a release without snapshots, so it runs in a step
+      # of its own.
+      SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity|TestLauncher_CPUTemplateSnapshotLoads|TestPhase3_UpgradeFromPhase2)$'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -381,6 +383,27 @@ jobs:
           kill "${sampler}" 2>/dev/null
           scripts/e2e-summary.sh "The launcher scenarios" launcher.log "$status"
 
+      - name: The upgrade that turns snapshots on
+        # TestPhase3_UpgradeFromPhase2 upgrades a release without snapshots
+        # to one with snapshots, over a running Sandbox. The release of the
+        # launcher scenarios has snapshots on, so the scenario skips there.
+        # Here it gets its own release with snapshots and S3 off.
+        env:
+          SETEC_E2E_NAMESPACE: setec-e2e-upgrade
+          SETEC_E2E_SANDBOX_NAMESPACE: setec-e2e-upgrade-sandboxes
+          SETEC_E2E_RELEASE: setec-e2e-upgrade
+          SETEC_E2E_WARM_POOL_NAMESPACE: setec-e2e-upgrade-pool
+          SETEC_E2E_SNAPSHOTS: ""
+          SETEC_E2E_S3: ""
+          SETEC_E2E_SESSION_DRAIN: ""
+        run: |
+          set +e
+          set -uo pipefail
+          go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 30m \
+            -run '^TestPhase3_UpgradeFromPhase2$' 2>&1 | tee upgrade.log
+          status="${PIPESTATUS[0]}"
+          scripts/e2e-summary.sh "The upgrade that turns snapshots on" upgrade.log "$status"
+
       - name: The chain-6 exit test
         # Two commands in one session reach the same machine and see the
         # same /workspace (gibson#1183, gibson#1450, setec#239). Its own
@@ -453,6 +476,7 @@ jobs:
             guard.log
             launcher.log
             agents.log
+            upgrade.log
             chain6.log
             chain6-fixture.log
           if-no-files-found: ignore

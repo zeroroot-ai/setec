@@ -98,6 +98,47 @@ func TestScan_RandomMemoryFillIsNotFlagged(t *testing.T) {
 	}
 }
 
+// TestScan_BinaryStringTablesAreNotFlagged guards the false positive that
+// refused every base of the warm pool in the nightly launcher run: a memory
+// image holds the string tables of the binaries in the guest. Lower-case text
+// in those tables is not an environment variable assignment.
+func TestScan_BinaryStringTablesAreNotFlagged(t *testing.T) {
+	s := New()
+	tables := []string{
+		// The excerpt of the finding in the nightly run (setec#253).
+		"\x00\x01failed to read traffic secrettls: received unexpected error: did not\x00",
+		// The shapes of the string tables of common binaries.
+		"\x00private-key: public-key:\x00",
+		"\x00token: %v\\[0-9a-f]{1,6}\x00",
+		"PasswordAuthentication=nofailed",
+		"Token:Names:Roles:Nodes:Force:Tasks:SecretConfigVolumeSince:Attrs:Close:",
+	}
+	for _, table := range tables {
+		fs, err := s.Scan(strings.NewReader(table))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(fs) != 0 {
+			t.Errorf("string table %q produced findings: %v", table, fs)
+		}
+	}
+}
+
+// TestScan_EnvAssignmentInEnvironBlock proves that the case-sensitive rule
+// still finds a secret in the environment block of a process, where each
+// entry ends with a NUL byte.
+func TestScan_EnvAssignmentInEnvironBlock(t *testing.T) {
+	s := New()
+	environ := "PATH=/usr/bin\x00HOME=/root\x00GITHUB_TOKEN=abcdef0123456789\x00TERM=xterm\x00"
+	fs, err := s.Scan(strings.NewReader(environ))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !ruleSet(fs)["secret-shaped-env-assignment"] {
+		t.Fatalf("expected secret-shaped-env-assignment on an environ block; got %v", fs)
+	}
+}
+
 // TestScan_TokenSpanningChunkBoundary ensures a secret straddling the
 // internal scan-window boundary is still detected (overlap carry works).
 func TestScan_TokenSpanningChunkBoundary(t *testing.T) {

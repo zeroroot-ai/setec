@@ -125,8 +125,15 @@ var builtinRules = []rule{
 		// secret and whose value is a non-trivial token. This is the shape
 		// secrets take when they are (wrongly) baked into a snapshot via the
 		// container env rather than injected post-restore.
+		//
+		// The name is upper case, as an environment variable name is. The
+		// rule is case sensitive on purpose. A memory image holds the string
+		// tables of each binary in the guest, and those tables hold lower-case
+		// text such as "read traffic secret" next to "tls: ...". A
+		// case-insensitive name matched that text and refused every base of
+		// the warm pool.
 		name:      "secret-shaped-env-assignment",
-		re:        regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"']{8,})`),
+		re:        regexp.MustCompile(`\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"']{8,})`),
 		maskGroup: 2,
 	},
 }
