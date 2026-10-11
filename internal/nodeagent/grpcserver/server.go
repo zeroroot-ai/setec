@@ -125,6 +125,14 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		return nil, err
 	}
 
+	// The image disk that the machine runs on, as the launcher checked it
+	// at start. A restore loads the snapshot only over the same disk
+	// (setec#277).
+	imageDisk, err := readImageDiskDigest(launchersandbox.HostPath(m, podspec.LauncherImageDiskDigest))
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "the image disk digest of the launcher: %v", err)
+	}
+
 	fc := s.FirecrackerFactory(m.APISocket)
 
 	if err := fc.Pause(ctx); err != nil {
@@ -198,7 +206,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 		clean = true
 	}
 
-	combined, err := makeLauncherFramedReader(parent, statePath, memPath, diskPath)
+	combined, err := makeLauncherFramedReader(parent, imageDisk, statePath, memPath, diskPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "assemble framed stream: %v", err)
 	}

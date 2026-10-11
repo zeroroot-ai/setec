@@ -226,6 +226,9 @@ func TestLauncherFileNamesMatchTheLauncher(t *testing.T) {
 	if LauncherStagedNoReseed != launcher.StagedNoReseed {
 		t.Fatalf("staged markers differ: %s and %s", LauncherStagedNoReseed, launcher.StagedNoReseed)
 	}
+	if LauncherImageDiskDigest != LauncherVMDir+"/"+launcher.ImageDiskDigest {
+		t.Fatalf("image disk digest files differ: %s and %s/%s", LauncherImageDiskDigest, LauncherVMDir, launcher.ImageDiskDigest)
+	}
 	pod := launcherOrFatal(t)
 	var s launcherSpec
 	if err := json.Unmarshal([]byte(pod.Spec.Containers[0].Env[0].Value), &s); err != nil {

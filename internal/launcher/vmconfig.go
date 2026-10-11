@@ -7,6 +7,10 @@ package launcher
 const (
 	// APISocket is the Firecracker API socket.
 	APISocket = "api.sock"
+	// ImageDiskDigest holds the hex SHA-256 of the image disk that the
+	// launcher checked at start (setec#277). The node agent stores it with
+	// each snapshot of the machine, and a restore must find the same disk.
+	ImageDiskDigest = "image-disk.sha256"
 	// VsockSocket is the host side of the vsock device. Firecracker
 	// connects a guest call to host port P to VsockSocket + "_P".
 	VsockSocket = "v.sock"

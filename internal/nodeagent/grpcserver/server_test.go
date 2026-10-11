@@ -79,8 +79,13 @@ func (f *fakeFirecracker) host(p string) string {
 const testPodUID = "05c716c8-eae5-4540-9daf-5c0bb659810a"
 
 // fakeMachine resolves testPodUID to a launcher work volume at root, with
-// a writable layer, and any other UID to launchersandbox.ErrNotFound.
-type fakeMachine struct{ root string }
+// a writable layer and the image disk digest that a launcher writes at
+// start, and any other UID to launchersandbox.ErrNotFound. noImageDisk
+// leaves the digest out, as a launcher that never checked its disk.
+type fakeMachine struct {
+	root        string
+	noImageDisk bool
+}
 
 func (m fakeMachine) Resolve(_ context.Context, podUID string) (launchersandbox.Paths, error) {
 	if podUID != testPodUID {
@@ -92,6 +97,9 @@ func (m fakeMachine) Resolve(_ context.Context, podUID string) (launchersandbox.
 	disk := filepath.Join(m.root, "writable.ext4")
 	if _, err := os.Stat(disk); os.IsNotExist(err) {
 		_ = os.WriteFile(disk, []byte("DISK"), 0o600)
+	}
+	if !m.noImageDisk {
+		_ = os.WriteFile(filepath.Join(m.root, "vm", "image-disk.sha256"), []byte(testImageDisk+"\n"), 0o600)
 	}
 	return launchersandbox.Paths{
 		APISocket: filepath.Join(m.root, "vm", podspec.LauncherAPISocket),
@@ -173,13 +181,37 @@ func TestCreateSnapshot_Happy(t *testing.T) {
 	defer func() { _ = rc.Close() }()
 	out := t.TempDir()
 	st, mem, disk := filepath.Join(out, "s"), filepath.Join(out, "m"), filepath.Join(out, "d")
-	if err := writeLauncherFramedStream(rc, st, mem, disk, nil); err != nil {
+	imageDisk, err := writeLauncherFramedStream(rc, st, mem, disk, nil)
+	if err != nil {
 		t.Fatalf("unpack: %v", err)
+	}
+	if imageDisk != testImageDisk {
+		t.Fatalf("the snapshot records image disk %q, want the one the launcher wrote", imageDisk)
 	}
 	for path, want := range map[string]string{st: "STATE", mem: "MEMORY-PAYLOAD", disk: "DISK"} {
 		if got, _ := os.ReadFile(path); !bytes.HasPrefix(got, []byte(want)) {
 			t.Fatalf("%s = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// TestCreateSnapshot_RefusesAMachineWithNoImageDiskDigest proves that no
+// snapshot is taken of a machine whose launcher recorded no checked image
+// disk: its restore could not prove that it loads over the same disk
+// (setec#277).
+func TestCreateSnapshot_RefusesAMachineWithNoImageDiskDigest(t *testing.T) {
+	fc := &fakeFirecracker{}
+	srv := newServer(t, fc)
+	srv.Machines = fakeMachine{root: fc.root, noImageDisk: true}
+	cli := newBufconnClient(t, srv)
+	_, err := cli.CreateSnapshot(context.Background(), &setecgrpcv1.CreateSnapshotRequest{
+		SandboxId: "ns/s", SnapshotId: "snap-1", StorageBackend: "local-disk", SourcePodUid: testPodUID,
+	})
+	if s, _ := status.FromError(err); s.Code() != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition", s.Code())
+	}
+	if fc.pauseCalls != 0 {
+		t.Fatal("the machine was paused for a snapshot that cannot be taken")
 	}
 }
 

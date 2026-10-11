@@ -68,6 +68,14 @@ const (
 	// LauncherRestoreTakenAt holds the time of the state, in Unix
 	// nanoseconds, when the node agent knows it (setec#194).
 	LauncherRestoreTakenAt = LauncherRestoreDir + "/taken-at"
+	// LauncherImageDiskDigest holds the hex SHA-256 of the image disk that
+	// the launcher checked at start (launcher.ImageDiskDigest in the work
+	// directory). The node agent stores it with each snapshot (setec#277).
+	LauncherImageDiskDigest = LauncherVMDir + "/image-disk.sha256"
+	// LauncherRestoreImageDisk holds the image disk digest of the snapshot
+	// that the node agent stages. The launcher loads the snapshot only
+	// over the same disk (setec#277).
+	LauncherRestoreImageDisk = LauncherRestoreDir + "/image-disk.sha256"
 	// LauncherIdentityGeneration holds the identity generation of the
 	// Sandbox after its last snapshot (setec#235). The node agent writes
 	// it while the machine is paused for the snapshot.
@@ -230,11 +238,12 @@ type launcherSource struct {
 }
 
 type launcherSnapshot struct {
-	State    string `json:"state"`
-	Memory   string `json:"memory"`
-	Staged   string `json:"staged"`
-	Evidence string `json:"evidence"`
-	TakenAt  string `json:"takenAt"`
+	State     string `json:"state"`
+	Memory    string `json:"memory"`
+	Staged    string `json:"staged"`
+	Evidence  string `json:"evidence"`
+	TakenAt   string `json:"takenAt"`
+	ImageDisk string `json:"imageDisk"`
 }
 
 type launcherBoot struct {
@@ -453,11 +462,12 @@ func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work res
 	}
 	if opts.Restore || opts.FromBase {
 		spec.Source.Snapshot = &launcherSnapshot{
-			State:    LauncherRestoreState,
-			Memory:   LauncherRestoreMemory,
-			Staged:   LauncherRestoreStaged,
-			Evidence: LauncherRestoreEvidence,
-			TakenAt:  LauncherRestoreTakenAt,
+			State:     LauncherRestoreState,
+			Memory:    LauncherRestoreMemory,
+			Staged:    LauncherRestoreStaged,
+			Evidence:  LauncherRestoreEvidence,
+			TakenAt:   LauncherRestoreTakenAt,
+			ImageDisk: LauncherRestoreImageDisk,
 		}
 	} else {
 		spec.Source.Boot = &launcherBoot{Kernel: launcherKernel, Initrd: launcherInitrd, BootArgs: launcherBootArgs}

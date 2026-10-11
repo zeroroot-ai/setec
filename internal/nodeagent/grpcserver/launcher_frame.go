@@ -20,18 +20,53 @@ import (
 )
 
 // The stored form of a launcher snapshot: the Firecracker state, the
-// memory and the writable layer of the machine. The memory and the
-// writable layer are sparse, so only their data extents are stored. A diff
-// snapshot names its parent: its memory holds only the pages that changed
-// since the parent, and a restore puts them on the memory of the parent.
+// memory and the writable layer of the machine, and the digest of the image
+// disk that the machine ran on. The memory and the writable layer are
+// sparse, so only their data extents are stored. A diff snapshot names its
+// parent: its memory holds only the pages that changed since the parent,
+// and a restore puts them on the memory of the parent.
 //
 //	magic(8) parentLen(8) parent
+//	imageDisk(64): the hex SHA-256 of the image disk (setec#277)
 //	stateSize(8) state
 //	memSize(8) extentCount(8) { offset(8) length(8) data }...
 //	diskSize(8) extentCount(8) { offset(8) length(8) data }...
 //
-// The magic keeps a file of another form from loading as a snapshot.
-var launcherFrameMagic = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '1', '\n'}
+// The magic keeps a file of another form from loading as a snapshot. A
+// snapshot of the first form records no image disk, so it does not load.
+var (
+	launcherFrameMagic   = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '2', '\n'}
+	launcherFrameMagicV1 = [8]byte{'S', 'E', 'T', 'E', 'C', 'L', '1', '\n'}
+)
+
+// imageDiskDigestLen is the length of the hex SHA-256 of an image disk.
+const imageDiskDigestLen = 64
+
+// validImageDiskDigest reports whether d is a lowercase hex SHA-256.
+func validImageDiskDigest(d string) bool {
+	if len(d) != imageDiskDigestLen {
+		return false
+	}
+	for _, c := range d {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// readImageDiskDigest reads the digest that the launcher wrote at start.
+func readImageDiskDigest(path string) (string, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // a path in the work volume of the Pod
+	if err != nil {
+		return "", errwrap.Wrap(err, "os.ReadFile")
+	}
+	d := strings.TrimSpace(string(raw))
+	if !validImageDiskDigest(d) {
+		return "", fmt.Errorf("%q is not a SHA-256", d)
+	}
+	return d, nil
+}
 
 // maxParentChain bounds the parents that one restore follows, and
 // maxParentRef the length of a parent reference.
@@ -107,8 +142,12 @@ func copySparse(src, dst string) (err error) {
 }
 
 // makeLauncherFramedReader frames the state, the memory and the writable
-// layer of a launcher snapshot. parentRef is empty for a full snapshot.
-func makeLauncherFramedReader(parentRef, statePath, memPath, diskPath string) (io.ReadCloser, error) {
+// layer of a launcher snapshot, and imageDisk, the digest of the image disk
+// of the machine. parentRef is empty for a full snapshot.
+func makeLauncherFramedReader(parentRef, imageDisk, statePath, memPath, diskPath string) (io.ReadCloser, error) {
+	if !validImageDiskDigest(imageDisk) {
+		return nil, fmt.Errorf("the image disk digest %q is not a SHA-256", imageDisk)
+	}
 	var files []*os.File
 	closeAll := func() {
 		for _, f := range files {
@@ -134,7 +173,10 @@ func makeLauncherFramedReader(parentRef, statePath, memPath, diskPath string) (i
 		}
 		return &b
 	}
-	readers := []io.Reader{bytes.NewReader(launcherFrameMagic[:]), u64(int64(len(parentRef))), strings.NewReader(parentRef)}
+	readers := []io.Reader{
+		bytes.NewReader(launcherFrameMagic[:]), u64(int64(len(parentRef))), strings.NewReader(parentRef),
+		strings.NewReader(imageDisk),
+	}
 	state, stateSize, err := open(statePath)
 	if err != nil {
 		closeAll()
@@ -167,65 +209,82 @@ func makeLauncherFramedReader(parentRef, statePath, memPath, diskPath string) (i
 // openParentFunc opens the stored stream of a parent snapshot.
 type openParentFunc func(ref string) (io.ReadCloser, error)
 
-// writeLauncherFramedStream reverses makeLauncherFramedReader. A diff
-// snapshot loads its parents first, with openParent, and then puts its
-// changed pages on their memory.
-func writeLauncherFramedStream(r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc) error {
+// writeLauncherFramedStream reverses makeLauncherFramedReader and returns
+// the image disk digest of the snapshot. A diff snapshot loads its parents
+// first, with openParent, and then puts its changed pages on their memory.
+// Each parent must name the same image disk.
+func writeLauncherFramedStream(r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc) (string, error) {
 	return writeLauncherFrame(r, statePath, memPath, diskPath, openParent, 0)
 }
 
-func writeLauncherFrame(r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc, depth int) error {
+func writeLauncherFrame(
+	r io.Reader, statePath, memPath, diskPath string, openParent openParentFunc, depth int,
+) (string, error) {
 	var magic [8]byte
 	if _, err := io.ReadFull(r, magic[:]); err != nil {
-		return fmt.Errorf("read the frame magic: %w", err)
+		return "", fmt.Errorf("read the frame magic: %w", err)
+	}
+	if magic == launcherFrameMagicV1 {
+		return "", errors.New("the snapshot records no image disk digest; take a new snapshot")
 	}
 	if magic != launcherFrameMagic {
-		return errors.New("the snapshot is not a launcher snapshot")
+		return "", errors.New("the snapshot is not a launcher snapshot")
 	}
 	var n uint64
 	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
-		return fmt.Errorf("read the parent length: %w", err)
+		return "", fmt.Errorf("read the parent length: %w", err)
 	}
 	if n > maxParentRef {
-		return fmt.Errorf("the parent reference is %d bytes, more than %d", n, maxParentRef)
+		return "", fmt.Errorf("the parent reference is %d bytes, more than %d", n, maxParentRef)
 	}
 	parent := make([]byte, n)
 	if _, err := io.ReadFull(r, parent); err != nil {
-		return fmt.Errorf("read the parent reference: %w", err)
+		return "", fmt.Errorf("read the parent reference: %w", err)
+	}
+	var digest [imageDiskDigestLen]byte
+	if _, err := io.ReadFull(r, digest[:]); err != nil {
+		return "", fmt.Errorf("read the image disk digest: %w", err)
+	}
+	imageDisk := string(digest[:])
+	if !validImageDiskDigest(imageDisk) {
+		return "", errors.New("the image disk digest of the snapshot is not a SHA-256")
 	}
 	if n > 0 {
 		if depth >= maxParentChain {
-			return fmt.Errorf("the snapshot has more than %d parents", maxParentChain)
+			return "", fmt.Errorf("the snapshot has more than %d parents", maxParentChain)
 		}
 		if openParent == nil {
-			return errors.New("the snapshot is a diff and no parent can be opened")
+			return "", errors.New("the snapshot is a diff and no parent can be opened")
 		}
 		prc, err := openParent(string(parent))
 		if err != nil {
-			return fmt.Errorf("open the parent %s: %w", parent, err)
+			return "", fmt.Errorf("open the parent %s: %w", parent, err)
 		}
-		err = writeLauncherFrame(prc, statePath, memPath, diskPath, openParent, depth+1)
+		parentDisk, err := writeLauncherFrame(prc, statePath, memPath, diskPath, openParent, depth+1)
 		_ = prc.Close()
 		if err != nil {
-			return fmt.Errorf("parent %s: %w", parent, err)
+			return "", fmt.Errorf("parent %s: %w", parent, err)
+		}
+		if parentDisk != imageDisk {
+			return "", fmt.Errorf("parent %s ran on another image disk", parent)
 		}
 	}
 	var stateSize uint64
 	if err := binary.Read(r, binary.BigEndian, &stateSize); err != nil {
-		return fmt.Errorf("read the state size: %w", err)
+		return "", fmt.Errorf("read the state size: %w", err)
 	}
 	if err := writeN(r, statePath, int64(stateSize)); err != nil { //nolint:gosec // a size of the stored stream
-		return fmt.Errorf("state: %w", err)
+		return "", fmt.Errorf("state: %w", err)
 	}
 	// The memory of a diff goes on the memory of its parent. The writable
 	// layer is always whole.
 	if err := writeExtents(r, memPath, n == 0); err != nil {
-		return fmt.Errorf("memory: %w", err)
+		return "", fmt.Errorf("memory: %w", err)
 	}
 	if err := writeExtents(r, diskPath, true); err != nil {
-		return fmt.Errorf("writable layer: %w", err)
+		return "", fmt.Errorf("writable layer: %w", err)
 	}
-	return nil
+	return imageDisk, nil
 }
 
 // writeExtents reads a size, an extent count and the extents, and writes

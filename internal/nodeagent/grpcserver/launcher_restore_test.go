@@ -47,7 +47,7 @@ func framed(t *testing.T, state, memory string) *os.File {
 	_ = os.WriteFile(sp, []byte(state), 0o600)
 	_ = os.WriteFile(mp, []byte(memory), 0o600)
 	_ = os.WriteFile(dp, []byte("DISK"), 0o600)
-	rc, err := makeLauncherFramedReader("", sp, mp, dp)
+	rc, err := makeLauncherFramedReader("", testImageDisk, sp, mp, dp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,9 @@ func framed(t *testing.T, state, memory string) *os.File {
 }
 
 // fakeLauncher plays the launcher: it waits for the staged marker, checks
-// the files, and writes ev.
+// the files, and writes ev. Like the launcher, it refuses a restore whose
+// staged image disk digest is not the one of its disk (setec#277): it then
+// reports the refusal instead of the state.
 func fakeLauncher(t *testing.T, p launchersandbox.Paths, ev podspec.RestoreEvidence) <-chan string {
 	t.Helper()
 	sawState := make(chan string, 1)
@@ -74,7 +76,13 @@ func fakeLauncher(t *testing.T, p launchersandbox.Paths, ev podspec.RestoreEvide
 		for range 200 {
 			if _, err := os.Stat(launchersandbox.HostPath(p, podspec.LauncherRestoreStaged)); err == nil {
 				b, _ := os.ReadFile(launchersandbox.HostPath(p, podspec.LauncherRestoreState))
-				sawState <- string(b)
+				disk, _ := os.ReadFile(launchersandbox.HostPath(p, podspec.LauncherRestoreImageDisk))
+				if string(bytes.TrimSpace(disk)) != testImageDisk {
+					sawState <- "refused: image disk " + string(disk)
+					ev = podspec.RestoreEvidence{Error: "the image disk is not the disk of the snapshot"}
+				} else {
+					sawState <- string(b)
+				}
 				raw, _ := json.Marshal(ev)
 				tmp := launchersandbox.HostPath(p, podspec.LauncherRestoreEvidence) + ".tmp"
 				_ = os.WriteFile(tmp, raw, 0o600)
@@ -103,7 +111,7 @@ func TestRestoreLauncher_StagesTheFilesAndReturnsTheEvidence(t *testing.T) {
 	if disk, _ := os.ReadFile(launchersandbox.HostPath(p, podspec.LauncherWritableDisk)); string(disk) != "DISK" {
 		t.Fatalf("the writable layer = %q, want the one of the snapshot", disk)
 	}
-	for _, f := range []string{podspec.LauncherRestoreState, podspec.LauncherRestoreMemory} {
+	for _, f := range []string{podspec.LauncherRestoreState, podspec.LauncherRestoreMemory, podspec.LauncherRestoreImageDisk} {
 		if _, err := os.Stat(launchersandbox.HostPath(p, f)); !os.IsNotExist(err) {
 			t.Fatalf("%s stays on the node after the restore", f)
 		}

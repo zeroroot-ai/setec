@@ -95,9 +95,13 @@ type Launcher struct {
 	// MkfsExt4.
 	Format Formatter
 	// CheckDisk checks the signature of the image disk before the machine
-	// uses it. The disk comes from the image volume of the Pod. Nil checks
-	// nothing, which only a test does.
-	CheckDisk func(s *Spec) error
+	// uses it, and returns the hex SHA-256 of the checked disk. The disk
+	// comes from the image volume of the Pod. Nil checks nothing, which
+	// only a test does; a snapshot load then fails, because no disk digest
+	// is known (setec#277).
+	CheckDisk func(s *Spec) (diskSHA256 string, err error)
+	// diskSHA256 is the digest that CheckDisk returned.
+	diskSHA256 string
 	// AfterStart runs once the machine runs, with the identity of the Pod.
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
@@ -115,6 +119,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	start, err := l.startKind(ctx)
 	if err != nil {
 		return LaunchFailedExit, err
+	}
+	if snap != nil {
+		if err := l.checkSnapshotDisk(snap); err != nil {
+			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
+		}
 	}
 	defer func() {
 		if lerr := l.Net.Leave(); lerr != nil && err == nil {
@@ -194,11 +203,60 @@ func (l *Launcher) prepare() error {
 	// The kubelet pulled the disk into the image volume of the Pod on the
 	// node, outside the Pod network. The launcher reaches no registry.
 	if l.CheckDisk != nil {
-		if err := l.CheckDisk(l.Spec); err != nil {
+		sum, err := l.CheckDisk(l.Spec)
+		if err != nil {
 			return fail(ReasonDisks, fmt.Errorf("check the image disk: %w", err))
+		}
+		if !isDiskSHA256(sum) {
+			return fail(ReasonDisks, fmt.Errorf("check the image disk: %q is not a SHA-256", sum))
+		}
+		l.diskSHA256 = sum
+		// Each snapshot of this machine records the disk that it runs on.
+		path := filepath.Join(l.Spec.WorkDir, ImageDiskDigest)
+		if err := os.WriteFile(path, []byte(sum+"\n"), 0o600); err != nil {
+			return fail(ReasonDisks, fmt.Errorf("record the image disk digest: %w", err))
 		}
 	}
 	return nil
+}
+
+// errSnapshotDisk is a snapshot that was taken over another image disk.
+var errSnapshotDisk = errors.New("the image disk is not the disk of the snapshot")
+
+// checkSnapshotDisk makes sure that a snapshot loads over the same image
+// disk that its machine ran on (setec#277). The memory of the snapshot
+// holds the page cache and the file system state of that disk. A rotation
+// of the disk signing key builds a new disk, and a new disk builder can
+// write other bytes, so the check compares the bytes, not the image digest.
+func (l *Launcher) checkSnapshotDisk(snap *SnapshotSource) error {
+	raw, err := os.ReadFile(snap.ImageDisk) //nolint:gosec // a path of the launcher spec
+	if err != nil {
+		return fmt.Errorf("read the image disk digest of the snapshot: %w", err)
+	}
+	want := strings.TrimSpace(string(raw))
+	switch {
+	case !isDiskSHA256(want):
+		return fmt.Errorf("%w: the snapshot records no valid disk digest", errSnapshotDisk)
+	case l.diskSHA256 == "":
+		return fmt.Errorf("%w: the image disk was not checked", errSnapshotDisk)
+	case want != l.diskSHA256:
+		return fmt.Errorf("%w: the snapshot ran on disk sha256:%s, this Pod has sha256:%s",
+			errSnapshotDisk, want, l.diskSHA256)
+	}
+	return nil
+}
+
+// isDiskSHA256 reports whether s is a lowercase hex SHA-256.
+func isDiskSHA256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // startKind is how the machine starts. A restore waits for the node agent:
