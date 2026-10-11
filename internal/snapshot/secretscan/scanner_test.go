@@ -111,6 +111,8 @@ func TestScan_BinaryStringTablesAreNotFlagged(t *testing.T) {
 		"\x00private-key: public-key:\x00",
 		"\x00token: %v\\[0-9a-f]{1,6}\x00",
 		"PasswordAuthentication=nofailed",
+		"\nPasswordAuthentication=nofailed\n",
+		"\ntoken: %v\\[0-9a-f]{1,6}\n",
 		"Token:Names:Roles:Nodes:Force:Tasks:SecretConfigVolumeSince:Attrs:Close:",
 	}
 	for _, table := range tables {
@@ -120,6 +122,35 @@ func TestScan_BinaryStringTablesAreNotFlagged(t *testing.T) {
 		}
 		if len(fs) != 0 {
 			t.Errorf("string table %q produced findings: %v", table, fs)
+		}
+	}
+}
+
+// TestScan_ConfigAssignmentInAnyCase proves that a secret line of a config
+// file is found in lower and mixed case, while the string tables of
+// TestScan_BinaryStringTablesAreNotFlagged stay clean.
+func TestScan_ConfigAssignmentInAnyCase(t *testing.T) {
+	s := New()
+	lines := []string{
+		"client_secret: Zx9fQ2mPaa71",     // YAML
+		"db_password=Zx9fQ2mPaa71",        // a lower-case .env entry
+		"api_key = Zx9fQ2mPaa71",          // INI or TOML
+		"Password=Zx9fQ2mPaa71",           // mixed case
+		"  oauth_token: 'Zx9fQ2mPaa71'\n", // indented, quoted
+	}
+	for _, line := range lines {
+		body := "# config\n" + line + "\nnext: value\n"
+		fs, err := s.Scan(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if !ruleSet(fs)["secret-shaped-config-assignment"] {
+			t.Errorf("expected secret-shaped-config-assignment on %q; got %v", line, fs)
+		}
+		for _, f := range fs {
+			if strings.Contains(f.Excerpt, "Zx9fQ2mPaa71") {
+				t.Errorf("excerpt re-leaked the secret: %q", f.Excerpt)
+			}
 		}
 	}
 }
