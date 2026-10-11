@@ -136,6 +136,9 @@ type LauncherOptions struct {
 	// DiskKeys are the base64 ed25519 public keys that may sign a disk.
 	// Required: the launcher refuses a disk that no key signed.
 	DiskKeys []string
+	// DiskKeyID is the diskbuilder.KeyID of the current signing seed. It
+	// names the tag of the disk that the Pod mounts (setec#272). Required.
+	DiskKeyID string
 	// ResolverIPs are the DNS servers of the Pod. The launcher gives the
 	// resolv.conf of the Pod to the machine.
 	ResolverIPs []string
@@ -407,13 +410,13 @@ func checkLauncherInputs(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (diskR
 	if opts.Image == "" {
 		return "", errors.New("podspec: the launcher image is empty")
 	}
-	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 {
-		return "", errors.New("podspec: the disk repository or the disk keys are empty")
+	if opts.DiskRepo == "" || len(opts.DiskKeys) == 0 || opts.DiskKeyID == "" {
+		return "", errors.New("podspec: the disk repository, the disk keys or the disk key id are empty")
 	}
 	if !strings.Contains(sb.Spec.Image, "@sha256:") {
 		return "", fmt.Errorf("podspec: a launcher Sandbox needs an image with a digest, got %q", sb.Spec.Image)
 	}
-	diskRef, err = diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image)
+	diskRef, err = diskbuilder.DiskRef(opts.DiskRepo, sb.Spec.Image, opts.DiskKeyID)
 	if err != nil {
 		return "", fmt.Errorf("podspec: the disk of %q: %w", sb.Spec.Image, err)
 	}

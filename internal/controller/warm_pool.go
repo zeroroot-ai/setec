@@ -301,7 +301,7 @@ func (r *WarmPoolReconciler) stepBasePod(
 func (r *WarmPoolReconciler) startBase(
 	ctx context.Context, cls *setecv1alpha1.SandboxClass, image, key string, nodes map[string]bool,
 ) error {
-	done, err := ensureDisk(ctx, r.Client, r.DiskBuilder, r.DiskRepo, image)
+	diskKeyID, done, err := ensureDisk(ctx, r.Client, r.DiskBuilder, r.DiskRepo, r.DiskKeys, image)
 	if err != nil || !done {
 		return err
 	}
@@ -312,7 +312,8 @@ func (r *WarmPoolReconciler) startBase(
 		name = fmt.Sprintf("base-%s-%s", key[:12], hex.EncodeToString(suffix))
 	}
 	pod, err := podspec.BuildLauncherBase(name, r.Namespace, image, *cls.Spec.DefaultResources, podspec.LauncherOptions{
-		Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, CPUTemplate: cls.Spec.CPUTemplate,
+		Image: r.LauncherImage, DiskRepo: r.DiskRepo, DiskKeys: r.DiskKeys, DiskKeyID: diskKeyID,
+		CPUTemplate: cls.Spec.CPUTemplate,
 	})
 	if err != nil {
 		return err

@@ -4,7 +4,7 @@
 // Command setec-disk-builder makes the signed read-only disk of an image
 // digest once and stores it in the registry (docs/design/storage.md).
 //
-//	setec-disk-builder --disk-repo REPO --key-file KEY build IMAGE@sha256:...
+//	setec-disk-builder --disk-repo REPO --key-file KEY [--key-id ID] build IMAGE@sha256:...
 package main
 
 import (
@@ -34,6 +34,8 @@ func main() {
 func runMain() int {
 	repo := flag.String("disk-repo", "", "the repository of the disks, e.g. ghcr.io/org/setec-disks")
 	keyFile := flag.String("key-file", "/etc/setec/disk-signing/seed", "the base64 ed25519 seed that signs each disk")
+	keyID := flag.String("key-id", "",
+		"build: the key id that the operator expects in the disk tag. A seed with a different id is refused")
 	tmp := flag.String("temp-dir", os.TempDir(), "where a disk is built")
 	issuer := flag.String("issuer", "", "verify: the OIDC issuer of a keyless signature")
 	identity := flag.String("identity", "", "verify: the certificate identity of a keyless signature")
@@ -49,7 +51,8 @@ func runMain() int {
 		return runVerify(flag.Arg(1), policy, *trustedRoot, *tmp)
 	}
 	if flag.NArg() != 2 || flag.Arg(0) != "build" || *repo == "" {
-		fmt.Fprintln(os.Stderr, "usage: setec-disk-builder --disk-repo REPO [--key-file KEY] build IMAGE@sha256:DIGEST")
+		fmt.Fprintln(os.Stderr,
+			"usage: setec-disk-builder --disk-repo REPO [--key-file KEY] [--key-id ID] build IMAGE@sha256:DIGEST")
 		fmt.Fprintln(os.Stderr,
 			"       setec-disk-builder [--issuer I --identity ID | (SETEC_VERIFY_PUBLIC_KEY)] verify IMAGE@sha256:DIGEST")
 		return 2
@@ -62,7 +65,7 @@ func runMain() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	b := &diskbuilder.Builder{
-		DiskRepo: *repo, Key: key, TempDir: *tmp,
+		DiskRepo: *repo, Key: key, WantKeyID: *keyID, TempDir: *tmp,
 		Options: []remote.Option{remote.WithAuthFromKeychain(authn.DefaultKeychain)},
 	}
 	tag, err := b.Ensure(ctx, flag.Arg(1))

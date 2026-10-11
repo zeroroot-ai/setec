@@ -11,7 +11,7 @@ This page describes how `setec` works on `main` today. Each statement names the 
 | Frontend | The gRPC API (`SandboxService`). It creates and reads `Sandbox` objects for an enrolled client. | `cmd/frontend/`, `internal/frontend/`, `api/grpc/v1/` |
 | Node agent | One per node. Takes and stores the snapshots of the machines on its node, and stages a snapshot for a restore. | `cmd/node-agent/`, `internal/nodeagent/` |
 | KVM device plugin | One per node. Offers `/dev/kvm` and `/dev/net/tun` to the launcher Pods. | `cmd/setec-device-plugin/`, `internal/deviceplugin/` |
-| Disk builder | A Job for each image digest. Makes a squashfs disk of the image, signs it, and pushes it. | `cmd/setec-disk-builder/`, `internal/diskbuilder/` |
+| Disk builder | A Job for each image digest and signing key. Makes a squashfs disk of the image, signs it, and pushes it. | `cmd/setec-disk-builder/`, `internal/diskbuilder/` |
 | Launcher | One per Sandbox, in the launcher Pod. Checks the disk signature, boots or loads the Firecracker machine, and signs the identity tokens of the Sandbox. | `cmd/setec-launcher/`, `internal/launcher/` |
 | Guest agent | The init process of each machine. Runs the workload, serves exec, reseeds the random number generator and gives a loaded machine a new identity. | `cmd/setec-guest-agent/`, `internal/guestagent/` |
 

@@ -79,11 +79,12 @@ func poolReconciler(t *testing.T, na *fakeNodeAgentClient, objs ...client.Object
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(setecv1alpha1.AddToScheme(s))
+	objs = append(objs, diskSeedSecret("setec-system", "seed"))
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
 		WithStatusSubresource(&setecv1alpha1.SandboxClass{}, &setecv1alpha1.Snapshot{}, &batchv1.Job{}).Build()
 	return &WarmPoolReconciler{
 		Client: c, Namespace: poolNS, LauncherImage: poolLaunch,
-		DiskRepo: "ghcr.io/org/setec-disks", DiskKeys: []string{"key"},
+		DiskRepo: "ghcr.io/org/setec-disks", DiskKeys: []string{testDiskPublicKey},
 		DiskBuilder: DiskBuilderConfig{Image: "builder:v1", Namespace: "setec-system", SigningSecret: "seed"},
 		Coordinator: &snapshotpkg.Coordinator{Client: c, Dialer: &fakeNodeAgentDialer{client: na}, PoolNamespace: poolNS},
 	}
@@ -98,7 +99,7 @@ func reconcileClass(t *testing.T, r *WarmPoolReconciler) {
 
 func completeDiskJob(t *testing.T, r *WarmPoolReconciler) {
 	t.Helper()
-	name, _ := diskJobName(poolImage)
+	name, _ := diskJobName(poolImage, testDiskKeyID)
 	job := &batchv1.Job{}
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "setec-system", Name: name}, job); err != nil {
 		t.Fatalf("the disk Job: %v", err)
@@ -269,7 +270,7 @@ func TestWarmPool_KeepsBasesForEachImageAndDropsAnIdleOne(t *testing.T) {
 	finishVerifyJobOf(t, r, second, true)
 	reconcileClass(t, r)
 	for _, img := range []string{poolImage, second} {
-		name, _ := diskJobName(img)
+		name, _ := diskJobName(img, testDiskKeyID)
 		if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, &batchv1.Job{}); err != nil {
 			t.Fatalf("no disk Job for the pool image %s: %v", img, err)
 		}
@@ -316,7 +317,7 @@ func TestWarmPool_AnImageThatDoesNotVerifyGetsNoBase(t *testing.T) {
 	r := poolReconciler(t, &fakeNodeAgentClient{}, poolClass(), b)
 
 	reconcileClass(t, r)
-	name, _ := diskJobName(poolImage)
+	name, _ := diskJobName(poolImage, testDiskKeyID)
 	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, &batchv1.Job{}); err == nil {
 		t.Fatal("the disk of the image builds before its signature is checked")
 	}

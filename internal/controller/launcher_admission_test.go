@@ -65,7 +65,8 @@ func TestHostGuard_AdmitsTheLauncherAndRefusesAPrivilegedPod(t *testing.T) {
 	sb.Spec.Image = "registry.example/tool@sha256:" + strings.Repeat("a", 64)
 	sb.Spec.Resources = setecv1alpha1.Resources{VCPU: 1, Memory: resource.MustParse("512Mi")}
 	launcher, err := podspec.BuildLauncher(sb, podspec.LauncherOptions{
-		Image: "launcher:test", DiskRepo: "registry.example/disks", DiskKeys: []string{"key"},
+		Image: "launcher:test", DiskRepo: "registry.example/disks", DiskKeys: []string{testDiskPublicKey},
+		DiskKeyID: testDiskKeyID,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 	launcher.OwnerReferences = nil

@@ -277,7 +277,7 @@ func TestMain(m *testing.M) {
 		Recorder:      mgr.GetEventRecorder("sandbox-controller"),
 		LauncherImage: "launcher:test",
 		DiskRepo:      "registry.example/disks",
-		DiskKeys:      []string{"key"},
+		DiskKeys:      []string{testDiskPublicKey},
 		DiskBuilder: DiskBuilderConfig{
 			Image: "disk-builder:test", Namespace: testDiskNamespace, SigningSecret: "disk-seed",
 		},
@@ -369,12 +369,13 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// ensurePrereqs creates the operator namespace of the disk builder Jobs and
-// one fleet Node. Envtest has no real Nodes and no scheduler, so tests bind
+// ensurePrereqs creates the operator namespace of the disk builder Jobs, the
+// disk signing Secret and one fleet Node. Envtest has no real Nodes and no scheduler, so tests bind
 // their Pods to the Node by hand.
 func ensurePrereqs(ctx context.Context, c client.Client) error {
 	for _, obj := range []client.Object{
 		&corev1.Namespace{Name: testDiskNamespace},
+		diskSeedSecret(testDiskNamespace, "disk-seed"),
 		&corev1.Node{Name: "fleet-node-1"},
 	} {
 		if err := c.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
