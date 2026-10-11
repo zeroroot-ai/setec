@@ -11,7 +11,7 @@ This page describes how `setec` works on `main` today. Each statement names the 
 | Frontend | The gRPC API (`SandboxService`). It creates and reads `Sandbox` objects for an enrolled client. | `cmd/frontend/`, `internal/frontend/`, `api/grpc/v1/` |
 | Node agent | One per node. Takes and stores the snapshots of the machines on its node, and stages a snapshot for a restore. | `cmd/node-agent/`, `internal/nodeagent/` |
 | KVM device plugin | One per node. Offers `/dev/kvm` and `/dev/net/tun` to the launcher Pods. | `cmd/setec-device-plugin/`, `internal/deviceplugin/` |
-| Disk builder | A Job for each image digest and signing key. Makes a squashfs disk of the image, signs it, and pushes it. | `cmd/setec-disk-builder/`, `internal/diskbuilder/` |
+| Disk builder | Two Jobs for each image digest and signing key. The build Job makes a squashfs disk of the image and pushes it. The operator signs it. The publish Job pushes the signature. No Job holds the signing seed. | `cmd/setec-disk-builder/`, `internal/diskbuilder/` |
 | Launcher | One per Sandbox, in the launcher Pod. Checks the disk signature, boots or loads the Firecracker machine, and signs the identity tokens of the Sandbox. | `cmd/setec-launcher/`, `internal/launcher/` |
 | Guest agent | The init process of each machine. Runs the workload, serves exec, reseeds the random number generator and gives a loaded machine a new identity. | `cmd/setec-guest-agent/`, `internal/guestagent/` |
 
@@ -26,7 +26,7 @@ This page describes how `setec` works on `main` today. Each statement names the 
 1. A client calls `Launch`, or a user creates a `Sandbox` object. `internal/frontend/service.go`.
 2. The admission webhook checks the Sandbox against its class. `internal/webhook/sandbox_webhook.go`, `internal/class/validator.go`.
 3. The operator refuses a class that names a removed backend. `internal/runtime/backend.go`.
-4. The operator makes sure a signed disk of the image digest exists, and runs the disk builder when it does not. `internal/controller/`, `internal/diskbuilder/`.
+4. The operator makes sure a signed disk of the image digest exists. When it does not, the operator runs the build Job, signs its report, and runs the publish Job. `internal/controller/`, `internal/diskbuilder/`.
 5. The operator writes the NetworkPolicy, then the launcher Pod. `internal/netpol/generator.go`, `internal/podspec/launcher.go`.
 6. The scheduler places the Pod on a node that offers the KVM device, and the launcher boots the machine.
 7. The operator records the phase and the exit code in the status. `internal/controller/sandbox_controller.go`.

@@ -72,8 +72,23 @@ launcher:
   # an image volume (Kubernetes 1.35 or later), so the kubelet pulls it with
   # the image credentials of the node.
   diskRepo: ""
-  # -- diskBuilder runs as a Job in the operator namespace before the first
-  # launcher Pod of an image digest.
+  # -- imageSources are the registries that a launcher image may come from.
+  # The operator refuses an image of another registry (--image-registry).
+  # The disk build Job and the image verify Job reach only the hosts of
+  # these entries, by name (systemPolicy, D76). hosts lists the registry
+  # host and each host that serves its blobs: a registry often sends a
+  # blob download to another host. A host that starts with "*." matches
+  # one more name level. The registry of diskRepo may list no hosts: the
+  # disk Jobs reach it already.
+  imageSources:
+    - registry: ghcr.io
+      hosts:
+        - ghcr.io
+        - pkg-containers.githubusercontent.com
+  # -- diskBuilder runs as two Jobs in the operator namespace before the
+  # first launcher Pod of an image digest: a build Job (the image registries
+  # and the disk registry) and a publish Job (the disk registry only). The
+  # operator signs between them, so no Job holds the signing seed.
   diskBuilder:
     image:
       repository: ghcr.io/zeroroot-ai/setec-disk-builder
@@ -269,6 +284,11 @@ systemPolicy:
     - namespace: monitoring
       podLabels:
         app.kubernetes.io/name: prometheus
+  # sigstoreHosts are the hosts of the Sigstore trust root that the image
+  # verify Job reads (the public-good TUF repository). The Job reaches them
+  # and the hosts of launcher.imageSources, and nothing else.
+  sigstoreHosts:
+    - tuf-repo-cdn.sigstore.dev
 
 # -- netpol defines the egress posture every generated NetworkPolicy is
 # built from. Both lists are validated at operator startup and at render

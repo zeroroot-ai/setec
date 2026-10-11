@@ -14,10 +14,16 @@ enforces it.
                    and its metrics port from the scrapers.
   4. node-agent    its gRPC port from the operator when snapshots are on, the
                    snapshot store out, and its metrics port from the scrapers.
-  5. builder jobs  the disk builder Job and the image verify Job of the
-                   operator. Each reaches the registry of the Sandbox image
-                   and the disk registry, on port 443 of the world, and the
-                   disk registry on its own address when it has one.
+  5. disk jobs     the Jobs of the operator, each by its component label.
+                   No Job reaches the world (no toEntities world):
+                   - disk-builder: the hosts of launcher.imageSources and
+                     the disk registry. It holds no signing seed.
+                   - disk-publisher: the disk registry only. It holds no
+                     signing seed.
+                   - image-verify: the hosts of launcher.imageSources and
+                     systemPolicy.sigstoreHosts.
+                   The operator holds the seed and signs between the build
+                   and the publish Job; it has no registry egress.
 
 The device plugin gets no allow: it talks to the kubelet over a unix socket.
 
@@ -26,6 +32,39 @@ runs setec (D76); development/k3s installs it too.
 hack/verify-chart-security.sh renders this file and fails when a Pod of the
 namespace has no allow it needs, or when the default deny is missing.
 */}}
+{{- define "setec.diskRegistryEgress" -}}
+{{- if .isIP }}
+- toCIDR:
+    - {{ printf "%s/32" .host }}
+{{- else }}
+- toFQDNs:
+    - matchName: {{ .host | quote }}
+{{- end }}
+  toPorts:
+    - ports:
+        - port: {{ .port | quote }}
+          protocol: TCP
+{{- end }}
+{{- define "setec.imageSourceEgress" -}}
+{{- $hosts := list }}
+{{- range $src := .sources }}
+{{- $hosts = concat $hosts ($src.hosts | default list) }}
+{{- end }}
+{{- if $hosts }}
+- toFQDNs:
+    {{- range $h := $hosts }}
+    {{- if hasPrefix "*." $h }}
+    - matchPattern: {{ $h | quote }}
+    {{- else }}
+    - matchName: {{ $h | quote }}
+    {{- end }}
+    {{- end }}
+  toPorts:
+    - ports:
+        - port: "443"
+          protocol: TCP
+{{- end }}
+{{- end }}
 {{- define "setec.metricsScraperPeers" -}}
 {{- range $c := .metricsScrapers }}
 - matchLabels:
@@ -258,36 +297,79 @@ spec:
 {{- $parts := splitList ":" $registry }}
 {{- $host := first $parts }}
 {{- $port := ternary (last $parts) "443" (gt (len $parts) 1) }}
+{{- $isIP := regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
+{{- $sources := $.Values.launcher.imageSources }}
+{{- if not $sources }}
+{{- fail "launcher.imageSources must not be empty: the disk builder pulls each launcher image from one of these registries, and reaches no other host" }}
+{{- end }}
+{{- range $src := $sources }}
+{{- if not $src.registry }}
+{{- fail "each launcher.imageSources entry needs a registry" }}
+{{- end }}
+{{- if and (not $src.hosts) (ne $src.registry $registry) }}
+{{- fail (printf "launcher.imageSources entry %q needs its hosts (the registry host and the hosts that serve its blobs). Only the registry of launcher.diskRepo may list none: the disk Jobs reach it already" $src.registry) }}
+{{- end }}
+{{- end }}
+{{- $disk := dict "isIP" $isIP "host" $host "port" $port }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: {{ $fn }}-builder-jobs
+  name: {{ $fn }}-disk-builder
   namespace: {{ $ns }}
   labels:
     {{- include "setec.labels" $ | nindent 4 }}
 spec:
-  description: "The disk builder Job and the image verify Job reach the image registries and the disk registry."
+  description: "The disk build Job reaches the named image registries and the disk registry. It holds no signing seed."
   endpointSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: In
-        values:
-          - disk-builder
-          - image-verify
+    matchLabels:
+      app.kubernetes.io/component: disk-builder
   egress:
-    - toEntities:
-        - world
+    {{- include "setec.imageSourceEgress" (dict "sources" $sources) | nindent 4 }}
+    {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-disk-publisher
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  description: "The disk publish Job reaches the disk registry only. It holds no signing seed."
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: disk-publisher
+  egress:
+    {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $fn }}-image-verify
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  description: "The image verify Job reaches the named image registries and the Sigstore trust root."
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: image-verify
+  egress:
+    {{- include "setec.imageSourceEgress" (dict "sources" $sources) | nindent 4 }}
+    {{- range $src := $sources }}
+    {{- if eq $src.registry $registry }}
+    {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- with $sp.sigstoreHosts }}
+    - toFQDNs:
+        {{- range . }}
+        - matchName: {{ . | quote }}
+        {{- end }}
       toPorts:
         - ports:
             - port: "443"
-              protocol: TCP
-    {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
-    - toCIDR:
-        - {{ printf "%s/32" $host }}
-      toPorts:
-        - ports:
-            - port: {{ $port | quote }}
               protocol: TCP
     {{- end }}
 {{- end }}

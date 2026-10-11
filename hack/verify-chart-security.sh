@@ -608,7 +608,35 @@ def drop(pred, name):
 drop(lambda d: d.get("kind") == "CiliumClusterwideNetworkPolicy", "no-deny")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-node-agent"), "no-node-agent")
 drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-frontend"), "no-frontend")
-drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-builder-jobs"), "no-builder-jobs")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-disk-builder"), "no-disk-builder")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-disk-publisher"), "no-disk-publisher")
+drop(lambda d: d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-image-verify"), "no-image-verify")
+# A Job policy that reaches the world, in each form the checker knows
+# (setec#279): the entity world, the whole address space, a "*" pattern.
+import copy
+for fx, rule in {
+    "builder-world": {"toEntities": ["world"], "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}]},
+    "builder-all-cidr": {"toCIDR": ["0.0.0.0/0"]},
+    "verify-any-fqdn": {"toFQDNs": [{"matchPattern": "*"}]},
+}.items():
+    world = copy.deepcopy(docs)
+    target = "-image-verify" if fx.startswith("verify") else "-disk-builder"
+    for d in world:
+        if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith(target):
+            d["spec"]["egress"].append(rule)
+    yaml.safe_dump_all(world, open(f"{sys.argv[2]}/sp-{fx}.yaml", "w"))
+# A publish policy that reaches an image registry too.
+extra = copy.deepcopy(docs)
+for d in extra:
+    if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-disk-publisher"):
+        d["spec"]["egress"].append({"toFQDNs": [{"matchName": "ghcr.io"}]})
+yaml.safe_dump_all(extra, open(f"{sys.argv[2]}/sp-publisher-extra-host.yaml", "w"))
+# A build policy that does not reach the disk registry.
+nodisk = copy.deepcopy(docs)
+for d in nodisk:
+    if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-disk-builder"):
+        d["spec"]["egress"] = d["spec"]["egress"][:1]
+yaml.safe_dump_all(nodisk, open(f"{sys.argv[2]}/sp-builder-no-disk-registry.yaml", "w"))
 # A metrics peer of the operator that pins no namespace (setec#252).
 for d in docs:
     if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-operator"):
@@ -618,7 +646,8 @@ for d in docs:
                 peer["matchExpressions"] = [{"key": "k8s:io.kubernetes.pod.namespace", "operator": "Exists"}]
 yaml.safe_dump_all(docs, open(f"{sys.argv[2]}/sp-any-namespace.yaml", "w"))
 PY
-for fx in no-deny no-node-agent no-frontend no-builder-jobs any-namespace; do
+for fx in no-deny no-node-agent no-frontend no-disk-builder no-disk-publisher no-image-verify \
+	builder-world builder-all-cidr verify-any-fqdn publisher-extra-host builder-no-disk-registry any-namespace; do
 	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-$fx.yaml" setec-system >/dev/null; then
 		fail "fixture $fx: the checker passed a render with a missing policy"
 	else

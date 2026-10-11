@@ -108,6 +108,7 @@ func runMain() int {
 		warmPoolNamespace   string
 		keptPinnedLimit     string
 		diskPublicKeys      []string
+		imageRegistries     []string
 		otlpEndpoint        string
 		otlpInsecure        bool
 		otlpCAFile          string
@@ -151,6 +152,9 @@ func runMain() int {
 		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
 	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
 		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
+	pflag.StringArrayVar(&imageRegistries, "image-registry", nil,
+		"A registry host that a launcher image may come from. Repeat it for each registry. "+
+			"The disk build Job reaches only these hosts and the disk registry; an image of another registry is refused.")
 	pflag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"Namespace of the operator, where the disk builder Jobs run.")
 	pflag.StringVar(&keptPinnedLimit, "kept-pinned-limit", "20Gi",
@@ -251,9 +255,9 @@ func runMain() int {
 	// launcher settings are required. Starting without them is a startup
 	// failure rather than a reconcile error on each Sandbox.
 	if slices.Contains([]string{launcherImage, diskRepo, diskBuilderImage, diskSigningSecret, operatorNamespace}, "") ||
-		len(diskPublicKeys) == 0 {
+		len(diskPublicKeys) == 0 || len(imageRegistries) == 0 {
 		setupLog.Error(nil, "--launcher-image, --disk-repo, --disk-builder-image, --disk-signing-secret, "+
-			"--disk-public-key and --operator-namespace are required")
+			"--disk-public-key, --image-registry and --operator-namespace are required")
 		return 1
 	}
 
@@ -404,7 +408,8 @@ func runMain() int {
 	diskBuilderCfg := controller.DiskBuilderConfig{
 		Image: diskBuilderImage, Namespace: operatorNamespace,
 		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
-		Reader: mgr.GetAPIReader(),
+		ImageRegistries: imageRegistries,
+		Reader:          mgr.GetAPIReader(),
 	}
 	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{

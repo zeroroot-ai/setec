@@ -9,11 +9,18 @@ Reads one rendered chart and fails when:
     which talks to the kubelet over a unix socket) has no CiliumNetworkPolicy
     that selects its component,
   - the operator or the frontend policy has no kube-apiserver egress,
-  - the render has no CiliumNetworkPolicy for the Job pods that the operator
-    makes at run time (BUILDER_JOBS), or that policy has no egress to the
-    world on port 443. A Job is not in the render, so the Deployment loop
-    above cannot see it. Without the allow the disk builder cannot reach a
-    registry and every launcher Sandbox ends in DiskBuildFailed,
+  - the render has no CiliumNetworkPolicy for a kind of Job pod that the
+    operator makes at run time (BUILDER_JOBS). A Job is not in the render,
+    so the Deployment loop above cannot see it. Without the allow the disk
+    builder cannot reach a registry and every launcher Sandbox ends in
+    DiskBuildFailed,
+  - a policy of those Job pods reaches the world: toEntities world or all,
+    a CIDR of the whole address space, or a toFQDNs pattern of "*". Each
+    host is named (setec#279). The build Job handles image content that a
+    tenant chose, and the publish Job holds the push credential,
+  - the build or the publish policy does not reach the disk registry (the
+    host of --disk-repo of the operator), or the publish policy reaches any
+    other host. The publish Job needs the disk registry only,
   - an ingress peer of a namespace policy (fromEndpoints) widens its
     namespace with a matchExpression on k8s:io.kubernetes.pod.namespace.
     Cilium scopes a peer with no namespace label to the namespace of the
@@ -30,7 +37,11 @@ NO_NETWORK = {"device-plugin"}
 NEEDS_API = {"operator", "frontend"}
 # The component label of the Job pods that the operator makes
 # (internal/controller/launcher_disk.go and pool_verify.go).
-BUILDER_JOBS = {"disk-builder", "image-verify"}
+BUILDER_JOBS = {"disk-builder", "disk-publisher", "image-verify"}
+# The Jobs that push to the disk registry.
+DISK_REGISTRY_JOBS = {"disk-builder", "disk-publisher"}
+WORLD_ENTITIES = {"world", "all"}
+WORLD_CIDRS = {"0.0.0.0/0", "::/0"}
 
 
 def selected_components(cnp):
@@ -45,12 +56,48 @@ def selected_components(cnp):
     return comps
 
 
-def reaches_world_443(cnp):
+def world_egress(cnp):
+    """The egress peers of cnp that reach the world, as text."""
+    out = []
     for e in cnp["spec"].get("egress") or []:
-        if "world" in (e.get("toEntities") or []) and any(
-                p.get("port") == "443" for tp in e.get("toPorts") or [] for p in tp.get("ports") or []):
-            return True
-    return False
+        out += [f"toEntities {x}" for x in e.get("toEntities") or [] if x in WORLD_ENTITIES]
+        out += [f"toCIDR {c}" for c in e.get("toCIDR") or [] if c in WORLD_CIDRS]
+        out += [f"toCIDRSet {c.get('cidr')}" for c in e.get("toCIDRSet") or [] if c.get("cidr") in WORLD_CIDRS]
+        for f in e.get("toFQDNs") or []:
+            if (f.get("matchPattern") or "").strip() in {"*", "**"}:
+                out.append(f"toFQDNs matchPattern {f.get('matchPattern')}")
+        if e.get("toEndpoints") == [{}] or any(not ep for ep in e.get("toEndpoints") or []):
+            out.append("toEndpoints {}")
+    return out
+
+
+def egress_hosts(cnp):
+    """The named hosts and addresses that cnp reaches."""
+    hosts = set()
+    for e in cnp["spec"].get("egress") or []:
+        for f in e.get("toFQDNs") or []:
+            hosts.add(f.get("matchName") or f.get("matchPattern"))
+        for c in e.get("toCIDR") or []:
+            hosts.add(c.split("/")[0])
+        for c in e.get("toCIDRSet") or []:
+            hosts.add((c.get("cidr") or "").split("/")[0])
+        for x in e.get("toEntities") or []:
+            hosts.add(f"entity:{x}")
+        if e.get("toEndpoints"):
+            hosts.add("endpoints")
+    return hosts
+
+
+def disk_registry_host(docs):
+    """The host of --disk-repo of the operator, or None."""
+    for d in docs:
+        if d.get("kind") != "Deployment":
+            continue
+        for c in d["spec"]["template"]["spec"].get("containers") or []:
+            for a in c.get("args") or []:
+                if a.startswith("--disk-repo="):
+                    return a.split("=", 1)[1].split("/")[0].split(":")[0]
+    return None
 
 
 def judge(docs, ns):
@@ -76,13 +123,23 @@ def judge(docs, ns):
                 out.append(f"{d['kind']}/{d['metadata']['name']} ({comp}) has no CiliumNetworkPolicy, so the default deny cuts it off")
             elif comp in NEEDS_API and not any("kube-apiserver" in (e.get("toEntities") or []) for e in cnp[comp]["spec"].get("egress") or []):
                 out.append(f"the {comp} policy has no kube-apiserver egress")
+    disk_host = disk_registry_host(docs)
     for job in sorted(BUILDER_JOBS):
         covering = [d for d in docs if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"].get("namespace") == ns
                     and job in selected_components(d)]
+        if disk_host is None:
+            continue  # no launcher: the operator makes no Job
         if not covering:
             out.append(f"the Job pods of the operator ({job}) have no CiliumNetworkPolicy, so the default deny cuts them off")
-        elif not any(reaches_world_443(d) for d in covering):
-            out.append(f"the policy of the {job} Job pods has no egress to the world on port 443")
+            continue
+        for d in covering:
+            for w in world_egress(d):
+                out.append(f"the policy {d['metadata']['name']} lets the {job} Job pods reach the world ({w})")
+        hosts = set().union(*(egress_hosts(d) for d in covering))
+        if job in DISK_REGISTRY_JOBS and disk_host not in hosts:
+            out.append(f"the policy of the {job} Job pods does not reach the disk registry {disk_host}")
+        if job == "disk-publisher" and hosts - {disk_host}:
+            out.append(f"the policy of the disk-publisher Job pods reaches more than the disk registry: {sorted(hosts - {disk_host})}")
     for comp, d in cnp.items():
         for rule in d["spec"].get("ingress") or []:
             for peer in rule.get("fromEndpoints") or []:
