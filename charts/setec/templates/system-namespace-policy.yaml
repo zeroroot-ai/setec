@@ -5,9 +5,10 @@ enforces it.
   1. default deny  One CiliumClusterwideNetworkPolicy selects each Pod of the
                    namespace. It allows DNS to kube-dns and nothing else, in
                    both directions.
-  2. operator      the API server out, the webhook port from the API server
-                   and the nodes, the node agent gRPC out when snapshots are
-                   on, and its metrics port from the scrapers.
+  2. operator      the API server out, the webhook port from the API server,
+                   the nodes and systemPolicy.webhookCallers, the node agent
+                   gRPC out when snapshots are on, and its metrics port from
+                   the scrapers.
   3. frontend      its gRPC port from systemPolicy.frontendCallers only, the
                    API server out (Sandbox CRs, exec through the API server),
                    and its metrics port from the scrapers.
@@ -35,6 +36,11 @@ namespace has no allow it needs, or when the default deny is missing.
 {{- $ns := .Values.namespace }}
 {{- $fn := include "setec.fullname" . }}
 {{- $sp := .Values.systemPolicy }}
+{{- range $c := $sp.webhookCallers }}
+{{- if not (and $c.namespace $c.podLabels) }}
+{{- fail "systemPolicy.webhookCallers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the caller is pinned too." }}
+{{- end }}
+{{- end }}
 {{- range $c := $sp.metricsScrapers }}
 {{- if not (and $c.namespace $c.podLabels) }}
 {{- fail "systemPolicy.metricsScrapers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the scraper is pinned too." }}
@@ -109,6 +115,18 @@ spec:
         - ports:
             - port: "9443"
               protocol: TCP
+    {{- with $sp.webhookCallers }}
+    - fromEndpoints:
+        {{- range $c := . }}
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $c.namespace | quote }}
+            {{- toYaml (omit $c.podLabels "k8s:io.kubernetes.pod.namespace") | nindent 12 }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "9443"
+              protocol: TCP
+    {{- end }}
     - fromEndpoints:
         {{- include "setec.metricsScraperPeers" $sp | trim | nindent 8 }}
       toPorts:
