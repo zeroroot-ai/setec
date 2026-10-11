@@ -83,7 +83,7 @@ func (w *SandboxClassWebhook) validate(class *setecv1alpha1.SandboxClass) (admis
 	// Default-deny egress consistency (docs/design/threat-model.md, setec#66): when a class
 	// both restricts the allowed network modes and declares a default mode,
 	// the default it would silently apply to a Sandbox MUST itself be an
-	// allowed mode. Otherwise the operator would synthesise a posture the
+	// allowed mode. Otherwise the operator would synthesize a posture the
 	// class forbids tenants from requesting explicitly. Evaluated before the
 	// Runtime nil-check so the consistency rule holds for every SandboxClass.
 	if class.Spec.DefaultNetworkMode != "" &&

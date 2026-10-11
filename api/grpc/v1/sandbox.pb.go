@@ -31,7 +31,7 @@ const (
 
 // Status discriminates "the command ran and this is its code" from
 // every way an exec can end WITHOUT one. It exists because an exit
-// code cannot be synthesised: a caller handed a bare stream close,
+// code cannot be synthesized: a caller handed a bare stream close,
 // or a zero-valued int32, cannot tell a clean success from a
 // microVM that disappeared mid-build.
 type SessionExecExit_Status int32
@@ -1538,7 +1538,7 @@ type SessionExecStart struct {
 	// The command inherits the session container's environment and
 	// working directory (/workspace). Setec deliberately offers no
 	// per-exec env or cwd override: the container runtime's exec
-	// primitive takes neither, and synthesising them would mean
+	// primitive takes neither, and synthesizing them would mean
 	// wrapping argv in a shell and silently changing its meaning.
 	// Callers that want either should run their own shell explicitly.
 	Command []string `protobuf:"bytes,2,rep,name=command,proto3" json:"command,omitempty"`

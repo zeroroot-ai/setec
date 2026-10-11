@@ -66,7 +66,7 @@ const (
 	KeySize = 32
 
 	// chunkSize is the plaintext chunk length. 1 MiB keeps memory use
-	// bounded while amortising the 16-byte GCM tag per chunk.
+	// bounded while amortizing the 16-byte GCM tag per chunk.
 	chunkSize = 1 << 20
 
 	// noncePrefixLen + 4-byte counter + 1-byte final flag = the 12-byte
