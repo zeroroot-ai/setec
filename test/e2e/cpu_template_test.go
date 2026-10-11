@@ -10,8 +10,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -40,7 +42,18 @@ func TestLauncher_CPUTemplateSnapshotLoads(t *testing.T) {
 	}
 	instanceType := nodeInstanceType(t, family)
 
-	cls := newSandboxClass("e2e-cpu-"+family+"-"+testNamespace, setecv1alpha1.SandboxClassSpec{
+	// The names are fixed. On a cluster that the suite does not own
+	// (installed mode) a killed run leaves them behind, so each run first
+	// deletes what an earlier run left.
+	clsName := "e2e-cpu-" + family + "-" + testNamespace
+	deleteCPUTemplateLeftovers(t, clsName)
+	t.Cleanup(func() {
+		snap := &setecv1alpha1.Snapshot{}
+		snap.Namespace, snap.Name = sandboxNamespace, "ct-snap"
+		_ = k8sClient.Delete(context.Background(), snap)
+	})
+
+	cls := newSandboxClass(clsName, setecv1alpha1.SandboxClassSpec{
 		Runtime:      &setecv1alpha1.SandboxClassRuntime{Backend: backendLauncher},
 		CPUTemplate:  family,
 		NodeSelector: map[string]string{instanceTypeLabel: instanceType},
@@ -70,6 +83,39 @@ func TestLauncher_CPUTemplateSnapshotLoads(t *testing.T) {
 		t.Errorf("the state did not survive the load: /tmp/marker = %q", got)
 	}
 	assertRestoredGuest(t, sandboxNamespace, "ct-src", before)
+}
+
+// deleteCPUTemplateLeftovers deletes the Sandbox ct-src, the Snapshot
+// ct-snap and the class clsName that an earlier run left, and waits until
+// they are gone.
+func deleteCPUTemplateLeftovers(t *testing.T, clsName string) {
+	t.Helper()
+	ctx := context.Background()
+	sb := &setecv1alpha1.Sandbox{}
+	sb.Namespace, sb.Name = sandboxNamespace, "ct-src"
+	snap := &setecv1alpha1.Snapshot{}
+	snap.Namespace, snap.Name = sandboxNamespace, "ct-snap"
+	cls := &setecv1alpha1.SandboxClass{}
+	cls.Name = clsName
+	objs := []client.Object{sb, snap, cls}
+	for _, obj := range objs {
+		if err := k8sClient.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("delete the leftover %T %s: %v", obj, client.ObjectKeyFromObject(obj), err)
+		}
+	}
+	deadline := time.Now().Add(defaultWait)
+	for _, obj := range objs {
+		for {
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj)
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the leftover %T %s still exists after %s", obj, client.ObjectKeyFromObject(obj), defaultWait)
+			}
+			time.Sleep(defaultPoll)
+		}
+	}
 }
 
 // nodeInstanceType returns the instance type of a node of family that can

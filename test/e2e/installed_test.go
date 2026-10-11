@@ -15,13 +15,21 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/zeroroot-ai/setec/internal/chartname"
 )
 
 // runInstalled runs the suite against the release in namespace and returns
 // the exit code of the run.
 func runInstalled(m *testing.M, namespace string) int {
 	testNamespace = namespace
-	helmReleaseName = envOr("SETEC_E2E_RELEASE", "setec")
+	helmReleaseName = os.Getenv("SETEC_E2E_RELEASE")
+	if helmReleaseName == "" {
+		fmt.Fprintf(os.Stderr, "e2e: %s needs SETEC_E2E_RELEASE, the Helm release of the installed setec\n",
+			installedNamespaceEnv)
+		return 1
+	}
+	chartFullname = chartname.Fullname(helmReleaseName)
 	sandboxNamespace = os.Getenv("SETEC_E2E_SANDBOX_NAMESPACE")
 	if sandboxNamespace == "" || sandboxNamespace == testNamespace {
 		fmt.Fprintf(os.Stderr,

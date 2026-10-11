@@ -136,13 +136,14 @@ e2e-cpu-template: ## Run the CPU template snapshot test on m8i nodes (setec#239)
 # already installed on a cluster with m8i nodes, and installs nothing:
 #
 #     SETEC_E2E_CONTEXT=<kubectl context> \
-#     SETEC_E2E_INSTALLED_NAMESPACE=setec-system \
+#     SETEC_E2E_INSTALLED_NAMESPACE=setec-system SETEC_E2E_RELEASE=<release> \
 #     SETEC_E2E_SANDBOX_NAMESPACE=setec-sandboxes make e2e-cpu-template
 #
 # The hosted exit test exit-test-setec-cpu-template runs it on staging each day.
 	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
 	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
 	SETEC_E2E_INSTALLED_NAMESPACE="$(SETEC_E2E_INSTALLED_NAMESPACE)" \
+	SETEC_E2E_RELEASE="$(SETEC_E2E_RELEASE)" \
 	SETEC_E2E_SANDBOX_NAMESPACE="$(SETEC_E2E_SANDBOX_NAMESPACE)" \
 	SETEC_E2E_CPU_TEMPLATE=m8i \
 	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT) -run '^TestLauncher_CPUTemplateSnapshotLoads$$'
