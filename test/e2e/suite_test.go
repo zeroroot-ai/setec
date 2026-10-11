@@ -182,6 +182,9 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "e2e: SETEC_E2E_SANDBOX_NAMESPACE=%q is the release namespace; Sandboxes need a namespace of their own (setec#10)\n", sandboxNamespace)
 		os.Exit(1)
 	}
+	if ns := os.Getenv(installedNamespaceEnv); ns != "" {
+		os.Exit(runInstalled(m, ns))
+	}
 	chartPath = envOr("SETEC_E2E_CHART", resolveChartPath())
 	imageTag = envOr("SETEC_E2E_IMAGE_TAG", "dev")
 	imagePullPolicy = envOr("SETEC_E2E_IMAGE_PULL_POLICY", "Never")

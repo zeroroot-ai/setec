@@ -130,15 +130,21 @@ e2e: ## Run the hardware-gated e2e suite (requires KVM nodes).
 
 .PHONY: e2e-cpu-template
 e2e-cpu-template: ## Run the CPU template snapshot test on m8i nodes (setec#239).
-# The one e2e scenario that exit-test-launcher skips: the runners are not m8i.
-# It loads a snapshot in a class with the m8i template, so it needs nodes of
-# that instance family. Run it against a named cluster with m8i nodes, for
-# example the rebuilt staging (release/final-session.md):
+# The one e2e scenario that exit-test-launcher skips: the CPU of its runners
+# is never m8i. It loads a snapshot in a class with the m8i template, so it
+# needs nodes of that instance family. It runs against the setec that is
+# already installed on a cluster with m8i nodes, and installs nothing:
 #
-#     SETEC_E2E_CONTEXT=<kubectl context> make e2e-cpu-template
-	SETEC_E2E_CHART="$(SETEC_E2E_CHART)" \
+#     SETEC_E2E_CONTEXT=<kubectl context> \
+#     SETEC_E2E_INSTALLED_NAMESPACE=setec-system SETEC_E2E_RELEASE=<release> \
+#     SETEC_E2E_SANDBOX_NAMESPACE=setec-sandboxes make e2e-cpu-template
+#
+# The hosted exit test exit-test-setec-cpu-template runs it on staging each day.
 	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
 	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
+	SETEC_E2E_INSTALLED_NAMESPACE="$(SETEC_E2E_INSTALLED_NAMESPACE)" \
+	SETEC_E2E_RELEASE="$(SETEC_E2E_RELEASE)" \
+	SETEC_E2E_SANDBOX_NAMESPACE="$(SETEC_E2E_SANDBOX_NAMESPACE)" \
 	SETEC_E2E_CPU_TEMPLATE=m8i \
 	go test -tags=e2e ./test/e2e/... -v -timeout $(E2E_TIMEOUT) -run '^TestLauncher_CPUTemplateSnapshotLoads$$'
 
