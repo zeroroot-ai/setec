@@ -399,6 +399,10 @@ jobs:
         run: |
           set +e
           set -uo pipefail
+          # Each release signs its disks with a key of its own, and it
+          # refuses a disk that another release signed. So each release
+          # keeps its disks in a repository of its own.
+          export SETEC_E2E_DISK_REPO="${SETEC_E2E_DISK_REPO%/*}/${SETEC_E2E_RELEASE}"
           go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 30m \
             -run '^TestPhase3_UpgradeFromPhase2$' 2>&1 | tee upgrade.log
           status="${PIPESTATUS[0]}"
@@ -418,6 +422,8 @@ jobs:
           # so a failing `go test` would skip the summary below.
           set +e
           set -uo pipefail
+          # A repository of its own for the disks of this release.
+          export SETEC_E2E_DISK_REPO="${SETEC_E2E_DISK_REPO%/*}/${SETEC_E2E_RELEASE}"
           go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6.log
           status="${PIPESTATUS[0]}"
@@ -437,6 +443,8 @@ jobs:
         run: |
           set +e
           set -uo pipefail
+          # A repository of its own for the disks of this release.
+          export SETEC_E2E_DISK_REPO="${SETEC_E2E_DISK_REPO%/*}/${SETEC_E2E_RELEASE}"
           go test -count=1 -tags=e2e ./test/e2e/... -v -timeout 25m \
             -run '^TestChain6_SessionAffinity$' 2>&1 | tee chain6-fixture.log
           status="${PIPESTATUS[0]}"
