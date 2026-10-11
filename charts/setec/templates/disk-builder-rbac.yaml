@@ -1,10 +1,11 @@
 {{- with .Values.launcher }}
 {{- /*
-The operator runs setec-disk-builder as two Jobs in its own namespace, a build
-Job and a publish Job for each image digest (docs/design/runtime.md). It needs
-get, create and delete on Jobs there and nowhere else. The Job Pods have no
-ServiceAccount token. The operator reads the build report from the
-termination message of the build Pod, through its cluster-wide Pod read.
+The operator runs setec-disk-builder as one Job in its own namespace for each
+image digest (docs/design/runtime.md): a check, a build and a publish
+container. It needs get and create on Jobs and on the signature ConfigMaps
+there, and nowhere else. The Job Pods have no ServiceAccount token. The
+operator reads the build report from the termination message of the build
+container, through its cluster-wide Pod read.
 
 The operator also reads the signing Secret, and only that Secret: the key id
 of its seed names the tag of each disk, so a rotated seed builds a new disk
@@ -19,11 +20,15 @@ metadata:
   labels:
     {{- include "setec.labels" $ | nindent 4 }}
 rules:
-  # delete: a complete build Job whose Pod is gone is deleted, so the next
-  # pass builds again.
   - apiGroups: ["batch"]
     resources: [jobs]
-    verbs: [get, create, delete]
+    verbs: [get, create]
+  # The signature ConfigMap of each disk Job: the operator writes it after
+  # the build container reports, and the publish container mounts it. The
+  # Job owns it. create cannot be limited by name.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create]
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [{{ .diskBuilder.signingSecret | quote }}]

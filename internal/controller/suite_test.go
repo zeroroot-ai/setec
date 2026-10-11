@@ -417,26 +417,8 @@ func completeDiskJobs(ctx context.Context, c client.Client) {
 				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue, LastTransitionTime: now},
 			}
 			_ = c.Status().Update(ctx, job)
-			reportDiskExists(ctx, c, job.Name)
 		}
 	}
-}
-
-// reportDiskExists plays the kubelet for the Pod of the build Job name: it
-// ends with the build report that the registry holds the signed disk.
-func reportDiskExists(ctx context.Context, c client.Client, name string) {
-	pod := &corev1.Pod{Name: name + "-pod", Namespace: testDiskNamespace,
-		Labels: map[string]string{batchv1.JobNameLabel: name}}
-	pod.Spec.Containers = []corev1.Container{{Name: builderContainer, Image: "disk-builder:test"}}
-	if err := c.Create(ctx, pod); err != nil {
-		return
-	}
-	pod.Status.Phase = corev1.PodSucceeded
-	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: builderContainer, Image: "disk-builder:test",
-		ImageID: "disk-builder:test", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-			Message: `{"exists":true,"layer":{"digest":"","diffID":"","size":0}}`,
-		}}}}
-	_ = c.Status().Update(ctx, pod)
 }
 
 // newNamespace creates a uniquely-named namespace and registers a cleanup

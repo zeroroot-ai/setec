@@ -110,16 +110,6 @@ func completeDiskJob(t *testing.T, r *WarmPoolReconciler) {
 	if err := r.Status().Update(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	// The build Pod reports that the registry holds the signed disk.
-	pod := &corev1.Pod{Name: name + "-x", Namespace: "setec-system", Labels: map[string]string{batchv1.JobNameLabel: name}}
-	pod.Spec.Containers = []corev1.Container{{Name: builderContainer, Image: "builder:v1"}}
-	pod.Status.Phase = corev1.PodSucceeded
-	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: builderContainer, State: corev1.ContainerState{
-		Terminated: &corev1.ContainerStateTerminated{Message: `{"exists":true,"layer":{"digest":"","diffID":"","size":0}}`},
-	}}}
-	if err := r.Create(context.Background(), pod); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func basePods(t *testing.T, r *WarmPoolReconciler) []corev1.Pod {

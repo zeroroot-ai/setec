@@ -16,11 +16,9 @@ Reads one rendered chart and fails when:
     DiskBuildFailed,
   - a policy of those Job pods reaches the world: toEntities world or all,
     a CIDR of the whole address space, or a toFQDNs pattern of "*". Each
-    host is named (setec#279). The build Job handles image content that a
-    tenant chose, and the publish Job holds the push credential,
-  - the build or the publish policy does not reach the disk registry (the
-    host of --disk-repo of the operator), or the publish policy reaches any
-    other host. The publish Job needs the disk registry only,
+    host is named (setec#279),
+  - the disk Job policy does not reach the disk registry (the host of
+    --disk-repo of the operator),
   - an ingress peer of a namespace policy (fromEndpoints) widens its
     namespace with a matchExpression on k8s:io.kubernetes.pod.namespace.
     Cilium scopes a peer with no namespace label to the namespace of the
@@ -37,9 +35,9 @@ NO_NETWORK = {"device-plugin"}
 NEEDS_API = {"operator", "frontend"}
 # The component label of the Job pods that the operator makes
 # (internal/controller/launcher_disk.go and pool_verify.go).
-BUILDER_JOBS = {"disk-builder", "disk-publisher", "image-verify"}
+BUILDER_JOBS = {"disk-builder", "image-verify"}
 # The Jobs that push to the disk registry.
-DISK_REGISTRY_JOBS = {"disk-builder", "disk-publisher"}
+DISK_REGISTRY_JOBS = {"disk-builder"}
 WORLD_ENTITIES = {"world", "all"}
 WORLD_CIDRS = {"0.0.0.0/0", "::/0"}
 
@@ -138,8 +136,6 @@ def judge(docs, ns):
         hosts = set().union(*(egress_hosts(d) for d in covering))
         if job in DISK_REGISTRY_JOBS and disk_host not in hosts:
             out.append(f"the policy of the {job} Job pods does not reach the disk registry {disk_host}")
-        if job == "disk-publisher" and hosts - {disk_host}:
-            out.append(f"the policy of the disk-publisher Job pods reaches more than the disk registry: {sorted(hosts - {disk_host})}")
     for comp, d in cnp.items():
         for rule in d["spec"].get("ingress") or []:
             for peer in rule.get("fromEndpoints") or []:

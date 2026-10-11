@@ -17,13 +17,13 @@ enforces it.
   5. disk jobs     the Jobs of the operator, each by its component label.
                    No Job reaches the world (no toEntities world):
                    - disk-builder: the hosts of launcher.imageSources and
-                     the disk registry. It holds no signing seed.
-                   - disk-publisher: the disk registry only. It holds no
-                     signing seed.
+                     the disk registry. Its build container, which reads
+                     the image, holds no secret; its check and publish
+                     containers hold the push credential and read no image.
                    - image-verify: the hosts of launcher.imageSources and
                      systemPolicy.sigstoreHosts.
                    The operator holds the seed and signs between the build
-                   and the publish Job; it has no registry egress.
+                   and the publish container; it has no registry egress.
 
 The device plugin gets no allow: it talks to the kubelet over a unix socket.
 
@@ -320,27 +320,12 @@ metadata:
   labels:
     {{- include "setec.labels" $ | nindent 4 }}
 spec:
-  description: "The disk build Job reaches the named image registries and the disk registry. It holds no signing seed."
+  description: "The disk Job reaches the named image registries and the disk registry. No container of it holds the signing seed."
   endpointSelector:
     matchLabels:
       app.kubernetes.io/component: disk-builder
   egress:
     {{- include "setec.imageSourceEgress" (dict "sources" $sources) | nindent 4 }}
-    {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
----
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: {{ $fn }}-disk-publisher
-  namespace: {{ $ns }}
-  labels:
-    {{- include "setec.labels" $ | nindent 4 }}
-spec:
-  description: "The disk publish Job reaches the disk registry only. It holds no signing seed."
-  endpointSelector:
-    matchLabels:
-      app.kubernetes.io/component: disk-publisher
-  egress:
     {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
 ---
 apiVersion: cilium.io/v2

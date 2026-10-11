@@ -112,30 +112,34 @@ func TestImageTar_HoldsTheImageConfig(t *testing.T) {
 	}
 }
 
-// makeDisk runs the three steps of a disk as the operator runs them: the
-// build step with no key, the signature of the operator over the build
-// report, and the publish step with no key. It returns the tag and the
-// build report.
+// makeDisk runs the three steps of a disk as the Job and the operator run
+// them: check, build with no credential and no key, the signature of the
+// operator over the build report, and publish with no key. It returns the
+// tag, and whether the check found the disk.
 func makeDisk(
 	t *testing.T, repo, ref string, key ed25519.PrivateKey, pack func(context.Context, v1.Image, string) error,
-) (name.Tag, BuildResult) {
+) (name.Tag, bool) {
 	t.Helper()
 	pub, _ := key.Public().(ed25519.PublicKey)
-	b := &Builder{DiskRepo: repo, KeyID: KeyID(pub), Pack: pack, TempDir: t.TempDir()}
-	res, err := b.Build(t.Context(), ref)
+	ref1, err := DiskRef(repo, ref, KeyID(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, _ := name.NewTag(ref1)
+	exists, err := Exists(t.Context(), repo, ref, KeyID(pub))
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if exists {
+		return tag, true
+	}
+	disk := filepath.Join(t.TempDir(), DiskFile)
+	res, err := (&Builder{Pack: pack}).Build(t.Context(), ref, disk)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if res.Exists {
-		tag, err := DiskRef(repo, ref, KeyID(pub))
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed, _ := name.NewTag(tag)
-		return parsed, res
-	}
-	// The report crosses a Pod boundary as JSON, and the operator parses it
-	// strictly.
+	// The report crosses a container boundary as JSON, and the operator
+	// parses it strictly.
 	raw, _ := json.Marshal(res)
 	res, err = ParseBuildResult(raw)
 	if err != nil {
@@ -143,20 +147,21 @@ func makeDisk(
 	}
 	d, _ := ParseDigestRef(ref)
 	sig := SignDigest(key, d.DigestStr(), res.DiskSHA256)
-	tag, err := (&Publisher{DiskRepo: repo, TempDir: t.TempDir()}).Publish(t.Context(), ref, KeyID(pub), res, sig)
+	got, err := (&Publisher{DiskRepo: repo, TempDir: t.TempDir()}).Publish(t.Context(), ref, KeyID(pub), disk, sig)
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	return tag, res
+	if got != tag {
+		t.Fatalf("Publish wrote %s, want %s", got, tag)
+	}
+	return tag, false
 }
 
-// TestDisk_BuildsOnceSignsAndTheNodeVerifies runs the whole path against an
-// in-memory registry: the first build makes and pushes the disk layer, the
-// operator signs, the publish step writes the tag, a second build finds the
-// disk, the node fetch verifies, and a wrong key is refused.
-func TestDisk_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(registry.New())
+// pushTestImage writes the test image to an in-memory registry and returns
+// the registry host and the digest reference of the image.
+func pushTestImage(t *testing.T, h http.Handler) (string, string) {
+	t.Helper()
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	u, _ := url.Parse(srv.URL)
 	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
@@ -165,27 +170,36 @@ func TestDisk_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	dg, _ := img.Digest()
-	ref := u.Host + "/tools/scanner@" + dg.String()
-	repo := u.Host + "/setec-disks"
+	return u.Host, u.Host + "/tools/scanner@" + dg.String()
+}
+
+// TestDisk_BuildsOnceSignsAndTheNodeVerifies runs the whole path against an
+// in-memory registry: the check finds nothing, the build makes the disk, the
+// operator signs, the publish step writes the tag, a second check finds the
+// disk, the node fetch verifies, and a wrong key is refused.
+func TestDisk_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
+	t.Parallel()
+	host, ref := pushTestImage(t, registry.New())
+	repo := host + "/setec-disks"
 
 	pub, key, _ := ed25519.GenerateKey(nil)
 	var packs atomic.Int32
-	tag1, res1 := makeDisk(t, repo, ref, key, tarPack(&packs))
-	if res1.Exists {
-		t.Fatal("the first build found a disk")
+	tag1, found := makeDisk(t, repo, ref, key, tarPack(&packs))
+	if found {
+		t.Fatal("the first check found a disk")
 	}
-	tag2, res2 := makeDisk(t, repo, ref, key, tarPack(&packs))
-	if !res2.Exists || tag2 != tag1 {
-		t.Fatalf("second build = %+v, tag %v; want Exists and %v", res2, tag2, tag1)
+	tag2, found := makeDisk(t, repo, ref, key, tarPack(&packs))
+	if !found || tag2 != tag1 {
+		t.Fatalf("second check = %t, tag %v; want found and %v", found, tag2, tag1)
 	}
 	if packs.Load() != 1 {
 		t.Fatalf("packs = %d, want 1: a digest is built once", packs.Load())
 	}
-	if _, err := (&Builder{DiskRepo: repo, KeyID: KeyID(pub)}).Build(t.Context(), u.Host+"/tools/scanner:v1"); err == nil {
+	if _, err := (&Builder{}).Build(t.Context(), host+"/tools/scanner:v1", filepath.Join(t.TempDir(), "d")); err == nil {
 		t.Fatal("Build accepted a tag")
 	}
 
-	// The node side: the kubelet unpacks the two layers into one image
+	// The node side: the kubelet unpacks the one layer into an image
 	// volume, and the launcher checks the two files.
 	art := checkDiskArtifact(t, tag1)
 	mnt := t.TempDir()
@@ -201,86 +215,63 @@ func TestDisk_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	if _, err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
 	}
-	if got, err := DiskRef(repo, ref, KeyID(pub)); err != nil || got != tag1.String() {
-		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
-	}
-	// The image config lists the diff id of each layer, which the node
-	// checks when it unpacks them.
-	cf, err := art.ConfigFile()
-	if err != nil || len(cf.RootFS.DiffIDs) != 2 || cf.RootFS.DiffIDs[0].String() != res1.Layer.DiffID {
-		t.Fatalf("config diff ids = %v, %v; want the disk layer first", cf.RootFS.DiffIDs, err)
-	}
 }
 
 // The publish step writes only a signature that names the image and the
-// disk of the build report. A signature of another image or of another
-// disk is refused, so a build report of one image never gets the tag of
-// another.
+// bytes of the disk in the work volume. A signature of another image or of
+// another disk is refused, so a disk is never published under the
+// signature of another one.
 func TestPublisher_RefusesASignatureOfAnotherDisk(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(registry.New())
-	t.Cleanup(srv.Close)
-	u, _ := url.Parse(srv.URL)
-	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
-	img := testImage(t)
-	if err := remote.Write(src, img); err != nil {
-		t.Fatal(err)
-	}
-	dg, _ := img.Digest()
-	ref := u.Host + "/tools/scanner@" + dg.String()
-	repo := u.Host + "/setec-disks"
+	host, ref := pushTestImage(t, registry.New())
+	repo := host + "/setec-disks"
 	pub, key, _ := ed25519.GenerateKey(nil)
 	var packs atomic.Int32
-	res, err := (&Builder{DiskRepo: repo, KeyID: KeyID(pub), Pack: tarPack(&packs), TempDir: t.TempDir()}).Build(t.Context(), ref)
+	disk := filepath.Join(t.TempDir(), DiskFile)
+	res, err := (&Builder{Pack: tarPack(&packs)}).Build(t.Context(), ref, disk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	d, _ := ParseDigestRef(ref)
 	p := &Publisher{DiskRepo: repo, TempDir: t.TempDir()}
 	for what, sig := range map[string]Signature{
 		"another image": SignDigest(key, "sha256:"+strings.Repeat("b", 64), res.DiskSHA256),
-		"another disk":  SignDigest(key, dg.String(), strings.Repeat("c", 64)),
+		"another disk":  SignDigest(key, d.DigestStr(), strings.Repeat("c", 64)),
 	} {
-		if _, err := p.Publish(t.Context(), ref, KeyID(pub), res, sig); !errors.Is(err, ErrBadSignature) {
+		if _, err := p.Publish(t.Context(), ref, KeyID(pub), disk, sig); !errors.Is(err, ErrBadSignature) {
 			t.Errorf("%s: Publish = %v, want ErrBadSignature", what, err)
 		}
 	}
-	if _, err := p.Publish(t.Context(), ref, KeyID(pub), BuildResult{Exists: true}, SignDigest(key, dg.String(), res.DiskSHA256)); !errors.Is(err, ErrBadBuildResult) {
-		t.Errorf("Publish of an existing disk = %v, want ErrBadBuildResult", err)
+	if found, err := Exists(t.Context(), repo, ref, KeyID(pub)); err != nil || found {
+		t.Fatalf("a refused publish wrote a disk: %t, %v", found, err)
 	}
 }
 
-// The operator signs what the build report names, so it reads the report
-// strictly: a field it does not know, a short digest, an empty size or a
-// disk SHA-256 that is not hex is refused.
-func TestParseBuildResult_IsStrict(t *testing.T) {
+// The operator signs what the build report names, so it reads the reports
+// strictly: a field it does not know, more data, or a disk SHA-256 that is
+// not hex is refused.
+func TestParseReports_AreStrict(t *testing.T) {
 	t.Parallel()
-	good := BuildResult{
-		Layer:      LayerRef{Digest: "sha256:" + strings.Repeat("a", 64), DiffID: "sha256:" + strings.Repeat("b", 64), Size: 10},
-		DiskSHA256: strings.Repeat("c", 64),
-	}
-	raw, _ := json.Marshal(good)
-	if got, err := ParseBuildResult(raw); err != nil || got != good {
+	good := `{"diskSHA256":"` + strings.Repeat("c", 64) + `"}`
+	if got, err := ParseBuildResult([]byte(good)); err != nil || got.DiskSHA256 != strings.Repeat("c", 64) {
 		t.Fatalf("ParseBuildResult(good) = %+v, %v", got, err)
 	}
-	if got, err := ParseBuildResult([]byte(`{"exists":true,"layer":{"digest":"","diffID":"","size":0}}`)); err != nil || !got.Exists {
-		t.Fatalf("ParseBuildResult(exists) = %+v, %v", got, err)
-	}
-	for what, mut := range map[string]func(*BuildResult){
-		"short digest":   func(r *BuildResult) { r.Layer.Digest = "sha256:abc" },
-		"bad diff id":    func(r *BuildResult) { r.Layer.DiffID = "md5:" + strings.Repeat("b", 64) },
-		"no size":        func(r *BuildResult) { r.Layer.Size = 0 },
-		"disk not hex":   func(r *BuildResult) { r.DiskSHA256 = strings.Repeat("z", 64) },
-		"exists + layer": func(r *BuildResult) { r.Exists = true },
+	for what, raw := range map[string]string{
+		"short sha":     `{"diskSHA256":"abc"}`,
+		"not hex":       `{"diskSHA256":"` + strings.Repeat("z", 64) + `"}`,
+		"unknown field": `{"diskSHA256":"` + strings.Repeat("c", 64) + `","extra":1}`,
+		"more data":     good + good,
+		"not JSON":      "pwned",
 	} {
-		r := good
-		mut(&r)
-		raw, _ := json.Marshal(r)
-		if _, err := ParseBuildResult(raw); !errors.Is(err, ErrBadBuildResult) {
-			t.Errorf("%s: err %v, want ErrBadBuildResult", what, err)
+		if _, err := ParseBuildResult([]byte(raw)); !errors.Is(err, ErrBadReport) {
+			t.Errorf("%s: err %v, want ErrBadReport", what, err)
 		}
 	}
-	if _, err := ParseBuildResult([]byte(`{"diskSHA256":"` + strings.Repeat("c", 64) + `","extra":1}`)); !errors.Is(err, ErrBadBuildResult) {
-		t.Errorf("unknown field: err %v, want ErrBadBuildResult", err)
+	if got, err := ParseCheckResult([]byte(`{"exists":true}`)); err != nil || !got.Exists {
+		t.Fatalf("ParseCheckResult = %+v, %v", got, err)
+	}
+	if _, err := ParseCheckResult([]byte(`{"exists":true,"x":1}`)); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("ParseCheckResult with an unknown field: %v", err)
 	}
 }
 
@@ -301,31 +292,21 @@ func immutableTags(next http.Handler) http.Handler {
 }
 
 // TestDisk_ANewSeedSignsANewDisk is setec#272: after a rotation of the
-// signing seed, the build must not reuse the disk of the previous key. It
-// builds a new disk under a new tag, beside the old one, in a registry with
-// immutable tags. A launcher that trusts only the new key accepts the new
-// disk, and the disk of the previous key stays for the launchers that still
-// trust it.
+// signing seed, the disk of the previous key is not reused. A new disk is
+// built under a new tag, beside the old one, in a registry with immutable
+// tags. A launcher that trusts only the new key accepts the new disk, and
+// the disk of the previous key stays for the launchers that still trust it.
 func TestDisk_ANewSeedSignsANewDisk(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(immutableTags(registry.New()))
-	t.Cleanup(srv.Close)
-	u, _ := url.Parse(srv.URL)
-	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
-	img := testImage(t)
-	if err := remote.Write(src, img); err != nil {
-		t.Fatal(err)
-	}
-	dg, _ := img.Digest()
-	ref := u.Host + "/tools/scanner@" + dg.String()
-	repo := u.Host + "/setec-disks"
+	host, ref := pushTestImage(t, immutableTags(registry.New()))
+	repo := host + "/setec-disks"
 
 	oldPub, oldKey, _ := ed25519.GenerateKey(nil)
 	newPub, newKey, _ := ed25519.GenerateKey(nil)
 	var packs atomic.Int32
 	oldTag, _ := makeDisk(t, repo, ref, oldKey, tarPack(&packs))
-	newTag, newRes := makeDisk(t, repo, ref, newKey, tarPack(&packs))
-	if newRes.Exists {
+	newTag, found := makeDisk(t, repo, ref, newKey, tarPack(&packs))
+	if found {
 		t.Fatal("the new seed found the disk of the previous seed")
 	}
 	if newTag == oldTag {
@@ -336,9 +317,6 @@ func TestDisk_ANewSeedSignsANewDisk(t *testing.T) {
 	}
 	if !strings.HasSuffix(newTag.TagStr(), "-"+KeyID(newPub)) || !strings.HasSuffix(oldTag.TagStr(), "-"+KeyID(oldPub)) {
 		t.Fatalf("tags %s and %s do not name their keys", oldTag, newTag)
-	}
-	if got, err := DiskRef(repo, ref, KeyID(newPub)); err != nil || got != newTag.String() {
-		t.Fatalf("DiskRef of the new key = %q, %v; want %q", got, err, newTag)
 	}
 
 	for _, c := range []struct {
@@ -387,7 +365,7 @@ func TestKeyID_IsStableAndShort(t *testing.T) {
 	}
 }
 
-// checkDiskArtifact checks that the disk at tag is two OCI layers of gzip
+// checkDiskArtifact checks that the disk at tag is one OCI layer of gzip
 // bytes, and returns it.
 func checkDiskArtifact(t *testing.T, tag name.Tag) v1.Image {
 	t.Helper()
@@ -399,8 +377,8 @@ func checkDiskArtifact(t *testing.T, tag name.Tag) v1.Image {
 		t.Fatalf("manifest media type = %s", mt)
 	}
 	layers, err := art.Layers()
-	if err != nil || len(layers) != 2 {
-		t.Fatalf("layers = %d, %v; want 2", len(layers), err)
+	if err != nil || len(layers) != 1 {
+		t.Fatalf("layers = %d, %v; want 1", len(layers), err)
 	}
 	for _, l := range layers {
 		if mt, _ := l.MediaType(); mt != types.OCILayer {

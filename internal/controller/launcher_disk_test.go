@@ -89,60 +89,61 @@ func completeJob(t *testing.T, r *SandboxReconciler, name string) {
 	}
 }
 
-// buildPod is the succeeded Pod of the build Job name, with message as its
-// termination message.
-func buildPod(t *testing.T, r *SandboxReconciler, name, message string) {
+// diskPod is the Pod of the disk Job name after its init containers ended:
+// the check container with checkMsg and the build container with buildMsg.
+func diskPod(t *testing.T, r *SandboxReconciler, name, checkMsg, buildMsg string) {
 	t.Helper()
 	pod := &corev1.Pod{Name: name + "-x", Namespace: "setec-system",
 		Labels: map[string]string{batchv1.JobNameLabel: name}}
-	pod.Spec.Containers = []corev1.Container{{Name: builderContainer, Image: "x"}}
+	pod.Spec.Containers = []corev1.Container{{Name: publishContainer, Image: "x"}}
 	if err := r.Create(context.Background(), pod); err != nil {
 		t.Fatal(err)
 	}
-	pod.Status.Phase = corev1.PodSucceeded
-	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: builderContainer,
-		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: message}}}}
+	ended := func(n, msg string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{Name: n, State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{Message: msg},
+		}}
+	}
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{ended(checkContainer, checkMsg), ended(builderContainer, buildMsg)}
 	if err := r.Status().Update(context.Background(), pod); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// testBuildResult is a build report of a disk with the SHA-256 of 32 bytes
-// of 0xd.
-func testBuildResult() diskbuilder.BuildResult {
-	return diskbuilder.BuildResult{
-		Layer: diskbuilder.LayerRef{
-			Digest: "sha256:" + strings.Repeat("a", 64), DiffID: "sha256:" + strings.Repeat("b", 64), Size: 4096,
-		},
-		DiskSHA256: strings.Repeat("d", 64),
+// noSecretIn fails when container c of the Job mounts a Secret volume, or
+// reads an env value from a reference.
+func noSecretIn(t *testing.T, job *batchv1.Job, c corev1.Container) {
+	t.Helper()
+	vols := map[string]corev1.Volume{}
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		vols[v.Name] = v
+	}
+	for _, m := range c.VolumeMounts {
+		if v := vols[m.Name]; v.Secret != nil || v.Projected != nil {
+			t.Fatalf("the container %s of the Job %s mounts the Secret volume %s", c.Name, job.Name, m.Name)
+		}
+	}
+	for _, e := range c.Env {
+		if e.ValueFrom != nil {
+			t.Fatalf("the container %s reads %s from a reference", c.Name, e.Name)
+		}
 	}
 }
 
-// noSeed fails when a Job pod mounts the signing Secret, or carries a
-// volume of any Secret other than the push credential.
+// noSeed fails when a volume of the Job is the signing Secret.
 func noSeed(t *testing.T, job *batchv1.Job, signingSecret string) {
 	t.Helper()
 	for _, v := range job.Spec.Template.Spec.Volumes {
-		if v.Secret != nil && (v.Secret.SecretName == signingSecret || v.Secret.SecretName != "disk-push") {
-			t.Fatalf("the Job %s mounts the Secret %s", job.Name, v.Secret.SecretName)
-		}
-		if v.Projected != nil {
-			t.Fatalf("the Job %s has a projected volume", job.Name)
-		}
-	}
-	for _, c := range job.Spec.Template.Spec.Containers {
-		for _, e := range c.Env {
-			if e.ValueFrom != nil {
-				t.Fatalf("the Job %s reads %s from a reference", job.Name, e.Name)
-			}
+		if v.Secret != nil && v.Secret.SecretName == signingSecret {
+			t.Fatalf("the Job %s mounts the signing Secret", job.Name)
 		}
 	}
 }
 
 // TestEnsureLauncherDisk_OneJobPerDigest covers the disk step of a launcher
-// Sandbox: the first call makes the build Job, a running Job waits, a
-// complete Job whose report says the disk exists lets the Pod start, and a
-// second Sandbox of the same digest shares the Job.
+// Sandbox: the first call makes the Job, a running Job waits, a complete Job
+// lets the Pod start, and a second Sandbox of the same digest shares the Job.
 func TestEnsureLauncherDisk_OneJobPerDigest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -160,24 +161,33 @@ func TestEnsureLauncherDisk_OneJobPerDigest(t *testing.T) {
 	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, job); err != nil {
 		t.Fatalf("the Job: %v", err)
 	}
-	c := job.Spec.Template.Spec.Containers[0]
-	if i := slices.Index(c.Args, "--key-id"); i < 0 || c.Args[i+1] != testDiskKeyID {
-		t.Fatalf("the Job args %v do not pass the key id %s", c.Args, testDiskKeyID)
+	spec := job.Spec.Template.Spec
+	if len(spec.InitContainers) != 2 || spec.InitContainers[0].Name != checkContainer ||
+		spec.InitContainers[1].Name != builderContainer || len(spec.Containers) != 1 || spec.Containers[0].Name != publishContainer {
+		t.Fatalf("the Job containers = %v / %v; want check, build, publish", spec.InitContainers, spec.Containers)
 	}
-	if c.Image != "ghcr.io/org/setec-disk-builder:v1" || c.Args[len(c.Args)-1] != image ||
-		*job.Spec.Template.Spec.AutomountServiceAccountToken || !*job.Spec.Template.Spec.SecurityContext.RunAsNonRoot {
-		t.Fatalf("the Job pod = %+v", job.Spec.Template.Spec)
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		if c.Image != "ghcr.io/org/setec-disk-builder:v1" || c.Args[len(c.Args)-1] != image {
+			t.Fatalf("the container %s = %s %v", c.Name, c.Image, c.Args)
+		}
+	}
+	if i := slices.Index(spec.Containers[0].Args, "--key-id"); i < 0 || spec.Containers[0].Args[i+1] != testDiskKeyID {
+		t.Fatalf("the publish args %v do not pass the key id %s", spec.Containers[0].Args, testDiskKeyID)
+	}
+	if *spec.AutomountServiceAccountToken || !*spec.SecurityContext.RunAsNonRoot {
+		t.Fatalf("the Job pod = %+v", spec)
 	}
 	if got := job.Spec.Template.Labels["app.kubernetes.io/component"]; got != componentDiskBuilder {
 		t.Fatalf("the Job pod component label = %q; the chart policy and the e2e diagnostics select the pod by it", got)
 	}
 	noSeed(t, job, "disk-seed")
+	// The container that reads the image holds no secret at all.
+	noSecretIn(t, job, spec.InitContainers[1])
 
 	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 		t.Fatalf("a running Job = %t, %v; want a wait", done, err)
 	}
 	completeJob(t, r, name)
-	buildPod(t, r, name, `{"exists":true,"layer":{"digest":"","diffID":"","size":0}}`)
 	other := sb.DeepCopy()
 	other.Name = "b"
 	if _, done, err := r.ensureLauncherDisk(ctx, other); err != nil || !done {
@@ -190,104 +200,88 @@ func TestEnsureLauncherDisk_OneJobPerDigest(t *testing.T) {
 	}
 }
 
-// TestEnsureLauncherDisk_TheOperatorSignsAndThePublishJobHasNoSeed is the
-// split of the disk step: the build Job reports a disk, the operator signs
-// it, and the publish Job carries the signature and no seed. The signature
-// verifies under the public key of the seed and names the image and the
-// disk of the report.
-func TestEnsureLauncherDisk_TheOperatorSignsAndThePublishJobHasNoSeed(t *testing.T) {
+// TestEnsureLauncherDisk_TheOperatorSignsTheBuildReport: after the build
+// container reports, the operator signs the image digest and the disk of the
+// report, and writes the ConfigMap that the publish container mounts. The
+// signature verifies under the public key of the seed.
+func TestEnsureLauncherDisk_TheOperatorSignsTheBuildReport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := diskReconciler(t)
 	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("12", 32)
 	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
 	sb.Spec.Image = image
-
 	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 		t.Fatal(err)
 	}
-	buildName, _ := diskJobName(image, testDiskKeyID)
-	completeJob(t, r, buildName)
-	res := testBuildResult()
-	raw, _ := json.Marshal(res)
-	buildPod(t, r, buildName, string(raw))
-
+	name, _ := diskJobName(image, testDiskKeyID)
+	sha := strings.Repeat("d", 64)
+	diskPod(t, r, name, `{"exists":false}`, `{"diskSHA256":"`+sha+`"}`)
 	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
-		t.Fatalf("after the build = %t, %v; want a publish Job and a wait", done, err)
+		t.Fatalf("after the build = %t, %v; want a wait", done, err)
 	}
-	pubName, _ := diskPublishJobName(image, testDiskKeyID)
-	pub := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: pubName}, pub); err != nil {
-		t.Fatalf("the publish Job: %v", err)
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name + "-sig"}, cm); err != nil {
+		t.Fatalf("the signature ConfigMap: %v", err)
 	}
-	if got := pub.Spec.Template.Labels["app.kubernetes.io/component"]; got != componentDiskPublisher {
-		t.Fatalf("the publish Job component label = %q", got)
-	}
-	noSeed(t, pub, "disk-seed")
-	c := pub.Spec.Template.Spec.Containers[0]
-	if !slices.Contains(c.Args, "publish") || c.Args[len(c.Args)-1] != image {
-		t.Fatalf("the publish Job args = %v", c.Args)
-	}
-	env := map[string]string{}
-	for _, e := range c.Env {
-		env[e.Name] = e.Value
+	if len(cm.OwnerReferences) != 1 || cm.OwnerReferences[0].Name != name {
+		t.Fatalf("the signature ConfigMap owners = %v; want the Job", cm.OwnerReferences)
 	}
 	var sig diskbuilder.Signature
-	if err := json.Unmarshal([]byte(env["SETEC_DISK_SIGNATURE"]), &sig); err != nil {
-		t.Fatalf("SETEC_DISK_SIGNATURE: %v", err)
+	if err := json.Unmarshal([]byte(cm.Data[signatureKey]), &sig); err != nil {
+		t.Fatal(err)
 	}
-	if got, err := diskbuilder.ParseBuildResult([]byte(env["SETEC_DISK_BUILD"])); err != nil || got != res {
-		t.Fatalf("SETEC_DISK_BUILD = %+v, %v", got, err)
-	}
-	pubKey, _ := base64.StdEncoding.DecodeString(testDiskPublicKey)
-	if sig.ImageDigest != "sha256:"+strings.Repeat("12", 32) || sig.DiskSHA256 != res.DiskSHA256 ||
-		!ed25519.Verify(pubKey, sig.Payload(), sig.Value) {
+	pub, _ := base64.StdEncoding.DecodeString(testDiskPublicKey)
+	if sig.ImageDigest != "sha256:"+strings.Repeat("12", 32) || sig.DiskSHA256 != sha || !ed25519.Verify(pub, sig.Payload(), sig.Value) {
 		t.Fatalf("the signature %+v does not sign the image and the disk of the report", sig)
 	}
-
-	completeJob(t, r, pubName)
+	// The publish container mounts the ConfigMap; the build container
+	// mounts neither it nor the credential.
+	job := &batchv1.Job{}
+	_ = r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, job)
+	if !slices.ContainsFunc(job.Spec.Template.Spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == "signature"
+	}) || slices.ContainsFunc(job.Spec.Template.Spec.InitContainers[1].VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == "signature" || m.Name == "registry"
+	}) {
+		t.Fatal("the signature or the credential is in the wrong container")
+	}
+	completeJob(t, r, name)
 	if keyID, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || !done || keyID != testDiskKeyID {
 		t.Fatalf("after the publish = %q, %t, %v; want done", keyID, done, err)
 	}
 }
 
-// A complete build Job whose Pod is gone (Pod GC, a lost node) is deleted,
-// so the next pass builds again. It is not a failed disk.
-func TestEnsureLauncherDisk_ABuildJobWithNoPodBuildsAgain(t *testing.T) {
+// When the check found the disk, the operator signs nothing.
+func TestEnsureLauncherDisk_AnExistingDiskIsNotSigned(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := diskReconciler(t)
-	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("56", 32)
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("78", 32)
 	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
 	sb.Spec.Image = image
 	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 		t.Fatal(err)
 	}
-	buildName, _ := diskJobName(image, testDiskKeyID)
-	completeJob(t, r, buildName)
-	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
-		t.Fatalf("= %t, %v; want a wait and no error", done, err)
-	}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: buildName}, &batchv1.Job{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("the build Job with no Pod: %v, want it deleted", err)
-	}
+	name, _ := diskJobName(image, testDiskKeyID)
+	diskPod(t, r, name, `{"exists":true}`, `{"diskSHA256":"`+strings.Repeat("e", 64)+`"}`)
 	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: buildName}, &batchv1.Job{}); err != nil {
-		t.Fatalf("the next pass made no build Job: %v", err)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name + "-sig"}, &corev1.ConfigMap{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the signature ConfigMap of an existing disk: %v, want none", err)
 	}
 }
 
-// A build report that is not strict JSON, or that the Pod never wrote, is a
-// failed disk: the operator signs nothing and starts no publish Job.
+// A build report that is not strict JSON is a failed disk: the operator
+// signs nothing.
 func TestEnsureLauncherDisk_ABadBuildReportFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for name, message := range map[string]string{
+	for what, message := range map[string]string{
 		"not JSON":      "pwned",
-		"short digest":  `{"layer":{"digest":"sha256:1","diffID":"sha256:1","size":1},"diskSHA256":"x"}`,
-		"unknown field": `{"exists":true,"layer":{"digest":"","diffID":"","size":0},"key":"x"}`,
+		"short sha":     `{"diskSHA256":"abc"}`,
+		"unknown field": `{"diskSHA256":"` + strings.Repeat("a", 64) + `","key":"x"}`,
 	} {
 		r := diskReconciler(t)
 		image := "ghcr.io/org/tool@sha256:" + strings.Repeat("34", 32)
@@ -296,18 +290,15 @@ func TestEnsureLauncherDisk_ABadBuildReportFails(t *testing.T) {
 		if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 			t.Fatal(err)
 		}
-		buildName, _ := diskJobName(image, testDiskKeyID)
-		completeJob(t, r, buildName)
-		buildPod(t, r, buildName, message)
+		name, _ := diskJobName(image, testDiskKeyID)
+		diskPod(t, r, name, `{"exists":false}`, message)
 		_, done, err := r.ensureLauncherDisk(ctx, sb)
 		var dbe *diskBuildError
 		if done || !errors.As(err, &dbe) {
-			t.Fatalf("%s: = %t, %v; want a diskBuildError", name, done, err)
+			t.Fatalf("%s: = %t, %v; want a diskBuildError", what, done, err)
 		}
-		jobs := &batchv1.JobList{}
-		_ = r.List(ctx, jobs)
-		if len(jobs.Items) != 1 {
-			t.Fatalf("%s: jobs = %d, want only the build Job", name, len(jobs.Items))
+		if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name + "-sig"}, &corev1.ConfigMap{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s: a signature exists: %v", what, err)
 		}
 	}
 }
@@ -339,23 +330,20 @@ func TestEnsureLauncherDisk_RefusesAnImageOfAnotherRegistry(t *testing.T) {
 	}
 }
 
-// No Job of the disk builder image mounts the signing seed: not the build
-// Job, not the publish Job, not the image verify Job. The verify Job also
+// No container of a disk Job mounts the signing seed. The build container,
+// which reads the image, mounts no secret and no signature. The verify Job
 // gets no push credential.
 func TestBuilderJobs_NoJobMountsTheSeed(t *testing.T) {
 	t.Parallel()
 	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed", RegistrySecret: "disk-push"}
 	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
-	key, _ := diskbuilder.ParsePrivateKey([]byte(testDiskSeed))
-	jobs := []*batchv1.Job{
-		diskJob(cfg, "r", "b", image, testDiskKeyID),
-		publishJob(cfg, "r", "p", image, testDiskKeyID, testBuildResult(),
-			diskbuilder.SignDigest(key, "sha256:"+strings.Repeat("ab", 32), strings.Repeat("d", 64))),
-	}
-	for _, j := range jobs {
-		noSeed(t, j, cfg.SigningSecret)
-		if j.Spec.Template.Spec.Containers[0].TerminationMessagePolicy != corev1.TerminationMessageReadFile {
-			t.Fatalf("the Job %s does not read its result from the termination file", j.Name)
+	j := diskJob(cfg, "r", "b", image, testDiskKeyID)
+	noSeed(t, j, cfg.SigningSecret)
+	spec := j.Spec.Template.Spec
+	noSecretIn(t, j, spec.InitContainers[1])
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		if c.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
+			t.Fatalf("the container %s does not write its report to the termination file", c.Name)
 		}
 	}
 	v := builderJob(cfg, "v", componentImageVerify, []string{"verify", image}, nil, false)

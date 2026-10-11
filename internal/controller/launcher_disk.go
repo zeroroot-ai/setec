@@ -27,12 +27,13 @@ import (
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create
 
-// DiskBuilderConfig is how the operator runs setec-disk-builder: a build Job
-// and a publish Job for each image digest, in the namespace of the operator
-// (docs/design/storage.md). The operator signs between the two. No Job holds
-// the signing seed.
+// DiskBuilderConfig is how the operator runs setec-disk-builder: one Job for
+// each image digest and signing key, in the namespace of the operator
+// (docs/design/runtime.md). The Job has three containers: check, build and
+// publish. The operator signs between build and publish. No container holds
+// the signing seed, and the build container holds no secret at all.
 type DiskBuilderConfig struct {
 	// Image is the setec-disk-builder image.
 	Image string
@@ -60,16 +61,22 @@ const (
 	ReasonDiskBuilding    = "DiskBuilding"
 	ReasonDiskBuildFailed = "DiskBuildFailed"
 
-	diskJobPrefix        = "setec-disk-"
-	diskPublishJobPrefix = "setec-disk-publish-"
+	diskJobPrefix = "setec-disk-"
 	// The component labels of the Job pods. The chart policy selects each.
-	componentDiskBuilder   = "disk-builder"
-	componentDiskPublisher = "disk-publisher"
-	componentImageVerify   = "image-verify"
-	// builderContainer is the one container of each Job pod.
+	componentDiskBuilder = "disk-builder"
+	componentImageVerify = "image-verify"
+	// The containers of a disk Job, in order: check and build are init
+	// containers, publish is the main one. The verify Job has one container,
+	// named like the build container.
+	checkContainer   = "check"
 	builderContainer = "disk-builder"
-	// tempDirFlag names the work directory of setec-disk-builder.
+	publishContainer = "publish"
+	// tempDirFlag names the temporary directory of setec-disk-builder.
 	tempDirFlag = "--temp-dir"
+	// signatureDir is where the publish container finds the signature.
+	signatureDir = "/etc/setec/disk-signature"
+	// signatureKey is the key of the signature in its ConfigMap.
+	signatureKey = "signature.json"
 	// builderWorkDir is the emptyDir of a disk builder Job.
 	builderWorkDir    = "/work"
 	diskBuildRequeue  = 5 * time.Second
@@ -85,16 +92,6 @@ func diskJobName(image, keyID string) (string, error) {
 		return "", fmt.Errorf("a launcher Sandbox needs an image with a digest, got %q", image)
 	}
 	return diskJobPrefix + digest[:20] + "-" + keyID, nil
-}
-
-// diskPublishJobName names the publish Job that follows the build Job of
-// image and keyID.
-func diskPublishJobName(image, keyID string) (string, error) {
-	name, err := diskJobName(image, keyID)
-	if err != nil {
-		return "", err
-	}
-	return diskPublishJobPrefix + strings.TrimPrefix(name, diskJobPrefix), nil
 }
 
 // errImageRegistryNotAllowed is a launcher image of a registry that is not
@@ -166,15 +163,18 @@ func (r *SandboxReconciler) ensureLauncherDisk(
 
 // ensureDisk is the disk step of a launcher Pod of image: of a Sandbox, or
 // of a warm pool base. The disk is the one that the current signing seed
-// signs, and keyID names it. The step has three parts:
+// signs, and keyID names it. One Job makes the disk:
 //
-//  1. The build Job pulls the image and pushes the disk layer. It has the
-//     network of the image registries and no seed. Its termination message
-//     is a diskbuilder.BuildResult.
-//  2. The operator reads that report and signs the image digest and the
-//     SHA-256 of the disk. The operator has no egress to a registry.
-//  3. The publish Job pushes the signature and the tag. It reaches only the
-//     disk registry and has no seed.
+//  1. check: looks up the disk with the push credential. When the registry
+//     holds it, the Job ends with no build.
+//  2. build: pulls the image and makes the disk. It holds no secret. It
+//     reports the SHA-256 of the disk in its termination message.
+//  3. publish: waits for the signature and pushes the disk and the
+//     signature with the push credential.
+//
+// Between build and publish the operator reads the report, signs the image
+// digest and the disk SHA-256, and writes the signature to a ConfigMap that
+// the publish container mounts. The operator has no registry egress.
 func ensureDisk(
 	ctx context.Context, c client.Client, cfg DiskBuilderConfig, diskRepo string, diskKeys []string, image string,
 ) (keyID string, done bool, err error) {
@@ -192,69 +192,20 @@ func ensureDisk(
 	if err != nil {
 		return "", false, err
 	}
-	buildName, err := diskJobName(image, keyID)
+	jobName, err := diskJobName(image, keyID)
 	if err != nil {
 		return "", false, err
 	}
-	state, err := jobState(ctx, reader, cfg.Namespace, buildName)
-	if err != nil || state != jobComplete {
-		return keyID, false, startOrWait(ctx, c, state, err, buildName, func() *batchv1.Job {
-			return diskJob(cfg, diskRepo, buildName, image, keyID)
-		})
-	}
-	res, err := buildResult(ctx, reader, cfg.Namespace, buildName)
-	if errors.Is(err, errNoBuildPod) {
-		// The Pod is gone (Pod GC, a lost node) and the Job stays. Delete
-		// the Job, so the next pass builds again; the build finds a disk
-		// that a publish already wrote.
-		return keyID, false, deleteJob(ctx, c, cfg.Namespace, buildName)
-	}
-	if err != nil {
-		return "", false, &diskBuildError{job: buildName, msg: err.Error()}
-	}
-	if res.Exists {
-		return keyID, true, nil
-	}
-
-	publishName, err := diskPublishJobName(image, keyID)
-	if err != nil {
-		return "", false, err
-	}
-	state, err = jobState(ctx, reader, cfg.Namespace, publishName)
-	if err != nil || state != jobComplete {
-		return keyID, false, startOrWait(ctx, c, state, err, publishName, func() *batchv1.Job {
-			d, _ := diskbuilder.ParseDigestRef(image) // checked by checkImageRegistry
-			sig := diskbuilder.SignDigest(key, d.DigestStr(), res.DiskSHA256)
-			return publishJob(cfg, diskRepo, publishName, image, keyID, res, sig)
-		})
-	}
-	return keyID, true, nil
-}
-
-// jobPhase is the state of a disk Job.
-type jobPhase int
-
-const (
-	jobMissing jobPhase = iota
-	jobRunning
-	jobComplete
-	jobFailedPhase
-)
-
-// jobFailure carries the message of a failed Job from jobState.
-type jobFailure struct{ msg string }
-
-func (e *jobFailure) Error() string { return e.msg }
-
-// jobState reads the Job name in namespace.
-func jobState(ctx context.Context, reader client.Reader, namespace, name string) (jobPhase, error) {
 	job := &batchv1.Job{}
-	err := reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, job)
+	err = reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: jobName}, job)
 	if apierrors.IsNotFound(err) {
-		return jobMissing, nil
+		if err := c.Create(ctx, diskJob(cfg, diskRepo, jobName, image, keyID)); err != nil && !apierrors.IsAlreadyExists(err) {
+			return "", false, fmt.Errorf("create the disk Job %s: %w", jobName, err)
+		}
+		return keyID, false, nil
 	}
 	if err != nil {
-		return jobMissing, errwrap.Wrap(err, "client.Reader.Get")
+		return "", false, errwrap.Wrap(err, "client.Reader.Get")
 	}
 	for _, cond := range job.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {
@@ -262,71 +213,109 @@ func jobState(ctx context.Context, reader client.Reader, namespace, name string)
 		}
 		switch cond.Type {
 		case batchv1.JobComplete:
-			return jobComplete, nil
+			return keyID, true, nil
 		case batchv1.JobFailed:
-			return jobFailedPhase, &jobFailure{msg: cond.Message}
+			return "", false, &diskBuildError{job: jobName, msg: cond.Message}
 		case batchv1.JobSuspended, batchv1.JobFailureTarget, batchv1.JobSuccessCriteriaMet:
 			// Not an end: JobComplete or JobFailed follows.
 		}
 	}
-	return jobRunning, nil
-}
-
-// startOrWait creates the Job of newJob when it is missing, and turns a
-// failed Job into a diskBuildError. A running Job is a wait.
-func startOrWait(
-	ctx context.Context, c client.Client, state jobPhase, stateErr error, name string, newJob func() *batchv1.Job,
-) error {
-	var failure *jobFailure
-	switch {
-	case errors.As(stateErr, &failure):
-		return &diskBuildError{job: name, msg: failure.msg}
-	case stateErr != nil:
-		return stateErr
-	case state == jobMissing:
-		if err := c.Create(ctx, newJob()); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create the disk Job %s: %w", name, err)
-		}
+	if err := signBuiltDisk(ctx, c, reader, cfg, job, image, key); err != nil {
+		return "", false, err
 	}
-	return nil
+	return keyID, false, nil
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;create
 
-// buildResult reads the report of the complete build Job name from the
-// termination message of its Pod. The report is strict JSON: the operator
-// signs what it names.
-func buildResult(ctx context.Context, reader client.Reader, namespace, name string) (diskbuilder.BuildResult, error) {
-	pods := &corev1.PodList{}
-	if err := reader.List(ctx, pods, client.InNamespace(namespace),
-		client.MatchingLabels{batchv1.JobNameLabel: name}); err != nil {
-		return diskbuilder.BuildResult{}, errwrap.Wrap(err, "client.Reader.List")
+// signBuiltDisk signs the disk of the running Job job once its build
+// container has reported, and writes the signature ConfigMap that the
+// publish container waits for. It does nothing while the build runs, when
+// the check found the disk, or when the ConfigMap exists. A report that is
+// not valid fails the disk: the operator signs only what it can read.
+func signBuiltDisk(
+	ctx context.Context, c client.Client, reader client.Reader, cfg DiskBuilderConfig,
+	job *batchv1.Job, image string, key ed25519.PrivateKey,
+) error {
+	cmName := job.Name + "-sig"
+	err := reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: cmName}, &corev1.ConfigMap{})
+	if err == nil {
+		return nil
 	}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Status.Phase != corev1.PodSucceeded {
-			continue
+	if !apierrors.IsNotFound(err) {
+		return errwrap.Wrap(err, "client.Reader.Get")
+	}
+	checkMsg, buildMsg, err := initReports(ctx, reader, cfg.Namespace, job.Name)
+	if err != nil || buildMsg == "" {
+		return err
+	}
+	if checkMsg != "" {
+		check, err := diskbuilder.ParseCheckResult([]byte(checkMsg))
+		if err != nil {
+			return &diskBuildError{job: job.Name, msg: err.Error()}
 		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.Name == builderContainer && cs.State.Terminated != nil {
-				return diskbuilder.ParseBuildResult([]byte(cs.State.Terminated.Message)) //nolint:wrapcheck // names the field
-			}
+		if check.Exists {
+			return nil
 		}
 	}
-	return diskbuilder.BuildResult{}, fmt.Errorf("%w: %s", errNoBuildPod, name)
-}
-
-// errNoBuildPod is a complete build Job whose Pod is gone.
-var errNoBuildPod = errors.New("no succeeded Pod holds the build result of the Job")
-
-// deleteJob deletes the Job jobName and its Pods.
-func deleteJob(ctx context.Context, c client.Client, namespace, jobName string) error {
-	job := &batchv1.Job{Name: jobName, Namespace: namespace}
-	err := c.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete the build Job %s: %w", jobName, err)
+	res, err := diskbuilder.ParseBuildResult([]byte(buildMsg))
+	if err != nil {
+		return &diskBuildError{job: job.Name, msg: err.Error()}
+	}
+	d, err := diskbuilder.ParseDigestRef(image)
+	if err != nil {
+		return err //nolint:wrapcheck // names the image
+	}
+	sig, err := json.Marshal(diskbuilder.SignDigest(key, d.DigestStr(), res.DiskSHA256))
+	if err != nil {
+		return errwrap.Wrap(err, "json.Marshal")
+	}
+	ctrlTrue := true
+	cm := &corev1.ConfigMap{
+		Name: cmName, Namespace: cfg.Namespace,
+		Labels: map[string]string{"app.kubernetes.io/component": componentDiskBuilder},
+		// The Job owns the ConfigMap, so it goes with the Job.
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &ctrlTrue,
+		}},
+		Data: map[string]string{signatureKey: string(sig)},
+	}
+	if err := c.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create the disk signature ConfigMap %s: %w", cmName, err)
 	}
 	return nil
+}
+
+// initReports returns the termination messages of the check and the build
+// container of the Pod of the Job jobName, once the build container has
+// ended with success. Both are empty while the build runs.
+func initReports(ctx context.Context, reader client.Reader, namespace, jobName string) (check, build string, err error) {
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods, client.InNamespace(namespace),
+		client.MatchingLabels{batchv1.JobNameLabel: jobName}); err != nil {
+		return "", "", errwrap.Wrap(err, "client.Reader.List")
+	}
+	for i := range pods.Items {
+		var c, b string
+		var built bool
+		for _, cs := range pods.Items[i].Status.InitContainerStatuses {
+			t := cs.State.Terminated
+			if t == nil || t.ExitCode != 0 {
+				continue
+			}
+			switch cs.Name {
+			case checkContainer:
+				c = t.Message
+			case builderContainer:
+				b, built = t.Message, true
+			}
+		}
+		if built {
+			return c, b, nil
+		}
+	}
+	return "", "", nil
 }
 
 type diskBuildError struct{ job, msg string }
@@ -338,34 +327,56 @@ func (e *diskBuildError) Error() string {
 	return fmt.Sprintf("the disk Job %s failed: %s", e.job, e.msg)
 }
 
-// diskJob is the build Job of the disk of image for the key keyID. It has
-// the push credential of the disk registry, and no signing seed.
-func diskJob(cfg DiskBuilderConfig, diskRepo, name, image, keyID string) *batchv1.Job {
-	return builderJob(cfg, name, componentDiskBuilder, []string{"--disk-repo", diskRepo,
-		"--key-id", keyID, tempDirFlag, builderWorkDir, "build", image}, nil, true)
-}
-
-// publishJob is the publish Job of the disk of image: it gets the build
-// report and the signature of the operator in its environment. It has the
-// push credential of the disk registry, and no signing seed.
-func publishJob(
-	cfg DiskBuilderConfig, diskRepo, name, image, keyID string, res diskbuilder.BuildResult, sig diskbuilder.Signature,
-) *batchv1.Job {
-	resJSON, _ := json.Marshal(res) //nolint:errchkjson // plain strings and an int
-	sigJSON, _ := json.Marshal(sig) //nolint:errchkjson // plain strings and bytes
-	env := []corev1.EnvVar{
-		{Name: "SETEC_DISK_BUILD", Value: string(resJSON)},
-		{Name: "SETEC_DISK_SIGNATURE", Value: string(sigJSON)},
+// diskJob is the Job that makes the disk of image for the key keyID. The
+// containers share the work volume. Only check and publish mount the push
+// credential, and only publish mounts the signature. The build container,
+// the one that reads the image, mounts neither.
+func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *batchv1.Job {
+	job := builderJob(cfg, jobName, componentDiskBuilder, nil, nil, false)
+	spec := &job.Spec.Template.Spec
+	work := corev1.VolumeMount{Name: "work", MountPath: builderWorkDir}
+	push := cfg.RegistrySecret != ""
+	var pushMounts []corev1.VolumeMount
+	var pushEnv []corev1.EnvVar
+	if push {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "registry", Secret: &corev1.SecretVolumeSource{
+			SecretName: cfg.RegistrySecret,
+			Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
+		}})
+		pushMounts = []corev1.VolumeMount{{Name: "registry", MountPath: "/etc/setec/registry", ReadOnly: true}}
+		pushEnv = []corev1.EnvVar{{Name: "DOCKER_CONFIG", Value: "/etc/setec/registry"}}
 	}
-	return builderJob(cfg, name, componentDiskPublisher, []string{"--disk-repo", diskRepo,
-		"--key-id", keyID, tempDirFlag, builderWorkDir, "publish", image}, env, true)
+	optional := true
+	spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "signature", VolumeSource: corev1.VolumeSource{
+		ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: jobName + "-sig"}, Optional: &optional,
+		},
+	}})
+	base := spec.Containers[0]
+	container := func(name string, args []string, mounts []corev1.VolumeMount, env []corev1.EnvVar) corev1.Container {
+		c := *base.DeepCopy()
+		c.Name, c.Args, c.Env = name, args, env
+		c.VolumeMounts = append([]corev1.VolumeMount{work}, mounts...)
+		return c
+	}
+	spec.InitContainers = []corev1.Container{
+		container(checkContainer, []string{"--disk-repo", diskRepo, "--key-id", keyID, "check", image}, pushMounts, pushEnv),
+		container(builderContainer, []string{"--work", builderWorkDir, "build", image}, nil, nil),
+	}
+	pubMounts := append(append([]corev1.VolumeMount{}, pushMounts...),
+		corev1.VolumeMount{Name: "signature", MountPath: signatureDir, ReadOnly: true})
+	spec.Containers = []corev1.Container{container(publishContainer, []string{
+		"--disk-repo", diskRepo, "--key-id", keyID, "--work", builderWorkDir,
+		"--signature-file", signatureDir + "/" + signatureKey, tempDirFlag, builderWorkDir, "publish", image,
+	}, pubMounts, pushEnv)}
+	return job
 }
 
-// builderJob is a Job of the setec-disk-builder image with args. push
-// mounts the push credential of the disk registry. No Job mounts the
-// signing seed. The Job runs as a user that is not root, with no
+// builderJob is a Job of the setec-disk-builder image with args, one
+// container. push mounts the push credential of the disk registry. No Job
+// mounts the signing seed. The Job runs as a user that is not root, with no
 // ServiceAccount token, and keeps its files in an emptyDir with a size limit.
-func builderJob(cfg DiskBuilderConfig, name, component string, args []string, env []corev1.EnvVar, push bool) *batchv1.Job {
+func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string, env []corev1.EnvVar, push bool) *batchv1.Job {
 	ttl := int32(diskJobTTLSeconds)
 	backoff := int32(2)
 	work := resource.MustParse("20Gi")
@@ -380,7 +391,7 @@ func builderJob(cfg DiskBuilderConfig, name, component string, args []string, en
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/etc/setec/registry"})
 	}
 	return &batchv1.Job{
-		Name:      name,
+		Name:      jobName,
 		Namespace: cfg.Namespace,
 		Labels:    map[string]string{"app.kubernetes.io/component": component},
 		Spec: batchv1.JobSpec{
@@ -401,7 +412,7 @@ func builderJob(cfg DiskBuilderConfig, name, component string, args []string, en
 						Image: cfg.Image,
 						Args:  args,
 						Env:   env,
-						// The build result goes to the termination message.
+						// Each step writes its report to the termination message.
 						TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: new(false),
