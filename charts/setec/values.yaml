@@ -251,6 +251,16 @@ systemPolicy:
   #    podLabels:
   #      app.kubernetes.io/component: daemon
   #  - cidr: 203.0.113.0/24
+  # webhookCallers are the Pods, besides the API server, that may reach the
+  # admission webhook port of the operator. Each entry is a namespace and
+  # the labels of its Pods, both required. An installer that proves the
+  # webhook serves before it applies a SandboxClass names its probe here
+  # (the webhook gate of the Gibson umbrella chart, setec#281). Empty by
+  # default: only the API server and the nodes reach the port.
+  webhookCallers: []
+  #  - namespace: gibson
+  #    podLabels:
+  #      app.kubernetes.io/component: webhook-gate
   # metricsScrapers are the Pods that may scrape the metrics ports. Each
   # entry is a namespace and the labels of its Pods. Both are required: the
   # person who creates a Pod chooses its labels, so the namespace is pinned

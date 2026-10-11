@@ -585,7 +585,9 @@ note "the setec namespace network policy"
 SP_ALL=("${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
 	--set snapshots.s3.bucket=setec-snapshots
 	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
-	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}')
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}'
+	--set 'systemPolicy.webhookCallers[0].namespace=gibson'
+	--set 'systemPolicy.webhookCallers[0].podLabels.app\.kubernetes\.io/component=webhook-gate')
 render "$workdir/sp-all.yaml" "${SP_ALL[@]}"
 if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/sp-all.yaml" setec-system >"$workdir/sp-all.out"; then
 	pass "each component of the setec namespace has an allow, under a default deny with DNS"
@@ -638,6 +640,40 @@ grep -q "port: \"50051\"" "$workdir/sp-all.yaml" && grep -q "k8s:io.kubernetes.p
 	&& grep -q -- "- 203.0.113.0/24" "$workdir/sp-all.yaml" \
 	&& pass "the frontend gRPC port admits the named caller and the named range" \
 	|| fail "the frontend gRPC port does not admit the named caller and range"
+# A webhook caller (setec#281): the operator admits it on 9443, pinned to its
+# namespace, and the default install admits nobody but the API server.
+if python3 - "$workdir/sp-all.yaml" "$workdir/sp-default.yaml" >"$workdir/sp-webhook.out" 2>&1 <<'PY'
+import sys, yaml
+def callers(path):
+    out = []
+    for d in yaml.safe_load_all(open(path)):
+        if isinstance(d, dict) and d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-operator"):
+            for rule in d["spec"].get("ingress") or []:
+                ports = [p.get("port") for tp in rule.get("toPorts") or [] for p in tp.get("ports") or []]
+                if "9443" in ports:
+                    out += [peer.get("matchLabels") for peer in rule.get("fromEndpoints") or []]
+    return out
+want = {"k8s:io.kubernetes.pod.namespace": "gibson", "app.kubernetes.io/component": "webhook-gate"}
+got_all, got_default = callers(sys.argv[1]), callers(sys.argv[2])
+if got_all != [want]:
+    sys.exit(f"the named webhook caller is not admitted on 9443: {got_all}")
+if got_default:
+    sys.exit(f"the default install admits a webhook caller: {got_default}")
+PY
+then
+	pass "the webhook port admits the named caller only, pinned to its namespace"
+else
+	fail "webhook callers: $(cat "$workdir/sp-webhook.out")"
+fi
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set 'systemPolicy.webhookCallers[0].namespace=gibson' \
+	>/dev/null 2>"$workdir/sp-nowhlabels.err"; then
+	fail "a webhook caller with no podLabels must fail the render"
+elif grep -qF "systemPolicy.webhookCallers" "$workdir/sp-nowhlabels.err"; then
+	pass "a webhook caller with no podLabels fails the render"
+else
+	fail "a webhook caller with no podLabels failed for another reason: $(tail -n1 "$workdir/sp-nowhlabels.err")"
+fi
 if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'systemPolicy.metricsScrapers[0].namespace=' \
