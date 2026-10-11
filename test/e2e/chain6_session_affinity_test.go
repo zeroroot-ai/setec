@@ -93,7 +93,7 @@ func TestChain6_SessionAffinity(t *testing.T) {
 	spec.SandboxClassName = chain6ClassName
 	spec.Lifecycle = &setecv1alpha1.Lifecycle{
 		Mode:      setecv1alpha1.LifecycleModeSession,
-		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size},
+		Workspace: &setecv1alpha1.WorkspaceSpec{Size: &size, StorageClassName: workspaceStorageClassName()},
 	}
 
 	sb := newSandbox(chain6SandboxName, spec)

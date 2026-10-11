@@ -98,6 +98,78 @@ func TestScan_RandomMemoryFillIsNotFlagged(t *testing.T) {
 	}
 }
 
+// TestScan_BinaryStringTablesAreNotFlagged guards the false positive that
+// refused every base of the warm pool in the nightly launcher run: a memory
+// image holds the string tables of the binaries in the guest. Lower-case text
+// in those tables is not an environment variable assignment.
+func TestScan_BinaryStringTablesAreNotFlagged(t *testing.T) {
+	s := New()
+	tables := []string{
+		// The excerpt of the finding in the nightly run (setec#253).
+		"\x00\x01failed to read traffic secrettls: received unexpected error: did not\x00",
+		// The shapes of the string tables of common binaries.
+		"\x00private-key: public-key:\x00",
+		"\x00token: %v\\[0-9a-f]{1,6}\x00",
+		"PasswordAuthentication=nofailed",
+		"\nPasswordAuthentication=nofailed\n",
+		"\ntoken: %v\\[0-9a-f]{1,6}\n",
+		"Token:Names:Roles:Nodes:Force:Tasks:SecretConfigVolumeSince:Attrs:Close:",
+	}
+	for _, table := range tables {
+		fs, err := s.Scan(strings.NewReader(table))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(fs) != 0 {
+			t.Errorf("string table %q produced findings: %v", table, fs)
+		}
+	}
+}
+
+// TestScan_ConfigAssignmentInAnyCase proves that a secret line of a config
+// file is found in lower and mixed case, while the string tables of
+// TestScan_BinaryStringTablesAreNotFlagged stay clean.
+func TestScan_ConfigAssignmentInAnyCase(t *testing.T) {
+	s := New()
+	lines := []string{
+		"client_secret: Zx9fQ2mPaa71",     // YAML
+		"db_password=Zx9fQ2mPaa71",        // a lower-case .env entry
+		"api_key = Zx9fQ2mPaa71",          // INI or TOML
+		"Password=Zx9fQ2mPaa71",           // mixed case
+		"  oauth_token: 'Zx9fQ2mPaa71'\n", // indented, quoted
+	}
+	for _, line := range lines {
+		body := "# config\n" + line + "\nnext: value\n"
+		fs, err := s.Scan(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if !ruleSet(fs)["secret-shaped-config-assignment"] {
+			t.Errorf("expected secret-shaped-config-assignment on %q; got %v", line, fs)
+		}
+		for _, f := range fs {
+			if strings.Contains(f.Excerpt, "Zx9fQ2mPaa71") {
+				t.Errorf("excerpt re-leaked the secret: %q", f.Excerpt)
+			}
+		}
+	}
+}
+
+// TestScan_EnvAssignmentInEnvironBlock proves that the case-sensitive rule
+// still finds a secret in the environment block of a process, where each
+// entry ends with a NUL byte.
+func TestScan_EnvAssignmentInEnvironBlock(t *testing.T) {
+	s := New()
+	environ := "PATH=/usr/bin\x00HOME=/root\x00GITHUB_TOKEN=abcdef0123456789\x00TERM=xterm\x00"
+	fs, err := s.Scan(strings.NewReader(environ))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !ruleSet(fs)["secret-shaped-env-assignment"] {
+		t.Fatalf("expected secret-shaped-env-assignment on an environ block; got %v", fs)
+	}
+}
+
 // TestScan_TokenSpanningChunkBoundary ensures a secret straddling the
 // internal scan-window boundary is still detected (overlap carry works).
 func TestScan_TokenSpanningChunkBoundary(t *testing.T) {

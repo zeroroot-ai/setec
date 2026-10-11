@@ -125,8 +125,32 @@ var builtinRules = []rule{
 		// secret and whose value is a non-trivial token. This is the shape
 		// secrets take when they are (wrongly) baked into a snapshot via the
 		// container env rather than injected post-restore.
+		//
+		// The name is upper case, as an environment variable name is. The
+		// rule is case sensitive on purpose. A memory image holds the string
+		// tables of each binary in the guest, and those tables hold lower-case
+		// text such as "read traffic secret" next to "tls: ...". A
+		// case-insensitive name matched that text and refused every base of
+		// the warm pool.
 		name:      "secret-shaped-env-assignment",
-		re:        regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"']{8,})`),
+		re:        regexp.MustCompile(`\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"']{8,})`),
+		maskGroup: 2,
+	},
+	{
+		// A line of a config file (YAML, .env, INI, TOML) whose key reads
+		// as a secret, in any case: "client_secret: ...", "db_password=...",
+		// "Password=...". The page cache of a guest holds such files.
+		//
+		// The rule is case insensitive, so three conditions keep it off the
+		// string tables of binaries: the key starts a line (after a newline,
+		// not a NUL), the key ends with the secret word ("Password=" but not
+		// "PasswordAuthentication="), and the value is token characters that
+		// end at white space, a quote, a NUL or the line end ("%v\[0-9" is
+		// not a value).
+		name: "secret-shaped-config-assignment",
+		re: regexp.MustCompile(`(?im)^[ \t]*(?:export[ \t]+)?` +
+			`([a-z0-9_.-]*(?:secret|password|passwd|api[_-]?key|token|private[_-]?key|credentials?))` +
+			`[ \t]*[:=][ \t]*["']?([a-z0-9_\-+/=.~]{8,})(?:["'\s\x00]|$)`),
 		maskGroup: 2,
 	},
 }
