@@ -28,9 +28,11 @@ const instanceTypeLabel = "node.kubernetes.io/instance-type"
 //
 // The template matches one CPU. The test runs on the nodes of that
 // instance family (SETEC_E2E_CPU_TEMPLATE, default m8i), and it fails when
-// the cluster has none: the CI runners of the e2e workflow are not m8i, so
-// the workflow names this test in SKIP_PATTERN. `make e2e-cpu-template` runs
-// it on a cluster with m8i nodes.
+// the cluster has none. The CPU of a GitHub-hosted runner is never m8i
+// (setec#271), so exit-test-launcher names this test in SKIP_PATTERN. `make
+// e2e-cpu-template` runs it against the setec installed on a cluster with m8i
+// nodes (SETEC_E2E_INSTALLED_NAMESPACE), and the hosted exit test
+// exit-test-setec-cpu-template runs that on staging each day.
 func TestLauncher_CPUTemplateSnapshotLoads(t *testing.T) {
 	family := os.Getenv("SETEC_E2E_CPU_TEMPLATE")
 	if family == "" {

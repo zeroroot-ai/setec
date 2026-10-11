@@ -30,7 +30,7 @@ A snapshot holds the CPU state of its machine, so it loads only where the guest 
 |---|---|---|
 | `m8i` | m8i: Intel Xeon 6 (Granite Rapids) | 5.17 or later |
 
-Firecracker has no static template for Granite Rapids. `m8i` is the custom template that Firecracker tests on that CPU, from the release that `firecracker.env` pins: it turns off the features that the T2 template turns off, so each m8i node shows one feature set. The file, its source and its license are in `cpu-templates/`. `TestCPUTemplates_AreValid` checks the format of each template, and the e2e scenario `TestLauncher_CPUTemplateSnapshotLoads` loads a snapshot in a class with the template on m8i nodes.
+Firecracker has no static template for Granite Rapids. `m8i` is the custom template that Firecracker tests on that CPU, from the release that `firecracker.env` pins: it turns off the features that the T2 template turns off, so each m8i node shows one feature set. The file, its source and its license are in `cpu-templates/`. `TestCPUTemplates_AreValid` checks the format of each template, and the e2e scenario `TestLauncher_CPUTemplateSnapshotLoads` loads a snapshot in a class with the template on m8i nodes. The CPU of a GitHub-hosted runner is never m8i, so the scenario runs each day against the setec installed on the m8i nodes of staging (`make e2e-cpu-template`, which installs nothing).
 
 ## Node preparation
 

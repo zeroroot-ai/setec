@@ -197,8 +197,8 @@ jobs:
         nodeAgent.nodeSelector.setec\.zeroroot\.ai/e2e-role=sandbox-host
       # The guard and the chain-6 exit test run in steps of their own. The
       # CPU template scenario needs nodes of the instance family of the
-      # template (m8i), which the runners are not. `make e2e-cpu-template`
-      # runs it on a cluster with m8i nodes (setec#239). The upgrade
+      # template (m8i). The CPU of a hosted runner is never m8i (setec#271):
+      # the hosted exit test exit-test-setec-cpu-template runs it on staging. The upgrade
       # scenario needs a release without snapshots, so it runs in a step
       # of its own.
       SKIP_PATTERN: '^(TestEnv_KVMPresent|TestChain6_SessionAffinity|TestLauncher_CPUTemplateSnapshotLoads|TestPhase3_UpgradeFromPhase2)$'
