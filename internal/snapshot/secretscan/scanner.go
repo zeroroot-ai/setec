@@ -120,10 +120,13 @@ func acceptName(window []byte, m []int, nameGroup, valueGroup int) bool {
 }
 
 // keyKeywords are the bare keywords "key" and "keys" (D90, amended). A name
-// with one of them (SSH_KEY, SIGNING_KEY, encryptionKey) reads as a secret
-// only when its value is secret-shaped too (secretShapedValue): kernel
-// keyring text in guest memory ("trusted_key: instantiate") is a key name
-// with an English word after it.
+// whose LAST segment is one of them (SSH_KEY, SIGNING_KEY, encryptionKey,
+// KEY) reads as a secret only when its value is secret-shaped too
+// (secretShapedValue): kernel keyring text in guest memory
+// ("trusted_key: instantiate") is a key name with an English word after it.
+// A name with "key" as its first or a middle segment (keyUsage, KEY_ID,
+// keyStore) names a property of a key, not a secret: x509 text in guest
+// memory ("keyUsage: <joined words>", setec#295 run 38236338234).
 var keyKeywords = map[string]bool{"key": true, "keys": true}
 
 // keywordSegment reports whether name holds a secret keyword (secretKeywords)
@@ -136,10 +139,11 @@ func keywordSegment(name string) bool {
 	return nameHasKeyword(name, secretKeywords)
 }
 
-// keyName reports whether name holds "key" or "keys" as a whole segment or
-// at its end. Such a name counts only with a secret-shaped value.
+// keyName reports whether the last segment of name is "key" or "keys".
+// Such a name counts only with a secret-shaped value.
 func keyName(name string) bool {
-	return nameHasKeyword(name, keyKeywords)
+	segs := nameSegments(name)
+	return len(segs) > 0 && keyKeywords[segs[len(segs)-1]]
 }
 
 // nameHasKeyword reports whether name holds one of kws as a whole segment,

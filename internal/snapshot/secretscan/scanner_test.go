@@ -84,6 +84,9 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"SIGNING_KEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
 		"\x00encryptionKey: ghp_x1y2z3\x00",
 		"DEPLOY_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+		"\x00apiKey: sk_live_abc\x00",
+		"\x00signingKey: 9f8e7d6c5b4a39281706f5e4d3c2b1a0\x00",
+		"KEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
 		// A generated password that starts with "%" and a letter (setec#287).
 		"DB_PASSWORD=%Kx9!q2Lm",
 	}
@@ -112,6 +115,14 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"\x003trusted_key: unsealing key: instantiate\x00",
 		"keyspace: Zx9fQ2mPaa71",
 		"apikeyring=Zx9fQ2mPaa71",
+		// "key" as the first or a middle segment names a property of a key,
+		// even with a secret-shaped value: x509 text of the guest memory
+		// (setec#295 run 38236338234).
+		"\x00keyUsage: digitalSignature2x509keyEncipherment\x00",
+		"KEY_ID=AKIAexample",
+		"keyring=Zx9fQ2mPaa71Zx9fQ2mPaa71",
+		"keyStore=Zx9fQ2mPaa71Zx9fQ2mPaa71",
+		"KEY_USAGE_FLAGS=Zx9fQ2mPaa71Zx9fQ2mPaa71",
 	}
 	for _, body := range noMatch {
 		fs, err := s.Scan(strings.NewReader(body))
