@@ -49,6 +49,71 @@ func TestScan_DetectsHighSignalSecrets(t *testing.T) {
 	}
 }
 
+// TestScan_SecretKeywordIsAWholeSegment is D90: a secret keyword counts
+// only as a whole segment of the name. Underscores, dashes, dots and case
+// changes split a name. The names of the decision match in each case; a
+// keyword inside a longer word does not.
+func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
+	s := New()
+	match := []string{
+		"SECRET_KEY=Zx9fQ2mPaa71",
+		"DB_PASSWORD=Zx9fQ2mPaa71",
+		"apiToken=Zx9fQ2mPaa71",
+		"\x00token: Zx9fQ2mPaa71\x00",
+		"DBPassword=Zx9fQ2mPaa71",
+		"client.secret=Zx9fQ2mPaa71",
+		"x-api-key: Zx9fQ2mPaa71",
+		"MY_PRIVATE_KEY=Zx9fQ2mPaa71",
+		"aws.credentials: Zx9fQ2mPaa71",
+		// "Password" is a whole segment of this name, so it matches (D90).
+		"PasswordAuthentication=nofailed",
+	}
+	for _, body := range match {
+		fs, err := s.Scan(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if !ruleSet(fs)["secret-shaped-env-assignment"] {
+			t.Errorf("%q: want secret-shaped-env-assignment, got %v", body, fs)
+		}
+	}
+	noMatch := []string{
+		"failed to read traffic secrettls: received unexpected error",
+		"\x00secrettls: Zx9fQ2mPaa71\x00",
+		"tokenizer=Zx9fQ2mPaa71",
+		"passwordless=Zx9fQ2mPaa71",
+		"MYSECRETVALUE=Zx9fQ2mPaa71",
+		"keyspace: Zx9fQ2mPaa71",
+		"apikeyring=Zx9fQ2mPaa71",
+	}
+	for _, body := range noMatch {
+		fs, err := s.Scan(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if ruleSet(fs)["secret-shaped-env-assignment"] {
+			t.Errorf("%q: a keyword inside a longer word matched: %v", body, fs)
+		}
+	}
+}
+
+// TestNameSegments pins the split of a name (D90).
+func TestNameSegments(t *testing.T) {
+	for name, want := range map[string]string{
+		"SECRET_KEY":             "secret key",
+		"apiToken":               "api token",
+		"DBPassword":             "db password",
+		"client.secret-value":    "client secret value",
+		"secrettls":              "secrettls",
+		"PasswordAuthentication": "password authentication",
+		"aws2Token":              "aws2 token",
+	} {
+		if got := strings.Join(nameSegments(name), " "); got != want {
+			t.Errorf("nameSegments(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestScan_RedactsSecretBody(t *testing.T) {
 	s := New()
 	fs, err := s.Scan(strings.NewReader("export TOKEN=supersecretvalue123"))
@@ -110,8 +175,6 @@ func TestScan_BinaryStringTablesAreNotFlagged(t *testing.T) {
 		// The shapes of the string tables of common binaries.
 		"\x00private-key: public-key:\x00",
 		"\x00token: %v\\[0-9a-f]{1,6}\x00",
-		"PasswordAuthentication=nofailed",
-		"\nPasswordAuthentication=nofailed\n",
 		"\ntoken: %v\\[0-9a-f]{1,6}\n",
 		"Token:Names:Roles:Nodes:Force:Tasks:SecretConfigVolumeSince:Attrs:Close:",
 	}

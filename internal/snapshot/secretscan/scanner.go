@@ -63,7 +63,73 @@ type rule struct {
 	name      string
 	re        *regexp.Regexp
 	maskGroup int
+	// nameGroup, when set, is the capture group of a name that must hold a
+	// secret keyword as a whole segment (keywordSegment). 0 checks nothing.
+	nameGroup int
 }
+
+// secretKeywords are the name segments that read as a secret (D90).
+var secretKeywords = map[string]bool{
+	"secret": true, "secrets": true, "password": true, "passwords": true, "passwd": true,
+	"token": true, "tokens": true, "credential": true, "credentials": true,
+	"apikey": true, "privatekey": true,
+}
+
+// secretKeywordPairs are two segments that read as a secret together.
+var secretKeywordPairs = map[[2]string]bool{
+	{"api", "key"}: true, {"private", "key"}: true,
+}
+
+// keywordSegment reports whether name holds a secret keyword as a whole
+// segment (D90). Underscores, dashes and dots split a name, and so does a
+// case change: "apiToken" is "api" and "token", "DBPassword" is "db" and
+// "password". "secrettls" is one segment, and it is no keyword.
+func keywordSegment(name string) bool {
+	segs := nameSegments(name)
+	for i, seg := range segs {
+		if secretKeywords[seg] {
+			return true
+		}
+		if i > 0 && secretKeywordPairs[[2]string{segs[i-1], seg}] {
+			return true
+		}
+	}
+	return false
+}
+
+// nameSegments splits name at underscores, dashes, dots and case changes,
+// and returns the segments in lower case.
+func nameSegments(name string) []string {
+	var segs []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			segs = append(segs, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	rs := []rune(name)
+	for i, r := range rs {
+		switch {
+		case r == '_' || r == '-' || r == '.':
+			flush()
+			continue
+		case isUpper(r) && i > 0 && (isLower(rs[i-1]) || isDigit(rs[i-1])):
+			// "apiToken": a capital after a lower-case letter starts a segment.
+			flush()
+		case isUpper(r) && i > 0 && isUpper(rs[i-1]) && i+1 < len(rs) && isLower(rs[i+1]):
+			// "DBPassword": the last capital of a run starts a segment.
+			flush()
+		}
+		cur = append(cur, r)
+	}
+	flush()
+	return segs
+}
+
+func isUpper(r rune) bool { return r >= 'A' && r <= 'Z' }
+func isLower(r rune) bool { return r >= 'a' && r <= 'z' }
+func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 // builtinRules is the default detector set. Each pattern targets a
 // high-signal, low-false-positive secret shape. The set is intentionally
@@ -121,20 +187,27 @@ var builtinRules = []rule{
 		maskGroup: 0,
 	},
 	{
-		// A declared environment-variable assignment whose name reads as a
-		// secret and whose value is a non-trivial token. This is the shape
-		// secrets take when they are (wrongly) baked into a snapshot via the
-		// container env rather than injected post-restore.
+		// An assignment whose name reads as a secret and whose value is a
+		// non-trivial token: an environment variable ("DB_PASSWORD=..."), a
+		// field of a struct or a JSON document ("apiToken=...",
+		// "token: ..."). This is the shape secrets take when they are
+		// (wrongly) baked into a snapshot rather than injected after the
+		// restore.
 		//
-		// The name is upper case, as an environment variable name is. The
-		// rule is case sensitive on purpose. A memory image holds the string
-		// tables of each binary in the guest, and those tables hold lower-case
-		// text such as "read traffic secret" next to "tls: ...". A
-		// case-insensitive name matched that text and refused every base of
-		// the warm pool.
-		name:      "secret-shaped-env-assignment",
-		re:        regexp.MustCompile(`\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"']{8,})`),
+		// A memory image holds the string tables of the binaries in the
+		// guest, where words of unrelated text sit side by side with no
+		// separator ("read traffic secret" next to "tls: ..."). So a secret
+		// keyword counts only as a whole segment of the name
+		// (keywordSegment, D90): underscores, dashes, dots and case changes
+		// split a name into segments. "SECRET_KEY", "DB_PASSWORD",
+		// "apiToken" and "token" match; "secrettls" does not. The value is
+		// token characters that end at white space, a quote, a NUL or the
+		// end, so a format string ("%v\[0-9a-f]") is not a value.
+		name: "secret-shaped-env-assignment",
+		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|api[_-]?key|token|private[_-]?key|credential)[A-Za-z0-9_.-]*)` +
+			`\s*[:=]\s*["']?([A-Za-z0-9_\-+/=.~]{8,})(?:["'\s\x00]|$)`),
 		maskGroup: 2,
+		nameGroup: 1,
 	},
 	{
 		// A line of a config file (YAML, .env, INI, TOML) whose key reads
@@ -198,6 +271,9 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	emit := func(window []byte, base int64) {
 		for _, rl := range s.rules {
 			for _, m := range rl.re.FindAllSubmatchIndex(window, -1) {
+				if g := rl.nameGroup; g > 0 && (m[2*g] < 0 || !keywordSegment(string(window[m[2*g]:m[2*g+1]]))) {
+					continue
+				}
 				start := int64(m[0]) + base
 				f := Finding{
 					Rule:    rl.name,
