@@ -180,6 +180,11 @@ func (p *Plugin) Serve(ctx context.Context, socket, kubeletSocket string) error 
 		ResourceName: p.dev.Resource,
 		Options:      &pluginapi.DevicePluginOptions{},
 	}); err != nil {
+		// A stop during the registration is a stop, as after it: the
+		// kubelet answer was not needed any more.
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	select {
