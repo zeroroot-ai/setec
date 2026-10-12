@@ -6,6 +6,7 @@
 package guestagent
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,4 +63,34 @@ func TestLinkConfigurer_TakesThePodIdentity(t *testing.T) {
 	if err != nil || string(raw) != "nameserver 10.43.0.10\n" {
 		t.Fatalf("resolv.conf = %q, %v", raw, err)
 	}
+}
+
+// TestBringUpLoopback runs in a private network namespace (unshare -rn, with
+// SETEC_NETNS_TEST=1), where lo starts down, as in a new machine. After
+// BringUpLoopback, lo is up and a listen on 127.0.0.1 works (setec#296).
+func TestBringUpLoopback(t *testing.T) {
+	if os.Getenv("SETEC_NETNS_TEST") != "1" {
+		t.Skip("needs a private network namespace; set SETEC_NETNS_TEST=1 under unshare -rn")
+	}
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lo.Attrs().Flags&net.FlagUp != 0 {
+		t.Fatal("lo is up before BringUpLoopback: the namespace is not new")
+	}
+	if err := BringUpLoopback(); err != nil {
+		t.Fatalf("BringUpLoopback: %v", err)
+	}
+	if lo, err = netlink.LinkByName("lo"); err != nil {
+		t.Fatal(err)
+	}
+	if lo.Attrs().Flags&net.FlagUp == 0 {
+		t.Fatalf("lo flags = %v, want up", lo.Attrs().Flags)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen on 127.0.0.1 after lo is up: %v", err)
+	}
+	_ = ln.Close()
 }
