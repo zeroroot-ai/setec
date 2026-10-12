@@ -72,6 +72,12 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"SECRET_KEY=a#b$c%d^e&f*",
 		"apiToken=P@ss:w0rd(2024)",
 		"\x00token: abc:def:123!\x00",
+		// A name that ends with a keyword (D90, amended).
+		"MYSECRET=Zx9fQ2mPaa71",
+		"DBPASSWORD=Zx9fQ2mPaa71",
+		"APIKEY=Zx9fQ2mPaa71",
+		"GITHUBTOKEN=Zx9fQ2mPaa71",
+		"\x00apikey: Zx9fQ2mPaa71\x00",
 		// A generated password that starts with "%" and a letter (setec#287).
 		"DB_PASSWORD=%Kx9!q2Lm",
 	}
@@ -90,6 +96,7 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"tokenizer=Zx9fQ2mPaa71",
 		"passwordless=Zx9fQ2mPaa71",
 		"MYSECRETVALUE=Zx9fQ2mPaa71",
+		"secrettls: Zx9fQ2mPaa71",
 		"keyspace: Zx9fQ2mPaa71",
 		"apikeyring=Zx9fQ2mPaa71",
 	}

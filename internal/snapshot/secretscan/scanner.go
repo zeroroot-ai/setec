@@ -111,12 +111,31 @@ var secretKeywordPairs = map[[2]string]bool{
 // case change: "apiToken" is "api" and "token", "DBPassword" is "db" and
 // "password". "secrettls" is one segment, and it is no keyword.
 func keywordSegment(name string) bool {
+	if keywordAtEnd(name) {
+		return true
+	}
 	segs := nameSegments(name)
 	for i, seg := range segs {
 		if secretKeywords[seg] {
 			return true
 		}
 		if i > 0 && secretKeywordPairs[[2]string{segs[i-1], seg}] {
+			return true
+		}
+	}
+	return false
+}
+
+// keywordAtEnd reports whether name ends with a secret keyword, in any case
+// and with or without separators (D90, amended): "MYSECRET", "DBPASSWORD",
+// "APIKEY" and "GITHUBTOKEN" are secret names that the segment rule alone
+// misses. "secrettls" does not end with a keyword. A false match fails the
+// scan closed, and a missed secret does not, so the rule takes the false
+// match.
+func keywordAtEnd(name string) bool {
+	flat := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(name))
+	for kw := range secretKeywords {
+		if strings.HasSuffix(flat, kw) {
 			return true
 		}
 	}
