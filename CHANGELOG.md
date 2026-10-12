@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.127.2](https://github.com/zeroroot-ai/setec/compare/v0.127.1...v0.127.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **chart:** named callers may reach the operator webhook port ([#282](https://github.com/zeroroot-ai/setec/issues/282)) ([05f37f4](https://github.com/zeroroot-ai/setec/commit/05f37f430a3da408ef4f22f0eb4d5be30c61124d)), closes [#281](https://github.com/zeroroot-ai/setec/issues/281)
+* **diskbuilder:** the disk tag names the signing key, so a rotated seed signs a new disk ([#275](https://github.com/zeroroot-ai/setec/issues/275)) ([4236f5a](https://github.com/zeroroot-ai/setec/commit/4236f5a1d500bcd2084c52f88b6df3edbfcd74b2)), closes [#272](https://github.com/zeroroot-ai/setec/issues/272)
+* **restore:** a snapshot loads only over the image disk that its machine ran on ([#283](https://github.com/zeroroot-ai/setec/issues/283)) ([f8d7fde](https://github.com/zeroroot-ai/setec/commit/f8d7fdef3944c85b1f8975767042336bb1572dca))
+
 ## [0.127.1](https://github.com/zeroroot-ai/setec/compare/v0.127.0...v0.127.1) (2026-10-11)
 
 
