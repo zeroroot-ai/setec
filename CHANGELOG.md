@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.127.5](https://github.com/zeroroot-ai/setec/compare/v0.127.4...v0.127.5) (2026-10-12)
+
+
+### Bug Fixes
+
+* **guestagent:** the guest agent brings up lo, so a guest process can listen on 127.0.0.1 ([#297](https://github.com/zeroroot-ai/setec/issues/297)) ([86c0178](https://github.com/zeroroot-ai/setec/commit/86c0178db6844f509177c5b282ee29a0b54c2756))
+
 ## [0.127.4](https://github.com/zeroroot-ai/setec/compare/v0.127.3...v0.127.4) (2026-10-12)
 
 
