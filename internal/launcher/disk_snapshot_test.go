@@ -30,10 +30,11 @@ func rotationDisk(t *testing.T, key ed25519.PrivateKey, imageRef, content string
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := diskbuilder.Sign(key, d.DigestStr(), disk)
+	sum, err := diskbuilder.FileSHA256(disk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	s := diskbuilder.SignDigest(key, d.DigestStr(), sum)
 	raw, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
