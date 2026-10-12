@@ -75,16 +75,23 @@ type rule struct {
 // string table of a binary holds a format string ("%v\[0-9a-f]{1,6}").
 var formatString = regexp.MustCompile(`^%[-+# 0]*\d*(?:\.\d+)?[A-Za-z]`)
 
+// formatSign is a second sign of a format string or a pattern in a string
+// table: a backslash, a bracket, a brace, or another verb. A password that
+// starts with "%" and a letter has none of them (setec#287).
+var formatSign = regexp.MustCompile(`[\\\[\]{}]|.%[-+# 0]*\d*(?:\.\d+)?[A-Za-z]`)
+
 // labelList is a value made only of "name:" labels, as the string table of
 // a binary holds field and option names side by side
 // ("Names:Roles:Nodes:", "public-key:").
 var labelList = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9_-]*:)+$`)
 
 // stringTableValue reports whether a value has the shape of a string table
-// and not of a secret: a format string, or a list of labels. Any other run
-// of characters is a value, so a password with punctuation still counts.
+// and not of a secret: a format string, or a list of labels. A format string
+// starts with a verb and has a second sign (formatSign), so a password that
+// starts with "%" and a letter still counts. Any other run of characters is
+// a value, so a password with punctuation still counts.
 func stringTableValue(v string) bool {
-	return formatString.MatchString(v) || labelList.MatchString(v)
+	return formatString.MatchString(v) && formatSign.MatchString(v) || labelList.MatchString(v)
 }
 
 // secretKeywords are the name segments that read as a secret (D90).

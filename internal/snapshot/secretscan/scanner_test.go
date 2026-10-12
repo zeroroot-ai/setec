@@ -72,6 +72,8 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"SECRET_KEY=a#b$c%d^e&f*",
 		"apiToken=P@ss:w0rd(2024)",
 		"\x00token: abc:def:123!\x00",
+		// A generated password that starts with "%" and a letter (setec#287).
+		"DB_PASSWORD=%Kx9!q2Lm",
 	}
 	for _, body := range match {
 		fs, err := s.Scan(strings.NewReader(body))
@@ -106,7 +108,9 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 func TestStringTableValue(t *testing.T) {
 	for v, want := range map[string]bool{
 		`%v\[0-9a-f]{1,6}`:    true,
-		`%-08.3f`:             true,
+		`%-08.3f%s`:           true,
+		"%Kx9!q2Lm":           false,
+		"%sAbcdefgh":          false,
 		"Names:Roles:Nodes:":  true,
 		"public-key:":         true,
 		"P@ssw0rd!2024":       false,
