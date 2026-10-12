@@ -73,7 +73,7 @@ type rule struct {
 
 // formatString is a value that starts with a Go or C format verb, as the
 // string table of a binary holds a format string ("%v\[0-9a-f]{1,6}").
-var formatString = regexp.MustCompile(`^%[-+# 0]*[0-9]*(?:\.[0-9]+)?[A-Za-z]`)
+var formatString = regexp.MustCompile(`^%[-+# 0]*\d*(?:\.\d+)?[A-Za-z]`)
 
 // labelList is a value made only of "name:" labels, as the string table of
 // a binary holds field and option names side by side
