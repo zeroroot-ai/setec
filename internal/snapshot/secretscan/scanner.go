@@ -25,6 +25,7 @@ package secretscan
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"regexp"
@@ -101,29 +102,91 @@ var secretKeywords = map[string]bool{
 	"apikey": true, "privatekey": true,
 }
 
-// secretKeywordPairs are two segments that read as a secret together.
-var secretKeywordPairs = map[[2]string]bool{
-	{"api", "key"}: true, {"private", "key"}: true,
-}
-
-// keywordSegment reports whether name holds a secret keyword as a whole
-// segment (D90). Underscores, dashes and dots split a name, and so does a
-// case change: "apiToken" is "api" and "token", "DBPassword" is "db" and
-// "password". "secrettls" is one segment, and it is no keyword.
-func keywordSegment(name string) bool {
-	if keywordAtEnd(name) {
+// acceptName reports whether the name of match m reads as a secret: a
+// secret keyword (keywordSegment) alone, or a bare "key" with a
+// secret-shaped value (D90, amended).
+func acceptName(window []byte, m []int, nameGroup, valueGroup int) bool {
+	if m[2*nameGroup] < 0 {
+		return false
+	}
+	name := string(window[m[2*nameGroup]:m[2*nameGroup+1]])
+	if keywordSegment(name) {
 		return true
 	}
+	if !keyName(name) || valueGroup == 0 || m[2*valueGroup] < 0 {
+		return false
+	}
+	return secretShapedValue(window, m[2*valueGroup], string(window[m[2*valueGroup]:m[2*valueGroup+1]]))
+}
+
+// keyKeywords are the bare keywords "key" and "keys" (D90, amended). A name
+// whose LAST segment is one of them (SSH_KEY, SIGNING_KEY, encryptionKey,
+// KEY) reads as a secret only when its value is secret-shaped too
+// (secretShapedValue): kernel keyring text in guest memory
+// ("trusted_key: instantiate") is a key name with an English word after it.
+// A name with "key" as its first or a middle segment (keyUsage, KEY_ID,
+// keyStore) names a property of a key, not a secret: x509 text in guest
+// memory ("keyUsage: <joined words>", setec#295 run 38236338234).
+var keyKeywords = map[string]bool{"key": true, "keys": true}
+
+// keywordSegment reports whether name holds a secret keyword (secretKeywords)
+// as a whole segment or at its end (D90). Underscores, dashes and dots split
+// a name, and so does a case change: "apiToken" is "api" and "token",
+// "DBPassword" is "db" and "password". "secrettls" is one segment, and it is
+// no keyword. These keywords need no check of the value: a real password can
+// be short or weak.
+func keywordSegment(name string) bool {
+	return nameHasKeyword(name, secretKeywords)
+}
+
+// keyName reports whether the last segment of name is "key" or "keys".
+// Such a name counts only with a secret-shaped value.
+func keyName(name string) bool {
 	segs := nameSegments(name)
-	for i, seg := range segs {
-		if secretKeywords[seg] {
-			return true
-		}
-		if i > 0 && secretKeywordPairs[[2]string{segs[i-1], seg}] {
+	return len(segs) > 0 && keyKeywords[segs[len(segs)-1]]
+}
+
+// nameHasKeyword reports whether name holds one of kws as a whole segment,
+// or ends with one of them.
+func nameHasKeyword(name string, kws map[string]bool) bool {
+	if keywordAtEnd(name, kws) {
+		return true
+	}
+	for _, seg := range nameSegments(name) {
+		if kws[seg] {
 			return true
 		}
 	}
 	return false
+}
+
+// secretPrefixes are the starts of known secret formats. A value with one
+// of them is secret-shaped whatever its length (D90, amended).
+var secretPrefixes = []string{
+	"sk_live_", "sk_test_", "rk_", "AKIA", "ASIA", "ghp_", "gho_", "ghs_", "github_pat_",
+	"xox", "AIza", "-----BEGIN", "ssh-rsa AAAA", "ssh-ed25519 AAAA",
+}
+
+// longTokenValue is 16 or more characters of a token alphabet, with no
+// white space.
+var longTokenValue = regexp.MustCompile(`^[A-Za-z0-9+/=_.:-]{16,}$`)
+
+// secretShapedValue reports whether the value that starts at window[start]
+// is secret-shaped (D90, amended): it starts with a known secret prefix,
+// or it is 16 or more characters of a token alphabet with at least one
+// letter and one digit. value is the captured value, which ends at white
+// space; the prefix is read from the window, because "ssh-rsa AAAA" holds a
+// space.
+func secretShapedValue(window []byte, start int, value string) bool {
+	rest := window[start:min(start+32, len(window))]
+	for _, p := range secretPrefixes {
+		if bytes.HasPrefix(rest, []byte(p)) {
+			return true
+		}
+	}
+	return longTokenValue.MatchString(value) &&
+		strings.ContainsAny(value, "0123456789") &&
+		strings.IndexFunc(value, func(r rune) bool { return isUpper(r) || isLower(r) }) >= 0
 }
 
 // keywordAtEnd reports whether name ends with a secret keyword, in any case
@@ -132,9 +195,9 @@ func keywordSegment(name string) bool {
 // misses. "secrettls" does not end with a keyword. A false match fails the
 // scan closed, and a missed secret does not, so the rule takes the false
 // match.
-func keywordAtEnd(name string) bool {
+func keywordAtEnd(name string, kws map[string]bool) bool {
 	flat := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(name))
-	for kw := range secretKeywords {
+	for kw := range kws {
 		if strings.HasSuffix(flat, kw) {
 			return true
 		}
@@ -250,7 +313,7 @@ var builtinRules = []rule{
 		// password with punctuation still counts. Only the two shapes of a
 		// string table are not a value (stringTableValue).
 		name: "secret-shaped-env-assignment",
-		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|api[_-]?key|token|private[_-]?key|credential)[A-Za-z0-9_.-]*)` +
+		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|key|token|credential)[A-Za-z0-9_.-]*)` +
 			`\s*[:=]\s*["']?([^\s"'\x00]{8,})`),
 		maskGroup:  2,
 		nameGroup:  1,
@@ -318,7 +381,7 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	emit := func(window []byte, base int64) {
 		for _, rl := range s.rules {
 			for _, m := range rl.re.FindAllSubmatchIndex(window, -1) {
-				if g := rl.nameGroup; g > 0 && (m[2*g] < 0 || !keywordSegment(string(window[m[2*g]:m[2*g+1]]))) {
+				if g := rl.nameGroup; g > 0 && !acceptName(window, m, g, rl.valueGroup) {
 					continue
 				}
 				if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
