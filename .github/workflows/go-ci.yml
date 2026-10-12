@@ -896,6 +896,7 @@ jobs:
       - fast
       - heavy
       - lint
+      - netns
       - proto-breaking
       - test
       - manifests-up-to-date
