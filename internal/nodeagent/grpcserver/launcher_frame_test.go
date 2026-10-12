@@ -32,9 +32,17 @@ func sparseFile(t *testing.T, path string, size int64, data map[int64][]byte) {
 	_ = f.Close()
 }
 
+// testImageDisk is the image disk digest of the test frames.
+var testImageDisk = strings.Repeat("ab", 32)
+
 func frameOf(t *testing.T, parent, state, mem, disk string) []byte {
 	t.Helper()
-	rc, err := makeLauncherFramedReader(parent, state, mem, disk)
+	return frameOn(t, parent, testImageDisk, state, mem, disk)
+}
+
+func frameOn(t *testing.T, parent, imageDisk, state, mem, disk string) []byte {
+	t.Helper()
+	rc, err := makeLauncherFramedReader(parent, imageDisk, state, mem, disk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +75,8 @@ func TestLauncherFrame_RoundTripKeepsTheHolesOfTheWritableLayer(t *testing.T) {
 	}
 	out := t.TempDir()
 	os2, om, od := filepath.Join(out, "s"), filepath.Join(out, "m"), filepath.Join(out, "d")
-	if err := writeLauncherFramedStream(bytes.NewReader(stream), os2, om, od, nil); err != nil {
-		t.Fatal(err)
+	if got, err := writeLauncherFramedStream(bytes.NewReader(stream), os2, om, od, nil); err != nil || got != testImageDisk {
+		t.Fatalf("writeLauncherFramedStream = %q, %v; want the image disk digest of the frame", got, err)
 	}
 	want, _ := os.ReadFile(dp)
 	got, _ := os.ReadFile(od)
@@ -79,7 +87,7 @@ func TestLauncherFrame_RoundTripKeepsTheHolesOfTheWritableLayer(t *testing.T) {
 		t.Fatalf("state = %q", st)
 	}
 	// A stream with no launcher frame never loads as a launcher snapshot.
-	if err := writeLauncherFramedStream(bytes.NewReader(make([]byte, 64)), os2, om, od, nil); err == nil {
+	if _, err := writeLauncherFramedStream(bytes.NewReader(make([]byte, 64)), os2, om, od, nil); err == nil {
 		t.Fatal("a stream with no launcher magic was accepted")
 	}
 }
@@ -117,7 +125,7 @@ func TestLauncherFrame_DiffGoesOnTheMemoryOfItsParent(t *testing.T) {
 	out := t.TempDir()
 	os2, om, od := filepath.Join(out, "s"), filepath.Join(out, "m"), filepath.Join(out, "d")
 	rc, _ := be.Open(context.Background(), "diff2")
-	if err := writeLauncherFramedStream(rc, os2, om, od, func(ref string) (io.ReadCloser, error) { return be.Open(context.Background(), ref) }); err != nil {
+	if _, err := writeLauncherFramedStream(rc, os2, om, od, func(ref string) (io.ReadCloser, error) { return be.Open(context.Background(), ref) }); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(om)
@@ -135,8 +143,54 @@ func TestLauncherFrame_DiffGoesOnTheMemoryOfItsParent(t *testing.T) {
 
 	// A diff with no way to open its parent fails.
 	rc2, _ := be.Open(context.Background(), "diff1")
-	if err := writeLauncherFramedStream(rc2, os2, om, od, nil); err == nil {
+	if _, err := writeLauncherFramedStream(rc2, os2, om, od, nil); err == nil {
 		t.Fatal("a diff with no parent opener was accepted")
+	}
+
+	// A diff whose parent ran on another image disk fails (setec#277).
+	state, mem := filepath.Join(dir, "other.state"), filepath.Join(dir, "other.mem")
+	_ = os.WriteFile(state, []byte("other"), 0o600)
+	sparseFile(t, mem, memSize, map[int64][]byte{0: page(4)})
+	be.blobs["diff-other"] = frameOn(t, "diff2", strings.Repeat("cd", 32), state, mem, disk)
+	rc3, _ := be.Open(context.Background(), "diff-other")
+	_, err := writeLauncherFramedStream(rc3, os2, om, od, func(ref string) (io.ReadCloser, error) { return be.Open(context.Background(), ref) })
+	if err == nil || !strings.Contains(err.Error(), "another image disk") {
+		t.Fatalf("a diff over a parent of another image disk = %v, want a refusal", err)
+	}
+}
+
+// TestLauncherFrame_RecordsTheImageDisk proves that a frame carries the
+// image disk digest, that a frame of the first form (no digest) does not
+// load, and that a frame with no valid digest is not made (setec#277).
+func TestLauncherFrame_RecordsTheImageDisk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sp, mp, dp := filepath.Join(dir, "s"), filepath.Join(dir, "m"), filepath.Join(dir, "d")
+	_ = os.WriteFile(sp, []byte("state"), 0o600)
+	_ = os.WriteFile(mp, []byte("memory"), 0o600)
+	_ = os.WriteFile(dp, []byte("disk"), 0o600)
+	for _, bad := range []string{"", "abc", strings.Repeat("AB", 32), strings.Repeat("zz", 32)} {
+		if _, err := makeLauncherFramedReader("", bad, sp, mp, dp); err == nil {
+			t.Fatalf("a frame with the image disk digest %q was made", bad)
+		}
+	}
+	stream := frameOf(t, "", sp, mp, dp)
+	out := t.TempDir()
+	os2, om, od := filepath.Join(out, "s"), filepath.Join(out, "m"), filepath.Join(out, "d")
+
+	// The first form: the same frame with the old magic and no digest.
+	v1 := append(append([]byte{}, launcherFrameMagicV1[:]...), stream[8:16]...)
+	v1 = append(v1, stream[16+len(testImageDisk):]...)
+	if _, err := writeLauncherFramedStream(bytes.NewReader(v1), os2, om, od, nil); err == nil ||
+		!strings.Contains(err.Error(), "no image disk digest") {
+		t.Fatalf("a frame of the first form = %v, want a refusal", err)
+	}
+
+	// A frame whose digest bytes are not a SHA-256 does not load.
+	bad := append([]byte{}, stream...)
+	copy(bad[16:], strings.Repeat("Z", len(testImageDisk)))
+	if _, err := writeLauncherFramedStream(bytes.NewReader(bad), os2, om, od, nil); err == nil {
+		t.Fatal("a frame with an invalid image disk digest loaded")
 	}
 }
 

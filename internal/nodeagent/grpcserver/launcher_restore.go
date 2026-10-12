@@ -53,11 +53,19 @@ func (s *Server) restoreLauncher(
 	defer func() {
 		_ = os.Remove(statePath)
 		_ = os.Remove(memPath)
+		_ = os.Remove(launchersandbox.HostPath(p, podspec.LauncherRestoreImageDisk))
 	}()
 	diskPath := launchersandbox.HostPath(p, podspec.LauncherWritableDisk)
 	openParent := func(ref string) (io.ReadCloser, error) { return backend.Open(ctx, ref) }
-	if err := writeLauncherFramedStream(rc, statePath, memPath, diskPath, openParent); err != nil {
+	imageDisk, err := writeLauncherFramedStream(rc, statePath, memPath, diskPath, openParent)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "unpack framed stream: %v", err)
+	}
+	// The launcher compares this digest with the image disk of the target
+	// Pod before the load (setec#277).
+	imageDiskPath := launchersandbox.HostPath(p, podspec.LauncherRestoreImageDisk)
+	if err := os.WriteFile(imageDiskPath, []byte(imageDisk+"\n"), 0o600); err != nil {
+		return nil, status.Errorf(codes.Internal, "write the image disk digest: %v", err)
 	}
 	if takenAtUnixNano > 0 {
 		takenAt := launchersandbox.HostPath(p, podspec.LauncherRestoreTakenAt)

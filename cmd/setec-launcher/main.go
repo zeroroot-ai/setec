@@ -60,10 +60,10 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 		Console:    os.Stdout,
 		Grace:      grace,
 		AfterStart: guest.AfterStart(spec.Workload),
-		CheckDisk: func(s *launcher.Spec) error {
+		CheckDisk: func(s *launcher.Spec) (string, error) {
 			keys, err := diskbuilder.ParsePublicKeys(s.DiskKeys)
 			if err != nil {
-				return err
+				return "", err
 			}
 			return diskbuilder.VerifyMounted(s.ImageDisk, s.DiskSignature, s.ImageRef, keys)
 		},

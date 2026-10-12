@@ -152,14 +152,14 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	mnt := t.TempDir()
 	untar(t, mutate.Extract(art), mnt)
 	disk, sigFile := filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile)
-	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{pub}); err != nil {
+	if sum, err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{pub}); err != nil || len(sum) != 64 {
 		t.Fatalf("VerifyMounted with the right key: %v", err)
 	}
 	other, _, _ := ed25519.GenerateKey(nil)
-	if err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
+	if _, err := VerifyMounted(disk, sigFile, ref, []ed25519.PublicKey{other}); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("VerifyMounted with a wrong key = %v, want ErrBadSignature", err)
 	}
-	if err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
+	if _, err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
 	}
 	if got, err := DiskRef(b.DiskRepo, ref, KeyID(pub)); err != nil || got != tag1.String() {
@@ -243,7 +243,7 @@ func TestBuilder_ANewSeedSignsANewDisk(t *testing.T) {
 	} {
 		mnt := t.TempDir()
 		untar(t, mutate.Extract(checkDiskArtifact(t, c.tag)), mnt)
-		err := VerifyMounted(filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile), ref, c.keys)
+		_, err := VerifyMounted(filepath.Join(mnt, DiskFile), filepath.Join(mnt, SignatureFile), ref, c.keys)
 		if (err == nil) != c.ok {
 			t.Fatalf("VerifyMounted(%s, %d keys) = %v, want ok=%v", c.tag.TagStr(), len(c.keys), err, c.ok)
 		}

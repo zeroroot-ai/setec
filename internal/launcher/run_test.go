@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -168,9 +169,11 @@ func TestRun_SnapshotIsTheSameCall(t *testing.T) {
 	t.Parallel()
 	s := testSpec(t)
 	s.Source = Source{Snapshot: &SnapshotSource{State: "/snap/state", Memory: "/snap/mem"}}
+	check := snapshotDisk(t, s, testDiskSHA)
 	vmm := &fakeVMM{report: 0}
 	var after []Start
 	l := &Launcher{Spec: s, Net: &fakeNet{}, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		CheckDisk: check,
 		AfterStart: func(_ context.Context, _ PodNet, start Start) error {
 			after = append(after, start)
 			return nil
@@ -234,6 +237,22 @@ func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return str
 
 func noFormat(string) error { return nil }
 
+// testDiskSHA is the digest of the image disk of the test launchers.
+var testDiskSHA = strings.Repeat("ab", 32)
+
+// snapshotDisk records digest as the image disk of the snapshot of s, as
+// the node agent stages it, and returns a disk check that reports
+// testDiskSHA for the disk of the Pod.
+func snapshotDisk(t *testing.T, s *Spec, digest string) func(*Spec) (string, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "image-disk.sha256")
+	if err := os.WriteFile(path, []byte(digest+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Source.Snapshot.ImageDisk = path
+	return func(*Spec) (string, error) { return testDiskSHA, nil }
+}
+
 // TestRun_ChecksTheDiskBeforeTheNetworkJoin proves that a disk that fails
 // its check stops the launch before the network join, with a typed reason.
 func TestRun_ChecksTheDiskBeforeTheNetworkJoin(t *testing.T) {
@@ -243,10 +262,10 @@ func TestRun_ChecksTheDiskBeforeTheNetworkJoin(t *testing.T) {
 	var joinedAtCheck int
 	checked := 0
 	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second, Format: noFormat,
-		CheckDisk: func(*Spec) error {
+		CheckDisk: func(*Spec) (string, error) {
 			joinedAtCheck = nw.joined
 			checked++
-			return nil
+			return testDiskSHA, nil
 		}}
 	if _, err := l.Run(t.Context()); err != nil {
 		t.Fatal(err)
@@ -257,7 +276,7 @@ func TestRun_ChecksTheDiskBeforeTheNetworkJoin(t *testing.T) {
 
 	bad := errors.New("the disk has no valid signature")
 	l = &Launcher{Spec: testSpec(t), Net: &fakeNet{}, VMM: &fakeVMM{}, Console: io.Discard, Grace: time.Second,
-		Format: noFormat, CheckDisk: func(*Spec) error { return bad }}
+		Format: noFormat, CheckDisk: func(*Spec) (string, error) { return "", bad }}
 	code, err := l.Run(t.Context())
 	var le *Error
 	if code != LaunchFailedExit || !errors.As(err, &le) || le.Reason != ReasonDisks || !errors.Is(err, bad) {
@@ -295,6 +314,7 @@ func TestRun_RestoreWaitsForTheStagedFilesAndConnectsLast(t *testing.T) {
 	vmm := &fakeVMM{report: 0}
 	connectedAtAfterStart := -1
 	l := &Launcher{Spec: s, Net: nw, VMM: vmm, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		CheckDisk: snapshotDisk(t, s, testDiskSHA),
 		AfterStart: func(context.Context, PodNet, Start) error {
 			connectedAtAfterStart = nw.connected
 			return nil
@@ -337,6 +357,7 @@ func TestRun_NoReseedMarkerKeepsTheMachineOffTheNetwork(t *testing.T) {
 	nw := &fakeNet{}
 	var got Start
 	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{report: 0}, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		CheckDisk: snapshotDisk(t, s, testDiskSHA),
 		AfterStart: func(_ context.Context, _ PodNet, start Start) error {
 			got = start
 			return nil
@@ -366,6 +387,7 @@ func TestRun_RestoreFailureWritesTheErrorAndNeverConnects(t *testing.T) {
 	}}
 	nw := &fakeNet{}
 	l := &Launcher{Spec: s, Net: nw, VMM: &fakeVMM{report: 0}, Console: io.Discard, Grace: time.Second, Format: noFormat,
+		CheckDisk:  snapshotDisk(t, s, testDiskSHA),
 		AfterStart: func(context.Context, PodNet, Start) error { return errors.New("no fresh entropy") }}
 	code, err := l.Run(t.Context())
 	if err == nil || code != LaunchFailedExit || nw.connected != 0 {

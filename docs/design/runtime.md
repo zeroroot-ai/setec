@@ -26,6 +26,8 @@ The substrate is x86 with KVM. Each published image is `linux/amd64`, and every 
 
 A snapshot holds the CPU state of its machine, so it loads only where the guest sees the same CPU features. A class fixes them with a Firecracker custom CPU template: `spec.cpuTemplate` names a file of `/opt/setec/cpu-templates/` in the launcher image, without `.json` (`internal/podspec/launcher.go`, `LauncherCPUTemplateDir`). The launcher passes it to Firecracker as the CPU configuration of the machine (`internal/launcher/vmconfig.go`). A class with a template also names the instance type of its nodes in `spec.nodeSelector`, because a template matches one CPU.
 
+A snapshot also holds the page cache and the file system state of its image disk, so it loads only over a disk with the same bytes. The launcher writes the SHA-256 of the disk that it checked into its work directory. The node agent stores that digest with each snapshot, and stages it for a restore. The launcher compares it with the disk of the new Pod before the load, and refuses another disk. A rotation of the disk signing key builds a new disk, and the check covers it too (`internal/launcher/run.go`, `checkSnapshotDisk`).
+
 | Template | Instance types | Host kernel |
 |---|---|---|
 | `m8i` | m8i: Intel Xeon 6 (Granite Rapids) | 5.17 or later |

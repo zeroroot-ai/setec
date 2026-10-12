@@ -100,6 +100,10 @@ type SnapshotSource struct {
 	// time of the state in Unix nanoseconds. The workload learns that it
 	// resumed from the state of that time (setec#194).
 	TakenAt string `json:"takenAt,omitempty"`
+	// ImageDisk is the file in which the node agent writes the hex SHA-256
+	// of the image disk that the machine of the snapshot ran on. The
+	// launcher loads the snapshot only over the same disk (setec#277).
+	ImageDisk string `json:"imageDisk"`
 }
 
 // RestoreEvidence is what the launcher reports after a snapshot load. Each
@@ -185,6 +189,9 @@ func (sn *SnapshotSource) validate() error {
 	}
 	if sn.Staged != "" && !filepath.IsAbs(sn.Staged) || sn.Evidence != "" && !filepath.IsAbs(sn.Evidence) {
 		return errors.New("launcher: the snapshot staged marker and evidence must be absolute paths")
+	}
+	if !filepath.IsAbs(sn.ImageDisk) {
+		return errors.New("launcher: the snapshot needs the absolute path of its image disk digest")
 	}
 	return nil
 }

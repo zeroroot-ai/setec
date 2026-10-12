@@ -223,19 +223,22 @@ func writeLayerEntries(tw *tar.Writer, disk string, sigJSON []byte) error {
 // VerifyMounted is the check of a launcher before the machine uses a disk.
 // The disk and the signature come from the image volume of the Pod. The
 // signature must name imageRef, match the disk bytes and be valid under
-// one of keys.
-func VerifyMounted(disk, sigFile, imageRef string, keys []ed25519.PublicKey) error {
+// one of keys. It returns the hex SHA-256 of the checked disk.
+func VerifyMounted(disk, sigFile, imageRef string, keys []ed25519.PublicKey) (diskSHA256 string, err error) {
 	d, err := ParseDigestRef(imageRef)
 	if err != nil {
-		return err
+		return "", err
 	}
 	raw, err := os.ReadFile(sigFile) //nolint:gosec // a path of the launcher spec
 	if err != nil {
-		return fmt.Errorf("%w: read the signature: %w", ErrBadSignature, err)
+		return "", fmt.Errorf("%w: read the signature: %w", ErrBadSignature, err)
 	}
 	var sig Signature
 	if err := json.Unmarshal(raw, &sig); err != nil {
-		return fmt.Errorf("%w: the signature is not valid JSON", ErrBadSignature)
+		return "", fmt.Errorf("%w: the signature is not valid JSON", ErrBadSignature)
 	}
-	return Verify(keys, sig, d.DigestStr(), disk)
+	if err := Verify(keys, sig, d.DigestStr(), disk); err != nil {
+		return "", err
+	}
+	return sig.DiskSHA256, nil
 }
