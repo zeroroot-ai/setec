@@ -137,6 +137,55 @@ func (k *fakeKubelet) Register(_ context.Context, r *pluginapi.RegisterRequest) 
 	return &pluginapi.Empty{}, nil
 }
 
+// blockingKubelet answers no Register call until its context ends.
+type blockingKubelet struct {
+	pluginapi.UnimplementedRegistrationServer
+	called chan struct{}
+}
+
+func (k *blockingKubelet) Register(ctx context.Context, _ *pluginapi.RegisterRequest) (*pluginapi.Empty, error) {
+	close(k.called)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A stop while the kubelet has not answered the registration yet is a
+// clean stop, as a stop after it is. The fake kubelet of the test below
+// hands over the request before its answer reaches the plugin, so its
+// cancel can land in that window.
+func TestServe_AStopDuringTheRegistrationIsClean(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "dp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	kubeletSock := filepath.Join(dir, "kubelet.sock")
+	lis, err := net.Listen("unix", kubeletSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := &blockingKubelet{called: make(chan struct{})}
+	srv := grpc.NewServer()
+	pluginapi.RegisterRegistrationServer(srv, k)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	p := mustNew(t, "/dev/null", 2)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- p.Serve(ctx, filepath.Join(dir, "setec-kvm.sock"), kubeletSock) }()
+	select {
+	case <-k.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the plugin did not call Register")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve after a stop during the registration: %v", err)
+	}
+}
+
 func TestServe_RegistersWithTheKubelet(t *testing.T) {
 	t.Parallel()
 	dir, err := os.MkdirTemp("", "dp")
