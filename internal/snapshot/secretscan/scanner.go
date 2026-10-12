@@ -99,11 +99,10 @@ var secretKeywords = map[string]bool{
 	"secret": true, "secrets": true, "password": true, "passwords": true, "passwd": true,
 	"token": true, "tokens": true, "credential": true, "credentials": true,
 	"apikey": true, "privatekey": true,
-}
-
-// secretKeywordPairs are two segments that read as a secret together.
-var secretKeywordPairs = map[[2]string]bool{
-	{"api", "key"}: true, {"private", "key"}: true,
+	// A bare key segment or a name that ends with "key" (SSH_KEY,
+	// SIGNING_KEY, encryptionKey) reads as a secret too (D90, amended). A
+	// false match such as "monkey" fails the scan closed.
+	"key": true, "keys": true,
 }
 
 // keywordSegment reports whether name holds a secret keyword as a whole
@@ -115,11 +114,8 @@ func keywordSegment(name string) bool {
 		return true
 	}
 	segs := nameSegments(name)
-	for i, seg := range segs {
+	for _, seg := range segs {
 		if secretKeywords[seg] {
-			return true
-		}
-		if i > 0 && secretKeywordPairs[[2]string{segs[i-1], seg}] {
 			return true
 		}
 	}
@@ -250,7 +246,7 @@ var builtinRules = []rule{
 		// password with punctuation still counts. Only the two shapes of a
 		// string table are not a value (stringTableValue).
 		name: "secret-shaped-env-assignment",
-		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|api[_-]?key|token|private[_-]?key|credential)[A-Za-z0-9_.-]*)` +
+		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|key|token|credential)[A-Za-z0-9_.-]*)` +
 			`\s*[:=]\s*["']?([^\s"'\x00]{8,})`),
 		maskGroup:  2,
 		nameGroup:  1,

@@ -78,6 +78,12 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"APIKEY=Zx9fQ2mPaa71",
 		"GITHUBTOKEN=Zx9fQ2mPaa71",
 		"\x00apikey: Zx9fQ2mPaa71\x00",
+		// A bare key (D90, amended).
+		"SSH_KEY=Zx9fQ2mPaa71",
+		"SIGNING_KEY=Zx9fQ2mPaa71",
+		"ENCRYPTION_KEY=Zx9fQ2mPaa71",
+		"STRIPE_KEY=Zx9fQ2mPaa71",
+		"\x00encryptionKey: Zx9fQ2mPaa71\x00",
 		// A generated password that starts with "%" and a letter (setec#287).
 		"DB_PASSWORD=%Kx9!q2Lm",
 	}
