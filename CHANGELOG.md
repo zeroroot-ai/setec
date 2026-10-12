@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.127.4](https://github.com/zeroroot-ai/setec/compare/v0.127.3...v0.127.4) (2026-10-12)
+
+
+### Bug Fixes
+
+* **secretscan:** a bare key name is a secret name when its value is secret-shaped ([#295](https://github.com/zeroroot-ai/setec/issues/295)) ([f4278a0](https://github.com/zeroroot-ai/setec/commit/f4278a0642f466081a216d38cbe5b1618146512f))
+* **secretscan:** a format string needs a second sign, so a password that starts with a verb is scanned ([#289](https://github.com/zeroroot-ai/setec/issues/289)) ([aab200c](https://github.com/zeroroot-ai/setec/commit/aab200c6d4943d4f105ff069d808b0c4147cdd74)), closes [#287](https://github.com/zeroroot-ai/setec/issues/287)
+* **secretscan:** a secret keyword also matches at the end of a name ([#294](https://github.com/zeroroot-ai/setec/issues/294)) ([24dc757](https://github.com/zeroroot-ai/setec/commit/24dc757f0447ef394837883c25edab4baa436040))
+* **secretscan:** a secret keyword in an assignment name counts only as a whole segment ([#286](https://github.com/zeroroot-ai/setec/issues/286)) ([521c7dd](https://github.com/zeroroot-ai/setec/commit/521c7dd47916c81b8708886a5bc0424a37760aed))
+
 ## [0.127.3](https://github.com/zeroroot-ai/setec/compare/v0.127.2...v0.127.3) (2026-10-12)
 
 
