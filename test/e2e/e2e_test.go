@@ -251,8 +251,15 @@ func dumpDiagnostics(t *testing.T, key client.ObjectKey) {
 		{"kubectl", "get", "events", "-n", key.Namespace, "--sort-by=.lastTimestamp"},
 		{"kubectl", "logs", "-l", operatorLabel, "-n", testNamespace, "--tail=200"},
 		// The disk builder Jobs of the launcher run in the release namespace.
+		// A disk Job runs its steps as init containers (check, disk-builder)
+		// before publish, so the logs and the state of each container are
+		// printed; the default container of a failed Job never started.
 		{"kubectl", "logs", "-l", "app.kubernetes.io/component=disk-builder", "-n", testNamespace,
-			"--tail=40", "--prefix"},
+			"--tail=40", "--prefix", "--all-containers", "--ignore-errors"},
+		{"kubectl", "get", "pods", "-l", "app.kubernetes.io/component=disk-builder", "-n", testNamespace,
+			"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{range .status.initContainerStatuses[*]}" +
+				"{\"  init \"}{.name}{\": \"}{.state}{\"\\n\"}{end}{range .status.containerStatuses[*]}" +
+				"{\"  \"}{.name}{\": \"}{.state}{\"\\n\"}{end}{end}"},
 	}
 	for _, c := range cmds {
 		out, _ := exec.Command(c[0], c[1:]...).CombinedOutput()
