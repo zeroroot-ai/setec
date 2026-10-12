@@ -112,12 +112,56 @@ func TestImageTar_HoldsTheImageConfig(t *testing.T) {
 	}
 }
 
-// TestBuilder_BuildsOnceSignsAndTheNodeVerifies runs the whole path against
-// an in-memory registry: the first Ensure builds and pushes, the second
-// finds the disk, the node fetch verifies, and a wrong key is refused.
-func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(registry.New())
+// makeDisk runs the three steps of a disk as the Job and the operator run
+// them: check, build with no credential and no key, the signature of the
+// operator over the build report, and publish with no key. It returns the
+// tag, and whether the check found the disk.
+func makeDisk(
+	t *testing.T, repo, ref string, key ed25519.PrivateKey, pack func(context.Context, v1.Image, string) error,
+) (name.Tag, bool) {
+	t.Helper()
+	pub, _ := key.Public().(ed25519.PublicKey)
+	ref1, err := DiskRef(repo, ref, KeyID(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, _ := name.NewTag(ref1)
+	exists, err := Exists(t.Context(), repo, ref, KeyID(pub))
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if exists {
+		return tag, true
+	}
+	disk := filepath.Join(t.TempDir(), DiskFile)
+	res, err := (&Builder{Pack: pack}).Build(t.Context(), ref, disk)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// The report crosses a container boundary as JSON, and the operator
+	// parses it strictly.
+	raw, _ := json.Marshal(res)
+	res, err = ParseBuildResult(raw)
+	if err != nil {
+		t.Fatalf("ParseBuildResult: %v", err)
+	}
+	d, _ := ParseDigestRef(ref)
+	sig := SignDigest(key, d.DigestStr(), res.DiskSHA256)
+	got, err := (&Publisher{DiskRepo: repo, TempDir: t.TempDir()}).Publish(t.Context(), ref, KeyID(pub), disk, sig)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if got != tag {
+		t.Fatalf("Publish wrote %s, want %s", got, tag)
+	}
+	return tag, false
+}
+
+// pushTestImage writes the test image to an in-memory registry and returns
+// the registry host and the digest reference of the image.
+func pushTestImage(t *testing.T, h http.Handler) (host, ref string) {
+	t.Helper()
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	u, _ := url.Parse(srv.URL)
 	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
@@ -126,24 +170,34 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	dg, _ := img.Digest()
-	ref := u.Host + "/tools/scanner@" + dg.String()
+	host = u.Host
+	return host, host + "/tools/scanner@" + dg.String()
+}
+
+// TestDisk_BuildsOnceSignsAndTheNodeVerifies runs the whole path against an
+// in-memory registry: the check finds nothing, the build makes the disk, the
+// operator signs, the publish step writes the tag, a second check finds the
+// disk, the node fetch verifies, and a wrong key is refused.
+func TestDisk_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
+	t.Parallel()
+	host, ref := pushTestImage(t, registry.New())
+	repo := host + "/setec-disks"
 
 	pub, key, _ := ed25519.GenerateKey(nil)
 	var packs atomic.Int32
-	b := &Builder{DiskRepo: u.Host + "/setec-disks", Key: key, Pack: tarPack(&packs), TempDir: t.TempDir()}
-	tag1, err := b.Ensure(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("first Ensure: %v", err)
+	tag1, found := makeDisk(t, repo, ref, key, tarPack(&packs))
+	if found {
+		t.Fatal("the first check found a disk")
 	}
-	tag2, err := b.Ensure(t.Context(), ref)
-	if err != nil || tag2 != tag1 {
-		t.Fatalf("second Ensure = %v, %v", tag2, err)
+	tag2, found := makeDisk(t, repo, ref, key, tarPack(&packs))
+	if !found || tag2 != tag1 {
+		t.Fatalf("second check = %t, tag %v; want found and %v", found, tag2, tag1)
 	}
 	if packs.Load() != 1 {
 		t.Fatalf("packs = %d, want 1: a digest is built once", packs.Load())
 	}
-	if _, err := b.Ensure(t.Context(), u.Host+"/tools/scanner:v1"); err == nil {
-		t.Fatal("Ensure accepted a tag")
+	if _, err := (&Builder{}).Build(t.Context(), host+"/tools/scanner:v1", filepath.Join(t.TempDir(), "d")); err == nil {
+		t.Fatal("Build accepted a tag")
 	}
 
 	// The node side: the kubelet unpacks the one layer into an image
@@ -162,8 +216,63 @@ func TestBuilder_BuildsOnceSignsAndTheNodeVerifies(t *testing.T) {
 	if _, err := VerifyMounted(disk, filepath.Join(mnt, "missing"), ref, []ed25519.PublicKey{pub}); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("VerifyMounted with no signature = %v, want ErrBadSignature", err)
 	}
-	if got, err := DiskRef(b.DiskRepo, ref, KeyID(pub)); err != nil || got != tag1.String() {
-		t.Fatalf("DiskRef = %q, %v; want %q", got, err, tag1)
+}
+
+// The publish step writes only a signature that names the image and the
+// bytes of the disk in the work volume. A signature of another image or of
+// another disk is refused, so a disk is never published under the
+// signature of another one.
+func TestPublisher_RefusesASignatureOfAnotherDisk(t *testing.T) {
+	t.Parallel()
+	host, ref := pushTestImage(t, registry.New())
+	repo := host + "/setec-disks"
+	pub, key, _ := ed25519.GenerateKey(nil)
+	var packs atomic.Int32
+	disk := filepath.Join(t.TempDir(), DiskFile)
+	res, err := (&Builder{Pack: tarPack(&packs)}).Build(t.Context(), ref, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := ParseDigestRef(ref)
+	p := &Publisher{DiskRepo: repo, TempDir: t.TempDir()}
+	for what, sig := range map[string]Signature{
+		"another image": SignDigest(key, "sha256:"+strings.Repeat("b", 64), res.DiskSHA256),
+		"another disk":  SignDigest(key, d.DigestStr(), strings.Repeat("c", 64)),
+	} {
+		if _, err := p.Publish(t.Context(), ref, KeyID(pub), disk, sig); !errors.Is(err, ErrBadSignature) {
+			t.Errorf("%s: Publish = %v, want ErrBadSignature", what, err)
+		}
+	}
+	if found, err := Exists(t.Context(), repo, ref, KeyID(pub)); err != nil || found {
+		t.Fatalf("a refused publish wrote a disk: %t, %v", found, err)
+	}
+}
+
+// The operator signs what the build report names, so it reads the reports
+// strictly: a field it does not know, more data, or a disk SHA-256 that is
+// not hex is refused.
+func TestParseReports_AreStrict(t *testing.T) {
+	t.Parallel()
+	good := `{"diskSHA256":"` + strings.Repeat("c", 64) + `"}`
+	if got, err := ParseBuildResult([]byte(good)); err != nil || got.DiskSHA256 != strings.Repeat("c", 64) {
+		t.Fatalf("ParseBuildResult(good) = %+v, %v", got, err)
+	}
+	for what, raw := range map[string]string{
+		"short sha":     `{"diskSHA256":"abc"}`,
+		"not hex":       `{"diskSHA256":"` + strings.Repeat("z", 64) + `"}`,
+		"unknown field": `{"diskSHA256":"` + strings.Repeat("c", 64) + `","extra":1}`,
+		"more data":     good + good,
+		"not JSON":      "pwned",
+	} {
+		if _, err := ParseBuildResult([]byte(raw)); !errors.Is(err, ErrBadReport) {
+			t.Errorf("%s: err %v, want ErrBadReport", what, err)
+		}
+	}
+	if got, err := ParseCheckResult([]byte(`{"exists":true}`)); err != nil || !got.Exists {
+		t.Fatalf("ParseCheckResult = %+v, %v", got, err)
+	}
+	if _, err := ParseCheckResult([]byte(`{"exists":true,"x":1}`)); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("ParseCheckResult with an unknown field: %v", err)
 	}
 }
 
@@ -183,39 +292,23 @@ func immutableTags(next http.Handler) http.Handler {
 	})
 }
 
-// TestBuilder_ANewSeedSignsANewDisk is setec#272: after a rotation of the
-// signing seed, the builder must not reuse the disk of the previous key. It
-// builds a new disk under a new tag, beside the old one, in a registry with
-// immutable tags. A launcher that trusts only the new key accepts the new
-// disk, and the disk of the previous key stays for the launchers that still
-// trust it.
-func TestBuilder_ANewSeedSignsANewDisk(t *testing.T) {
+// TestDisk_ANewSeedSignsANewDisk is setec#272: after a rotation of the
+// signing seed, the disk of the previous key is not reused. A new disk is
+// built under a new tag, beside the old one, in a registry with immutable
+// tags. A launcher that trusts only the new key accepts the new disk, and
+// the disk of the previous key stays for the launchers that still trust it.
+func TestDisk_ANewSeedSignsANewDisk(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(immutableTags(registry.New()))
-	t.Cleanup(srv.Close)
-	u, _ := url.Parse(srv.URL)
-	src, _ := name.NewTag(u.Host + "/tools/scanner:v1")
-	img := testImage(t)
-	if err := remote.Write(src, img); err != nil {
-		t.Fatal(err)
-	}
-	dg, _ := img.Digest()
-	ref := u.Host + "/tools/scanner@" + dg.String()
-	repo := u.Host + "/setec-disks"
+	host, ref := pushTestImage(t, immutableTags(registry.New()))
+	repo := host + "/setec-disks"
 
 	oldPub, oldKey, _ := ed25519.GenerateKey(nil)
 	newPub, newKey, _ := ed25519.GenerateKey(nil)
 	var packs atomic.Int32
-	oldBuilder := &Builder{DiskRepo: repo, Key: oldKey, Pack: tarPack(&packs), TempDir: t.TempDir()}
-	oldTag, err := oldBuilder.Ensure(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("Ensure with the previous seed: %v", err)
-	}
-	newTag, err := (&Builder{
-		DiskRepo: repo, Key: newKey, WantKeyID: KeyID(newPub), Pack: tarPack(&packs), TempDir: t.TempDir(),
-	}).Ensure(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("Ensure with the new seed: %v", err)
+	oldTag, _ := makeDisk(t, repo, ref, oldKey, tarPack(&packs))
+	newTag, found := makeDisk(t, repo, ref, newKey, tarPack(&packs))
+	if found {
+		t.Fatal("the new seed found the disk of the previous seed")
 	}
 	if newTag == oldTag {
 		t.Fatalf("the new seed reused the tag %s of the previous seed", oldTag)
@@ -225,9 +318,6 @@ func TestBuilder_ANewSeedSignsANewDisk(t *testing.T) {
 	}
 	if !strings.HasSuffix(newTag.TagStr(), "-"+KeyID(newPub)) || !strings.HasSuffix(oldTag.TagStr(), "-"+KeyID(oldPub)) {
 		t.Fatalf("tags %s and %s do not name their keys", oldTag, newTag)
-	}
-	if got, err := DiskRef(repo, ref, KeyID(newPub)); err != nil || got != newTag.String() {
-		t.Fatalf("DiskRef of the new key = %q, %v; want %q", got, err, newTag)
 	}
 
 	for _, c := range []struct {
@@ -247,14 +337,6 @@ func TestBuilder_ANewSeedSignsANewDisk(t *testing.T) {
 		if (err == nil) != c.ok {
 			t.Fatalf("VerifyMounted(%s, %d keys) = %v, want ok=%v", c.tag.TagStr(), len(c.keys), err, c.ok)
 		}
-	}
-
-	// A seed that is not the one the operator expects is refused, so the
-	// operator never waits for a tag that no build writes.
-	oldBuilder.WantKeyID = KeyID(newPub)
-	_, err = oldBuilder.Ensure(t.Context(), ref)
-	if err == nil || !strings.Contains(err.Error(), "the caller expects") {
-		t.Fatalf("Ensure with an unexpected seed = %v, want a refusal", err)
 	}
 }
 
@@ -299,20 +381,22 @@ func checkDiskArtifact(t *testing.T, tag name.Tag) v1.Image {
 	if err != nil || len(layers) != 1 {
 		t.Fatalf("layers = %d, %v; want 1", len(layers), err)
 	}
-	if mt, _ := layers[0].MediaType(); mt != types.OCILayer {
-		t.Fatalf("layer media type = %s", mt)
-	}
-	// The stored bytes must be what the media type says: the first real
-	// pull failed on gzip bytes under the media type of a plain tar.
-	blob, err := layers[0].Compressed()
-	if err != nil {
-		t.Fatal(err)
-	}
-	magic := make([]byte, 2)
-	_, err = io.ReadFull(blob, magic)
-	_ = blob.Close()
-	if err != nil || magic[0] != 0x1f || magic[1] != 0x8b {
-		t.Fatalf("the stored layer is not gzip: % x, %v", magic, err)
+	for _, l := range layers {
+		if mt, _ := l.MediaType(); mt != types.OCILayer {
+			t.Fatalf("layer media type = %s", mt)
+		}
+		// The stored bytes must be what the media type says: the first real
+		// pull failed on gzip bytes under the media type of a plain tar.
+		blob, err := l.Compressed()
+		if err != nil {
+			t.Fatal(err)
+		}
+		magic := make([]byte, 2)
+		_, err = io.ReadFull(blob, magic)
+		_ = blob.Close()
+		if err != nil || magic[0] != 0x1f || magic[1] != 0x8b {
+			t.Fatalf("the stored layer is not gzip: % x, %v", magic, err)
+		}
 	}
 	return art
 }
@@ -346,10 +430,11 @@ func TestVerify_RefusesAChangedDiskAndAnotherImage(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(nil)
 	path := filepath.Join(t.TempDir(), "d")
 	_ = os.WriteFile(path, []byte("disk bytes"), 0o600)
-	sig, err := Sign(key, "sha256:aaa", path)
+	sum, err := FileSHA256(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sig := SignDigest(key, "sha256:aaa", sum)
 	keys := []ed25519.PublicKey{pub}
 	if err := Verify(keys, sig, "sha256:aaa", path); err != nil {
 		t.Fatalf("Verify: %v", err)

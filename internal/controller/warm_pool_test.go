@@ -85,7 +85,9 @@ func poolReconciler(t *testing.T, na *fakeNodeAgentClient, objs ...client.Object
 	return &WarmPoolReconciler{
 		Client: c, Namespace: poolNS, LauncherImage: poolLaunch,
 		DiskRepo: "ghcr.io/org/setec-disks", DiskKeys: []string{testDiskPublicKey},
-		DiskBuilder: DiskBuilderConfig{Image: "builder:v1", Namespace: "setec-system", SigningSecret: "seed"},
+		DiskBuilder: DiskBuilderConfig{
+			Image: "builder:v1", Namespace: "setec-system", SigningSecret: "seed", ImageRegistries: []string{"ghcr.io"},
+		},
 		Coordinator: &snapshotpkg.Coordinator{Client: c, Dialer: &fakeNodeAgentDialer{client: na}, PoolNamespace: poolNS},
 	}
 }

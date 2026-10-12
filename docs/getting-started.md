@@ -112,7 +112,7 @@ spec:
 
 A tour of the fields:
 
-- `spec.image`: the OCI image whose root filesystem becomes the microVM's root filesystem, by digest. Any standard image works. The first Sandbox of a digest waits for the disk builder to make and sign its disk.
+- `spec.image`: the OCI image whose root filesystem becomes the microVM's root filesystem, by digest. Any standard image works. The first Sandbox of a digest waits for the disk builder to make and sign its disk. The image must come from a registry of `launcher.imageSources` (the default is `ghcr.io`). The operator refuses an image of another registry.
 - `spec.command`: what to run inside the VM. If omitted, the image's entrypoint is used.
 - `spec.resources.vcpu` and `spec.resources.memory`: the microVM's CPU and memory ceiling. These are hard caps enforced by Firecracker, not Kubernetes requests.
 - `spec.lifecycle.timeout`: after this duration the operator terminates the workload and records a timeout status. It stops runaway jobs without you watching them.

@@ -10,25 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
-
-	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
-
-// ReadPrivateKey reads an ed25519 seed (32 bytes, base64) from path. The
-// install keeps it in a Secret of the disk builder.
-func ReadPrivateKey(path string) (ed25519.PrivateKey, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // a mounted Secret
-	if err != nil {
-		return nil, errwrap.Wrap(err, "os.ReadFile")
-	}
-	key, err := ParsePrivateKey(raw)
-	if err != nil {
-		return nil, fmt.Errorf("diskbuilder: %s: %w", path, err)
-	}
-	return key, nil
-}
 
 // ParsePrivateKey reads an ed25519 seed (32 bytes, base64).
 func ParsePrivateKey(raw []byte) (ed25519.PrivateKey, error) {

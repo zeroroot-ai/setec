@@ -200,15 +200,13 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Sign signs the disk at path for imageDigest.
-func Sign(key ed25519.PrivateKey, imageDigest, path string) (Signature, error) {
-	sum, err := FileSHA256(path)
-	if err != nil {
-		return Signature{}, err
-	}
-	s := Signature{ImageDigest: imageDigest, DiskSHA256: sum}
+// SignDigest signs the disk with the hex SHA-256 diskSHA256 for imageDigest.
+// The operator signs this way: it never sees the disk, only the report of
+// the build step.
+func SignDigest(key ed25519.PrivateKey, imageDigest, diskSHA256 string) Signature {
+	s := Signature{ImageDigest: imageDigest, DiskSHA256: diskSHA256}
 	s.Value = ed25519.Sign(key, s.Payload())
-	return s, nil
+	return s
 }
 
 // ErrBadSignature is the refusal of a disk.

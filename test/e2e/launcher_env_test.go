@@ -106,6 +106,14 @@ func launcherHelmArgs(publicKey string) []string {
 		"--set-string", "launcher.image.repository=" + launcherCfg.imageRepo,
 		"--set-string", "launcher.image.tag=" + imageTag,
 		"--set-string", "launcher.diskRepo=" + launcherCfg.diskRepo,
+		// The images of the scenarios come from Docker Hub, and the signed
+		// pool images from the registry of the suite (the disk registry).
+		"--set-string", "launcher.imageSources[0].registry=docker.io",
+		"--set-string", "launcher.imageSources[0].hosts[0]=index.docker.io",
+		"--set-string", "launcher.imageSources[0].hosts[1]=registry-1.docker.io",
+		"--set-string", "launcher.imageSources[0].hosts[2]=auth.docker.io",
+		"--set-string", "launcher.imageSources[0].hosts[3]=production.cloudflare.docker.com",
+		"--set-string", "launcher.imageSources[1].registry=" + strings.SplitN(launcherCfg.diskRepo, "/", 2)[0],
 		"--set-string", "launcher.diskBuilder.image.repository=" + launcherCfg.diskBuilderImageRepo,
 		"--set-string", "launcher.diskBuilder.image.tag=" + imageTag,
 		"--set-string", "launcher.diskBuilder.signingSecret=" + diskSigningSecret,

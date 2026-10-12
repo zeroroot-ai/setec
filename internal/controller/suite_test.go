@@ -280,6 +280,7 @@ func TestMain(m *testing.M) {
 		DiskKeys:      []string{testDiskPublicKey},
 		DiskBuilder: DiskBuilderConfig{
 			Image: "disk-builder:test", Namespace: testDiskNamespace, SigningSecret: "disk-seed",
+			ImageRegistries: []string{"docker.io"},
 		},
 		// Phase 2 dependencies wired so the envtest reconciler exercises
 		// the full Phase 2 flow. Each dependency is nil-safe so Phase 1

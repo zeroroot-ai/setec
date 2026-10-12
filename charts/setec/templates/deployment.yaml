@@ -88,6 +88,9 @@ spec:
             - --disk-registry-secret={{ . }}
             {{- end }}
             - --operator-namespace={{ $.Values.namespace }}
+            {{- range .imageSources }}
+            - --image-registry={{ .registry }}
+            {{- end }}
             {{- with .warmPool.namespace }}
             {{- if not (has . $.Values.sandboxNamespaces) }}
             {{- fail (printf "launcher.warmPool.namespace %q must be one of sandboxNamespaces: the operator writes the base Pods there, and the namespace baseline deny policy confines them" .) }}
