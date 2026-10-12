@@ -78,12 +78,12 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"APIKEY=Zx9fQ2mPaa71",
 		"GITHUBTOKEN=Zx9fQ2mPaa71",
 		"\x00apikey: Zx9fQ2mPaa71\x00",
-		// A bare key (D90, amended).
-		"SSH_KEY=Zx9fQ2mPaa71",
-		"SIGNING_KEY=Zx9fQ2mPaa71",
-		"ENCRYPTION_KEY=Zx9fQ2mPaa71",
-		"STRIPE_KEY=Zx9fQ2mPaa71",
-		"\x00encryptionKey: Zx9fQ2mPaa71\x00",
+		// A bare key with a secret-shaped value (D90, amended).
+		"SSH_KEY=AAAAB3NzaC1yc2EAAAADAQABAAAB",
+		"STRIPE_KEY=sk_live_abc",
+		"SIGNING_KEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+		"\x00encryptionKey: ghp_x1y2z3\x00",
+		"DEPLOY_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 		// A generated password that starts with "%" and a letter (setec#287).
 		"DB_PASSWORD=%Kx9!q2Lm",
 	}
@@ -103,6 +103,13 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"passwordless=Zx9fQ2mPaa71",
 		"MYSECRETVALUE=Zx9fQ2mPaa71",
 		"secrettls: Zx9fQ2mPaa71",
+		// A bare key with a value that is not secret-shaped: the kernel
+		// keyring text of the guest memory (setec#295 run 38229444253).
+		"\x00trusted_key: instantiate\x00",
+		"\x00encrypted key: decrypting\x00",
+		"KEY_ID=12",
+		"SSH_KEY=Zx9fQ2mPaa71",
+		"\x003trusted_key: unsealing key: instantiate\x00",
 		"keyspace: Zx9fQ2mPaa71",
 		"apikeyring=Zx9fQ2mPaa71",
 	}
@@ -135,6 +142,31 @@ func TestStringTableValue(t *testing.T) {
 	} {
 		if got := stringTableValue(v); got != want {
 			t.Errorf("stringTableValue(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// TestSecretShapedValue pins the value check of a bare key name (D90,
+// amended): a known secret prefix, or 16 or more token characters with a
+// letter and a digit.
+func TestSecretShapedValue(t *testing.T) {
+	for v, want := range map[string]bool{
+		"sk_live_abc":                      true,
+		"rk_x":                             true,
+		"AKIAABC":                          true,
+		"-----BEGIN":                       true,
+		"ssh-rsa AAAAB3":                   true,
+		"9f8e7d6c5b4a39281706f5e4d3c2b1a0": true,
+		"Zx9fQ2mPaa71Zx9f":                 true,
+		"Zx9fQ2mPaa71Zx9":                  false, // 15 characters
+		"instantiateinstantiate":           false, // no digit
+		"1234567890123456":                 false, // no letter
+		"decrypting":                       false,
+		"Zx9fQ2mP aa71Zx9fQ2":              false, // white space ends the value
+	} {
+		value, _, _ := strings.Cut(v, " ")
+		if got := secretShapedValue([]byte(v), 0, value); got != want {
+			t.Errorf("secretShapedValue(%q) = %v, want %v", v, got, want)
 		}
 	}
 }
