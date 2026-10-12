@@ -66,6 +66,25 @@ type rule struct {
 	// nameGroup, when set, is the capture group of a name that must hold a
 	// secret keyword as a whole segment (keywordSegment). 0 checks nothing.
 	nameGroup int
+	// valueGroup, when set, is the capture group of a value that must not
+	// have the shape of a string table (stringTableValue). 0 checks nothing.
+	valueGroup int
+}
+
+// formatString is a value that starts with a Go or C format verb, as the
+// string table of a binary holds a format string ("%v\[0-9a-f]{1,6}").
+var formatString = regexp.MustCompile(`^%[-+# 0]*[0-9]*(?:\.[0-9]+)?[A-Za-z]`)
+
+// labelList is a value made only of "name:" labels, as the string table of
+// a binary holds field and option names side by side
+// ("Names:Roles:Nodes:", "public-key:").
+var labelList = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9_-]*:)+$`)
+
+// stringTableValue reports whether a value has the shape of a string table
+// and not of a secret: a format string, or a list of labels. Any other run
+// of characters is a value, so a password with punctuation still counts.
+func stringTableValue(v string) bool {
+	return formatString.MatchString(v) || labelList.MatchString(v)
 }
 
 // secretKeywords are the name segments that read as a secret (D90).
@@ -201,13 +220,15 @@ var builtinRules = []rule{
 		// (keywordSegment, D90): underscores, dashes, dots and case changes
 		// split a name into segments. "SECRET_KEY", "DB_PASSWORD",
 		// "apiToken" and "token" match; "secrettls" does not. The value is
-		// token characters that end at white space, a quote, a NUL or the
-		// end, so a format string ("%v\[0-9a-f]") is not a value.
+		// any run of characters up to white space, a quote or a NUL, so a
+		// password with punctuation still counts. Only the two shapes of a
+		// string table are not a value (stringTableValue).
 		name: "secret-shaped-env-assignment",
 		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|api[_-]?key|token|private[_-]?key|credential)[A-Za-z0-9_.-]*)` +
-			`\s*[:=]\s*["']?([A-Za-z0-9_\-+/=.~]{8,})(?:["'\s\x00]|$)`),
-		maskGroup: 2,
-		nameGroup: 1,
+			`\s*[:=]\s*["']?([^\s"'\x00]{8,})`),
+		maskGroup:  2,
+		nameGroup:  1,
+		valueGroup: 2,
 	},
 	{
 		// A line of a config file (YAML, .env, INI, TOML) whose key reads
@@ -272,6 +293,9 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 		for _, rl := range s.rules {
 			for _, m := range rl.re.FindAllSubmatchIndex(window, -1) {
 				if g := rl.nameGroup; g > 0 && (m[2*g] < 0 || !keywordSegment(string(window[m[2*g]:m[2*g+1]]))) {
+					continue
+				}
+				if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
 					continue
 				}
 				start := int64(m[0]) + base

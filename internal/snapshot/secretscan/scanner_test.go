@@ -67,6 +67,11 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"aws.credentials: Zx9fQ2mPaa71",
 		// "Password" is a whole segment of this name, so it matches (D90).
 		"PasswordAuthentication=nofailed",
+		// A password with punctuation is a value.
+		"DB_PASSWORD=P@ssw0rd!2024",
+		"SECRET_KEY=a#b$c%d^e&f*",
+		"apiToken=P@ss:w0rd(2024)",
+		"\x00token: abc:def:123!\x00",
 	}
 	for _, body := range match {
 		fs, err := s.Scan(strings.NewReader(body))
@@ -98,6 +103,25 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 }
 
 // TestNameSegments pins the split of a name (D90).
+func TestStringTableValue(t *testing.T) {
+	for v, want := range map[string]bool{
+		`%v\[0-9a-f]{1,6}`:    true,
+		`%-08.3f`:             true,
+		"Names:Roles:Nodes:":  true,
+		"public-key:":         true,
+		"P@ssw0rd!2024":       false,
+		"a#b$c%d^e&f*":        false,
+		"abc:def:123!":        false,
+		"Zx9fQ2mPaa71":        false,
+		"user:pass@host:5432": false,
+		"100%secret":          false,
+	} {
+		if got := stringTableValue(v); got != want {
+			t.Errorf("stringTableValue(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
 func TestNameSegments(t *testing.T) {
 	for name, want := range map[string]string{
 		"SECRET_KEY":             "secret key",
