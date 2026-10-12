@@ -120,11 +120,6 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	if err != nil {
 		return LaunchFailedExit, err
 	}
-	if snap != nil {
-		if err := l.checkSnapshotDisk(snap); err != nil {
-			return LaunchFailedExit, l.failRestore(fail(ReasonSourceFailed, err))
-		}
-	}
 	defer func() {
 		if lerr := l.Net.Leave(); lerr != nil && err == nil {
 			err = fmt.Errorf("remove the network join: %w", lerr)
@@ -260,13 +255,27 @@ func isDiskSHA256(s string) bool {
 }
 
 // startKind is how the machine starts. A restore waits for the node agent:
-// it stages the state, the memory and the writable layer, so the disks are
-// ready only after that.
+// it stages the state, the memory, the writable layer and the image disk
+// digest, so the disks are ready only after that. A snapshot then loads
+// only over the image disk that its machine ran on (setec#277).
 func (l *Launcher) startKind(ctx context.Context) (Start, error) {
 	snap := l.Spec.Source.Snapshot
 	if snap == nil {
 		return Booted, nil
 	}
+	start, err := l.waitStaged(ctx, snap)
+	if err != nil {
+		return start, err
+	}
+	if err := l.checkSnapshotDisk(snap); err != nil {
+		return start, l.failRestore(fail(ReasonSourceFailed, err))
+	}
+	return start, nil
+}
+
+// waitStaged waits for the files that the node agent stages for a restore,
+// and reads the reseed mode of its marker.
+func (l *Launcher) waitStaged(ctx context.Context, snap *SnapshotSource) (Start, error) {
 	if snap.Staged == "" {
 		return Loaded, nil
 	}
