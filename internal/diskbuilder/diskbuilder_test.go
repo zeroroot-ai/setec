@@ -430,10 +430,11 @@ func TestVerify_RefusesAChangedDiskAndAnotherImage(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(nil)
 	path := filepath.Join(t.TempDir(), "d")
 	_ = os.WriteFile(path, []byte("disk bytes"), 0o600)
-	sig, err := Sign(key, "sha256:aaa", path)
+	sum, err := FileSHA256(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sig := SignDigest(key, "sha256:aaa", sum)
 	keys := []ed25519.PublicKey{pub}
 	if err := Verify(keys, sig, "sha256:aaa", path); err != nil {
 		t.Fatalf("Verify: %v", err)
