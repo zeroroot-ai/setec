@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.127.3](https://github.com/zeroroot-ai/setec/compare/v0.127.2...v0.127.3) (2026-10-12)
+
+
+### Bug Fixes
+
+* **deviceplugin:** a stop during the kubelet registration is a clean stop ([#284](https://github.com/zeroroot-ai/setec/issues/284)) ([ac1df79](https://github.com/zeroroot-ai/setec/commit/ac1df79dd9f477f78c9425548b78591f67d990eb))
+* **diskbuilder:** split the disk build and the disk signature into separate steps ([#280](https://github.com/zeroroot-ai/setec/issues/280)) ([908def8](https://github.com/zeroroot-ai/setec/commit/908def82fefe45bc2a3d697a61a20d7e28f4cc91))
+
 ## [0.127.2](https://github.com/zeroroot-ai/setec/compare/v0.127.1...v0.127.2) (2026-10-12)
 
 
