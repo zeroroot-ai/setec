@@ -159,7 +159,7 @@ func makeDisk(
 
 // pushTestImage writes the test image to an in-memory registry and returns
 // the registry host and the digest reference of the image.
-func pushTestImage(t *testing.T, h http.Handler) (string, string) {
+func pushTestImage(t *testing.T, h http.Handler) (host, ref string) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -170,7 +170,8 @@ func pushTestImage(t *testing.T, h http.Handler) (string, string) {
 		t.Fatal(err)
 	}
 	dg, _ := img.Digest()
-	return u.Host, u.Host + "/tools/scanner@" + dg.String()
+	host = u.Host
+	return host, host + "/tools/scanner@" + dg.String()
 }
 
 // TestDisk_BuildsOnceSignsAndTheNodeVerifies runs the whole path against an

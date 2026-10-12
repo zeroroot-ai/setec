@@ -135,7 +135,10 @@ func strictJSON(raw []byte, out any) error {
 // ParseCheckResult reads the report of the check container strictly.
 func ParseCheckResult(raw []byte) (CheckResult, error) {
 	var r CheckResult
-	return r, strictJSON(raw, &r)
+	if err := strictJSON(raw, &r); err != nil {
+		return CheckResult{}, err
+	}
+	return r, nil
 }
 
 // ParseBuildResult reads the report of the build container strictly. The

@@ -135,7 +135,8 @@ func runMain() int {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: setec-disk-builder --disk-repo REPO --key-id ID check IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr, "       setec-disk-builder [--work DIR] build IMAGE@sha256:DIGEST")
-	fmt.Fprintln(os.Stderr, "       setec-disk-builder --disk-repo REPO --key-id ID [--work DIR] publish IMAGE@sha256:DIGEST")
+	fmt.Fprintln(os.Stderr,
+		"       setec-disk-builder --disk-repo REPO --key-id ID [--work DIR] publish IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr,
 		"       setec-disk-builder [--issuer I --identity ID | (SETEC_VERIFY_PUBLIC_KEY)] verify IMAGE@sha256:DIGEST")
 }

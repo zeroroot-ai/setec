@@ -141,6 +141,34 @@ func noSeed(t *testing.T, job *batchv1.Job, signingSecret string) {
 	}
 }
 
+// checkDiskJobShape checks the containers, the arguments, the pod settings
+// and the secrets of the disk Job of image.
+func checkDiskJobShape(t *testing.T, job *batchv1.Job, image string) {
+	t.Helper()
+	spec := job.Spec.Template.Spec
+	if len(spec.InitContainers) != 2 || spec.InitContainers[0].Name != checkContainer ||
+		spec.InitContainers[1].Name != builderContainer || len(spec.Containers) != 1 || spec.Containers[0].Name != publishContainer {
+		t.Fatalf("the Job containers = %v / %v; want check, build, publish", spec.InitContainers, spec.Containers)
+	}
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		if c.Image != "ghcr.io/org/setec-disk-builder:v1" || c.Args[len(c.Args)-1] != image {
+			t.Fatalf("the container %s = %s %v", c.Name, c.Image, c.Args)
+		}
+	}
+	if i := slices.Index(spec.Containers[0].Args, "--key-id"); i < 0 || spec.Containers[0].Args[i+1] != testDiskKeyID {
+		t.Fatalf("the publish args %v do not pass the key id %s", spec.Containers[0].Args, testDiskKeyID)
+	}
+	if *spec.AutomountServiceAccountToken || !*spec.SecurityContext.RunAsNonRoot {
+		t.Fatalf("the Job pod = %+v", spec)
+	}
+	if got := job.Spec.Template.Labels[componentLabel]; got != componentDiskBuilder {
+		t.Fatalf("the Job pod component label = %q; the chart policy and the e2e diagnostics select the pod by it", got)
+	}
+	noSeed(t, job, "disk-seed")
+	// The container that reads the image holds no secret at all.
+	noSecretIn(t, job, spec.InitContainers[1])
+}
+
 // TestEnsureLauncherDisk_OneJobPerDigest covers the disk step of a launcher
 // Sandbox: the first call makes the Job, a running Job waits, a complete Job
 // lets the Pod start, and a second Sandbox of the same digest shares the Job.
@@ -161,28 +189,7 @@ func TestEnsureLauncherDisk_OneJobPerDigest(t *testing.T) {
 	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: name}, job); err != nil {
 		t.Fatalf("the Job: %v", err)
 	}
-	spec := job.Spec.Template.Spec
-	if len(spec.InitContainers) != 2 || spec.InitContainers[0].Name != checkContainer ||
-		spec.InitContainers[1].Name != builderContainer || len(spec.Containers) != 1 || spec.Containers[0].Name != publishContainer {
-		t.Fatalf("the Job containers = %v / %v; want check, build, publish", spec.InitContainers, spec.Containers)
-	}
-	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
-		if c.Image != "ghcr.io/org/setec-disk-builder:v1" || c.Args[len(c.Args)-1] != image {
-			t.Fatalf("the container %s = %s %v", c.Name, c.Image, c.Args)
-		}
-	}
-	if i := slices.Index(spec.Containers[0].Args, "--key-id"); i < 0 || spec.Containers[0].Args[i+1] != testDiskKeyID {
-		t.Fatalf("the publish args %v do not pass the key id %s", spec.Containers[0].Args, testDiskKeyID)
-	}
-	if *spec.AutomountServiceAccountToken || !*spec.SecurityContext.RunAsNonRoot {
-		t.Fatalf("the Job pod = %+v", spec)
-	}
-	if got := job.Spec.Template.Labels["app.kubernetes.io/component"]; got != componentDiskBuilder {
-		t.Fatalf("the Job pod component label = %q; the chart policy and the e2e diagnostics select the pod by it", got)
-	}
-	noSeed(t, job, "disk-seed")
-	// The container that reads the image holds no secret at all.
-	noSecretIn(t, job, spec.InitContainers[1])
+	checkDiskJobShape(t, job, image)
 
 	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 		t.Fatalf("a running Job = %t, %v; want a wait", done, err)
@@ -346,7 +353,7 @@ func TestBuilderJobs_NoJobMountsTheSeed(t *testing.T) {
 			t.Fatalf("the container %s does not write its report to the termination file", c.Name)
 		}
 	}
-	v := builderJob(cfg, "v", componentImageVerify, []string{"verify", image}, nil, false)
+	v := builderJob(cfg, "v", componentImageVerify, []string{"verify", image}, nil)
 	if len(v.Spec.Template.Spec.Volumes) != 1 {
 		t.Fatalf("the verify Job has volumes %v; want only the work volume", v.Spec.Template.Spec.Volumes)
 	}

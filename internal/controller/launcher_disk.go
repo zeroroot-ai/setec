@@ -77,6 +77,12 @@ const (
 	signatureDir = "/etc/setec/disk-signature"
 	// signatureKey is the key of the signature in its ConfigMap.
 	signatureKey = "signature.json"
+	// componentLabel is the label that the chart policy selects a pod by.
+	componentLabel = "app.kubernetes.io/component"
+	// The volumes of a disk Job.
+	workVolume     = "work"
+	registryVolume = "registry"
+	registryDir    = "/etc/setec/registry"
 	// builderWorkDir is the emptyDir of a disk builder Job.
 	builderWorkDir    = "/work"
 	diskBuildRequeue  = 5 * time.Second
@@ -274,7 +280,7 @@ func signBuiltDisk(
 	ctrlTrue := true
 	cm := &corev1.ConfigMap{
 		Name: cmName, Namespace: cfg.Namespace,
-		Labels: map[string]string{"app.kubernetes.io/component": componentDiskBuilder},
+		Labels: map[string]string{componentLabel: componentDiskBuilder},
 		// The Job owns the ConfigMap, so it goes with the Job.
 		OwnerReferences: []metav1.OwnerReference{{
 			APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &ctrlTrue,
@@ -332,25 +338,22 @@ func (e *diskBuildError) Error() string {
 // credential, and only publish mounts the signature. The build container,
 // the one that reads the image, mounts neither.
 func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *batchv1.Job {
-	job := builderJob(cfg, jobName, componentDiskBuilder, nil, nil, false)
+	job := builderJob(cfg, jobName, componentDiskBuilder, nil, nil)
 	spec := &job.Spec.Template.Spec
-	work := corev1.VolumeMount{Name: "work", MountPath: builderWorkDir}
-	push := cfg.RegistrySecret != ""
+	work := corev1.VolumeMount{Name: workVolume, MountPath: builderWorkDir}
 	var pushMounts []corev1.VolumeMount
 	var pushEnv []corev1.EnvVar
-	if push {
-		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "registry", Secret: &corev1.SecretVolumeSource{
+	if cfg.RegistrySecret != "" {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: registryVolume, Secret: &corev1.SecretVolumeSource{
 			SecretName: cfg.RegistrySecret,
 			Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
 		}})
-		pushMounts = []corev1.VolumeMount{{Name: "registry", MountPath: "/etc/setec/registry", ReadOnly: true}}
-		pushEnv = []corev1.EnvVar{{Name: "DOCKER_CONFIG", Value: "/etc/setec/registry"}}
+		pushMounts = []corev1.VolumeMount{{Name: registryVolume, MountPath: registryDir, ReadOnly: true}}
+		pushEnv = []corev1.EnvVar{{Name: "DOCKER_CONFIG", Value: registryDir}}
 	}
 	optional := true
-	spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "signature", VolumeSource: corev1.VolumeSource{
-		ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: jobName + "-sig"}, Optional: &optional,
-		},
+	spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "signature", ConfigMap: &corev1.ConfigMapVolumeSource{
+		Name: jobName + "-sig", Optional: &optional,
 	}})
 	base := spec.Containers[0]
 	container := func(name string, args []string, mounts []corev1.VolumeMount, env []corev1.EnvVar) corev1.Container {
@@ -373,32 +376,23 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *bat
 }
 
 // builderJob is a Job of the setec-disk-builder image with args, one
-// container. push mounts the push credential of the disk registry. No Job
-// mounts the signing seed. The Job runs as a user that is not root, with no
-// ServiceAccount token, and keeps its files in an emptyDir with a size limit.
-func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string, env []corev1.EnvVar, push bool) *batchv1.Job {
+// container and the work volume. It mounts no Secret: diskJob adds the push
+// credential to the containers that need it. The Job runs as a user that is
+// not root, with no ServiceAccount token, and keeps its files in an
+// emptyDir with a size limit.
+func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string, env []corev1.EnvVar) *batchv1.Job {
 	ttl := int32(diskJobTTLSeconds)
 	backoff := int32(2)
 	work := resource.MustParse("20Gi")
-	vols := []corev1.Volume{{Name: "work", EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &work}}}
-	mounts := []corev1.VolumeMount{{Name: "work", MountPath: builderWorkDir}}
-	if push && cfg.RegistrySecret != "" {
-		vols = append(vols, corev1.Volume{Name: "registry", Secret: &corev1.SecretVolumeSource{
-			SecretName: cfg.RegistrySecret,
-			Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
-		}})
-		mounts = append(mounts, corev1.VolumeMount{Name: "registry", MountPath: "/etc/setec/registry", ReadOnly: true})
-		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/etc/setec/registry"})
-	}
 	return &batchv1.Job{
 		Name:      jobName,
 		Namespace: cfg.Namespace,
-		Labels:    map[string]string{"app.kubernetes.io/component": component},
+		Labels:    map[string]string{componentLabel: component},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
-				Labels: map[string]string{"app.kubernetes.io/component": component},
+				Labels: map[string]string{componentLabel: component},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: new(false),
@@ -419,9 +413,9 @@ func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string,
 							ReadOnlyRootFilesystem:   new(true),
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 						},
-						VolumeMounts: mounts,
+						VolumeMounts: []corev1.VolumeMount{{Name: workVolume, MountPath: builderWorkDir}},
 					}},
-					Volumes: vols,
+					Volumes: []corev1.Volume{{Name: workVolume, EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &work}}},
 				},
 			},
 		},
