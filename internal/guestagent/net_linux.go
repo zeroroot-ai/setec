@@ -16,6 +16,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// BringUpLoopback brings lo up. The guest agent is the init of the machine,
+// and the kernel leaves lo down until something brings it up, so a guest
+// process could not listen on 127.0.0.1 (setec#296). Up, lo gets 127.0.0.1/8
+// and ::1 from the kernel. It runs once, at start, for each Sandbox with or
+// without a network.
+func BringUpLoopback() error {
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("lo: %w", err)
+	}
+	if err := netlink.LinkSetUp(lo); err != nil {
+		return fmt.Errorf("bring up lo: %w", err)
+	}
+	return nil
+}
+
 // LinkConfigurer gives eth0 of the machine the identity of the Pod: MAC,
 // MTU, address and default route, and writes the resolv.conf of the Pod
 // into the root of the image. After a snapshot load in a new Pod it runs

@@ -86,6 +86,34 @@ jobs:
       tier: heavy
 
   # ---- setec-specific lint (fast tier / pull_request) ----
+  # The guest network tests need a private network and UTS namespace, so the
+  # default go test skips them. This job runs them as root under unshare and
+  # fails when one of them skips (setec#296).
+  netns:
+    name: Guest network tests in a private namespace
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the guest network tests
+        run: |
+          set -euo pipefail
+          go test -c -o "$RUNNER_TEMP/guestagent.test" ./internal/guestagent/
+          sudo SETEC_NETNS_TEST=1 unshare -nu "$RUNNER_TEMP/guestagent.test" \
+            -test.run '^(TestLinkConfigurer_TakesThePodIdentity|TestBringUpLoopback)$' -test.v | tee "$RUNNER_TEMP/netns.log"
+          for t in TestLinkConfigurer_TakesThePodIdentity TestBringUpLoopback; do
+            grep -q -- "--- PASS: $t " "$RUNNER_TEMP/netns.log" || { echo "::error::$t did not PASS"; exit 1; }
+          done
+
   lint:
     name: Lint (golangci-lint + buf)
     if: github.event_name == 'pull_request'

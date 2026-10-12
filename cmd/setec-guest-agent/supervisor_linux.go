@@ -63,6 +63,10 @@ func endMachine() {
 }
 
 func runSupervisor(ctx context.Context, logf func(string, ...any)) error {
+	// A guest process that listens on 127.0.0.1 needs lo up (setec#296).
+	if err := guestagent.BringUpLoopback(); err != nil {
+		return err
+	}
 	sup := guestagent.NewSupervisor(guestagent.NewRoot)
 	// The identity socket of the Sandbox (setec#235). Each process learns
 	// its path from the environment.
