@@ -87,6 +87,12 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"\x00apiKey: sk_live_abc\x00",
 		"\x00signingKey: 9f8e7d6c5b4a39281706f5e4d3c2b1a0\x00",
 		"KEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+		// A one-segment name that ends with key, with a secret-shaped value
+		// (D90, fourth amendment).
+		"SSHKEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+		"STRIPEKEY=sk_live_abc",
+		"SIGNINGKEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+		"signingkeys=9f8e7d6c5b4a39281706f5e4d3c2b1a0",
 		// A generated password that starts with "%" and a letter (setec#287).
 		"DB_PASSWORD=%Kx9!q2Lm",
 	}
@@ -123,6 +129,9 @@ func TestScan_SecretKeywordIsAWholeSegment(t *testing.T) {
 		"keyring=Zx9fQ2mPaa71Zx9fQ2mPaa71",
 		"keyStore=Zx9fQ2mPaa71Zx9fQ2mPaa71",
 		"KEY_USAGE_FLAGS=Zx9fQ2mPaa71Zx9fQ2mPaa71",
+		// A one-segment name that ends with key needs a secret-shaped value.
+		"SSHKEY=Zx9fQ2mPaa71",
+		"\x00monkey: instantiate\x00",
 	}
 	for _, body := range noMatch {
 		fs, err := s.Scan(strings.NewReader(body))
