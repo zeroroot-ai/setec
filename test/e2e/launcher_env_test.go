@@ -113,6 +113,9 @@ func launcherHelmArgs(publicKey string) []string {
 		"--set-string", "launcher.imageSources[0].hosts[1]=registry-1.docker.io",
 		"--set-string", "launcher.imageSources[0].hosts[2]=auth.docker.io",
 		"--set-string", "launcher.imageSources[0].hosts[3]=production.cloudflare.docker.com",
+		// Docker Hub also redirects a blob to CloudFront. Run 38204451017
+		// timed out on it in each disk build (setec#291).
+		"--set-string", "launcher.imageSources[0].hosts[4]=production.cloudfront.docker.com",
 		"--set-string", "launcher.imageSources[1].registry=" + strings.SplitN(launcherCfg.diskRepo, "/", 2)[0],
 		"--set-string", "launcher.diskBuilder.image.repository=" + launcherCfg.diskBuilderImageRepo,
 		"--set-string", "launcher.diskBuilder.image.tag=" + imageTag,
