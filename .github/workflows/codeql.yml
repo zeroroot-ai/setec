@@ -35,7 +35,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: zeroroot-ai/.github/.github/workflows/reusable-codeql.yml@96b8fa3f95163ce097194672a80f1317830503d4 # v0.17.5
+    uses: zeroroot-ai/.github/.github/workflows/reusable-codeql.yml@534026f4a8ed977a3c04ad1a69e572fd7d92e7a2 # v0.18.0
     with:
       languages: '["go"]'
       go-build-command: go build ./...
