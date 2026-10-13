@@ -5,10 +5,10 @@
 # organization. This repo keeps no CodeQL config file and no query list
 # (setec#241).
 #
-# Triggers: merge_group is the gate before a merge, and the weekly run on
-# Tuesday at 08:00 UTC sends the result to code scanning. workflow_dispatch
-# forces a scan of main on demand, so that a fixed alert closes before the
-# next weekly run.
+# Triggers: merge_group is the gate before a merge. A push to main sends the
+# result for refs/heads/main to code scanning, so an alert closes when its
+# fix merges, not at the next weekly run. The weekly run on Tuesday at
+# 08:00 UTC is the deep scan. workflow_dispatch forces a scan on demand.
 #
 # The merge_group run does not upload. Its temporary gh-readonly-queue ref is
 # often gone before the upload call, which then fails with "ref not found".
@@ -16,6 +16,8 @@
 name: CodeQL
 
 on:
+  push:
+    branches: [main]
   merge_group:
   schedule:
     - cron: "0 8 * * 2"
@@ -35,7 +37,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: zeroroot-ai/.github/.github/workflows/reusable-codeql.yml@534026f4a8ed977a3c04ad1a69e572fd7d92e7a2 # v0.18.0
+    uses: zeroroot-ai/.github/.github/workflows/reusable-codeql.yml@7ca10753e23be732df39f4db48af0b9edcfea2b5 # v0.19.2
     with:
       languages: '["go"]'
       go-build-command: go build ./...
