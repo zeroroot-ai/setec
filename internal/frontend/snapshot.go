@@ -162,7 +162,7 @@ func sandboxFromSnapshot(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRe
 			SandboxClassName: snap.Spec.SandboxClass,
 			Image:            snap.Spec.ImageRef,
 			Command:          command,
-			Resources:        setecv1alpha1.Resources{VCPU: int32(vcpu), Memory: mem}, //nolint:gosec // a small count
+			Resources:        setecv1alpha1.Resources{VCPU: vcpu, Memory: mem},
 			SnapshotRef:      &setecv1alpha1.SandboxSnapshotRef{Name: snap.Name},
 			Lifecycle:        lifecycle,
 		},
@@ -203,10 +203,21 @@ func checkSnapshotOpens(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchReq
 	return nil
 }
 
+// snapshotVCPU is the vCPU count of snap, from its annotation. An
+// annotation is writable by a user of the namespace, so the count is
+// parsed to the 32 bits of SandboxSpec.VCPU and must be one or more.
+func snapshotVCPU(snap *setecv1alpha1.Snapshot) (int32, bool) {
+	v, err := strconv.ParseInt(snap.Annotations[setecv1alpha1.SnapshotVCPUAnnotation], 10, 32)
+	if err != nil || v < 1 {
+		return 0, false
+	}
+	return int32(v), true
+}
+
 // snapshotMachine is the machine size of snap. A size in req must match it.
-func snapshotMachine(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) (vcpu int, mem resource.Quantity, err error) {
-	vcpu, err = strconv.Atoi(snap.Annotations[setecv1alpha1.SnapshotVCPUAnnotation])
-	if err != nil || vcpu < 1 {
+func snapshotMachine(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchRequest) (vcpu int32, mem resource.Quantity, err error) {
+	vcpu, ok := snapshotVCPU(snap)
+	if !ok {
 		return 0, mem, status.Errorf(codes.FailedPrecondition, "snapshot %q has no machine size", snap.Name)
 	}
 	mem, err = resource.ParseQuantity(snap.Annotations[setecv1alpha1.SnapshotMemoryAnnotation])
@@ -214,7 +225,7 @@ func snapshotMachine(snap *setecv1alpha1.Snapshot, req *setecv1grpc.LaunchReques
 		return 0, mem, status.Errorf(codes.FailedPrecondition, "snapshot %q has no memory size", snap.Name)
 	}
 	if r := req.GetResources(); r != nil {
-		if r.GetVcpu() != 0 && int(r.GetVcpu()) != vcpu {
+		if r.GetVcpu() != 0 && int64(r.GetVcpu()) != int64(vcpu) {
 			return 0, mem, status.Errorf(codes.InvalidArgument,
 				"resources.vcpu %d differs from the %d of the snapshot", r.GetVcpu(), vcpu)
 		}

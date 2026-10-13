@@ -5,7 +5,6 @@ package frontend
 
 import (
 	"context"
-	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -97,8 +96,8 @@ func reviewSandbox(snap *setecv1alpha1.Snapshot) (*setecv1alpha1.Sandbox, error)
 	if !snap.Spec.Kept {
 		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q is not kept", snap.Name)
 	}
-	vcpu, err := strconv.Atoi(snap.Annotations[setecv1alpha1.SnapshotVCPUAnnotation])
-	if err != nil {
+	vcpu, ok := snapshotVCPU(snap)
+	if !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %q has no machine size", snap.Name)
 	}
 	mem, err := resource.ParseQuantity(snap.Annotations[setecv1alpha1.SnapshotMemoryAnnotation])
@@ -112,7 +111,7 @@ func reviewSandbox(snap *setecv1alpha1.Snapshot) (*setecv1alpha1.Sandbox, error)
 			SandboxClassName: snap.Spec.SandboxClass,
 			Image:            snap.Spec.ImageRef,
 			Command:          []string{"sh"},
-			Resources:        setecv1alpha1.Resources{VCPU: int32(vcpu), Memory: mem}, //nolint:gosec // a small count
+			Resources:        setecv1alpha1.Resources{VCPU: vcpu, Memory: mem},
 			SnapshotRef:      &setecv1alpha1.SandboxSnapshotRef{Name: snap.Name},
 			Review:           true,
 			Network:          &setecv1alpha1.Network{Mode: setecv1alpha1.NetworkModeNone},
