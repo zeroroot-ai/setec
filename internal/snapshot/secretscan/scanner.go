@@ -139,11 +139,22 @@ func keywordSegment(name string) bool {
 	return nameHasKeyword(name, secretKeywords)
 }
 
-// keyName reports whether the last segment of name is "key" or "keys".
-// Such a name counts only with a secret-shaped value.
+// keyName reports whether the last segment of name is "key" or "keys", or
+// whether name is one segment that ends with one of them (D90, fourth
+// amendment): SSHKEY, STRIPEKEY and SIGNINGKEY have no separator, so the
+// split cannot find "key" in them. Such a name counts only with a
+// secret-shaped value. keyUsage is two segments and does not end with
+// "key", so it does not count.
 func keyName(name string) bool {
 	segs := nameSegments(name)
-	return len(segs) > 0 && keyKeywords[segs[len(segs)-1]]
+	if len(segs) == 0 {
+		return false
+	}
+	last := segs[len(segs)-1]
+	if keyKeywords[last] {
+		return true
+	}
+	return len(segs) == 1 && (strings.HasSuffix(last, "key") || strings.HasSuffix(last, "keys"))
 }
 
 // nameHasKeyword reports whether name holds one of kws as a whole segment,
