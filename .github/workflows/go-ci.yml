@@ -775,7 +775,7 @@ jobs:
   # `ready_for_review` is moot under a no-drafts policy (AGENTS.md ss4).
   policy-guards:
     name: policy-guards
-    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@534026f4a8ed977a3c04ad1a69e572fd7d92e7a2 # v0.18.0
+    uses: zeroroot-ai/.github/.github/workflows/vault-auth-method-deny-list.yml@7ca10753e23be732df39f4db48af0b9edcfea2b5 # v0.19.2
   no-monorepo-shortcuts:
     uses: zeroroot-ai/.github/.github/workflows/no-monorepo-shortcuts.yml@534026f4a8ed977a3c04ad1a69e572fd7d92e7a2 # v0.18.0
   runs-on-lint:
