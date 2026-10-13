@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -294,6 +295,10 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 	uid, gid, _, err := lookupUser(s.Root, user)
 	if err != nil || uid == 0 {
 		return err
+	}
+	// os.Chown takes an int. On a 32-bit build a large id does not fit.
+	if uint64(uid) > math.MaxInt || uint64(gid) > math.MaxInt {
+		return fmt.Errorf("guestagent: user %q has an id larger than this build can chown", user)
 	}
 	chown := s.chown
 	if chown == nil {
