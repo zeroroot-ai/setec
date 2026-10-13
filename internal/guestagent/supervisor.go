@@ -296,15 +296,26 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 	if err != nil || uid == 0 {
 		return err
 	}
-	// os.Chown takes an int. On a 32-bit build a large id does not fit.
-	if uint64(uid) > math.MaxInt || uint64(gid) > math.MaxInt {
+	u, okU := chownID(uid, math.MaxInt)
+	g, okG := chownID(gid, math.MaxInt)
+	if !okU || !okG {
 		return fmt.Errorf("guestagent: user %q has an id larger than this build can chown", user)
 	}
 	chown := s.chown
 	if chown == nil {
 		chown = os.Chown
 	}
-	return chown(dir, int(uid), int(gid))
+	return chown(dir, u, g)
+}
+
+// chownID converts a 32-bit id to the int of os.Chown. It refuses an id
+// above limit, which is math.MaxInt: on a 32-bit build a large id does not
+// fit in an int.
+func chownID(id uint32, limit uint64) (int, bool) {
+	if uint64(id) > limit {
+		return 0, false
+	}
+	return int(id), true
 }
 
 // ResumedFile is where a workload reads that it resumed from a snapshot:
