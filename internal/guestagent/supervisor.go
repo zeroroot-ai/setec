@@ -296,8 +296,8 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 	if err != nil || uid == 0 {
 		return err
 	}
-	u, okU := chownID(uid, math.MaxInt)
-	g, okG := chownID(gid, math.MaxInt)
+	u, okU := chownID(uid)
+	g, okG := chownID(gid)
 	if !okU || !okG {
 		return fmt.Errorf("guestagent: user %q has an id larger than this build can chown", user)
 	}
@@ -309,10 +309,11 @@ func (s *Supervisor) ClaimWorkspace(user string) error {
 }
 
 // chownID converts a 32-bit id to the int of os.Chown. It refuses an id
-// above limit, which is math.MaxInt: on a 32-bit build a large id does not
-// fit in an int.
-func chownID(id uint32, limit uint64) (int, bool) {
-	if uint64(id) > limit {
+// above math.MaxInt32, which is the largest id that fits in an int on every
+// build. On a 64-bit build this also refuses ids from 2^31 up, which no
+// image user has.
+func chownID(id uint32) (int, bool) {
+	if id > math.MaxInt32 {
 		return 0, false
 	}
 	return int(id), true
