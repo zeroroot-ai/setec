@@ -126,6 +126,31 @@ jobs:
 YAML
 assert_cov "every gate covered (changes exempt)" pass
 
+# gibson#807 condition 7: a guard on pull_request only is skipped in the merge
+# queue, and the aggregator reads the skip as a pass.
+write_wf <<'YAML'
+on: {pull_request: null, merge_group: null}
+jobs:
+  fast: {if: "github.event_name == 'pull_request'", runs-on: ubuntu-latest}
+  heavy: {if: "github.event_name == 'merge_group'", runs-on: ubuntu-latest}
+  lint: {runs-on: ubuntu-latest}
+  ci-required:
+    needs: [fast, heavy, lint]
+    runs-on: ubuntu-latest
+YAML
+assert_cov "tier jobs one-lane, guards in both lanes" pass
+
+write_wf <<'YAML'
+on: {pull_request: null, merge_group: null}
+jobs:
+  fast: {if: "github.event_name == 'pull_request'", runs-on: ubuntu-latest}
+  lint: {if: "github.event_name == 'pull_request'", runs-on: ubuntu-latest}
+  ci-required:
+    needs: [fast, lint]
+    runs-on: ubuntu-latest
+YAML
+assert_cov "MUTATION a guard runs on pull_request only" fail
+
 # THE regression this script exists for: someone adds a gate and forgets the
 # aggregator. The gate runs, can go red, and gates nothing.
 write_wf <<'YAML'

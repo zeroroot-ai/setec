@@ -75,7 +75,23 @@ if phantom:
     # a gate failure.
     print(f"::error::{path}: `{AGG}` lists unknown job(s) in needs: {', '.join(phantom)}")
 
-if missing or phantom:
+# A gate that runs in one lane only is skipped in the other, and the
+# aggregator reads a skip as a pass. Only the tier jobs may be one-lane, each
+# because the other lane runs its equivalent (gibson#807 condition 7).
+#   fast                  pull_request: the merge queue runs `heavy`, its superset
+#   heavy, test,
+#   examples-govulncheck  merge_group: too slow for every push, and the PR
+#                         lane shows what the queue will add
+LANE_TIERS = {"fast", "heavy", "test", "examples-govulncheck"}
+one_lane = sorted(j for j in gates
+                  if "github.event_name ==" in str((jobs[j] or {}).get("if") or "")
+                  and j not in LANE_TIERS)
+if one_lane:
+    print(f"::error::{path}: gate job(s) run in one lane only: {', '.join(one_lane)}")
+    print(f"::error::The other lane skips them, and `{AGG}` reads a skip as a pass.")
+    print(f"::error::Run each in both lanes, or justify it in LANE_TIERS.")
+
+if missing or phantom or one_lane:
     sys.exit(1)
 
 print(f"ok  {path}: `{AGG}` covers all {len(gates)} gate job(s): "

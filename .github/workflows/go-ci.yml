@@ -38,6 +38,12 @@ name: go-ci
 #                                reach, and per decision 9, scanner cadence
 #                                belongs on merge_group).
 #
+# Every other guard runs in BOTH lanes (gibson#807 condition 7). A guard that
+# ran on pull_request only was skipped in the merge queue, and ci-required
+# read the skip as a pass, so the queued merge commit was never checked by
+# it. scripts/check-ci-required-coverage.sh allows a one-lane `if:` only on
+# the four tier jobs it names.
+#
 # merge_group fires: the queue is enabled on setec (ruleset
 # `setec-required-checks`), so every gate below that declares the lane runs
 # there for real. The note that once said this wiring was "intentionally a
@@ -91,7 +97,6 @@ jobs:
   # fails when one of them skips (setec#296).
   netns:
     name: Guest network tests in a private namespace
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -116,7 +121,6 @@ jobs:
 
   lint:
     name: Lint (golangci-lint + buf)
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -150,7 +154,6 @@ jobs:
   # ---- proto WIRE-breaking gate (fast tier / pull_request) ----
   proto-breaking:
     name: Proto WIRE-breaking gate
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -174,14 +177,19 @@ jobs:
         # any change that breaks an existing wire encoding (changed field
         # numbers/types, removed fields). Additive fields, renames, and doc
         # edits pass.
+        # The base is the PR base, or the queue base in the merge queue. A
+        # missing base fails the gate: a check that cannot compare must not
+        # pass (gibson#807 condition 7).
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
-          git fetch origin "${GITHUB_BASE_REF:-main}" --depth=1 || true
-          base="origin/${GITHUB_BASE_REF:-main}"
-          if git rev-parse --verify "$base" >/dev/null 2>&1; then
-            buf breaking --against ".git#ref=$base"
-          else
-            echo "No base ref to diff against; skipping breaking check."
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ]; then
+            echo "::error::no base commit to diff the protos against"
+            exit 1
           fi
+          git fetch --no-tags origin "${BASE_SHA}"
+          buf breaking --against ".git#ref=${BASE_SHA}"
 
   # ---- envtest suite (heavy tier / merge_group) ----
   # `make test` runs unit + envtest (real apiserver via KUBEBUILDER_ASSETS,
@@ -229,7 +237,6 @@ jobs:
   # ---- generated-file drift gates (fast tier / pull_request) ----
   manifests-up-to-date:
     name: Manifests up-to-date
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -255,7 +262,6 @@ jobs:
 
   proto-up-to-date:
     name: Proto up-to-date
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -282,7 +288,6 @@ jobs:
   # ---- helm chart gates (fast tier / pull_request) ----
   helm-lint:
     name: Helm lint
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -402,7 +407,6 @@ jobs:
   # match today's behaviour rather than moved to merge_group.
   docker-build:
     name: Docker build (no push)
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -426,7 +430,6 @@ jobs:
   # ---- cheap guard checks (fast tier / pull_request) ----
   flag-smoke-test:
     name: Binary flag smoke test
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -462,7 +465,6 @@ jobs:
 
   no-marker-in-source:
     name: No TODO/FIXME/XXX/HACK markers in production source
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -630,7 +632,6 @@ jobs:
 
   no-insecure-flag-in-chart:
     name: Chart templates are mTLS-only
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -646,7 +647,6 @@ jobs:
 
   no-unimplemented-in-frontend:
     name: Frontend has no codes.Unimplemented
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -664,7 +664,6 @@ jobs:
   # reusable, which only knows the root module) ----
   examples-build:
     name: Examples build
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -878,7 +877,7 @@ jobs:
   #
   # `if: always()` is mandatory, not stylistic: GitHub skips a `needs:` job
   # whenever ANY dependency is skipped, and these gates are lane-split by design
-  # (most are pull_request-only, `heavy`/`test`/`examples-govulncheck` are
+  # (`fast` is pull_request-only, `heavy`/`test`/`examples-govulncheck` are
   # merge_group-only), so without it this job would vanish on every run. An
   # ABSENT required context does not fail the PR — it freezes merge-queue entry,
   # which is strictly worse than a red check (.github#202).
