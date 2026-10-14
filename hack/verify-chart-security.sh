@@ -68,6 +68,24 @@ assert_absent() {
 	pass "$desc"
 }
 
+# assert_refused <description> <expected error text> <helm template args...>
+# The render must fail, and with the named error. A render that fails for
+# another reason proves nothing about the rule under test: that is how the
+# SPIFFE ID check passed for a missing frontendCallers instead.
+assert_refused() {
+	local desc="$1" want="$2" err
+	shift 2
+	err="$(mktemp)"
+	if "$HELM" template setec "$CHART_DIR" "$@" >/dev/null 2>"$err"; then
+		fail "$desc — the render passed"
+	elif grep -qF -- "$want" "$err"; then
+		pass "$desc"
+	else
+		fail "$desc — failed for another reason: $(grep -m1 '^Error' "$err" || tail -n1 "$err")"
+	fi
+	rm -f "$err"
+}
+
 render() {
 	local out="$1"
 	shift
@@ -93,6 +111,21 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
 printf 'verify-chart-security: rendering %s\n' "$CHART_DIR"
+
+# The negative cases below are only as good as assert_refused. Prove first
+# that it fails a render that fails for another reason, and a render that
+# passes. Each probe must add one failure, or the guard is broken.
+probe_before=$fail_count
+assert_refused "probe: a render that fails for another reason" "no such error text" \
+	--set webhook.certManager.enabled=true >/dev/null 2>&1
+assert_refused "probe: a render that passes" "no such error text" -f "$LAUNCHER_VALUES" \
+	--set webhook.certManager.enabled=true --set "sandboxNamespaces={${NS_A},${NS_B}}" >/dev/null 2>&1
+if [ "$fail_count" -ne $((probe_before + 2)) ]; then
+	printf 'verify-chart-security: GUARD BROKEN: assert_refused passed a probe it must fail\n' >&2
+	exit 1
+fi
+fail_count=$probe_before
+pass "assert_refused fails both probes"
 
 # ---------------------------------------------------------------------------
 # Sandbox-namespace host guard (setec#159).
@@ -230,14 +263,10 @@ assert_contains "$workdir/all-on.yaml" "the operator gets the launcher flags" \
 	"--launcher-image=" \
 	"--disk-repo=" \
 	"--disk-public-key="
-if "$HELM" template setec "$CHART_DIR" \
+assert_refused "a render without the launcher values fails: each launcher needs a disk repository and its keys" \
+	"launcher.diskRepo is required" \
 	--set webhook.certManager.enabled=true \
-	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	>/dev/null 2>&1; then
-	fail "a render without the launcher values must fail: each launcher needs a disk repository and its keys"
-else
-	pass "a render without the launcher values fails"
-fi
+	--set "sandboxNamespaces={${NS_A},${NS_B}}"
 
 # ---------------------------------------------------------------------------
 # Leader-election RBAC (setec#217, granted by #219).
@@ -347,29 +376,27 @@ else
 	fail "a frontend install must render with no static sandboxNamespaces: the frontend makes the pair namespaces"
 fi
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+assert_refused "a frontend with no enrolled client fails the render" \
+	"frontend.clients must not be empty" \
+	-f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
-	--set credentials.spiffe.trustDomain=example.org \
-	>/dev/null 2>&1; then
-	fail "a frontend with no enrolled client must fail the render"
-else
-	pass "a frontend with no enrolled client fails the render"
-fi
+	--set credentials.spiffe.trustDomain=example.org
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+# The caller is set, so the render reaches the SPIFFE ID check. Without it,
+# the render failed on the missing caller and this case tested nothing.
+assert_refused "a client whose ID is not a SPIFFE ID fails the render" \
+	"spiffeID must start with spiffe://" \
+	-f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
 	--set credentials.spiffe.trustDomain=example.org \
 	--set 'frontend.clients[0].name=saas' \
 	--set 'frontend.clients[0].spiffeID=https://zeroroot.ai/gibson' \
-	>/dev/null 2>&1; then
-	fail "a client whose ID is not a SPIFFE ID must fail the render"
-else
-	pass "a client whose ID is not a SPIFFE ID fails the render"
-fi
+	--set 'systemPolicy.frontendCallers[0].namespace=gibson' \
+	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
 
 # ---------------------------------------------------------------------------
 # Reserved egress ranges cover both address families (GHSA-qwgf-q723-rpjf).
@@ -392,25 +419,19 @@ assert_contains "$workdir/operator.stripped.yaml" "default reserved list reaches
 	"ff00::/8" \
 	"169.254.0.0/16"
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+assert_refused "an IPv4-only reserved list fails the render" \
+	"netpol.reservedCIDRs must hold at least one IPv6 prefix" \
+	-f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	--set 'netpol.reservedCIDRs={10.0.0.0/8,169.254.0.0/16}' \
-	>/dev/null 2>&1; then
-	fail "an IPv4-only reserved list must fail the render"
-else
-	pass "an IPv4-only reserved list fails the render"
-fi
+	--set 'netpol.reservedCIDRs={10.0.0.0/8,169.254.0.0/16}'
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+assert_refused "an IPv6-only reserved list fails the render" \
+	"netpol.reservedCIDRs must hold at least one IPv4 prefix" \
+	-f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-	--set 'netpol.reservedCIDRs={fc00::/7,fe80::/10}' \
-	>/dev/null 2>&1; then
-	fail "an IPv6-only reserved list must fail the render"
-else
-	pass "an IPv6-only reserved list fails the render"
-fi
+	--set 'netpol.reservedCIDRs={fc00::/7,fe80::/10}'
 
 # ---------------------------------------------------------------------------
 # Frontend pods/exec is bound per Sandbox namespace, never cluster-wide
@@ -554,25 +575,25 @@ assert_absent "$workdir/classes-default.stripped.yaml" "the shipped classes gran
 
 # Malformed shapes must fail the render, not the post-install hook.
 allowance_refused() {
-	local desc="$1" entries="$2"
+	local desc="$1" want="$2" entries="$3"
 	printf 'sandboxClasses:\n  classes:\n    - name: t\n      spec:\n        defaultNetworkMode: none\n        egressAllowSelectors: %s\n' \
 		"$entries" >"$workdir/allowance-bad.yaml"
-	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+	assert_refused "$desc" "$want" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
-		-f "$workdir/allowance-bad.yaml" >/dev/null 2>&1; then
-		fail "$desc"
-	else
-		pass "$desc"
-	fi
+		-f "$workdir/allowance-bad.yaml"
 }
 allowance_refused "an allowance with no selector fails the render" \
+	"sets neither namespaceSelector nor podSelector" \
 	'[{"ports":[{"port":53}]}]'
 allowance_refused "an allowance with no ports fails the render" \
+	"].ports is empty" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}}}]'
 allowance_refused "a port with no port value fails the render" \
+	"has no port" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"TCP"}]}]'
 allowance_refused "a port with an unknown protocol fails the render" \
+	"protocol must be TCP, UDP or SCTP" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"ICMP","port":53}]}]'
 
 # ---------------------------------------------------------------------------

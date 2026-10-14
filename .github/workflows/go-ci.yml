@@ -252,13 +252,11 @@ jobs:
       - name: Regenerate manifests and deepcopy
         run: make manifests generate
 
-      - name: Verify no uncommitted changes
-        run: |
-          if ! git diff --exit-code; then
-            echo "::error::Generated files are out of date."
-            echo "::error::Run 'make manifests generate' locally and commit the result."
-            exit 1
-          fi
+      - name: The freshness check fails on a changed file and on a new file
+        run: ./hack/check-generated-fresh.sh --selftest
+
+      - name: Verify no uncommitted or untracked changes
+        run: ./hack/check-generated-fresh.sh "make manifests generate"
 
   proto-up-to-date:
     name: Proto up-to-date
@@ -277,13 +275,11 @@ jobs:
       - name: Regenerate proto stubs
         run: make proto
 
-      - name: Verify no uncommitted changes
-        run: |
-          if ! git diff --exit-code; then
-            echo "::error::Generated proto files are out of date."
-            echo "::error::Run 'make proto' locally and commit the result."
-            exit 1
-          fi
+      - name: The freshness check fails on a changed file and on a new file
+        run: ./hack/check-generated-fresh.sh --selftest
+
+      - name: Verify no uncommitted or untracked changes
+        run: ./hack/check-generated-fresh.sh "make proto"
 
   # ---- helm chart gates (fast tier / pull_request) ----
   helm-lint:
@@ -471,22 +467,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Grep Go sources for markers
-        # Excludes vendor/bin dirs; uses grep exit 1 as the fail signal
-        # and inverts it so this step succeeds only when no matches.
-        run: |
-          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.go" --exclude-dir=vendor --exclude-dir=bin . ; then
-            echo "::error::production Go sources contain TODO/FIXME/XXX/HACK markers; resolve or delete each one"
-            exit 1
-          fi
+      - name: The rule fails on a planted marker and on an empty tree
+        run: ./hack/check-forbidden-text.sh --selftest
 
-      - name: Grep markdown docs for markers
-        # Every .md must be marker-free.
-        run: |
-          if grep -rEn "TODO|FIXME|XXX|HACK" --include="*.md" . ; then
-            echo "::error::markdown docs contain TODO/FIXME/XXX/HACK markers"
-            exit 1
-          fi
+      - name: No marker in a Go or Markdown file
+        run: ./hack/check-forbidden-text.sh markers
 
   runtime-pin:
     name: one pin for each runtime release
@@ -638,12 +623,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Grep chart for insecure flags
-        run: |
-          if grep -rE "auth-disabled|insecure-grpc" charts/setec/ ; then
-            echo "::error::chart templates/values still reference insecure flags; mTLS is mandatory"
-            exit 1
-          fi
+      - name: The rule fails on a planted flag and on an empty tree
+        run: ./hack/check-forbidden-text.sh --selftest
+
+      - name: No insecure flag in the chart
+        run: ./hack/check-forbidden-text.sh insecure-flag
 
   no-unimplemented-in-frontend:
     name: Frontend has no codes.Unimplemented
@@ -653,12 +637,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Grep internal/frontend for Unimplemented
-        run: |
-          if grep -rn "codes.Unimplemented" internal/frontend/ ; then
-            echo "::error::internal/frontend still returns codes.Unimplemented; implement or delete the RPC"
-            exit 1
-          fi
+      - name: The rule fails on a planted Unimplemented and on an empty tree
+        run: ./hack/check-forbidden-text.sh --selftest
+
+      - name: No codes.Unimplemented in internal/frontend
+        run: ./hack/check-forbidden-text.sh unimplemented
 
   # ---- examples (separate Go modules under examples/, unreachable by the
   # reusable, which only knows the root module) ----

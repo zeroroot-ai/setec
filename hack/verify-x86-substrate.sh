@@ -35,7 +35,8 @@ CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
 # The launcher values that the chart requires (hack/chart-launcher-values.yaml).
 LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
-WORKFLOW_DIR=".github/workflows"
+# Only the fixture in hack/verify-x86-substrate.test.sh sets X86_WORKFLOW_DIR.
+WORKFLOW_DIR="${X86_WORKFLOW_DIR:-.github/workflows}"
 # The files a person builds an image from by hand. Only the fixture in
 # hack/verify-x86-substrate.test.sh sets X86_BUILD_FILES.
 BUILD_FILES="${X86_BUILD_FILES:-Makefile Dockerfile Dockerfile.launcher Dockerfile.disk-builder}"

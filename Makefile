@@ -178,6 +178,7 @@ lint-config: ## Verify golangci-lint linter configuration against the vendored s
 		echo "   Run: make lint-config-schema-refresh   (then commit the file)"; \
 		exit 1; \
 	}
+	cd hack/lintconfig && go test -count=1 .
 	cd hack/lintconfig && go run . \
 		-schema "golangci.$(GOLANGCI_LINT_SCHEMA_VERSION).jsonschema.json" \
 		-config ../../.golangci.yml \
@@ -242,6 +243,12 @@ unwired-version:
 # test-support package internal/chartname.
 .PHONY: lint-unwired
 lint-unwired: unwired-version ## Fail if a declaration nothing reads is added (#116). Baseline only shrinks.
+	@# The fixture first: the pinned unwired must block a planted unread field,
+	@# or a green run below measures nothing (gibson#807 condition 7).
+	@out="$$(go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) \
+	  -dir hack/testdata/ast-tools/unwired -baseline hack/testdata/ast-tools/unwired/baseline.txt 2>&1 || true)"; \
+	  case "$$out" in *main.Config.Unread*) echo "unwired fixture: the planted unread field is blocked" ;; \
+	  *) echo "::error::the pinned unwired did not block the planted unread field:"; echo "$$out"; exit 1 ;; esac
 	go run github.com/zeroroot-ai/ast-checks/cmd/unwired@$(UNWIRED_VERSION) -dir . -tags e2e -baseline .unwired-baseline.txt
 
 .PHONY: lint-unwired-write

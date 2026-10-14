@@ -66,31 +66,9 @@ func TestSandboxClasses_AreBuiltViaConstructor(t *testing.T) {
 		}
 		scanned++
 
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil &&
-				fn.Name.Name == constructorName {
-				exempted++
-				continue
-			}
-			ast.Inspect(decl, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok || !isSandboxClassType(lit.Type) {
-					return true
-				}
-				for _, elt := range lit.Elts {
-					kv, ok := elt.(*ast.KeyValueExpr)
-					if !ok {
-						continue
-					}
-					if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Spec" {
-						pos := fset.Position(lit.Pos())
-						offenders = append(offenders,
-							filepath.Base(pos.Filename)+":"+itoa(pos.Line))
-					}
-				}
-				return true
-			})
-		}
+		o, e := rawSandboxClassLiterals(fset, f)
+		offenders = append(offenders, o...)
+		exempted += e
 	}
 
 	if scanned == 0 {
@@ -113,6 +91,37 @@ func TestSandboxClasses_AreBuiltViaConstructor(t *testing.T) {
 			"FailedScheduling event on the Pod (setec#330).",
 			strings.Join(offenders, ", "))
 	}
+}
+
+// rawSandboxClassLiterals returns each SandboxClass literal with a Spec in f
+// outside the constructor, and how many constructor declarations it skipped.
+func rawSandboxClassLiterals(fset *token.FileSet, f *ast.File) (offenders []string, exempted int) {
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil &&
+			fn.Name.Name == constructorName {
+			exempted++
+			continue
+		}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok || !isSandboxClassType(lit.Type) {
+				return true
+			}
+			for _, elt := range lit.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Spec" {
+					pos := fset.Position(lit.Pos())
+					offenders = append(offenders,
+						filepath.Base(pos.Filename)+":"+itoa(pos.Line))
+				}
+			}
+			return true
+		})
+	}
+	return offenders, exempted
 }
 
 // constructorName is the sole exempt function: the one that legitimately
@@ -144,4 +153,37 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// TestRawSandboxClassLiterals_FindsAPlantedLiteral is the failing fixture of
+// TestSandboxClasses_AreBuiltViaConstructor (gibson#807 condition 7). A raw
+// literal with a Spec, in either form, is an offender. The constructor and a
+// literal with no Spec are not.
+func TestRawSandboxClassLiterals_FindsAPlantedLiteral(t *testing.T) {
+	const src = `package e2e
+
+func newSandboxClass(name string, spec Spec) *v1.SandboxClass {
+	return &v1.SandboxClass{Spec: spec}
+}
+
+func planted() {
+	_ = v1.SandboxClass{Spec: Spec{}}
+	_ = SandboxClass{Spec: Spec{}}
+	_ = v1.SandboxClass{}
+	_ = newSandboxClass("a", Spec{})
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "planted.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse the fixture: %v", err)
+	}
+	offenders, exempted := rawSandboxClassLiterals(fset, f)
+	if exempted != 1 {
+		t.Errorf("exempted %d constructor declarations, want 1", exempted)
+	}
+	want := []string{"planted.go:8", "planted.go:9"}
+	if strings.Join(offenders, ",") != strings.Join(want, ",") {
+		t.Errorf("offenders = %v, want %v", offenders, want)
+	}
 }
