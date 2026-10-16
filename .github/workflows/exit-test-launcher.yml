@@ -374,6 +374,19 @@ jobs:
                 --all-containers --since=65s --tail=-1 --prefix 2>&1
               kubectl logs -n "${SETEC_E2E_NAMESPACE}" -l app.kubernetes.io/component=operator \
                 --all-containers --since=65s --tail=-1 --prefix 2>&1
+              # A container that restarted lost its log: the lines above
+              # come from the new process. Print why the old one ended and
+              # its last lines, once for each restart (setec#313).
+              kubectl get pods -n "${SETEC_E2E_NAMESPACE}" \
+                -o go-template='{{range .items}}{{$p := .metadata.name}}{{range .status.containerStatuses}}{{$p}}|{{.name}}|{{.restartCount}}|{{with .lastState.terminated}}{{.reason}}|{{.exitCode}}{{end}}{{"\n"}}{{end}}{{end}}' 2>/dev/null |
+                while IFS='|' read -r pod ctr count reason code; do
+                  [ "${count:-0}" -gt 0 ] || continue
+                  key="${pod}/${ctr}/${count}"
+                  grep -qxF "$key" restarts.seen 2>/dev/null && continue
+                  echo "$key" >> restarts.seen
+                  echo "RESTART ${pod}/${ctr}: restartCount=${count} reason=${reason:-?} exitCode=${code:-?}"
+                  kubectl logs -n "${SETEC_E2E_NAMESPACE}" "$pod" -c "$ctr" --previous --tail=80 2>&1 | sed "s|^|[previous ${pod}/${ctr}] |"
+                done
             done
           ) > agents.log &
           sampler=$!
