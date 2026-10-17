@@ -15,8 +15,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	grpccreds "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -87,6 +90,10 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	}
 	if err := queryPool(t, client); err == nil {
 		t.Fatal("DeleteSnapshot against a node-agent from an untrusted CA: want refusal, got success")
+	} else if status.Code(err) != codes.Unavailable {
+		// The wait for the connection keeps time for the cause: the
+		// refusal ends the call, not the deadline of the caller.
+		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
 }
 
@@ -109,6 +116,10 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	}
 	if err := queryPool(t, client); err == nil {
 		t.Fatal("DeleteSnapshot with an identity the node-agent does not trust: want refusal, got success")
+	} else if status.Code(err) != codes.Unavailable {
+		// The wait for the connection keeps time for the cause: the
+		// refusal ends the call, not the deadline of the caller.
+		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
 }
 
@@ -126,6 +137,10 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	}
 	if err := queryPool(t, client); err == nil {
 		t.Fatal("DeleteSnapshot against a plaintext listener: want refusal, got success")
+	} else if status.Code(err) != codes.Unavailable {
+		// The wait for the connection keeps time for the cause: the
+		// refusal ends the call, not the deadline of the caller.
+		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
 }
 
@@ -262,6 +277,83 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 		t.Fatalf("DeleteSnapshot against the new node-agent: want success (proves the stale "+
 			"connection to the stopped old node-agent was dropped), got %v", err)
 	}
+}
+
+// TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace covers a node-agent
+// container that restarts in its Pod: the UID and the IP stay the same,
+// so the cached connection is kept, and for some seconds nothing listens.
+// A call in that gap must wait for the new process, not fail at once with
+// Unavailable. That fail-fast made the coordinator mark a snapshot Failed
+// (setec#313). The case with no wait is the failing fixture: it shows that
+// the scenario reproduces the failure.
+func TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		addr     string
+		wait     time.Duration
+		wantCode codes.Code
+	}{
+		{name: "with the wait the call reaches the new process", addr: "127.0.0.4",
+			wait: nodeAgentReadyWait, wantCode: codes.OK},
+		{name: "with no wait the call fails in the gap", addr: "127.0.0.5",
+			wait: 0, wantCode: codes.Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := restartInPlace(t, tc.addr, tc.wait)
+			if status.Code(got) != tc.wantCode {
+				t.Fatalf("DeleteSnapshot across an in-place restart: want %v, got %v", tc.wantCode, got)
+			}
+		})
+	}
+}
+
+// restartInPlace stops the node-agent at addr, keeps its Pod, and starts a
+// new listener at the same address one second after a call starts. It
+// returns the result of that call.
+func restartInPlace(t *testing.T, addr string, wait time.Duration) error {
+	t.Helper()
+	ca := spiffetest.NewCA(t)
+	port, oldSrv := servePool(t, addr, ca, ca)
+
+	resolver := &fakeResolver{pod: podWithUID("same-uid", addr)}
+	d := NewGRPCDialer(resolver, authorityPattern(port), operatorCredentials(t, ca, ca))
+	d.ReadyWait = wait
+	t.Cleanup(func() { _ = d.Close() })
+
+	client, err := d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := queryPool(t, client); err != nil {
+		t.Fatalf("DeleteSnapshot before the restart: %v", err)
+	}
+
+	// The process ends. The Pod, and so the cached connection, stays. The
+	// connection sees the end before the next call, as it does in a
+	// cluster, where the gap lasts seconds.
+	oldSrv.Stop()
+	d.mu.Lock()
+	conn := d.conns[testNodeName].conn
+	d.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); conn.GetState() == connectivity.Ready; {
+		if time.Now().After(deadline) {
+			t.Fatal("the connection stayed Ready after the node-agent stopped")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client, err = d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial during the restart: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- queryPool(t, client) }()
+
+	// The call is in the gap now. The new process listens a second later.
+	time.Sleep(time.Second)
+	servePoolOnFixedPort(t, addr, port, ca, ca)
+	return <-done
 }
 
 // ---------------------------------------------------------------------
