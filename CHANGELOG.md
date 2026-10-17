@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.127.6](https://github.com/zeroroot-ai/setec/compare/v0.127.5...v0.127.6) (2026-10-17)
+
+
+### Bug Fixes
+
+* **ci:** every guard runs in the merge queue, and buf breaking fails without a base ([#312](https://github.com/zeroroot-ai/setec/issues/312)) ([7f426b1](https://github.com/zeroroot-ai/setec/commit/7f426b16fe6b68118c8db2ce5d1a1b058e94a363))
+* **frontend,guestagent:** bound the integer conversions code scanning found ([#307](https://github.com/zeroroot-ai/setec/issues/307)) ([298a832](https://github.com/zeroroot-ai/setec/commit/298a83250f8414ff68957239b8bb4ac3ce57df4b)), closes [#306](https://github.com/zeroroot-ai/setec/issues/306)
+* **rework:** a one-segment name that ends with key counts ([#298](https://github.com/zeroroot-ai/setec/issues/298)) ([1325131](https://github.com/zeroroot-ai/setec/commit/13251314d201f6467242e6affa2314e4d8bd60aa))
+* **rework:** bound the chown id of ClaimWorkspace against math.MaxInt32 ([#309](https://github.com/zeroroot-ai/setec/issues/309)) ([6af02d5](https://github.com/zeroroot-ai/setec/commit/6af02d5e1c131a4e6bc719a2ab6d5f4f63461a8a))
+* **secretscan:** a one-segment name that ends with key counts ([1325131](https://github.com/zeroroot-ai/setec/commit/13251314d201f6467242e6affa2314e4d8bd60aa))
+* **snapshot:** a node-agent call waits for a node-agent that restarts in place ([#314](https://github.com/zeroroot-ai/setec/issues/314)) ([8a86772](https://github.com/zeroroot-ai/setec/commit/8a867721ddae48c663676654959559a3a1297b4e))
+
 ## [0.127.5](https://github.com/zeroroot-ai/setec/compare/v0.127.4...v0.127.5) (2026-10-12)
 
 
