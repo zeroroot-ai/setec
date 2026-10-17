@@ -392,6 +392,50 @@ func TestGRPCDialer_AHandshakeCutShortIsAnOutage(t *testing.T) {
 	}
 }
 
+// TestGRPCDialer_RefusesAPeerThatSendsBadTLS: a peer that answers the
+// ClientHello with a handshake message of no known type sends bad TLS. That
+// is a fault of TLS with its cause, not an outage (setec#315).
+func TestGRPCDialer_RefusesAPeerThatSendsBadTLS(t *testing.T) {
+	t.Parallel()
+	ca := spiffetest.NewCA(t)
+	lis, err := net.Listen("tcp", net.JoinHostPort(testNodeAgentIP, "0"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+	// A TLS record: type handshake (22), version TLS 1.2, length 4, and a
+	// handshake message of type 0xFE with no body.
+	bad := []byte{22, 3, 3, 0, 4, 0xFE, 0, 0, 0}
+	go func() {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				buf := make([]byte, 4096)
+				_, _ = c.Read(buf)
+				_, _ = c.Write(bad)
+				_, _ = c.Read(buf)
+			}()
+		}
+	}()
+	port := lis.Addr().(*net.TCPAddr).Port
+
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
+	t.Cleanup(func() { _ = d.Close() })
+	client, err := d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	err = queryPool(t, client)
+	if err == nil {
+		t.Fatal("DeleteSnapshot against a peer that sends bad TLS: want refusal, got success")
+	}
+	assertTLSRefusal(t, err, "local error")
+}
+
 // assertTLSRefusal checks that err is a refusal by TLS with its cause: the
 // code Unavailable, the text of the cause, and no ErrNodeAgentUnavailable,
 // so a caller does not retry it (setec#315).
