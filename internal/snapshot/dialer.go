@@ -85,8 +85,9 @@ const nodeAgentReadyWait = 15 * time.Second
 // IP) get detected, instead of a stale connection that still accepts
 // TCP but talks to a Pod that no longer exists.
 type cachedConn struct {
-	podKey string
-	conn   *grpc.ClientConn
+	podKey    string
+	conn      *grpc.ClientConn
+	handshake *handshakeRecorder
 }
 
 // NewGRPCDialer constructs a GRPCDialer with the provided pod
@@ -130,7 +131,7 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 
 	if cached, ok := d.conns[nodeName]; ok {
 		if cached.podKey == podKey {
-			return wrapGRPC(cached.conn, d.ReadyWait), nil
+			return wrapGRPC(cached.conn, d.ReadyWait, cached.handshake), nil
 		}
 		// The node-agent on this node restarted. A new Pod, with a
 		// new UID and likely a new IP, now serves it. The cached
@@ -151,8 +152,9 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 	}
 	target := net.JoinHostPort(pod.Status.PodIP, port)
 
+	handshake := &handshakeRecorder{TransportCredentials: d.Credentials, last: &lastError{}}
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(d.Credentials),
+		grpc.WithTransportCredentials(handshake),
 		// WithAuthority keeps the gRPC :authority, and so the TLS
 		// ServerName the node-agent's certificate is verified
 		// against, as the per-node name the chart's Certificate SAN
@@ -165,8 +167,8 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 	if err != nil {
 		return nil, fmt.Errorf("grpcdialer: dial %q (authority %q): %w", target, authority, err)
 	}
-	d.conns[nodeName] = cachedConn{podKey: podKey, conn: conn}
-	return wrapGRPC(conn, d.ReadyWait), nil
+	d.conns[nodeName] = cachedConn{podKey: podKey, conn: conn, handshake: handshake}
+	return wrapGRPC(conn, d.ReadyWait, handshake), nil
 }
 
 // connCacheKey identifies the Pod instance a connection was dialed to.
@@ -181,60 +183,120 @@ func connCacheKey(pod *corev1.Pod) string {
 	return pod.Status.PodIP
 }
 
+// lastError holds one error, safe for use by more than one goroutine.
+type lastError struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (l *lastError) set(err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.err = err
+}
+
+func (l *lastError) get() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
+
+// handshakeRecorder wraps the transport credentials of one connection and
+// keeps the error of its last client handshake. A connection that never
+// gets Ready because the TLS handshake fails (an untrusted CA, a wrong
+// SPIFFE ID, a plaintext listener) is a fault of the configuration, not a
+// short outage. The shim reads this error to tell the two apart, and to
+// give the cause (setec#315).
+type handshakeRecorder struct {
+	grpccreds.TransportCredentials
+
+	last *lastError
+}
+
+// ClientHandshake runs the handshake of the wrapped credentials and keeps
+// its error. A handshake that succeeds clears it.
+func (h *handshakeRecorder) ClientHandshake(
+	ctx context.Context, authority string, raw net.Conn,
+) (net.Conn, grpccreds.AuthInfo, error) {
+	conn, info, err := h.TransportCredentials.ClientHandshake(ctx, authority, raw)
+	h.last.set(err)
+	if err != nil {
+		return conn, info, err //nolint:wrapcheck // gRPC reads the handshake error of its credentials as is
+	}
+	return &alertConn{Conn: conn, last: h.last}, info, nil
+}
+
+// alertConn keeps a TLS alert that the peer sends after the handshake. In
+// TLS 1.3 the client ends its handshake before the server checks the client
+// certificate, so a node agent that refuses the identity of the operator
+// says so with an alert on the first read. The recorder keeps that alert
+// like a failed handshake.
+type alertConn struct {
+	net.Conn
+
+	last *lastError
+}
+
+func (c *alertConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	// crypto/tls reports an alert of the peer as a net.OpError with the
+	// operation "remote error", for example "tls: unknown certificate
+	// authority".
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "remote error" {
+		c.last.set(err)
+	}
+	return n, err //nolint:wrapcheck // the reader of a net.Conn reads io.EOF and its peers as is
+}
+
+// Clone keeps the recorder: gRPC may clone the credentials of a
+// connection, and the clone must report to the same place.
+func (h *handshakeRecorder) Clone() grpccreds.TransportCredentials {
+	return &handshakeRecorder{TransportCredentials: h.TransportCredentials.Clone(), last: h.last}
+}
+
 // grpcShim adapts the generated setecv1grpc.NodeAgentServiceClient
 // (which takes variadic grpc.CallOption) to the narrower
 // snapshot.NodeAgentClient used by the Coordinator. The Coordinator
 // stays testable without importing gRPC. Before each call the shim waits,
 // for at most readyWait, until the connection is up (see
 // nodeAgentReadyWait). When the connection is still down after the wait,
-// the shim does not send the call and returns a notSentError.
+// the shim does not send the call.
 type grpcShim struct {
 	conn      *grpc.ClientConn
 	inner     setecgrpcv1.NodeAgentServiceClient
 	readyWait time.Duration
+	handshake *handshakeRecorder
 }
 
-func wrapGRPC(conn *grpc.ClientConn, readyWait time.Duration) NodeAgentClient {
-	return &grpcShim{conn: conn, inner: setecgrpcv1.NewNodeAgentServiceClient(conn), readyWait: readyWait}
-}
-
-// notSentError is the error of a call that the shim did not send, because
-// the connection to the node agent was not up after the wait. The node
-// agent did nothing for it, so a caller may send it again (setec#315). It
-// wraps ErrNodeAgentUnavailable and has the gRPC code Unavailable.
-type notSentError struct {
-	state connectivity.State
-	wait  time.Duration
-}
-
-func (e *notSentError) Error() string {
-	return fmt.Sprintf("grpcdialer: the connection to the node agent is %s after a wait of %s; the call was not sent",
-		e.state, e.wait)
-}
-
-func (e *notSentError) Unwrap() error { return ErrNodeAgentUnavailable }
-
-// GRPCStatus gives the error the code Unavailable for status.Code.
-func (e *notSentError) GRPCStatus() *grpcstatus.Status {
-	return grpcstatus.New(grpccodes.Unavailable, e.Error())
+func wrapGRPC(conn *grpc.ClientConn, readyWait time.Duration, handshake *handshakeRecorder) NodeAgentClient {
+	return &grpcShim{
+		conn: conn, inner: setecgrpcv1.NewNodeAgentServiceClient(conn),
+		readyWait: readyWait, handshake: handshake,
+	}
 }
 
 // ready waits until the connection is Ready or the wait ends. When ctx
 // has a deadline, the wait takes at most half of the time left. With no
-// wait (readyWait 0) it returns nil at once and the call goes out as
-// gRPC decides. Otherwise it returns a notSentError when the connection
-// is not Ready.
+// wait (readyWait 0) it returns nil at once and the call goes out as gRPC
+// decides. When the connection is not Ready after the wait, the call is not
+// sent, and ready returns:
+//   - the error of ctx, when ctx ended,
+//   - an Unavailable status with the cause, when the last TLS handshake
+//     failed: a fault of the configuration, which a retry does not mend,
+//   - else an error that wraps ErrNodeAgentUnavailable and an Unavailable
+//     status: the node agent got no call, so a caller may send it again.
 func (s *grpcShim) ready(ctx context.Context) error {
-	wait := s.readyWait
-	if dl, ok := ctx.Deadline(); ok {
-		wait = min(wait, time.Until(dl)/2)
-	}
 	if s.readyWait <= 0 {
 		return nil
 	}
 	st := s.conn.GetState()
 	if st == connectivity.Ready {
 		return nil
+	}
+	wait := s.readyWait
+	if dl, ok := ctx.Deadline(); ok {
+		wait = max(min(wait, time.Until(dl)/2), 0)
 	}
 	if wait > 0 {
 		wctx, cancel := context.WithTimeout(ctx, wait)
@@ -246,10 +308,20 @@ func (s *grpcShim) ready(ctx context.Context) error {
 			}
 		}
 	}
-	if st == connectivity.Ready {
+	switch {
+	case st == connectivity.Ready:
 		return nil
+	case ctx.Err() != nil:
+		return fmt.Errorf("grpcdialer: wait for the node agent: %w", ctx.Err())
 	}
-	return &notSentError{state: st, wait: max(wait, 0)}
+	if s.handshake != nil {
+		if hsErr := s.handshake.last.get(); hsErr != nil {
+			return grpcstatus.Error(grpccodes.Unavailable,
+				"grpcdialer: the TLS handshake with the node agent failed: "+hsErr.Error())
+		}
+	}
+	return fmt.Errorf("%w: %w", ErrNodeAgentUnavailable, grpcstatus.Errorf(grpccodes.Unavailable,
+		"grpcdialer: the connection to the node agent is %s after a wait of %s; the call was not sent", st, wait))
 }
 
 func (s *grpcShim) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {

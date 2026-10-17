@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,7 +34,8 @@ func unavailableCases() []struct {
 	dialErr error
 	rpcErr  error
 } {
-	notSent := &notSentError{state: connectivity.TransientFailure, wait: nodeAgentReadyWait}
+	// The error of the shim for a call that it did not send.
+	notSent := fmt.Errorf("%w: %w", ErrNodeAgentUnavailable, status.Error(codes.Unavailable, "not sent"))
 	return []struct {
 		name    string
 		dialErr error

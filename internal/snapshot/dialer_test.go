@@ -94,6 +94,10 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 		// The wait for the connection keeps time for the cause: the
 		// refusal ends the call, not the deadline of the caller.
 		t.Fatalf("want the refusal as Unavailable, got %v", err)
+	} else if errors.Is(err, ErrNodeAgentUnavailable) || !strings.Contains(err.Error(), "TLS handshake") {
+		// A refusal is a fault of the configuration with its cause, not a
+		// short outage that a caller retries (setec#315).
+		t.Fatalf("want the refusal as a failed TLS handshake that is not retried, got %v", err)
 	}
 }
 
@@ -120,6 +124,10 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 		// The wait for the connection keeps time for the cause: the
 		// refusal ends the call, not the deadline of the caller.
 		t.Fatalf("want the refusal as Unavailable, got %v", err)
+	} else if errors.Is(err, ErrNodeAgentUnavailable) || !strings.Contains(err.Error(), "TLS handshake") {
+		// A refusal is a fault of the configuration with its cause, not a
+		// short outage that a caller retries (setec#315).
+		t.Fatalf("want the refusal as a failed TLS handshake that is not retried, got %v", err)
 	}
 }
 
@@ -141,6 +149,10 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 		// The wait for the connection keeps time for the cause: the
 		// refusal ends the call, not the deadline of the caller.
 		t.Fatalf("want the refusal as Unavailable, got %v", err)
+	} else if errors.Is(err, ErrNodeAgentUnavailable) || !strings.Contains(err.Error(), "TLS handshake") {
+		// A refusal is a fault of the configuration with its cause, not a
+		// short outage that a caller retries (setec#315).
+		t.Fatalf("want the refusal as a failed TLS handshake that is not retried, got %v", err)
 	}
 }
 
