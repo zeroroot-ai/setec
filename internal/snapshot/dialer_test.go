@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	grpccreds "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
@@ -261,6 +262,59 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 	if err := queryPool(t, client); err != nil {
 		t.Fatalf("DeleteSnapshot against the new node-agent: want success (proves the stale "+
 			"connection to the stopped old node-agent was dropped), got %v", err)
+	}
+}
+
+// TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace covers a node-agent
+// container that restarts in its Pod: the UID and the IP stay the same,
+// so the cached connection is kept, and for some seconds nothing listens.
+// A call in that gap must wait for the new process, not fail at once with
+// Unavailable. That fail-fast made the coordinator mark a snapshot Failed
+// (setec#313).
+func TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace(t *testing.T) {
+	t.Parallel()
+	ca := spiffetest.NewCA(t)
+	const addr = "127.0.0.4"
+	port, oldSrv := servePool(t, addr, ca, ca)
+
+	resolver := &fakeResolver{pod: podWithUID("same-uid", addr)}
+	d := NewGRPCDialer(resolver, authorityPattern(port), operatorCredentials(t, ca, ca))
+	t.Cleanup(func() { _ = d.Close() })
+
+	client, err := d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := queryPool(t, client); err != nil {
+		t.Fatalf("DeleteSnapshot before the restart: %v", err)
+	}
+
+	// The process ends. The Pod, and so the cached connection, stays.
+	// The connection sees the end before the next call, as it does in a
+	// cluster, where the gap lasts seconds.
+	oldSrv.Stop()
+	d.mu.Lock()
+	conn := d.conns[testNodeName].conn
+	d.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); conn.GetState() == connectivity.Ready; {
+		if time.Now().After(deadline) {
+			t.Fatal("the connection stayed Ready after the node-agent stopped")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client, err = d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial during the restart: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- queryPool(t, client) }()
+
+	// The call is in the gap now. The new process listens a second later.
+	time.Sleep(time.Second)
+	servePoolOnFixedPort(t, addr, port, ca, ca)
+
+	if err := <-done; err != nil {
+		t.Fatalf("DeleteSnapshot across an in-place restart: want success after the wait, got %v", err)
 	}
 }
 
