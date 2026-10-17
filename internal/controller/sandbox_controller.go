@@ -1790,6 +1790,15 @@ func (r *SandboxReconciler) reconcilePhase3Lifecycle(
 func (r *SandboxReconciler) requestSnapshot(ctx context.Context, sb *setecv1alpha1.Sandbox) (ctrl.Result, error) {
 	existing := &setecv1alpha1.Snapshot{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.Snapshot.Name}, existing)
+	if err == nil && !existing.DeletionTimestamp.IsZero() && existing.Spec.StorageRef == "" {
+		// The Snapshot of an attempt that stored nothing is going away:
+		// the coordinator removes it when the node agent cannot be
+		// reached (setec#315). Wait until it is gone, then take the
+		// snapshot again. The Terminating case below ends the reconcile
+		// with no requeue, so without this wait the snapshot was never
+		// taken.
+		return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+	}
 	if err == nil {
 		// A Snapshot with the target name exists. Which phase it is
 		// in decides what happens next, and it has to be read.
@@ -1834,6 +1843,15 @@ func (r *SandboxReconciler) requestSnapshot(ctx context.Context, sb *setecv1alph
 	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonSnapshotCreateStarted, actionRequestSnapshot,
 		"creating Snapshot %q", sb.Spec.Snapshot.Name)
 	if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
+		if errors.Is(err, snapshot.ErrNodeAgentUnavailable) {
+			// A short outage of the node agent: the coordinator removed
+			// the Snapshot of the attempt, so the next try takes it again
+			// (setec#315).
+			_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "NodeAgentUnavailable", false)
+			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
+				"the node agent cannot be reached now; Snapshot %q is taken again: %v", sb.Spec.Snapshot.Name, err)
+			return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+		}
 		// Roll back to Running if the Coordinator could not complete
 		// (e.g. InsufficientStorage before VM pause).
 		_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "SnapshotCreateFailed", false)

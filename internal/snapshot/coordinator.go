@@ -15,6 +15,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -288,8 +290,11 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	if dialErr != nil {
 		c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable,
 			fmt.Sprintf("dial node-agent on %q: %v", pod.Spec.NodeName, dialErr))
-		c.failSnapshot(ctx, snap, "NodeAgentUnreachable", dialErr)
 		setSpanErr(span, dialErr.Error())
+		if nodeAgentUnavailable(dialErr) {
+			return c.abandonSnapshot(ctx, snap, dialErr)
+		}
+		c.failSnapshot(ctx, snap, "NodeAgentUnreachable", dialErr)
 		return fmt.Errorf("coordinator: dial node-agent: %w", dialErr)
 	}
 
@@ -305,14 +310,18 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 		IdentityGeneration: nextIdentityGeneration(sb),
 	})
 	if rpcErr != nil {
+		setSpanErr(span, rpcErr.Error())
+		c.recordDuration("create", sb, time.Since(start))
+		if nodeAgentUnavailable(rpcErr) {
+			c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable, rpcErr.Error())
+			return c.abandonSnapshot(ctx, snap, rpcErr)
+		}
 		reason := EventReasonSnapshotCreateFailed
 		if isInsufficientStorage(rpcErr) {
 			reason = EventReasonInsufficientStorage
 		}
 		c.emit(sb, corev1.EventTypeWarning, reason, rpcErr.Error())
 		c.failSnapshot(ctx, snap, reason, rpcErr)
-		setSpanErr(span, rpcErr.Error())
-		c.recordDuration("create", sb, time.Since(start))
 		return fmt.Errorf("coordinator: CreateSnapshot RPC: %w", rpcErr)
 	}
 
@@ -353,6 +362,12 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	c.recordDuration("create", sb, time.Since(start))
 	return nil
 }
+
+// ErrNodeAgentUnavailable marks an error that means the node agent cannot be
+// reached now: its Pod is missing, not Ready, or refuses the connection. It
+// is a short outage, for example a restart or a rollout of the node agent,
+// so a caller tries again. It never marks a Snapshot Failed (setec#315).
+var ErrNodeAgentUnavailable = errors.New("snapshot: the node agent cannot be reached now")
 
 // ErrInvalidParent is returned when the parent of a diff snapshot cannot
 // carry it.
@@ -456,6 +471,29 @@ func (c *Coordinator) failSnapshot(ctx context.Context, snap *setecv1alpha1.Snap
 		log.FromContext(ctx).Error(err, "could not record Snapshot phase Failed",
 			"snapshot", snap.Namespace+"/"+snap.Name, "reason", reason, "cause", cause)
 	}
+}
+
+// nodeAgentUnavailable reports whether err means that the node agent cannot
+// be reached now: the dialer found no Pod to dial, or the RPC never got an
+// answer (codes.Unavailable, after the wait of the dialer).
+func nodeAgentUnavailable(err error) bool {
+	return errors.Is(err, ErrNodeAgentUnavailable) || grpcstatus.Code(err) == grpccodes.Unavailable
+}
+
+// abandonSnapshot removes the Snapshot of an attempt that could not reach
+// the node agent, and returns an error that wraps ErrNodeAgentUnavailable.
+// The attempt stored nothing that a Snapshot points to: the storage
+// reference is set only after a reply. With the Snapshot gone, the next
+// reconcile takes the snapshot again. A Failed Snapshot would stop it until
+// a person deleted it (setec#315). When the removal fails, the Snapshot is
+// marked Failed as before, so it never stays Creating with no write.
+func (c *Coordinator) abandonSnapshot(ctx context.Context, snap *setecv1alpha1.Snapshot, cause error) error {
+	if err := c.Client.Delete(ctx, snap); client.IgnoreNotFound(err) != nil {
+		c.failSnapshot(ctx, snap, EventReasonNodeAgentUnreachable, cause)
+		return fmt.Errorf("coordinator: remove the Snapshot of an attempt that could not reach the node agent (%v): %w",
+			cause, err)
+	}
+	return fmt.Errorf("coordinator: %w: %w", ErrNodeAgentUnavailable, cause)
 }
 
 // RestoreSandbox issues the RestoreSandbox RPC to the node holding

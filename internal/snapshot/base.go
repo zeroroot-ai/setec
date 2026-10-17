@@ -89,6 +89,9 @@ func (c *Coordinator) CreateBase(
 	}
 	na, err := c.Dialer.Dial(ctx, pod.Spec.NodeName)
 	if err != nil {
+		if nodeAgentUnavailable(err) {
+			return c.abandonSnapshot(ctx, snap, err)
+		}
 		c.failSnapshot(ctx, snap, "NodeAgentUnreachable", err)
 		return fmt.Errorf("coordinator: dial node-agent: %w", err)
 	}
@@ -100,6 +103,9 @@ func (c *Coordinator) CreateBase(
 		ScanForSecrets: true,
 	})
 	if err != nil {
+		if nodeAgentUnavailable(err) {
+			return c.abandonSnapshot(ctx, snap, err)
+		}
 		c.failSnapshot(ctx, snap, EventReasonSnapshotCreateFailed, err)
 		return fmt.Errorf("coordinator: base CreateSnapshot RPC: %w", err)
 	}

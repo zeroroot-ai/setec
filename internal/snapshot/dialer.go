@@ -115,11 +115,14 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 
 	pod, err := d.Resolver.ResolveNodeAgentPod(ctx, nodeName)
 	if err != nil {
-		return nil, fmt.Errorf("grpcdialer: resolve node-agent pod on node %q: %w", nodeName, err)
+		// No Ready node-agent Pod on the node is a short outage (a
+		// restart or a rollout), so the error says so (setec#315).
+		return nil, fmt.Errorf("grpcdialer: resolve node-agent pod on node %q: %w: %w",
+			nodeName, ErrNodeAgentUnavailable, err)
 	}
 	if pod.Status.PodIP == "" {
-		return nil, fmt.Errorf("grpcdialer: node-agent pod %s/%s on node %q has no PodIP",
-			pod.Namespace, pod.Name, nodeName)
+		return nil, fmt.Errorf("grpcdialer: node-agent pod %s/%s on node %q has no PodIP: %w",
+			pod.Namespace, pod.Name, nodeName, ErrNodeAgentUnavailable)
 	}
 	podKey := connCacheKey(pod)
 

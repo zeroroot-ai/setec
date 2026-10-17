@@ -487,3 +487,74 @@ func TestSnapshotCreate_FailedSnapshotDoesNotRunAfterCreate(t *testing.T) {
 	}, 5*time.Second, 500*time.Millisecond).Should(gomega.BeTrue(),
 		"afterCreate=Terminated must not delete the Sandbox when the snapshot failed")
 }
+
+// TestSnapshotCreate_RemovedAttemptIsTakenAgain: the coordinator removes
+// the Snapshot of an attempt that could not reach the node agent
+// (setec#315). While that Snapshot goes away it reads Terminating and has
+// no storageRef. The Sandbox must wait for it, and then take the snapshot
+// again. A Terminating Snapshot ended the reconcile with no requeue, so
+// the snapshot was never taken.
+func TestSnapshotCreate_RemovedAttemptIsTakenAgain(t *testing.T) {
+	g := gomega.NewWithT(t)
+	ns := newNamespace(t, "p3-removed")
+	const hold = "test.setec.zeroroot.ai/hold"
+	key := types.NamespacedName{Namespace: ns, Name: "snap-removed"}
+
+	gone := &setecv1alpha1.Snapshot{
+		Namespace: ns, Name: key.Name,
+		Finalizers: []string{hold},
+		Spec: setecv1alpha1.SnapshotSpec{
+			SandboxClass: "standard", ImageRef: "img:v1",
+			StorageBackend: "local-disk", Node: "node-a",
+			// No storageRef: the attempt stored nothing.
+		},
+	}
+	g.Expect(testClient.Create(testCtx, gone)).To(gomega.Succeed())
+	g.Expect(testClient.Delete(testCtx, gone)).To(gomega.Succeed())
+
+	sb := newPhase3Sandbox("sb", ns, func(sb *setecv1alpha1.Sandbox) {
+		sb.Spec.Snapshot = &setecv1alpha1.SandboxSnapshotSpec{Create: true, Name: key.Name}
+	})
+	g.Expect(testClient.Create(testCtx, sb)).To(gomega.Succeed())
+
+	g.Eventually(func() bool {
+		pod, err := getPod(testCtx, ns, sb.Name+"-vm")
+		return err == nil && pod != nil
+	}, 15*time.Second, 250*time.Millisecond).Should(gomega.BeTrue())
+	pod, err := getPod(testCtx, ns, sb.Name+"-vm")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	bindPodToNode(t, pod)
+	pod, err = getPod(testCtx, ns, sb.Name+"-vm")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = podReadyConditions()
+	pod.Status.StartTime = &metav1.Time{Time: time.Now()}
+	g.Expect(testClient.Status().Update(testCtx, pod)).To(gomega.Succeed())
+
+	// The Sandbox reaches Running and meets the Snapshot that goes away.
+	g.Eventually(func() setecv1alpha1.SandboxPhase {
+		got := &setecv1alpha1.Sandbox{}
+		if err := testClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: sb.Name}, got); err != nil {
+			return ""
+		}
+		return got.Status.Phase
+	}, 30*time.Second, 250*time.Millisecond).Should(gomega.Equal(setecv1alpha1.SandboxPhaseRunning))
+	time.Sleep(2 * time.Second)
+
+	// The Snapshot of the attempt is gone now.
+	g.Eventually(func() error {
+		cur := &setecv1alpha1.Snapshot{}
+		if err := testClient.Get(testCtx, key, cur); err != nil {
+			return err
+		}
+		cur.Finalizers = slices.DeleteFunc(cur.Finalizers, func(f string) bool { return f == hold })
+		return testClient.Update(testCtx, cur)
+	}, 10*time.Second, 250*time.Millisecond).Should(gomega.Succeed())
+
+	// The Sandbox takes the snapshot again: a new Snapshot of that name.
+	g.Eventually(func() bool {
+		cur := &setecv1alpha1.Snapshot{}
+		return testClient.Get(testCtx, key, cur) == nil && cur.DeletionTimestamp.IsZero()
+	}, 30*time.Second, 250*time.Millisecond).Should(gomega.BeTrue(),
+		"the Sandbox must take the snapshot again after the Snapshot of the removed attempt is gone")
+}
