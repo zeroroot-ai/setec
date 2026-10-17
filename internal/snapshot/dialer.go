@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -219,32 +222,68 @@ func (h *handshakeRecorder) ClientHandshake(
 	ctx context.Context, authority string, raw net.Conn,
 ) (net.Conn, grpccreds.AuthInfo, error) {
 	conn, info, err := h.TransportCredentials.ClientHandshake(ctx, authority, raw)
-	h.last.set(err)
 	if err != nil {
+		// Only a TLS fault is kept. A handshake cut short by the network
+		// (a reset, an EOF, a timeout) is an outage, and keeps what was
+		// there before.
+		if tlsFault(err) {
+			h.last.set(err)
+		}
 		return conn, info, err //nolint:wrapcheck // gRPC reads the handshake error of its credentials as is
 	}
+	// A kept error is cleared by the first read that succeeds, not here:
+	// in TLS 1.3 a refusal of the client certificate comes after this
+	// point (see alertConn).
 	return &alertConn{Conn: conn, last: h.last}, info, nil
 }
+
+// tlsFault reports whether err of a TLS handshake is a fault of TLS: a
+// certificate that does not verify, a peer that is not TLS, or an alert of
+// the peer. Errors of the network or of the ctx are not.
+func tlsFault(err error) bool {
+	if op, ok := errors.AsType[*net.OpError](err); ok {
+		return op.Op == remoteErrorOp
+	}
+	for _, transient := range []error{
+		io.EOF, io.ErrUnexpectedEOF, net.ErrClosed, os.ErrDeadlineExceeded,
+		context.Canceled, context.DeadlineExceeded, syscall.ECONNRESET, syscall.EPIPE,
+	} {
+		if errors.Is(err, transient) {
+			return false
+		}
+	}
+	return true
+}
+
+// remoteErrorOp is the operation of the net.OpError that crypto/tls returns
+// for an alert of the peer, for example "remote error: tls: unknown
+// certificate authority". It is not part of the API of crypto/tls.
+// TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs fails if it changes.
+const remoteErrorOp = "remote error"
 
 // alertConn keeps a TLS alert that the peer sends after the handshake. In
 // TLS 1.3 the client ends its handshake before the server checks the client
 // certificate, so a node agent that refuses the identity of the operator
 // says so with an alert on the first read. The recorder keeps that alert
-// like a failed handshake.
+// like a failed handshake. The first read that succeeds clears the kept
+// error. The wrap hides syscall.Conn of the TLS connection, so channelz
+// shows no socket options for it. gRPC needs nothing else from it.
 type alertConn struct {
 	net.Conn
 
-	last *lastError
+	last    *lastError
+	cleared bool
 }
 
 func (c *alertConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
-	// crypto/tls reports an alert of the peer as a net.OpError with the
-	// operation "remote error", for example "tls: unknown certificate
-	// authority".
-	var op *net.OpError
-	if errors.As(err, &op) && op.Op == "remote error" {
+	op, isOp := errors.AsType[*net.OpError](err)
+	switch {
+	case isOp && op.Op == remoteErrorOp:
 		c.last.set(err)
+	case err == nil && n > 0 && !c.cleared:
+		c.cleared = true
+		c.last.set(nil)
 	}
 	return n, err //nolint:wrapcheck // the reader of a net.Conn reads io.EOF and its peers as is
 }
