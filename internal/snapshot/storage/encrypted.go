@@ -221,8 +221,18 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 	if err != nil {
 		return 0, "", err
 	}
+	// One Save of an id at a time in this process: the files of a Save in
+	// flight are not partial, and must not be removed.
+	release, ok := claimSave(snapshotID)
+	if !ok {
+		return 0, "", ErrAlreadyExists
+	}
+	defer release()
+	if err := b.removePartial(ctx, snapshotID); err != nil {
+		return 0, "", err
+	}
 	// A sealed DEK already present means the snapshot exists (or a
-	// concurrent Save is racing us) — never overwrite key material.
+	// Save in another process is racing us): never overwrite key material.
 	if err := b.DEKs.Put(ctx, snapshotID, sealed); err != nil {
 		return 0, "", err
 	}
@@ -243,6 +253,55 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 		return 0, "", saveErr
 	}
 	return size, ref, nil
+}
+
+// partialRemover is a backend that can tell a partial artifact from a
+// complete one, and remove the partial one (setec#317).
+type partialRemover interface {
+	RemovePartial(ctx context.Context, snapshotID string) error
+}
+
+// removePartial removes what a Save at snapshotID that ended inside the
+// write left: a partial payload of the inner backend and its sealed DEK. A
+// complete snapshot gives ErrAlreadyExists. An inner backend that cannot
+// tell partial from complete is left as it is, and Save refuses an id that
+// has a sealed DEK, as before.
+func (b *EncryptedBackend) removePartial(ctx context.Context, snapshotID string) error {
+	inner, ok := b.Inner.(partialRemover)
+	if !ok {
+		return nil
+	}
+	if err := inner.RemovePartial(ctx, snapshotID); err != nil {
+		return fmt.Errorf("storage: remove a partial snapshot: %w", err)
+	}
+	// The payload is gone or partial, so a sealed DEK at the id is the key
+	// of a dead attempt.
+	if err := b.DEKs.Destroy(ctx, snapshotID); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: destroy the sealed DEK of a partial snapshot: %w", err)
+	}
+	return nil
+}
+
+// saves is the set of snapshot ids that a Save of this process writes now.
+var saves = struct {
+	sync.Mutex
+	ids map[string]struct{}
+}{ids: map[string]struct{}{}}
+
+// claimSave marks snapshotID as written by this process. It reports false
+// when another Save of this process writes it now. release ends the claim.
+func claimSave(snapshotID string) (release func(), ok bool) {
+	saves.Lock()
+	defer saves.Unlock()
+	if _, busy := saves.ids[snapshotID]; busy {
+		return nil, false
+	}
+	saves.ids[snapshotID] = struct{}{}
+	return func() {
+		saves.Lock()
+		defer saves.Unlock()
+		delete(saves.ids, snapshotID)
+	}, true
 }
 
 // Open unseals the snapshot's DEK and returns a verifying, decrypting

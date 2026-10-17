@@ -176,6 +176,39 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	return counter.n, snapshotID, nil
 }
 
+// RemovePartial removes the partial artifact of a Save that ended inside
+// the write: a payload with no digest sidecar. It removes every version of
+// the payload. A complete snapshot (a payload with its sidecar) is kept,
+// and RemovePartial returns ErrAlreadyExists. With nothing at the id it
+// returns nil (setec#317). A multipart upload that never completed is not
+// an object, and the lifecycle rule of the bucket ends it.
+func (b *S3Backend) RemovePartial(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return errwrap.Wrap(err, "context.Context.Err")
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	complete, err := b.exists(ctx, b.shaKey(snapshotID))
+	if err != nil {
+		return err
+	}
+	if complete {
+		return ErrAlreadyExists
+	}
+	partial, err := b.exists(ctx, b.stateKey(snapshotID))
+	if err != nil {
+		return err
+	}
+	if !partial {
+		return nil
+	}
+	if err := b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID)); err != nil {
+		return fmt.Errorf("storage: s3 remove a partial payload %q: %w", snapshotID, err)
+	}
+	return nil
+}
+
 // Open returns a reader over the payload that verifies the persisted
 // SHA256 as the stream drains; the final Read reports ErrCorrupted on
 // a digest mismatch. A missing payload returns ErrNotFound; a payload

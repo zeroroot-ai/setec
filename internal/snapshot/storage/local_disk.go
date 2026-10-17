@@ -313,3 +313,34 @@ func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (size in
 // Compile-time assertion that LocalDiskBackend satisfies the
 // StorageBackend interface.
 var _ StorageBackend = (*LocalDiskBackend)(nil)
+
+// RemovePartial removes the partial artifact of a Save that ended inside
+// the write: a payload with no digest sidecar. It overwrites the payload
+// before it unlinks it. A complete snapshot (a payload with its sidecar)
+// is kept, and RemovePartial returns ErrAlreadyExists. With nothing at the
+// id it returns nil (setec#317).
+func (b *LocalDiskBackend) RemovePartial(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return errwrap.Wrap(err, "context.Context.Err")
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	if _, err := os.Stat(b.sha256Path(snapshotID)); err == nil {
+		return ErrAlreadyExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: stat sha256 sidecar: %w", err)
+	}
+	statePath := b.statePath(snapshotID)
+	if info, err := os.Stat(statePath); err == nil {
+		if err := overwriteWithZeros(statePath, info.Size()); err != nil {
+			return fmt.Errorf("storage: secure overwrite of a partial payload: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: stat %s: %w", statePath, err)
+	}
+	if err := os.RemoveAll(b.snapshotDir(snapshotID)); err != nil {
+		return fmt.Errorf("storage: remove a partial snapshot: %w", err)
+	}
+	return nil
+}
