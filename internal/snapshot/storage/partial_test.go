@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // A Save that ends inside the write, for example when the node agent is
@@ -38,13 +41,39 @@ func leavePartialLocal(t *testing.T, b *EncryptedBackend, id string) {
 
 func TestEncryptedBackend_SaveOverAPartialAttempt(t *testing.T) {
 	b, _, _ := newEncryptedBackend(t)
+	b.PartialStaleAfter = time.Nanosecond
 	ctx := context.Background()
 	leavePartialLocal(t, b, "snap-1")
 
 	if _, _, err := b.Save(ctx, "snap-1", bytes.NewReader(plaintextMarker)); err != nil {
 		t.Fatalf("Save over a partial attempt: %v", err)
 	}
-	rc, err := b.Open(ctx, "snap-1")
+	assertOpens(t, b, "snap-1", plaintextMarker)
+}
+
+// TestEncryptedBackend_SaveKeepsANewPartialArtifact: a partial artifact
+// newer than PartialStaleAfter may be a Save in flight in another process
+// or on another node. Save refuses the id and keeps the artifact.
+func TestEncryptedBackend_SaveKeepsANewPartialArtifact(t *testing.T) {
+	b, _, _ := newEncryptedBackend(t)
+	ctx := context.Background()
+	leavePartialLocal(t, b, "snap-1")
+
+	if _, _, err := b.Save(ctx, "snap-1", bytes.NewReader(plaintextMarker)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("Save over a new partial artifact: want ErrAlreadyExists, got %v", err)
+	}
+	if _, err := os.Stat(b.Inner.(*LocalDiskBackend).statePath("snap-1")); err != nil {
+		t.Fatalf("the payload of the other Save is gone: %v", err)
+	}
+	if _, err := b.DEKs.Get(ctx, "snap-1"); err != nil {
+		t.Fatalf("the sealed DEK of the other Save is gone: %v", err)
+	}
+}
+
+// assertOpens checks that Open of id returns want.
+func assertOpens(t *testing.T, b *EncryptedBackend, id string, want []byte) {
+	t.Helper()
+	rc, err := b.Open(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -53,8 +82,8 @@ func TestEncryptedBackend_SaveOverAPartialAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !bytes.Equal(got, plaintextMarker) {
-		t.Fatal("Open returned other bytes than the second Save wrote")
+	if !bytes.Equal(got, want) {
+		t.Fatal("Open returned other bytes than the last Save wrote")
 	}
 }
 
@@ -66,13 +95,13 @@ func TestLocalDiskBackend_RemovePartialKeepsACompleteSnapshot(t *testing.T) {
 	if _, _, err := b.Save(ctx, "snap-1", bytes.NewReader([]byte("complete"))); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := b.RemovePartial(ctx, "snap-1"); !errors.Is(err, ErrAlreadyExists) {
+	if err := b.RemovePartial(ctx, "snap-1", 0); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("RemovePartial of a complete snapshot: want ErrAlreadyExists, got %v", err)
 	}
 	if _, err := os.Stat(b.statePath("snap-1")); err != nil {
 		t.Fatalf("the complete snapshot is gone: %v", err)
 	}
-	if err := b.RemovePartial(ctx, "snap-none"); err != nil {
+	if err := b.RemovePartial(ctx, "snap-none", 0); err != nil {
 		t.Fatalf("RemovePartial with nothing there: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(b.Root, "snap-none")); !errors.Is(err, os.ErrNotExist) {
@@ -135,31 +164,58 @@ func TestEncryptedBackend_SaveDoesNotRemoveASaveInFlight(t *testing.T) {
 
 func TestS3EncryptedBackend_SaveOverAPartialAttempt(t *testing.T) {
 	ctx := context.Background()
-	inner, fake := newTestS3Backend(t)
-	b := &EncryptedBackend{Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore()}
-
-	// The attempt sealed its DEK and uploaded the payload, and ended before
-	// the digest sidecar.
-	if err := b.DEKs.Put(ctx, "sess-ckpt-1", []byte("sealed-dek-of-a-dead-attempt")); err != nil {
-		t.Fatalf("put the DEK of the attempt: %v", err)
+	inner, fake := newVersionedTestBackend(t)
+	b := &EncryptedBackend{
+		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
+		PartialStaleAfter: time.Nanosecond,
 	}
-	fake.mu.Lock()
-	fake.objects["checkpoints/"+inner.stateKey("sess-ckpt-1")] = []byte("half a payload")
-	fake.mu.Unlock()
+	leavePartialS3(t, b, inner, "sess-ckpt-1")
 
 	if _, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker)); err != nil {
 		t.Fatalf("Save over a partial attempt: %v", err)
 	}
-	rc, err := b.Open(ctx, "sess-ckpt-1")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	got, _ := io.ReadAll(rc)
-	_ = rc.Close()
-	if !bytes.Equal(got, plaintextMarker) {
-		t.Fatal("Open returned other bytes than the second Save wrote")
+	assertOpens(t, b, "sess-ckpt-1", plaintextMarker)
+	// Every version of the partial payload is gone: only the new one is left.
+	if n := fake.liveVersionCount(inner.stateKey("sess-ckpt-1")); n != 1 {
+		t.Fatalf("payload versions after the Save: got %d, want 1", n)
 	}
 	if _, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker)); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("a second Save of a complete snapshot: want ErrAlreadyExists, got %v", err)
+	}
+}
+
+func TestS3EncryptedBackend_SaveKeepsANewPartialArtifact(t *testing.T) {
+	ctx := context.Background()
+	inner, fake := newVersionedTestBackend(t)
+	b := &EncryptedBackend{
+		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
+		PartialStaleAfter: time.Hour,
+	}
+	leavePartialS3(t, b, inner, "sess-ckpt-1")
+
+	if _, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("Save over a new partial artifact: want ErrAlreadyExists, got %v", err)
+	}
+	if n := fake.liveVersionCount(inner.stateKey("sess-ckpt-1")); n != 1 {
+		t.Fatalf("the payload of the other Save: got %d versions, want 1", n)
+	}
+	if _, err := b.DEKs.Get(ctx, "sess-ckpt-1"); err != nil {
+		t.Fatalf("the sealed DEK of the other Save is gone: %v", err)
+	}
+}
+
+// leavePartialS3 makes the partial artifact of a Save that sealed its DEK
+// and uploaded the payload, and ended before the digest sidecar.
+func leavePartialS3(t *testing.T, b *EncryptedBackend, inner *S3Backend, id string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := b.DEKs.Put(ctx, id, []byte("sealed-dek-of-a-dead-attempt")); err != nil {
+		t.Fatalf("put the DEK of the attempt: %v", err)
+	}
+	if _, err := inner.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(inner.Bucket), Key: aws.String(inner.stateKey(id)),
+		Body: bytes.NewReader([]byte("half a payload")),
+	}); err != nil {
+		t.Fatalf("put the partial payload: %v", err)
 	}
 }

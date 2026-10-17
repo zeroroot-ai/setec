@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
@@ -145,6 +146,22 @@ func (d *DirDEKStore) Get(_ context.Context, snapshotID string) ([]byte, error) 
 	return sealed, nil
 }
 
+// ModTime returns the time the sealed DEK of snapshotID was written, or
+// ErrNotFound.
+func (d *DirDEKStore) ModTime(_ context.Context, snapshotID string) (time.Time, error) {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return time.Time{}, err
+	}
+	info, err := os.Stat(d.path(snapshotID))
+	if errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("storage: stat sealed DEK: %w", err)
+	}
+	return info.ModTime(), nil
+}
+
 // Destroy implements SealedDEKStore: zero-overwrite, fsync, unlink.
 func (d *DirDEKStore) Destroy(_ context.Context, snapshotID string) error {
 	if err := ValidateSnapshotID(snapshotID); err != nil {
@@ -182,6 +199,11 @@ type EncryptedBackend struct {
 
 	// DEKs persists the sealed per-snapshot DEKs.
 	DEKs SealedDEKStore
+
+	// PartialStaleAfter is the age after which Save takes a partial
+	// artifact at its id for the remains of a dead Save and removes it
+	// (setec#317). 0 means defaultPartialStaleAfter.
+	PartialStaleAfter time.Duration
 }
 
 // EncryptedAtRest implements the AtRestReporter capability: every
@@ -225,14 +247,15 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 	// flight are not partial, and must not be removed.
 	release, ok := claimSave(snapshotID)
 	if !ok {
-		return 0, "", ErrAlreadyExists
+		return 0, "", fmt.Errorf("%w: a save of this id is in flight in this process", ErrAlreadyExists)
 	}
 	defer release()
 	if err := b.removePartial(ctx, snapshotID); err != nil {
 		return 0, "", err
 	}
-	// A sealed DEK already present means the snapshot exists (or a
-	// Save in another process is racing us): never overwrite key material.
+	// A sealed DEK already present means the snapshot exists, or a Save in
+	// another process or on another node wrote its DEK after the check
+	// above: never overwrite key material.
 	if err := b.DEKs.Put(ctx, snapshotID, sealed); err != nil {
 		return 0, "", err
 	}
@@ -256,26 +279,60 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 }
 
 // partialRemover is a backend that can tell a partial artifact from a
-// complete one, and remove the partial one (setec#317).
+// complete one, and remove a partial one older than olderThan (setec#317).
 type partialRemover interface {
-	RemovePartial(ctx context.Context, snapshotID string) error
+	RemovePartial(ctx context.Context, snapshotID string, olderThan time.Duration) error
 }
 
+// dekAger is a sealed-DEK store that knows when a DEK was written.
+type dekAger interface {
+	ModTime(ctx context.Context, snapshotID string) (time.Time, error)
+}
+
+// defaultPartialStaleAfter is the age after which a partial artifact is
+// taken for the remains of a dead Save and not for a Save in flight. It is
+// the default of the node agent flag --s3-stale-multipart-window, which
+// bounds the longest Save in the same way.
+const defaultPartialStaleAfter = 6 * time.Hour
+
 // removePartial removes what a Save at snapshotID that ended inside the
-// write left: a partial payload of the inner backend and its sealed DEK. A
-// complete snapshot gives ErrAlreadyExists. An inner backend that cannot
-// tell partial from complete is left as it is, and Save refuses an id that
-// has a sealed DEK, as before.
+// write left: a partial payload of the inner backend and its sealed DEK,
+// when both are older than PartialStaleAfter. A complete snapshot, or a
+// newer partial one that may be a Save in flight in another process or on
+// another node, gives an error that wraps ErrAlreadyExists. An inner
+// backend or a DEK store that cannot tell these apart is left as it is,
+// and Save refuses an id that has a sealed DEK, as before.
 func (b *EncryptedBackend) removePartial(ctx context.Context, snapshotID string) error {
 	inner, ok := b.Inner.(partialRemover)
 	if !ok {
 		return nil
 	}
-	if err := inner.RemovePartial(ctx, snapshotID); err != nil {
+	ager, ok := b.DEKs.(dekAger)
+	if !ok {
+		return nil
+	}
+	olderThan := b.PartialStaleAfter
+	if olderThan <= 0 {
+		olderThan = defaultPartialStaleAfter
+	}
+	if err := inner.RemovePartial(ctx, snapshotID, olderThan); err != nil {
+		if errors.Is(err, ErrAlreadyExists) {
+			return err
+		}
 		return fmt.Errorf("storage: remove a partial snapshot: %w", err)
 	}
-	// The payload is gone or partial, so a sealed DEK at the id is the key
-	// of a dead attempt.
+	// The payload is gone, or it was partial and old. A sealed DEK at the
+	// id is then the key of a dead Save, unless it is new.
+	written, err := ager.ModTime(ctx, snapshotID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if written.IsZero() || time.Since(written) < olderThan {
+		return fmt.Errorf("%w: a sealed DEK written at %s may belong to a save in flight", ErrAlreadyExists, written)
+	}
 	if err := b.DEKs.Destroy(ctx, snapshotID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("storage: destroy the sealed DEK of a partial snapshot: %w", err)
 	}
@@ -289,7 +346,12 @@ var saves = struct {
 }{ids: map[string]struct{}{}}
 
 // claimSave marks snapshotID as written by this process. It reports false
-// when another Save of this process writes it now. release ends the claim.
+// when another Save of this process writes it now. The claim is keyed by
+// the id only, so a Save to one backend also refuses a Save of the same id
+// to another backend of this process. That is safe, because no caller does
+// both. A Save in another process or on another node is not seen here:
+// removePartial leaves its artifacts alone by their age. release ends the
+// claim.
 func claimSave(snapshotID string) (release func(), ok bool) {
 	saves.Lock()
 	defer saves.Unlock()

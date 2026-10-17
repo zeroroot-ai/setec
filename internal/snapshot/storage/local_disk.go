@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
@@ -315,11 +316,14 @@ func (b *LocalDiskBackend) Stat(ctx context.Context, storageRef string) (size in
 var _ StorageBackend = (*LocalDiskBackend)(nil)
 
 // RemovePartial removes the partial artifact of a Save that ended inside
-// the write: a payload with no digest sidecar. It overwrites the payload
-// before it unlinks it. A complete snapshot (a payload with its sidecar)
-// is kept, and RemovePartial returns ErrAlreadyExists. With nothing at the
-// id it returns nil (setec#317).
-func (b *LocalDiskBackend) RemovePartial(ctx context.Context, snapshotID string) error {
+// the write: a payload with no digest sidecar, last written more than
+// olderThan ago. It overwrites the payload before it unlinks it. A complete
+// snapshot (a payload with its sidecar) is kept, and RemovePartial returns
+// ErrAlreadyExists. A partial payload that is newer may be a Save in flight
+// in another process, so it is kept too, and RemovePartial returns an error
+// that wraps ErrAlreadyExists. With nothing at the id it returns nil
+// (setec#317).
+func (b *LocalDiskBackend) RemovePartial(ctx context.Context, snapshotID string, olderThan time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return errwrap.Wrap(err, "context.Context.Err")
 	}
@@ -331,15 +335,30 @@ func (b *LocalDiskBackend) RemovePartial(ctx context.Context, snapshotID string)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("storage: stat sha256 sidecar: %w", err)
 	}
+	dir := b.snapshotDir(snapshotID)
+	dirInfo, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("storage: stat %s: %w", dir, err)
+	}
 	statePath := b.statePath(snapshotID)
+	written, size, hasPayload := dirInfo.ModTime(), int64(0), false
 	if info, err := os.Stat(statePath); err == nil {
-		if err := overwriteWithZeros(statePath, info.Size()); err != nil {
-			return fmt.Errorf("storage: secure overwrite of a partial payload: %w", err)
-		}
+		written, size, hasPayload = info.ModTime(), info.Size(), true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("storage: stat %s: %w", statePath, err)
 	}
-	if err := os.RemoveAll(b.snapshotDir(snapshotID)); err != nil {
+	if age := time.Since(written); age < olderThan {
+		return fmt.Errorf("%w: a partial snapshot written %s ago may be a save in flight",
+			ErrAlreadyExists, age.Round(time.Second))
+	}
+	if hasPayload {
+		if err := overwriteWithZeros(statePath, size); err != nil {
+			return fmt.Errorf("storage: secure overwrite of a partial payload: %w", err)
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("storage: remove a partial snapshot: %w", err)
 	}
 	return nil
