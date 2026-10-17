@@ -49,6 +49,10 @@ type GRPCDialer struct {
 	// certificate against it, but it is never a dial address.
 	AuthorityPattern string
 
+	// ReadyWait bounds the wait for the connection before each call
+	// (nodeAgentReadyWait by default). 0 turns the wait off.
+	ReadyWait time.Duration
+
 	// Credentials are the client transport credentials used for
 	// mTLS. They are required. The operator-to-node-agent channel is
 	// always mTLS. They come from internal/credentials, which decides
@@ -63,12 +67,16 @@ type GRPCDialer struct {
 // nodeAgentReadyWait bounds how long a call waits for the connection to a
 // node-agent to come up before it is sent. A node-agent container that
 // restarts refuses connections for some seconds, and the Pod keeps its
-// UID and IP, so the cached connection only has to reconnect. Without the
+// UID and IP, so the cached connection only has to reconnect. The kubelet
+// restarts a container at once, and again after 10 seconds, so 15 seconds
+// covers two restarts. Each controller has one worker, so the wait stays
+// short: a node-agent that stays down holds the worker for 15 seconds a
+// call, not longer. Without the
 // wait, a call in that gap failed at once with Unavailable, and the
 // coordinator marked a snapshot Failed that a retry seconds later would
 // have taken (setec#313). The wait covers only the connection: a call
 // that reached the node-agent is never sent again.
-const nodeAgentReadyWait = 60 * time.Second
+const nodeAgentReadyWait = 15 * time.Second
 
 // cachedConn pairs a connection with the identity of the Pod it was
 // dialed to. This lets a restarted node-agent (new Pod UID, new Pod
@@ -87,6 +95,7 @@ func NewGRPCDialer(resolver NodeAgentPodResolver, authorityPattern string, creds
 		Resolver:         resolver,
 		AuthorityPattern: authorityPattern,
 		Credentials:      creds,
+		ReadyWait:        nodeAgentReadyWait,
 		conns:            map[string]cachedConn{},
 	}
 }
@@ -119,7 +128,7 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 
 	if cached, ok := d.conns[nodeName]; ok {
 		if cached.podKey == podKey {
-			return wrapGRPC(cached.conn, nodeAgentReadyWait), nil
+			return wrapGRPC(cached.conn, d.ReadyWait), nil
 		}
 		// The node-agent on this node restarted. A new Pod, with a
 		// new UID and likely a new IP, now serves it. The cached
@@ -155,7 +164,7 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 		return nil, fmt.Errorf("grpcdialer: dial %q (authority %q): %w", target, authority, err)
 	}
 	d.conns[nodeName] = cachedConn{podKey: podKey, conn: conn}
-	return wrapGRPC(conn, nodeAgentReadyWait), nil
+	return wrapGRPC(conn, d.ReadyWait), nil
 }
 
 // connCacheKey identifies the Pod instance a connection was dialed to.
@@ -186,11 +195,20 @@ func wrapGRPC(conn *grpc.ClientConn, readyWait time.Duration) NodeAgentClient {
 	return &grpcShim{conn: conn, inner: setecgrpcv1.NewNodeAgentServiceClient(conn), readyWait: readyWait}
 }
 
-// awaitReady waits until the connection is Ready, the wait ends, or ctx
-// ends. It reports nothing: the call that follows fails with the cause
-// when the connection is still down.
+// awaitReady waits until the connection is Ready or the wait ends. It
+// reports nothing: the call that follows fails with the cause when the
+// connection is still down. When ctx has a deadline, the wait takes at most
+// half of the time left, so the call keeps time to fail with its cause and
+// not with DeadlineExceeded.
 func (s *grpcShim) awaitReady(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, s.readyWait)
+	wait := s.readyWait
+	if dl, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(dl)/2)
+	}
+	if wait <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	s.conn.Connect()
 	for st := s.conn.GetState(); st != connectivity.Ready; st = s.conn.GetState() {
