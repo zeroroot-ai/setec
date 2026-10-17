@@ -289,21 +289,29 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 func TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name     string
-		addr     string
-		wait     time.Duration
-		wantCode codes.Code
+		name        string
+		addr        string
+		wait        time.Duration
+		wantCode    codes.Code
+		wantNotSent bool
 	}{
 		{name: "with the wait the call reaches the new process", addr: "127.0.0.4",
 			wait: nodeAgentReadyWait, wantCode: codes.OK},
 		{name: "with no wait the call fails in the gap", addr: "127.0.0.5",
 			wait: 0, wantCode: codes.Unavailable},
+		// The wait ends before the new process listens: the shim does not
+		// send the call, and says so (setec#315).
+		{name: "a wait that ends in the gap does not send the call", addr: "127.0.0.6",
+			wait: 200 * time.Millisecond, wantCode: codes.Unavailable, wantNotSent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := restartInPlace(t, tc.addr, tc.wait)
 			if status.Code(got) != tc.wantCode {
 				t.Fatalf("DeleteSnapshot across an in-place restart: want %v, got %v", tc.wantCode, got)
+			}
+			if notSent := errors.Is(got, ErrNodeAgentUnavailable); notSent != tc.wantNotSent {
+				t.Fatalf("the call was not sent: got %v, want %v (err %v)", notSent, tc.wantNotSent, got)
 			}
 		})
 	}

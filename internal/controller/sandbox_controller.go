@@ -162,6 +162,7 @@ const (
 	eventReasonResumed               = "Resumed"
 	eventReasonSnapshotCreateStarted = "SnapshotCreateStarted"
 	eventReasonSnapshotCreateFailed  = "SnapshotCreateFailed"
+	eventReasonNodeAgentUnavailable  = "NodeAgentUnavailable"
 	eventReasonWorkspaceCreated      = "WorkspaceCreated"
 	eventReasonWorkspaceDeleted      = "WorkspaceDeleted"
 	eventReasonSessionVMRestart      = "SessionVMRestart"
@@ -1844,13 +1845,14 @@ func (r *SandboxReconciler) requestSnapshot(ctx context.Context, sb *setecv1alph
 		"creating Snapshot %q", sb.Spec.Snapshot.Name)
 	if err := r.Coordinator.CreateSnapshot(ctx, sb); err != nil {
 		if errors.Is(err, snapshot.ErrNodeAgentUnavailable) {
-			// A short outage of the node agent: the coordinator removed
-			// the Snapshot of the attempt, so the next try takes it again
-			// (setec#315).
-			_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, "NodeAgentUnavailable", false)
-			r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, eventReasonSnapshotCreateFailed, actionRequestSnapshot,
-				"the node agent cannot be reached now; Snapshot %q is taken again: %v", sb.Spec.Snapshot.Name, err)
-			return ctrl.Result{RequeueAfter: snapshotInFlightRequeue}, nil
+			// A short outage of the node agent, which got no call: the
+			// coordinator removed the Snapshot of the attempt, so a later
+			// reconcile takes it again (setec#315). The error goes back to
+			// the work queue, so the tries back off while the outage lasts.
+			_ = r.patchPhase(ctx, sb, setecv1alpha1.SandboxPhaseRunning, eventReasonNodeAgentUnavailable, false)
+			return r.recordAndReturnErr(sb, eventReasonNodeAgentUnavailable,
+				fmt.Errorf("the node agent cannot be reached now; Snapshot %q is taken again later: %w",
+					sb.Spec.Snapshot.Name, err))
 		}
 		// Roll back to Running if the Coordinator could not complete
 		// (e.g. InsufficientStorage before VM pause).

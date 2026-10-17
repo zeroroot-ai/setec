@@ -15,8 +15,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -312,17 +310,7 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 	if rpcErr != nil {
 		setSpanErr(span, rpcErr.Error())
 		c.recordDuration("create", sb, time.Since(start))
-		if nodeAgentUnavailable(rpcErr) {
-			c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable, rpcErr.Error())
-			return c.abandonSnapshot(ctx, snap, rpcErr)
-		}
-		reason := EventReasonSnapshotCreateFailed
-		if isInsufficientStorage(rpcErr) {
-			reason = EventReasonInsufficientStorage
-		}
-		c.emit(sb, corev1.EventTypeWarning, reason, rpcErr.Error())
-		c.failSnapshot(ctx, snap, reason, rpcErr)
-		return fmt.Errorf("coordinator: CreateSnapshot RPC: %w", rpcErr)
+		return c.failCreate(ctx, sb, snap, rpcErr)
 	}
 
 	// 5. Record the identity generation before the Snapshot is Ready: a
@@ -364,9 +352,10 @@ func (c *Coordinator) CreateSnapshot(ctx context.Context, sb *setecv1alpha1.Sand
 }
 
 // ErrNodeAgentUnavailable marks an error that means the node agent cannot be
-// reached now: its Pod is missing, not Ready, or refuses the connection. It
-// is a short outage, for example a restart or a rollout of the node agent,
-// so a caller tries again. It never marks a Snapshot Failed (setec#315).
+// reached now and did nothing: its Pod is missing or not Ready, or the
+// connection was not up, so the call was not sent. It is a short outage,
+// for example a restart or a rollout of the node agent, so a caller tries
+// again. It never marks a Snapshot Failed (setec#315).
 var ErrNodeAgentUnavailable = errors.New("snapshot: the node agent cannot be reached now")
 
 // ErrInvalidParent is returned when the parent of a diff snapshot cannot
@@ -473,27 +462,49 @@ func (c *Coordinator) failSnapshot(ctx context.Context, snap *setecv1alpha1.Snap
 	}
 }
 
-// nodeAgentUnavailable reports whether err means that the node agent cannot
-// be reached now: the dialer found no Pod to dial, or the RPC never got an
-// answer (codes.Unavailable, after the wait of the dialer).
+// nodeAgentUnavailable reports whether err means that the node agent could
+// not be reached and did nothing: the resolver found no Ready node-agent
+// Pod, or the shim did not send the call. An RPC that was sent and then
+// failed with codes.Unavailable is not such an error: the node agent may
+// have paused the machine or stored part of the snapshot.
 func nodeAgentUnavailable(err error) bool {
-	return errors.Is(err, ErrNodeAgentUnavailable) || grpcstatus.Code(err) == grpccodes.Unavailable
+	return errors.Is(err, ErrNodeAgentUnavailable)
 }
 
 // abandonSnapshot removes the Snapshot of an attempt that could not reach
 // the node agent, and returns an error that wraps ErrNodeAgentUnavailable.
-// The attempt stored nothing that a Snapshot points to: the storage
-// reference is set only after a reply. With the Snapshot gone, the next
-// reconcile takes the snapshot again. A Failed Snapshot would stop it until
-// a person deleted it (setec#315). When the removal fails, the Snapshot is
-// marked Failed as before, so it never stays Creating with no write.
+// The node agent got no call, so it stored nothing. With the Snapshot gone,
+// a later reconcile takes the snapshot again. A Failed Snapshot would stop
+// it until a person deleted it (setec#315). When the removal fails, the
+// Snapshot is marked Failed as before, so it never stays Creating with no
+// write.
 func (c *Coordinator) abandonSnapshot(ctx context.Context, snap *setecv1alpha1.Snapshot, cause error) error {
-	if err := c.Client.Delete(ctx, snap); client.IgnoreNotFound(err) != nil {
+	err := c.Client.Delete(ctx, snap)
+	if err != nil && !apierrors.IsNotFound(err) {
 		c.failSnapshot(ctx, snap, EventReasonNodeAgentUnreachable, cause)
-		return fmt.Errorf("coordinator: remove the Snapshot of an attempt that could not reach the node agent (%v): %w",
-			cause, err)
+		return fmt.Errorf("coordinator: remove the Snapshot of an attempt that could not reach the node agent: %w",
+			errors.Join(err, cause))
 	}
-	return fmt.Errorf("coordinator: %w: %w", ErrNodeAgentUnavailable, cause)
+	return fmt.Errorf("coordinator: %w", cause)
+}
+
+// failCreate records an RPC error of CreateSnapshot. A call that the node
+// agent never got removes the Snapshot of the attempt. Any other error
+// marks it Failed (setec#129).
+func (c *Coordinator) failCreate(
+	ctx context.Context, sb *setecv1alpha1.Sandbox, snap *setecv1alpha1.Snapshot, rpcErr error,
+) error {
+	if nodeAgentUnavailable(rpcErr) {
+		c.emit(sb, corev1.EventTypeWarning, EventReasonNodeAgentUnreachable, rpcErr.Error())
+		return c.abandonSnapshot(ctx, snap, rpcErr)
+	}
+	reason := EventReasonSnapshotCreateFailed
+	if isInsufficientStorage(rpcErr) {
+		reason = EventReasonInsufficientStorage
+	}
+	c.emit(sb, corev1.EventTypeWarning, reason, rpcErr.Error())
+	c.failSnapshot(ctx, snap, reason, rpcErr)
+	return fmt.Errorf("coordinator: CreateSnapshot RPC: %w", rpcErr)
 }
 
 // RestoreSandbox issues the RestoreSandbox RPC to the node holding

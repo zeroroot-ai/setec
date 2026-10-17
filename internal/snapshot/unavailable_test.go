@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,20 +28,22 @@ import (
 // until a person deleted it.
 
 // unavailableCases are the errors that mean "the node agent cannot be
-// reached now". Each one comes from the dial or from the RPC.
+// reached now, and it got no call". Each one comes from the dial or from
+// the shim, which did not send the call.
 func unavailableCases() []struct {
 	name    string
 	dialErr error
 	rpcErr  error
 } {
+	notSent := &notSentError{state: connectivity.TransientFailure, wait: nodeAgentReadyWait}
 	return []struct {
 		name    string
 		dialErr error
 		rpcErr  error
 	}{
-		{name: "the RPC is Unavailable", rpcErr: status.Error(codes.Unavailable, "connection refused")},
-		{name: "the RPC is Unavailable, wrapped", rpcErr: fmt.Errorf("shim: %w", status.Error(codes.Unavailable, "x"))},
-		{name: "the dialer finds no node agent Pod", dialErr: fmt.Errorf("grpcdialer: %w", ErrNodeAgentUnavailable)},
+		{name: "the shim did not send the call", rpcErr: notSent},
+		{name: "the shim did not send the call, wrapped", rpcErr: fmt.Errorf("x: %w", notSent)},
+		{name: "the resolver finds no Ready node agent Pod", dialErr: fmt.Errorf("grpcdialer: %w", ErrNodeAgentUnavailable)},
 	}
 }
 
@@ -88,6 +91,9 @@ func TestCreateSnapshot_OtherErrorsStayFailed(t *testing.T) {
 		"Internal":         status.Error(codes.Internal, "firecracker pause"),
 		"plain":            errors.New("fc: pause failed"),
 		"DeadlineExceeded": status.Error(codes.DeadlineExceeded, "slow"),
+		// A call that was sent and then lost its connection: the node
+		// agent may have paused the machine or stored part of it.
+		"sent and then Unavailable": status.Error(codes.Unavailable, "transport is closing"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			sb := newSandboxForCoord()
@@ -134,23 +140,25 @@ func TestCreateBase_NodeAgentUnavailableLeavesNoFailedBase(t *testing.T) {
 	}
 }
 
-// TestGRPCDialer_MissingPodIsUnavailable: a node agent Pod that is not
-// there yet, or has no IP yet, is a short outage, not a fault of the
-// configuration.
-func TestGRPCDialer_MissingPodIsUnavailable(t *testing.T) {
+// TestNodeAgentPodMissingIsUnavailable: a node agent Pod that is not Ready
+// yet, or has no IP yet, is a short outage. A failure to list Pods is a
+// fault of the configuration, and stays a plain error.
+func TestNodeAgentPodMissingIsUnavailable(t *testing.T) {
 	t.Parallel()
+	notReady := nodeAgentPod(testPodName, testNamespace, testWorkerNode, corev1.PodRunning, corev1.ConditionFalse, testPodIP)
+	r := &PodResolver{Client: newFakePodClient(t, notReady), Namespace: testNamespace}
+	if _, err := r.ResolveNodeAgentPod(t.Context(), testWorkerNode); !errors.Is(err, ErrNodeAgentUnavailable) {
+		t.Fatalf("ResolveNodeAgentPod with no Ready Pod: want ErrNodeAgentUnavailable, got %v", err)
+	}
+	if _, err := (&PodResolver{Namespace: testNamespace}).ResolveNodeAgentPod(t.Context(), testWorkerNode); err == nil ||
+		errors.Is(err, ErrNodeAgentUnavailable) {
+		t.Fatalf("ResolveNodeAgentPod with no client: want a plain error, got %v", err)
+	}
+
 	ca := spiffetest.NewCA(t)
-	for name, r := range map[string]*fakeResolver{
-		"no Pod":    {err: errors.New("podresolver: no Ready node-agent pod on node")},
-		"no Pod IP": {pod: podWithUID("uid", "")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			d := NewGRPCDialer(r, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
-			t.Cleanup(func() { _ = d.Close() })
-			if _, err := d.Dial(t.Context(), testNodeName); !errors.Is(err, ErrNodeAgentUnavailable) {
-				t.Fatalf("Dial: want ErrNodeAgentUnavailable, got %v", err)
-			}
-		})
+	d := NewGRPCDialer(&fakeResolver{pod: podWithUID("uid", "")}, unusedAuthorityPattern, operatorCredentials(t, ca, ca))
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.Dial(t.Context(), testNodeName); !errors.Is(err, ErrNodeAgentUnavailable) {
+		t.Fatalf("Dial to a Pod with no IP: want ErrNodeAgentUnavailable, got %v", err)
 	}
 }

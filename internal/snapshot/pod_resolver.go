@@ -86,9 +86,12 @@ func (r *PodResolver) ResolveNodeAgentPod(ctx context.Context, nodeName string) 
 		}
 		return pod, nil
 	}
+	// No Ready node-agent Pod is a short outage, for example a restart or
+	// a rollout of the DaemonSet, so the error says so (setec#315). The
+	// other errors of this function are faults of the configuration.
 	return nil, fmt.Errorf(
-		"podresolver: no Running and Ready node-agent pod found on node %q in namespace %q",
-		nodeName, r.Namespace)
+		"podresolver: no Running and Ready node-agent pod found on node %q in namespace %q: %w",
+		nodeName, r.Namespace, ErrNodeAgentUnavailable)
 }
 
 // podRunningAndReady reports whether pod is in Phase Running with its

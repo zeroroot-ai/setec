@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	grpccreds "google.golang.org/grpc/credentials"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 
 	setecgrpcv1 "github.com/zeroroot-ai/setec/api/grpc/v1"
@@ -115,10 +117,7 @@ func (d *GRPCDialer) Dial(ctx context.Context, nodeName string) (NodeAgentClient
 
 	pod, err := d.Resolver.ResolveNodeAgentPod(ctx, nodeName)
 	if err != nil {
-		// No Ready node-agent Pod on the node is a short outage (a
-		// restart or a rollout), so the error says so (setec#315).
-		return nil, fmt.Errorf("grpcdialer: resolve node-agent pod on node %q: %w: %w",
-			nodeName, ErrNodeAgentUnavailable, err)
+		return nil, fmt.Errorf("grpcdialer: resolve node-agent pod on node %q: %w", nodeName, err)
 	}
 	if pod.Status.PodIP == "" {
 		return nil, fmt.Errorf("grpcdialer: node-agent pod %s/%s on node %q has no PodIP: %w",
@@ -187,7 +186,8 @@ func connCacheKey(pod *corev1.Pod) string {
 // snapshot.NodeAgentClient used by the Coordinator. The Coordinator
 // stays testable without importing gRPC. Before each call the shim waits,
 // for at most readyWait, until the connection is up (see
-// nodeAgentReadyWait).
+// nodeAgentReadyWait). When the connection is still down after the wait,
+// the shim does not send the call and returns a notSentError.
 type grpcShim struct {
 	conn      *grpc.ClientConn
 	inner     setecgrpcv1.NodeAgentServiceClient
@@ -198,47 +198,88 @@ func wrapGRPC(conn *grpc.ClientConn, readyWait time.Duration) NodeAgentClient {
 	return &grpcShim{conn: conn, inner: setecgrpcv1.NewNodeAgentServiceClient(conn), readyWait: readyWait}
 }
 
-// awaitReady waits until the connection is Ready or the wait ends. It
-// reports nothing: the call that follows fails with the cause when the
-// connection is still down. When ctx has a deadline, the wait takes at most
-// half of the time left, so the call keeps time to fail with its cause and
-// not with DeadlineExceeded.
-func (s *grpcShim) awaitReady(ctx context.Context) {
+// notSentError is the error of a call that the shim did not send, because
+// the connection to the node agent was not up after the wait. The node
+// agent did nothing for it, so a caller may send it again (setec#315). It
+// wraps ErrNodeAgentUnavailable and has the gRPC code Unavailable.
+type notSentError struct {
+	state connectivity.State
+	wait  time.Duration
+}
+
+func (e *notSentError) Error() string {
+	return fmt.Sprintf("grpcdialer: the connection to the node agent is %s after a wait of %s; the call was not sent",
+		e.state, e.wait)
+}
+
+func (e *notSentError) Unwrap() error { return ErrNodeAgentUnavailable }
+
+// GRPCStatus gives the error the code Unavailable for status.Code.
+func (e *notSentError) GRPCStatus() *grpcstatus.Status {
+	return grpcstatus.New(grpccodes.Unavailable, e.Error())
+}
+
+// ready waits until the connection is Ready or the wait ends. When ctx
+// has a deadline, the wait takes at most half of the time left. With no
+// wait (readyWait 0) it returns nil at once and the call goes out as
+// gRPC decides. Otherwise it returns a notSentError when the connection
+// is not Ready.
+func (s *grpcShim) ready(ctx context.Context) error {
 	wait := s.readyWait
 	if dl, ok := ctx.Deadline(); ok {
 		wait = min(wait, time.Until(dl)/2)
 	}
-	if wait <= 0 {
-		return
+	if s.readyWait <= 0 {
+		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	s.conn.Connect()
-	for st := s.conn.GetState(); st != connectivity.Ready; st = s.conn.GetState() {
-		if st == connectivity.Shutdown || !s.conn.WaitForStateChange(ctx, st) {
-			return
+	st := s.conn.GetState()
+	if st == connectivity.Ready {
+		return nil
+	}
+	if wait > 0 {
+		wctx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		s.conn.Connect()
+		for st = s.conn.GetState(); st != connectivity.Ready; st = s.conn.GetState() {
+			if st == connectivity.Shutdown || !s.conn.WaitForStateChange(wctx, st) {
+				break
+			}
 		}
 	}
+	if st == connectivity.Ready {
+		return nil
+	}
+	return &notSentError{state: st, wait: max(wait, 0)}
 }
 
 func (s *grpcShim) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnapshotRequest) (*setecgrpcv1.CreateSnapshotResponse, error) {
-	s.awaitReady(ctx)
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	return s.inner.CreateSnapshot(ctx, in)
 }
 func (s *grpcShim) RestoreSandbox(ctx context.Context, in *setecgrpcv1.RestoreSandboxRequest) (*setecgrpcv1.RestoreSandboxResponse, error) {
-	s.awaitReady(ctx)
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	return s.inner.RestoreSandbox(ctx, in)
 }
 func (s *grpcShim) PauseSandbox(ctx context.Context, in *setecgrpcv1.PauseSandboxRequest) (*setecgrpcv1.PauseSandboxResponse, error) {
-	s.awaitReady(ctx)
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	return s.inner.PauseSandbox(ctx, in)
 }
 func (s *grpcShim) ResumeSandbox(ctx context.Context, in *setecgrpcv1.ResumeSandboxRequest) (*setecgrpcv1.ResumeSandboxResponse, error) {
-	s.awaitReady(ctx)
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	return s.inner.ResumeSandbox(ctx, in)
 }
 func (s *grpcShim) DeleteSnapshot(ctx context.Context, in *setecgrpcv1.DeleteSnapshotRequest) (*setecgrpcv1.DeleteSnapshotResponse, error) {
-	s.awaitReady(ctx)
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	return s.inner.DeleteSnapshot(ctx, in)
 }
 
