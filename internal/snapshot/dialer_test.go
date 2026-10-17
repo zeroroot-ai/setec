@@ -88,13 +88,11 @@ func TestGRPCDialer_RefusesANodeAgentFromAnUntrustedCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if err := queryPool(t, client); err == nil {
+	err = queryPool(t, client)
+	if err == nil {
 		t.Fatal("DeleteSnapshot against a node-agent from an untrusted CA: want refusal, got success")
-	} else if status.Code(err) != codes.Unavailable {
-		// The wait for the connection keeps time for the cause: the
-		// refusal ends the call, not the deadline of the caller.
-		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
+	assertTLSRefusal(t, err, "certificate")
 }
 
 // TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs is the mirror of the
@@ -114,13 +112,11 @@ func TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if err := queryPool(t, client); err == nil {
+	err = queryPool(t, client)
+	if err == nil {
 		t.Fatal("DeleteSnapshot with an identity the node-agent does not trust: want refusal, got success")
-	} else if status.Code(err) != codes.Unavailable {
-		// The wait for the connection keeps time for the cause: the
-		// refusal ends the call, not the deadline of the caller.
-		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
+	assertTLSRefusal(t, err, "remote error")
 }
 
 func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
@@ -135,13 +131,11 @@ func TestGRPCDialer_RefusesAPlaintextNodeAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	if err := queryPool(t, client); err == nil {
+	err = queryPool(t, client)
+	if err == nil {
 		t.Fatal("DeleteSnapshot against a plaintext listener: want refusal, got success")
-	} else if status.Code(err) != codes.Unavailable {
-		// The wait for the connection keeps time for the cause: the
-		// refusal ends the call, not the deadline of the caller.
-		t.Fatalf("want the refusal as Unavailable, got %v", err)
 	}
+	assertTLSRefusal(t, err, "first record does not look like a TLS handshake")
 }
 
 // TestGRPCDialer_RefusesToDialWithoutCredentials is the guard against
@@ -289,21 +283,29 @@ func TestGRPCDialer_RedialsAfterNodeAgentRestart(t *testing.T) {
 func TestGRPCDialer_WaitsForANodeAgentThatRestartsInPlace(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name     string
-		addr     string
-		wait     time.Duration
-		wantCode codes.Code
+		name        string
+		addr        string
+		wait        time.Duration
+		wantCode    codes.Code
+		wantNotSent bool
 	}{
 		{name: "with the wait the call reaches the new process", addr: "127.0.0.4",
 			wait: nodeAgentReadyWait, wantCode: codes.OK},
 		{name: "with no wait the call fails in the gap", addr: "127.0.0.5",
 			wait: 0, wantCode: codes.Unavailable},
+		// The wait ends before the new process listens: the shim does not
+		// send the call, and says so (setec#315).
+		{name: "a wait that ends in the gap does not send the call", addr: "127.0.0.6",
+			wait: 200 * time.Millisecond, wantCode: codes.Unavailable, wantNotSent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := restartInPlace(t, tc.addr, tc.wait)
 			if status.Code(got) != tc.wantCode {
 				t.Fatalf("DeleteSnapshot across an in-place restart: want %v, got %v", tc.wantCode, got)
+			}
+			if notSent := errors.Is(got, ErrNodeAgentUnavailable); notSent != tc.wantNotSent {
+				t.Fatalf("the call was not sent: got %v, want %v (err %v)", notSent, tc.wantNotSent, got)
 			}
 		})
 	}
@@ -354,6 +356,56 @@ func restartInPlace(t *testing.T, addr string, wait time.Duration) error {
 	time.Sleep(time.Second)
 	servePoolOnFixedPort(t, addr, port, ca, ca)
 	return <-done
+}
+
+// TestGRPCDialer_AHandshakeCutShortIsAnOutage: a listener that accepts and
+// closes at once cuts the TLS handshake short, as a node agent does while
+// it starts or stops. That is an outage that a caller retries, not a fault
+// of TLS (setec#315).
+func TestGRPCDialer_AHandshakeCutShortIsAnOutage(t *testing.T) {
+	t.Parallel()
+	ca := spiffetest.NewCA(t)
+	lis, err := net.Listen("tcp", net.JoinHostPort(testNodeAgentIP, "0"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+	go func() {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := lis.Addr().(*net.TCPAddr).Port
+
+	d := NewGRPCDialer(fixedPod(), authorityPattern(port), operatorCredentials(t, ca, ca))
+	t.Cleanup(func() { _ = d.Close() })
+	client, err := d.Dial(t.Context(), testNodeName)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := queryPool(t, client); !errors.Is(err, ErrNodeAgentUnavailable) {
+		t.Fatalf("a handshake cut short: want ErrNodeAgentUnavailable, got %v", err)
+	}
+}
+
+// assertTLSRefusal checks that err is a refusal by TLS with its cause: the
+// code Unavailable, the text of the cause, and no ErrNodeAgentUnavailable,
+// so a caller does not retry it (setec#315).
+func assertTLSRefusal(t *testing.T, err error, cause string) {
+	t.Helper()
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want the refusal as Unavailable, got %v", err)
+	}
+	if errors.Is(err, ErrNodeAgentUnavailable) {
+		t.Fatalf("a refusal by TLS is not an outage, got %v", err)
+	}
+	if !strings.Contains(err.Error(), cause) {
+		t.Fatalf("want the cause %q in the error, got %v", cause, err)
+	}
 }
 
 // ---------------------------------------------------------------------
