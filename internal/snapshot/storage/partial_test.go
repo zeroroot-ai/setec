@@ -298,9 +298,14 @@ func TestS3EncryptedBackend_SaveEndsAtTheBound(t *testing.T) {
 		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
 		PartialStaleAfter: 100 * time.Millisecond,
 	}
-	slow := &slowReader{delay: time.Second, r: bytes.NewReader(plaintextMarker)}
+	slow := &slowReader{delay: 2 * time.Second, r: bytes.NewReader(plaintextMarker)}
+	start := time.Now()
 	if _, _, err := b.Save(ctx, "sess-ckpt-1", slow); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a Save longer than the bound: want DeadlineExceeded, got %v", err)
+	}
+	// The Save ends at the bound, not when the source sends its next byte.
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("the Save took %s, want it to end near the bound of 100ms", took)
 	}
 	if _, err := b.DEKs.Get(ctx, "sess-ckpt-1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the DEK of the ended Save: want it gone, got %v", err)

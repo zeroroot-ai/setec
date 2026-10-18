@@ -203,7 +203,7 @@ type EncryptedBackend struct {
 	// PartialStaleAfter is the age after which Save takes a partial
 	// artifact at its id for the remains of a dead Save and removes it
 	// (setec#317). It is also the longest time a Save may run: Save ends a
-	// write that takes longer. 0 means defaultPartialStaleAfter. The node
+	// write that takes longer, also one that waits for its source. 0 means defaultPartialStaleAfter. The node
 	// agent sets it from --s3-stale-multipart-window for S3. The local disk
 	// has one writer for each node and uses the default.
 	PartialStaleAfter time.Duration
@@ -274,12 +274,24 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 	// of a dead Save, so the bound must hold for this one (setec#317).
 	saveCtx, cancel := context.WithTimeout(ctx, b.partialStaleAfter())
 	defer cancel()
+	// A backend that reads the pipe does not watch the ctx while it waits
+	// for bytes, so the end of the ctx closes the pipe.
+	stop := context.AfterFunc(saveCtx, func() { _ = pr.CloseWithError(context.Cause(saveCtx)) })
+	defer stop()
 	size, ref, saveErr := b.Inner.Save(saveCtx, snapshotID, pr)
+	if saveErr != nil && saveCtx.Err() != nil && ctx.Err() == nil {
+		// The bound ended the Save. The inner error may only say that the
+		// pipe closed, so the cause is put first.
+		saveErr = fmt.Errorf("storage: the save ran longer than %s: %w: %w",
+			b.partialStaleAfter(), saveCtx.Err(), saveErr)
+	}
 	if saveErr != nil {
 		_ = pr.CloseWithError(saveErr)
 		// The ciphertext never landed; destroy the orphan key. The ctx of
-		// the Save may have ended, and the key must still go.
-		cleanupCtx := context.WithoutCancel(ctx)
+		// the Save may have ended, and the key must still go, within a
+		// bound of its own.
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancelCleanup()
 		if shredErr := b.DEKs.Destroy(cleanupCtx, snapshotID); shredErr != nil && !errors.Is(shredErr, os.ErrNotExist) {
 			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %w", saveErr, shredErr)
 		}
@@ -304,6 +316,10 @@ type dekAger interface {
 // the default of the node agent flag --s3-stale-multipart-window, which
 // bounds the longest Save in the same way.
 const defaultPartialStaleAfter = 6 * time.Hour
+
+// cleanupTimeout bounds the removal of what a failed Save left. It runs on a
+// ctx of its own, because the ctx of the Save may have ended.
+const cleanupTimeout = time.Minute
 
 // partialStaleAfter returns PartialStaleAfter, or its default.
 func (b *EncryptedBackend) partialStaleAfter() time.Duration {

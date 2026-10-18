@@ -170,7 +170,11 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 		// All versions: on a versioned bucket a plain delete would leave the
 		// half-written payload behind as a noncurrent version, still billed
 		// and still readable to anyone with the KEK.
-		_ = b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID))
+		// The ctx of the Save may have ended (the age bound of
+		// EncryptedBackend), so the removal runs on a ctx of its own.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		_ = b.deleteObjectAllVersions(cleanupCtx, b.stateKey(snapshotID))
 		return 0, "", fmt.Errorf("storage: s3 write sha sidecar %q: %w", snapshotID, err)
 	}
 	return counter.n, snapshotID, nil
