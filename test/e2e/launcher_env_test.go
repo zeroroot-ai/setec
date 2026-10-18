@@ -117,6 +117,13 @@ func launcherHelmArgs(publicKey string) []string {
 		// timed out on it in each disk build (setec#291).
 		"--set-string", "launcher.imageSources[0].hosts[4]=production.cloudfront.docker.com",
 		"--set-string", "launcher.imageSources[1].registry=" + strings.SplitN(launcherCfg.diskRepo, "/", 2)[0],
+		// The installed scenarios take their image from the mirror on
+		// ghcr.io (installedScenarioImages), the registry that an installed
+		// release allows. The suite allows it too, so they also run on a
+		// release that the suite installs (setec#239).
+		"--set-string", "launcher.imageSources[2].registry=" + installedImageRegistry,
+		"--set-string", "launcher.imageSources[2].hosts[0]=ghcr.io",
+		"--set-string", "launcher.imageSources[2].hosts[1]=pkg-containers.githubusercontent.com",
 		"--set-string", "launcher.diskBuilder.image.repository=" + launcherCfg.diskBuilderImageRepo,
 		"--set-string", "launcher.diskBuilder.image.tag=" + imageTag,
 		"--set-string", "launcher.diskBuilder.signingSecret=" + diskSigningSecret,
