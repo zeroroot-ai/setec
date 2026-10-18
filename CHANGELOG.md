@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.127.8](https://github.com/zeroroot-ai/setec/compare/v0.127.7...v0.127.8) (2026-10-18)
+
+
+### Bug Fixes
+
+* **e2e:** the installed CPU template scenario takes its image from the ghcr.io mirror ([#322](https://github.com/zeroroot-ai/setec/issues/322)) ([b9df88d](https://github.com/zeroroot-ai/setec/commit/b9df88dd10b843e92237d1073612a8f7d62b6ea7)), closes [#239](https://github.com/zeroroot-ai/setec/issues/239)
+
 ## [0.127.7](https://github.com/zeroroot-ai/setec/compare/v0.127.6...v0.127.7) (2026-10-18)
 
 
