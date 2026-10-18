@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -625,4 +626,44 @@ func queryPool(t *testing.T, client NodeAgentClient) error {
 	defer cancel()
 	_, err := client.DeleteSnapshot(ctx, &setecgrpcv1.DeleteSnapshotRequest{StorageRef: "probe"})
 	return err
+}
+
+// errConn is a net.Conn whose Read returns n bytes and err.
+type errConn struct {
+	net.Conn
+
+	n   int
+	err error
+}
+
+func (c *errConn) Read(_ []byte) (int, error) { return c.n, c.err }
+
+// TestAlertConn_KeepsATLSAlertAfterTheHandshake: an alert after the
+// handshake, of the peer or of this side, is kept as a TLS fault. A read
+// error of the network is not. The first read that succeeds clears a kept
+// fault (setec#315).
+func TestAlertConn_KeepsATLSAlertAfterTheHandshake(t *testing.T) {
+	t.Parallel()
+	read := func(c *alertConn, n int, err error) {
+		c.Conn = &errConn{n: n, err: err}
+		_, _ = c.Read(make([]byte, 8))
+	}
+	for _, op := range []string{remoteErrorOp, localErrorOp} {
+		c := &alertConn{last: &lastError{}}
+		alert := &net.OpError{Op: op, Err: errors.New("tls: bad record MAC")}
+		read(c, 0, alert)
+		if !errors.Is(c.last.get(), alert) {
+			t.Fatalf("an alert with the operation %q is not kept: %v", op, c.last.get())
+		}
+	}
+	c := &alertConn{last: &lastError{}}
+	read(c, 0, &net.OpError{Op: "read", Err: syscall.ECONNRESET})
+	if c.last.get() != nil {
+		t.Fatalf("a reset of the network is kept as a TLS fault: %v", c.last.get())
+	}
+	c.last.set(errors.New("an old TLS fault"))
+	read(c, 4, nil)
+	if c.last.get() != nil {
+		t.Fatalf("a read that succeeds does not clear the kept fault: %v", c.last.get())
+	}
 }

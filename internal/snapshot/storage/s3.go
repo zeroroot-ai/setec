@@ -204,7 +204,8 @@ func (b *S3Backend) RemovePartial(ctx context.Context, snapshotID string, olderT
 		return err
 	}
 	if written.IsZero() || time.Since(written) < olderThan {
-		return fmt.Errorf("%w: a partial snapshot written at %s may be a save in flight", ErrAlreadyExists, written)
+		return fmt.Errorf("%w: a partial snapshot written %s may be a save in flight",
+			ErrAlreadyExists, writtenAt(written))
 	}
 	if err := b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID)); err != nil {
 		return fmt.Errorf("storage: s3 remove a partial payload %q: %w", snapshotID, err)

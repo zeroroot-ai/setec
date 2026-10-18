@@ -242,9 +242,12 @@ func (h *handshakeRecorder) ClientHandshake(
 	return &alertConn{Conn: conn, last: h.last}, info, nil
 }
 
-// tlsFault reports whether err of a TLS handshake is a fault of TLS: a
-// certificate that does not verify, a peer that is not TLS, or an alert of
-// the peer. Errors of the network or of the ctx are not.
+// tlsFault reports whether err of a TLS handshake or read is a fault of
+// TLS: a certificate that does not verify, a peer that is not TLS, an alert
+// of the peer, or an alert that this side sends because the peer sent bad
+// TLS. An alert that this side sends for a fault of its own (an internal
+// error) is a TLS fault too: a retry does not mend it. Errors of the
+// network or of the ctx are not TLS faults.
 func tlsFault(err error) bool {
 	if op, ok := errors.AsType[*net.OpError](err); ok {
 		// An alert of the peer, or an alert that this side sends because
@@ -293,7 +296,9 @@ func (c *alertConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	op, isOp := errors.AsType[*net.OpError](err)
 	switch {
-	case isOp && op.Op == remoteErrorOp:
+	case isOp && (op.Op == remoteErrorOp || op.Op == localErrorOp):
+		// An alert of the peer, or one that this side sends because the
+		// peer sent a bad record after the handshake.
 		c.last.set(err)
 	case err == nil && n > 0 && !c.cleared:
 		c.cleared = true

@@ -202,7 +202,10 @@ type EncryptedBackend struct {
 
 	// PartialStaleAfter is the age after which Save takes a partial
 	// artifact at its id for the remains of a dead Save and removes it
-	// (setec#317). 0 means defaultPartialStaleAfter.
+	// (setec#317). It is also the longest time a Save may run: Save ends a
+	// write that takes longer. 0 means defaultPartialStaleAfter. The node
+	// agent sets it from --s3-stale-multipart-window for S3. The local disk
+	// has one writer for each node and uses the default.
 	PartialStaleAfter time.Duration
 }
 
@@ -266,11 +269,18 @@ func (b *EncryptedBackend) Save(ctx context.Context, snapshotID string, state io
 		_ = pw.CloseWithError(encErr)
 	}()
 
-	size, ref, saveErr := b.Inner.Save(ctx, snapshotID, pr)
+	// No Save runs longer than the age bound of removePartial. A Save in
+	// another process takes artifacts older than the bound for the remains
+	// of a dead Save, so the bound must hold for this one (setec#317).
+	saveCtx, cancel := context.WithTimeout(ctx, b.partialStaleAfter())
+	defer cancel()
+	size, ref, saveErr := b.Inner.Save(saveCtx, snapshotID, pr)
 	if saveErr != nil {
 		_ = pr.CloseWithError(saveErr)
-		// The ciphertext never landed; destroy the orphan key.
-		if shredErr := b.DEKs.Destroy(ctx, snapshotID); shredErr != nil && !errors.Is(shredErr, os.ErrNotExist) {
+		// The ciphertext never landed; destroy the orphan key. The ctx of
+		// the Save may have ended, and the key must still go.
+		cleanupCtx := context.WithoutCancel(ctx)
+		if shredErr := b.DEKs.Destroy(cleanupCtx, snapshotID); shredErr != nil && !errors.Is(shredErr, os.ErrNotExist) {
 			return 0, "", fmt.Errorf("storage: save failed (%w) and sealed DEK cleanup failed: %w", saveErr, shredErr)
 		}
 		return 0, "", saveErr
@@ -295,6 +305,23 @@ type dekAger interface {
 // bounds the longest Save in the same way.
 const defaultPartialStaleAfter = 6 * time.Hour
 
+// partialStaleAfter returns PartialStaleAfter, or its default.
+func (b *EncryptedBackend) partialStaleAfter() time.Duration {
+	if b.PartialStaleAfter > 0 {
+		return b.PartialStaleAfter
+	}
+	return defaultPartialStaleAfter
+}
+
+// writtenAt says when an artifact was written, for an error text. A zero
+// time means that the store did not say.
+func writtenAt(t time.Time) string {
+	if t.IsZero() {
+		return "at an unknown time"
+	}
+	return "at " + t.UTC().Format(time.RFC3339)
+}
+
 // removePartial removes what a Save at snapshotID that ended inside the
 // write left: a partial payload of the inner backend and its sealed DEK,
 // when both are older than PartialStaleAfter. A complete snapshot, or a
@@ -311,10 +338,7 @@ func (b *EncryptedBackend) removePartial(ctx context.Context, snapshotID string)
 	if !ok {
 		return nil
 	}
-	olderThan := b.PartialStaleAfter
-	if olderThan <= 0 {
-		olderThan = defaultPartialStaleAfter
-	}
+	olderThan := b.partialStaleAfter()
 	if err := inner.RemovePartial(ctx, snapshotID, olderThan); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
 			return err
@@ -331,7 +355,8 @@ func (b *EncryptedBackend) removePartial(ctx context.Context, snapshotID string)
 		return err
 	}
 	if written.IsZero() || time.Since(written) < olderThan {
-		return fmt.Errorf("%w: a sealed DEK written at %s may belong to a save in flight", ErrAlreadyExists, written)
+		return fmt.Errorf("%w: a sealed DEK written %s may belong to a save in flight",
+			ErrAlreadyExists, writtenAt(written))
 	}
 	if err := b.DEKs.Destroy(ctx, snapshotID); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("storage: destroy the sealed DEK of a partial snapshot: %w", err)
