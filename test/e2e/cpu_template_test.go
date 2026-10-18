@@ -62,7 +62,14 @@ func TestLauncher_CPUTemplateSnapshotLoads(t *testing.T) {
 		t.Fatalf("create the class: %v", err)
 	}
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), cls) })
-	inClass := func(spec *setecv1alpha1.SandboxSpec) { spec.SandboxClassName = cls.Name }
+	// Each Sandbox of the scenario takes the image of an installed scenario:
+	// an installed release allows only its own registries (setec#239). The
+	// restore runs the same image as its source.
+	image := installedScenarioImages[t.Name()]
+	inClass := func(spec *setecv1alpha1.SandboxSpec) {
+		spec.SandboxClassName = cls.Name
+		spec.Image = image
+	}
 
 	src := launcherSandbox("ct-src", "echo before-snapshot > /tmp/marker; sleep 3600")
 	inClass(&src.Spec)
