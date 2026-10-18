@@ -170,7 +170,11 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 		// All versions: on a versioned bucket a plain delete would leave the
 		// half-written payload behind as a noncurrent version, still billed
 		// and still readable to anyone with the KEK.
-		_ = b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID))
+		// The ctx of the Save may have ended (the age bound of
+		// EncryptedBackend), so the removal runs on a ctx of its own.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		_ = b.deleteObjectAllVersions(cleanupCtx, b.stateKey(snapshotID))
 		return 0, "", fmt.Errorf("storage: s3 write sha sidecar %q: %w", snapshotID, err)
 	}
 	return counter.n, snapshotID, nil
@@ -204,7 +208,8 @@ func (b *S3Backend) RemovePartial(ctx context.Context, snapshotID string, olderT
 		return err
 	}
 	if written.IsZero() || time.Since(written) < olderThan {
-		return fmt.Errorf("%w: a partial snapshot written at %s may be a save in flight", ErrAlreadyExists, written)
+		return fmt.Errorf("%w: a partial snapshot written %s may be a save in flight",
+			ErrAlreadyExists, writtenAt(written))
 	}
 	if err := b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID)); err != nil {
 		return fmt.Errorf("storage: s3 remove a partial payload %q: %w", snapshotID, err)

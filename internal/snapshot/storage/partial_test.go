@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,11 +40,23 @@ func leavePartialLocal(t *testing.T, b *EncryptedBackend, id string) {
 	}
 }
 
+// backdateLocal makes the partial artifact at id look written age ago.
+func backdateLocal(t *testing.T, b *EncryptedBackend, id string, age time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-age)
+	inner := b.Inner.(*LocalDiskBackend)
+	for _, p := range []string{b.DEKs.(*DirDEKStore).path(id), inner.statePath(id), inner.snapshotDir(id)} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdate %s: %v", p, err)
+		}
+	}
+}
+
 func TestEncryptedBackend_SaveOverAPartialAttempt(t *testing.T) {
 	b, _, _ := newEncryptedBackend(t)
-	b.PartialStaleAfter = time.Nanosecond
 	ctx := context.Background()
 	leavePartialLocal(t, b, "snap-1")
+	backdateLocal(t, b, "snap-1", 2*defaultPartialStaleAfter)
 
 	if _, _, err := b.Save(ctx, "snap-1", bytes.NewReader(plaintextMarker)); err != nil {
 		t.Fatalf("Save over a partial attempt: %v", err)
@@ -167,9 +180,9 @@ func TestS3EncryptedBackend_SaveOverAPartialAttempt(t *testing.T) {
 	inner, fake := newVersionedTestBackend(t)
 	b := &EncryptedBackend{
 		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
-		PartialStaleAfter: time.Nanosecond,
 	}
 	leavePartialS3(t, b, inner, "sess-ckpt-1")
+	fake.backdate(2*defaultPartialStaleAfter, inner.stateKey("sess-ckpt-1"), inner.dekKey("sess-ckpt-1"))
 
 	if _, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker)); err != nil {
 		t.Fatalf("Save over a partial attempt: %v", err)
@@ -217,5 +230,84 @@ func leavePartialS3(t *testing.T, b *EncryptedBackend, inner *S3Backend, id stri
 		Body: bytes.NewReader([]byte("half a payload")),
 	}); err != nil {
 		t.Fatalf("put the partial payload: %v", err)
+	}
+}
+
+// TestS3EncryptedBackend_SaveKeepsANewDEKWithNoPayload: a Save in flight
+// on another node has put its sealed DEK, and its multipart upload is not
+// an object yet. Save refuses the id and keeps that DEK.
+func TestS3EncryptedBackend_SaveKeepsANewDEKWithNoPayload(t *testing.T) {
+	ctx := context.Background()
+	inner, _ := newVersionedTestBackend(t)
+	b := &EncryptedBackend{
+		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
+		PartialStaleAfter: time.Hour,
+	}
+	if err := b.DEKs.Put(ctx, "sess-ckpt-1", []byte("sealed-dek-of-a-save-in-flight")); err != nil {
+		t.Fatalf("put the DEK: %v", err)
+	}
+	if _, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("Save over a new DEK: want ErrAlreadyExists, got %v", err)
+	}
+	if got, err := b.DEKs.Get(ctx, "sess-ckpt-1"); err != nil || string(got) != "sealed-dek-of-a-save-in-flight" {
+		t.Fatalf("the DEK of the other Save: got %q, %v", got, err)
+	}
+}
+
+// TestS3EncryptedBackend_SaveKeepsADEKOfUnknownAge: a store that does not
+// send Last-Modified gives no age, and an artifact of no known age is kept.
+func TestS3EncryptedBackend_SaveKeepsADEKOfUnknownAge(t *testing.T) {
+	ctx := context.Background()
+	inner, _ := newTestS3Backend(t) // this fake sends no Last-Modified
+	b := &EncryptedBackend{
+		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
+		PartialStaleAfter: time.Nanosecond,
+	}
+	if err := b.DEKs.Put(ctx, "sess-ckpt-1", []byte("sealed-dek")); err != nil {
+		t.Fatalf("put the DEK: %v", err)
+	}
+	_, _, err := b.Save(ctx, "sess-ckpt-1", bytes.NewReader(plaintextMarker))
+	if !errors.Is(err, ErrAlreadyExists) || !strings.Contains(err.Error(), "unknown time") {
+		t.Fatalf("Save over a DEK of unknown age: want ErrAlreadyExists at an unknown time, got %v", err)
+	}
+}
+
+// slowReader returns its bytes only after delay.
+type slowReader struct {
+	delay time.Duration
+	r     io.Reader
+	slept bool
+}
+
+func (s *slowReader) Read(p []byte) (int, error) {
+	if !s.slept {
+		s.slept = true
+		time.Sleep(s.delay)
+	}
+	return s.r.Read(p)
+}
+
+// TestS3EncryptedBackend_SaveEndsAtTheBound: no Save runs longer than
+// PartialStaleAfter, because a Save on another node takes artifacts older
+// than that for the remains of a dead Save. The Save fails, and its DEK
+// goes.
+func TestS3EncryptedBackend_SaveEndsAtTheBound(t *testing.T) {
+	ctx := context.Background()
+	inner, _ := newVersionedTestBackend(t)
+	b := &EncryptedBackend{
+		Inner: inner, KEK: StaticKEKSource(bytes.Repeat([]byte{0x42}, 32)), DEKs: inner.DEKStore(),
+		PartialStaleAfter: 100 * time.Millisecond,
+	}
+	slow := &slowReader{delay: 2 * time.Second, r: bytes.NewReader(plaintextMarker)}
+	start := time.Now()
+	if _, _, err := b.Save(ctx, "sess-ckpt-1", slow); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a Save longer than the bound: want DeadlineExceeded, got %v", err)
+	}
+	// The Save ends at the bound, not when the source sends its next byte.
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("the Save took %s, want it to end near the bound of 100ms", took)
+	}
+	if _, err := b.DEKs.Get(ctx, "sess-ckpt-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the DEK of the ended Save: want it gone, got %v", err)
 	}
 }

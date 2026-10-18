@@ -76,6 +76,17 @@ func (f *versionedFakeS3) current(key string) ([]byte, bool) {
 	return last.body, true
 }
 
+// backdate makes the newest version of each key look written age ago.
+func (f *versionedFakeS3) backdate(age time.Duration, keys ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, key := range keys {
+		if vs := f.versions[key]; len(vs) > 0 {
+			vs[len(vs)-1].written = time.Now().Add(-age)
+		}
+	}
+}
+
 // liveVersionCount counts stored object versions, ignoring delete markers —
 // this is what "did the erase actually erase" comes down to.
 func (f *versionedFakeS3) liveVersionCount(key string) int {

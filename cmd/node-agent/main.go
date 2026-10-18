@@ -110,7 +110,9 @@ func runMain() int {
 		"At startup, abort multipart checkpoint uploads under --s3-prefix older than this "+
 			"(setec#297). An upload orphaned by an OOM or a node drain is billed forever and "+
 			"is invisible to ListObjects. MUST exceed the longest suspend any agent sharing "+
-			"the prefix will run, or the sweep aborts a live upload.")
+			"the prefix will run, or the sweep aborts a live upload. It also bounds each "+
+			"checkpoint upload, and a checkpoint left partial by a dead agent blocks its id "+
+			"for this long (setec#317).")
 	flag.StringVar(&entropyReseedMode, "entropy-reseed", requireMode,
 		"Entropy reseed after a restore (setec#72). 'require' (default) fails a restore closed "+
 			"unless the guest confirms fresh entropy; 'off' is an explicit opt-out, and the "+
