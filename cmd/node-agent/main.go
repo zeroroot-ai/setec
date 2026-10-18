@@ -207,7 +207,12 @@ func s3SessionStorage(ctx context.Context, c s3Config) func(kek []byte) storage.
 		fmt.Fprintf(os.Stderr, "node-agent: aborted %d stale multipart upload(s) older than %s\n", aborted, c.staleWindow)
 	}
 	return func(kek []byte) storage.StorageBackend {
-		return &storage.EncryptedBackend{Inner: s3Backend, KEK: storage.StaticKEKSource(kek), DEKs: dekStore}
+		// The window that bounds the longest upload also tells the
+		// partial artifact of a dead Save from a Save in flight (setec#317).
+		return &storage.EncryptedBackend{
+			Inner: s3Backend, KEK: storage.StaticKEKSource(kek), DEKs: dekStore,
+			PartialStaleAfter: c.staleWindow,
+		}
 	}
 }
 

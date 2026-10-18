@@ -176,6 +176,58 @@ func (b *S3Backend) Save(ctx context.Context, snapshotID string, state io.Reader
 	return counter.n, snapshotID, nil
 }
 
+// RemovePartial removes the partial artifact of a Save that ended inside
+// the write: a payload with no digest sidecar, last written more than
+// olderThan ago. It removes every version of the payload. A complete
+// snapshot (a payload with its sidecar) is kept, and RemovePartial returns
+// ErrAlreadyExists. A partial payload that is newer, or of no known age, may
+// be a Save in flight on another node, so it is kept too, and RemovePartial
+// returns an error that wraps ErrAlreadyExists. With nothing at the id it
+// returns nil (setec#317). A multipart upload that never completed is not an
+// object: AbortStaleMultipartUploads ends it.
+func (b *S3Backend) RemovePartial(ctx context.Context, snapshotID string, olderThan time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return errwrap.Wrap(err, "context.Context.Err")
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	complete, err := b.exists(ctx, b.shaKey(snapshotID))
+	if err != nil {
+		return err
+	}
+	if complete {
+		return ErrAlreadyExists
+	}
+	written, found, err := b.lastModified(ctx, b.stateKey(snapshotID))
+	if err != nil || !found {
+		return err
+	}
+	if written.IsZero() || time.Since(written) < olderThan {
+		return fmt.Errorf("%w: a partial snapshot written at %s may be a save in flight", ErrAlreadyExists, written)
+	}
+	if err := b.deleteObjectAllVersions(ctx, b.stateKey(snapshotID)); err != nil {
+		return fmt.Errorf("storage: s3 remove a partial payload %q: %w", snapshotID, err)
+	}
+	return nil
+}
+
+// lastModified returns the time an object was last written, and whether it
+// exists. A zero time means that the store did not say.
+func (b *S3Backend) lastModified(ctx context.Context, key string) (time.Time, bool, error) {
+	head, err := b.Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(b.Bucket), Key: aws.String(key)})
+	if err != nil {
+		if isS3NotFound(err) {
+			return time.Time{}, false, nil
+		}
+		if isS3AccessDenied(err) {
+			return time.Time{}, false, fmt.Errorf("storage: s3 head %q: %w", key, errHeadForbidden(err))
+		}
+		return time.Time{}, false, fmt.Errorf("storage: s3 head %q: %w", key, err)
+	}
+	return aws.ToTime(head.LastModified), true, nil
+}
+
 // Open returns a reader over the payload that verifies the persisted
 // SHA256 as the stream drains; the final Read reports ErrCorrupted on
 // a digest mismatch. A missing payload returns ErrNotFound; a payload
@@ -513,6 +565,22 @@ func (s *S3DEKStore) Get(ctx context.Context, snapshotID string) ([]byte, error)
 		return nil, fmt.Errorf("storage: s3 read sealed DEK %q: %w", snapshotID, err)
 	}
 	return sealed, nil
+}
+
+// ModTime returns the time the sealed DEK of snapshotID was written, or
+// ErrNotFound. A zero time means that the store did not say.
+func (s *S3DEKStore) ModTime(ctx context.Context, snapshotID string) (time.Time, error) {
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return time.Time{}, err
+	}
+	written, found, err := s.Backend.lastModified(ctx, s.Backend.dekKey(snapshotID))
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !found {
+		return time.Time{}, ErrNotFound
+	}
+	return written, nil
 }
 
 // Destroy deletes the sealed DEK. A blob that never existed (or is

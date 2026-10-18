@@ -48,6 +48,7 @@ type fakeVersion struct {
 	id           string
 	body         []byte
 	deleteMarker bool
+	written      time.Time
 }
 
 type fakeUpload struct {
@@ -125,8 +126,9 @@ func (f *versionedFakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.versions[key] = append(f.versions[key], fakeVersion{
-			id:   fmt.Sprintf("v%d", len(f.versions[key])+1),
-			body: body,
+			id:      fmt.Sprintf("v%d", len(f.versions[key])+1),
+			body:    body,
+			written: time.Now(),
 		})
 		w.Header().Set("ETag", `"fake"`)
 		w.WriteHeader(http.StatusOK)
@@ -153,6 +155,8 @@ func (f *versionedFakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		vs := f.versions[key]
+		w.Header().Set("Last-Modified", vs[len(vs)-1].written.UTC().Format(http.TimeFormat))
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(http.StatusOK)
 
