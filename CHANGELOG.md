@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.127.7](https://github.com/zeroroot-ai/setec/compare/v0.127.6...v0.127.7) (2026-10-18)
+
+
+### Bug Fixes
+
+* **rework:** a peer that sends bad TLS is a TLS fault, not an outage ([#320](https://github.com/zeroroot-ai/setec/issues/320)) ([f926785](https://github.com/zeroroot-ai/setec/commit/f926785159b164398b26e7ebd74a306b6c186932)), closes [#315](https://github.com/zeroroot-ai/setec/issues/315)
+* **rework:** a Save ends at its age bound, and a TLS alert after the handshake is kept ([#321](https://github.com/zeroroot-ai/setec/issues/321)) ([a961e6f](https://github.com/zeroroot-ai/setec/commit/a961e6fcbbdd6f1fcf63fa52e62bdac1e1e4b112))
+* **snapshot:** a node agent that is down for a short time no longer fails a snapshot ([#316](https://github.com/zeroroot-ai/setec/issues/316)) ([3c25b98](https://github.com/zeroroot-ai/setec/commit/3c25b985e4f1362406374bdb7dda8c2ab5f8db28))
+* **storage:** a Save over the partial artifact of a dead attempt removes it ([#318](https://github.com/zeroroot-ai/setec/issues/318)) ([c9ee603](https://github.com/zeroroot-ai/setec/commit/c9ee6036cbafc9749ee5c920a10f68914d7e5ba3))
+
 ## [0.127.6](https://github.com/zeroroot-ai/setec/compare/v0.127.5...v0.127.6) (2026-10-17)
 
 
