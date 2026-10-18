@@ -205,10 +205,10 @@ func (l *lastError) get() error {
 }
 
 // handshakeRecorder wraps the transport credentials of one connection and
-// keeps the error of its last client handshake. A connection that never
-// gets Ready because the TLS handshake fails (an untrusted CA, a wrong
-// SPIFFE ID, a plaintext listener) is a fault of the configuration, not a
-// short outage. The shim reads this error to tell the two apart, and to
+// keeps its last TLS fault (see tlsFault). A connection that never gets
+// Ready because of a TLS fault (an untrusted CA, a wrong SPIFFE ID, a peer
+// that is not TLS or sends bad TLS) is a fault of the configuration, not a
+// short outage. The shim reads the kept fault to tell the two apart, and to
 // give the cause (setec#315).
 type handshakeRecorder struct {
 	grpccreds.TransportCredentials
@@ -217,7 +217,12 @@ type handshakeRecorder struct {
 }
 
 // ClientHandshake runs the handshake of the wrapped credentials and keeps
-// its error. A handshake that succeeds clears it.
+// its error when it is a TLS fault. Only the first read that succeeds on a
+// connection clears a kept fault (see alertConn). A refused dial or a
+// handshake cut short keeps it. So a node agent that had a TLS fault and
+// then restarts in place reads as that fault until a connection to it
+// works. That is the safe side: a reset after an alert must not hide the
+// fault.
 func (h *handshakeRecorder) ClientHandshake(
 	ctx context.Context, authority string, raw net.Conn,
 ) (net.Conn, grpccreds.AuthInfo, error) {
@@ -242,7 +247,10 @@ func (h *handshakeRecorder) ClientHandshake(
 // the peer. Errors of the network or of the ctx are not.
 func tlsFault(err error) bool {
 	if op, ok := errors.AsType[*net.OpError](err); ok {
-		return op.Op == remoteErrorOp
+		// An alert of the peer, or an alert that this side sends because
+		// the peer sent bad TLS ("unexpected message", "decode error").
+		// Other operations ("read", "write", "dial") are of the network.
+		return op.Op == remoteErrorOp || op.Op == localErrorOp
 	}
 	for _, transient := range []error{
 		io.EOF, io.ErrUnexpectedEOF, net.ErrClosed, os.ErrDeadlineExceeded,
@@ -260,6 +268,12 @@ func tlsFault(err error) bool {
 // certificate authority". It is not part of the API of crypto/tls.
 // TestGRPCDialer_IsRefusedWhenItCannotProveWhoItIs fails if it changes.
 const remoteErrorOp = "remote error"
+
+// localErrorOp is the operation of the net.OpError that crypto/tls returns
+// when this side sends an alert, for example "local error: tls: unexpected
+// message". It is not part of the API of crypto/tls.
+// TestGRPCDialer_RefusesAPeerThatSendsBadTLS fails if it changes.
+const localErrorOp = "local error"
 
 // alertConn keeps a TLS alert that the peer sends after the handshake. In
 // TLS 1.3 the client ends its handshake before the server checks the client
