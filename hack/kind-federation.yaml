@@ -1,0 +1,15 @@
+# kind topology of the federation exit test (.github/workflows/exit-test-federation.yml,
+# setec#251). One control plane and one worker. The test needs no KVM: it
+# proves the trust between SPIFFE trust domains, not a launch.
+#
+# Cilium replaces kindnet because the chart renders CiliumNetworkPolicy
+# objects for the fleet namespace. The workflow installs it from the pinned
+# chart.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+nodes:
+  - role: control-plane
+  - role: worker

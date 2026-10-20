@@ -391,7 +391,8 @@ get one `--spiffe-authorized-id` per entry in the matching
 required with the frontend on. An enrolled client in a
 different domain needs a `federation` block: `bundleEndpointURL`,
 `bundleEndpointProfile` (`https_spiffe` or `https_web`) and, for
-`https_spiffe`, `endpointSPIFFEID`. The chart renders one
+`https_spiffe`, `endpointSPIFFEID` and `trustDomainBundle` (the bundle of that
+domain for the first fetch, from `spire-server bundle show -format spiffe`). The chart renders one
 `ClusterFederatedTrustDomain` for each such client, so SPIRE fetches the
 bundle of that domain and serves it to the frontend. The render fails
 when a foreign client has no bundle source. The `ClusterSPIFFEID` of the

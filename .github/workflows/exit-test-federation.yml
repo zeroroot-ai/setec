@@ -1,0 +1,72 @@
+# Exit test: a setec fleet in one SPIFFE trust domain serves an install in
+# another (setec#251, ADR-0164).
+#
+# One kind cluster runs three SPIRE servers with three trust domains. The
+# caller of the enrolled install reaches the frontend of the fleet. The
+# caller of a domain that the fleet does not trust is refused in the TLS
+# handshake. test/federation/run.sh holds the steps.
+#
+# Trigger: push to main and a manual start. It never runs on a pull request
+# and never on a schedule (exit tests do not gate a merge).
+
+name: exit-test-federation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  federation:
+    name: federation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      KIND_CLUSTER: setec-federation
+      FRONTEND_IMAGE: setec-frontend:fed
+      CLIENT_IMAGE: setec-fedclient:fed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+
+      - name: Install helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Create the kind cluster
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER }}
+          config: hack/kind-federation.yaml
+          wait: 0s
+
+      - name: Install Cilium
+        # The pin equals the one of exit-test-launcher.
+        env:
+          CILIUM_VERSION: 1.20.2
+        run: |
+          set -euo pipefail
+          helm upgrade --install cilium oci://quay.io/cilium/charts/cilium \
+            --version "${CILIUM_VERSION}" --namespace kube-system \
+            --set ipam.mode=kubernetes \
+            --set operator.replicas=1 \
+            --set envoy.enabled=false \
+            --set hubble.enabled=false \
+            --wait --timeout 10m
+          kubectl -n kube-system rollout status daemonset/cilium --timeout=300s
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Build the frontend and the client
+        run: |
+          set -euo pipefail
+          docker build --build-arg CMD=frontend -t "${FRONTEND_IMAGE}" .
+          docker build --build-arg CMD=fedclient --build-arg CMD_PATH=./test/federation/client \
+            -t "${CLIENT_IMAGE}" .
+          kind load docker-image --name "${KIND_CLUSTER}" "${FRONTEND_IMAGE}" "${CLIENT_IMAGE}"
+
+      - name: The federation scenario
+        run: test/federation/run.sh

@@ -15,6 +15,11 @@ The render fails when a client in a foreign domain names no bundle source:
 the frontend would refuse that client on every call, and nothing at render
 time would say why.
 
+With the https_spiffe profile, SPIRE verifies the bundle endpoint with the
+bundle that it already holds. The first fetch needs a bootstrap bundle, so
+federation.trustDomainBundle (the SPIFFE bundle of the client domain, in
+JSON) goes into the object.
+
 The SPIFFE registration of the frontend (its ClusterSPIFFEID) must list the
 same domains under federatesWith. The install owns that registration.
 */ -}}
@@ -52,6 +57,9 @@ spec:
     {{- if eq $profile "https_spiffe" }}
     endpointSPIFFEID: {{ $f.endpointSPIFFEID | quote }}
     {{- end }}
+  {{- with $f.trustDomainBundle }}
+  trustDomainBundle: {{ . | quote }}
+  {{- end }}
   {{- with $.Values.credentials.spiffe.className }}
   className: {{ . | quote }}
   {{- end }}
