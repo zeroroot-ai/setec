@@ -31,10 +31,12 @@ A snapshot also holds the page cache and the file system state of its image disk
 | Template | Instance types | Host kernel |
 |---|---|---|
 | `m8i` | m8i: Intel Xeon 6 (Granite Rapids) | 5.17 or later |
+| `c8i` | c8i: the same CPU as m8i | 5.17 or later |
+| `r8i` | r8i: the same CPU as m8i | 5.17 or later |
 
 Firecracker has no static template for Granite Rapids. `m8i` is the custom template that Firecracker tests on that CPU, from the release that `firecracker.env` pins: it turns off the features that the T2 template turns off, so each m8i node shows one feature set. The file, its source and its license are in `cpu-templates/`. `TestCPUTemplates_AreValid` checks the format of each template, and the e2e scenario `TestLauncher_CPUTemplateSnapshotLoads` loads a snapshot in a class with the template on m8i nodes. The CPU of a GitHub-hosted runner is never m8i, so the scenario runs each day against the setec installed on the m8i nodes of staging (`make e2e-cpu-template`, which installs nothing).
 
-The drill and hosted use the instance types `m8i.2xlarge` and `m8i.4xlarge` only, so `m8i` covers the whole list. A class that names a template that the image does not hold fails at launch with the reason `BadSpec`. The message names the template and lists the templates of the image.
+The drill and hosted use only the c8i, m8i and r8i families (`scripts/check-fleet-instance-types.py` in hosted). Each family has a template. The c8i and r8i files equal the m8i file, because the three families have the same Granite Rapids CPU. The e2e scenario runs on m8i nodes only. A class that names a template that the image does not hold fails at launch with the reason `BadSpec`. The message names the template and lists the templates of the image.
 
 ## Node preparation
 

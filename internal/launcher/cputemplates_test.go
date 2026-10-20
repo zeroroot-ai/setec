@@ -84,7 +84,10 @@ func TestCPUTemplates_AreValid(t *testing.T) {
 			}
 		}
 	}
-	if !names["m8i"] {
-		t.Fatalf("the launcher image ships no m8i template; templates: %v", names)
+	// The hosted guard allows these families for a fleet (setec#239).
+	for _, fam := range []string{"c8i", "m8i", "r8i"} {
+		if !names[fam] {
+			t.Errorf("the launcher image ships no %s template; templates: %v", fam, names)
+		}
 	}
 }

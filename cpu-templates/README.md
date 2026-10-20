@@ -9,6 +9,7 @@ one node of the class takes loads on each other node of the class
 
 | File | Instance types | Source |
 |---|---|---|
+| `c8i.json`, `r8i.json` | c8i and r8i (the same Xeon 6 CPU as m8i), on a host kernel 5.17 or later | The same file as `m8i.json` |
 | `m8i.json` | m8i (Intel Xeon 6, Granite Rapids), on a host kernel 5.17 or later | Firecracker `tests/data/custom_cpu_templates/GNR_TO_T2_6.1.json` at commit `95f868c8e345b1cc8faccd1a3c910b4989dc3f58` (the release that `firecracker.env` pins), unchanged |
 
 `m8i.json` turns off the CPU features that the T2 template of Firecracker
