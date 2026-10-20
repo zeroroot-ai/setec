@@ -13,7 +13,7 @@ name: exit-test-federation
 
 on:
   push:
-    branches: [main, feat/federation-exit-test] # TEMP: branch, remove before merge
+    branches: [main]
   workflow_dispatch:
 
 permissions:
