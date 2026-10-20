@@ -100,6 +100,9 @@ type Launcher struct {
 	// only a test does; a snapshot load then fails, because no disk digest
 	// is known (setec#277).
 	CheckDisk func(s *Spec) (diskSHA256 string, err error)
+	// CheckCPUTemplate checks that the CPU template of the spec is in the
+	// launcher image. Nil checks nothing, which only a test does.
+	CheckCPUTemplate func(path string) error
 	// diskSHA256 is the digest that CheckDisk returned.
 	diskSHA256 string
 	// AfterStart runs once the machine runs, with the identity of the Pod.
@@ -191,6 +194,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 func (l *Launcher) prepare() error {
 	if err := l.Spec.Validate(); err != nil {
 		return fail(ReasonBadSpec, err)
+	}
+	if l.CheckCPUTemplate != nil && l.Spec.CPUTemplate != "" {
+		if err := l.CheckCPUTemplate(l.Spec.CPUTemplate); err != nil {
+			return fail(ReasonBadSpec, err)
+		}
 	}
 	if err := os.MkdirAll(l.Spec.WorkDir, 0o700); err != nil {
 		return fail(ReasonDisks, err)

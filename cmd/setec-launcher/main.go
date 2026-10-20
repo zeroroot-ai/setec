@@ -54,12 +54,13 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 	}
 	guest := launcher.NewGuest(spec)
 	l := &launcher.Launcher{
-		Spec:       spec,
-		Net:        launcher.TCNetwork{},
-		VMM:        &launcher.FirecrackerVMM{Binary: fcBinary},
-		Console:    os.Stdout,
-		Grace:      grace,
-		AfterStart: guest.AfterStart(spec.Workload),
+		Spec:             spec,
+		Net:              launcher.TCNetwork{},
+		VMM:              &launcher.FirecrackerVMM{Binary: fcBinary},
+		Console:          os.Stdout,
+		Grace:            grace,
+		AfterStart:       guest.AfterStart(spec.Workload),
+		CheckCPUTemplate: launcher.CheckCPUTemplate,
 		CheckDisk: func(s *launcher.Spec) (string, error) {
 			keys, err := diskbuilder.ParsePublicKeys(s.DiskKeys)
 			if err != nil {
