@@ -75,6 +75,21 @@ func (e *Enrollment) SPIFFEIDs() []string {
 	return append([]string(nil), e.ids...)
 }
 
+// The fixed texts of the answers that say how far a caller got. A caller
+// that tests the answers (the federation exit test) matches on these
+// constants, so the texts have one source.
+const (
+	// NotEnrolledText ends the PermissionDenied answer to a caller whose
+	// SPIFFE ID is not an enrolled client.
+	NotEnrolledText = "is not an enrolled client"
+	// NoNamespaceText ends the PermissionDenied answer for an enrolled
+	// caller whose pair has no namespace the frontend can reach.
+	NoNamespaceText = "has no accessible namespace"
+	// NotOwnerText is in the PermissionDenied answer for an enrolled
+	// caller that names a namespace of another pair.
+	NotOwnerText = "does not own namespace"
+)
+
 // clientFromContext returns the enrolled name of the caller. It reads the
 // SPIFFE ID from the URI SAN of the verified peer certificate.
 func (e *Enrollment) clientFromContext(ctx context.Context) (string, error) {
@@ -95,7 +110,7 @@ func (e *Enrollment) clientFromContext(ctx context.Context) (string, error) {
 	}
 	name, ok := e.byID[id]
 	if !ok {
-		return "", status.Errorf(codes.PermissionDenied, "caller %s is not an enrolled client", id)
+		return "", status.Errorf(codes.PermissionDenied, "caller %s "+NotEnrolledText, id)
 	}
 	return name, nil
 }
@@ -130,7 +145,7 @@ func resolveCallerNamespace(
 	ns, err := r.NamespaceFor(ctx, pair)
 	if err != nil {
 		return "", tenancy.Pair{}, status.Errorf(codes.PermissionDenied,
-			"pair %s has no accessible namespace: %v", pair, err)
+			"pair %s "+NoNamespaceText+": %v", pair, err)
 	}
 	return ns, pair, nil
 }
