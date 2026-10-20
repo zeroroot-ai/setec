@@ -856,7 +856,7 @@ func (s *Service) checkTenantNamespace(ctx context.Context, tenant, ns string) e
 	}
 	if mine != ns {
 		return status.Errorf(codes.PermissionDenied,
-			"the caller does not own namespace %q", ns)
+			"the caller "+NotOwnerText+" %q", ns)
 	}
 	return nil
 }
