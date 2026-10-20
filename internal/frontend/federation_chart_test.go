@@ -19,14 +19,15 @@ func renderFederation(t *testing.T, sets ...string) (string, error) {
 	if err != nil {
 		t.Fatalf("this test renders the chart and needs helm on PATH: %v", err)
 	}
-	args := []string{"template", "setec", filepath.Join("..", "..", "charts", "setec"),
+	args := make([]string, 0, 17+2*len(sets))
+	args = append(args, "template", "setec", filepath.Join("..", "..", "charts", "setec"),
 		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "frontend.enabled=true",
 		"--set", "credentials.spiffe.trustDomain=fleet.test",
 		"--set", "systemPolicy.frontendCallers[0].namespace=gibson",
 		"--set", `systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon`,
-		"--show-only", "templates/federation.yaml"}
+		"--show-only", "templates/federation.yaml")
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
@@ -44,7 +45,7 @@ type renderError struct{ msg string }
 func (e *renderError) Error() string { return e.msg }
 
 // TestFederationChart_ForeignClientGetsItsBundle checks setec#251 and
-// ADR-0164: a client in another trust domain gets one
+// a client in another trust domain gets one
 // ClusterFederatedTrustDomain, with the domain taken from its SPIFFE ID
 // and the bundle source from its federation block. A client in the trust
 // domain of the fleet gets none.
@@ -108,5 +109,32 @@ func TestFederationChart_RefusesAnIncompleteForeignClient(t *testing.T) {
 				t.Fatalf("render error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestFederationChart_GlobalTrustDomainWins checks that the trust domain of
+// a parent chart (global.spire.trustDomain) decides which client is foreign,
+// before credentials.spiffe.trustDomain does.
+func TestFederationChart_GlobalTrustDomainWins(t *testing.T) {
+	t.Parallel()
+	sets := []string{
+		"frontend.clients[0].name=same",
+		"frontend.clients[0].spiffeID=spiffe://global.test/ns/gibson/sa/daemon",
+		"frontend.clients[1].name=outside",
+		"frontend.clients[1].spiffeID=spiffe://install-b.test/ns/gibson/sa/daemon",
+		"frontend.clients[1].federation.bundleEndpointURL=https://spire.install-b.test:8443",
+		"frontend.clients[1].federation.endpointSPIFFEID=spiffe://install-b.test/spire/server",
+	}
+	out, err := renderFederation(t, append([]string{"global.spire.trustDomain=global.test"}, sets...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out, "kind: ClusterFederatedTrustDomain"); n != 1 || !strings.Contains(out, `trustDomain: "install-b.test"`) {
+		t.Errorf("want one federation for install-b.test, got:\n%s", out)
+	}
+	// Without the global value, credentials.spiffe.trustDomain (fleet.test)
+	// makes the client of global.test foreign, and it has no bundle source.
+	if _, err := renderFederation(t, sets...); err == nil || !strings.Contains(err.Error(), "needs federation.bundleEndpointURL") {
+		t.Fatalf("render error = %v, want the missing bundle source of the client in global.test", err)
 	}
 }
