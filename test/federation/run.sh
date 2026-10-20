@@ -63,6 +63,7 @@ install_spire() {
     --set global.spire.namespaces.server.name="spire-$x" \
     --set global.spire.namespaces.system.name="spire-$x" \
     --set spiffe-csi-driver.enabled=false \
+    --set spiffe-oidc-discovery-provider.enabled=false \
     --set spire-server.federation.enabled=true \
     --set "spire-agent.socketPath=/run/spire/agent-sockets-$x/spire-agent.sock" \
     --set "spire-server.controllerManager.identities.clusterSPIFFEIDs.default.federatesWith={$peer}" \
