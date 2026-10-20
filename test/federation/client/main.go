@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Command client is the caller of the federation exit test (setec#251,
-// ADR-0164). It runs in a Pod of one trust domain, takes its SVID from the
+// Command client is the caller of the federation exit test (setec#251). It runs in a Pod of one trust domain, takes its SVID from the
 // SPIRE agent of that domain, and calls the frontend of the setec fleet in
 // another trust domain. It reports whether the frontend accepted it.
 //
@@ -107,7 +106,12 @@ func runRefused(socket, addr, serverID string, window time.Duration) int {
 		switch {
 		case err != nil:
 			fmt.Printf("waiting: %v\n", err)
-		case code == codes.Unavailable && strings.Contains(msg, "tls"):
+		case strings.Contains(msg, "x509") || strings.Contains(msg, "failed to verify"):
+			// The client refused the fleet. The fleet did not refuse the client.
+			fmt.Printf("FAILED: the client rejected the fleet, not the reverse: %s\n", msg)
+			return 1
+		case code == codes.Unavailable && strings.Contains(msg, "remote error: tls:"):
+			// A TLS alert that the fleet sent.
 			refused++
 			fmt.Printf("REFUSED %d code=%s: %s\n", refused, code, msg)
 		default:
