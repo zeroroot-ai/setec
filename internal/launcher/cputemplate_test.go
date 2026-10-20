@@ -42,3 +42,11 @@ func TestRun_UnknownCPUTemplateIsABadSpec(t *testing.T) {
 		t.Fatalf("code = %d, err = %v", code, err)
 	}
 }
+
+func TestCheckCPUTemplate_UnreadableDirIsReported(t *testing.T) {
+	t.Parallel()
+	err := CheckCPUTemplate(filepath.Join(t.TempDir(), "no-dir", "m8i.json"))
+	if err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("error = %v", err)
+	}
+}

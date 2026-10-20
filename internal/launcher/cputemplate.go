@@ -26,12 +26,14 @@ func CheckCPUTemplate(path string) error {
 		return fmt.Errorf("cpu template %q: %w", path, err)
 	}
 	name := strings.TrimSuffix(filepath.Base(path), ".json")
+	entries, rerr := os.ReadDir(filepath.Dir(path))
+	if rerr != nil {
+		return fmt.Errorf("cpu template %q is not in the launcher image, and the template directory cannot be read: %w", name, rerr)
+	}
 	var have []string
-	if entries, rerr := os.ReadDir(filepath.Dir(path)); rerr == nil {
-		for _, e := range entries {
-			if n, ok := strings.CutSuffix(e.Name(), ".json"); ok {
-				have = append(have, n)
-			}
+	for _, e := range entries {
+		if n, ok := strings.CutSuffix(e.Name(), ".json"); ok {
+			have = append(have, n)
 		}
 	}
 	sort.Strings(have)
