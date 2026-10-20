@@ -178,5 +178,5 @@ kubectl delete crd sandboxes.setec.zeroroot.ai
   nested virtualization, and the KVM device plugin.
 - [charts/setec/README.md](../charts/setec/README.md) — Helm values,
   upgrade, and uninstall.
-- [.github/workflows/exit-test-launcher.yml](../.github/workflows/exit-test-launcher.yml) — the nightly
+- [.github/workflows/exit-test-launcher.yml](../.github/workflows/exit-test-launcher.yml) — the
   end-to-end run on real Firecracker machines.

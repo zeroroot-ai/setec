@@ -23,7 +23,7 @@ The workflow `guest-kernel.yml` builds `vmlinux` on each release tag, signs it w
 
 ## The security update routine
 
-1. The scheduled workflow `guest-kernel-currency.yml` fails when the series of the pin has a later release.
+1. A person runs the workflow `guest-kernel-currency.yml` with `workflow_dispatch`. It fails when the series of the pin has a later release.
 2. The failure opens the work. The maintainer on duty for `setec` takes it the same day.
 3. Copy the sha256 of `linux-<version>.tar.xz` from `https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc`.
 4. Change both lines of `kernel/kernel.env` in one pull request.
