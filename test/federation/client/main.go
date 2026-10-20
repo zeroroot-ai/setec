@@ -44,14 +44,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "client: --spiffe-socket, --addr and --server-spiffe-id are required")
 		os.Exit(2)
 	}
+	try := func(ctx context.Context) (codes.Code, string, error) {
+		return attempt(ctx, *socket, *addr, *serverID)
+	}
 	switch *expect {
 	case "accepted":
-		try := func(ctx context.Context) (codes.Code, string, error) {
-			return attempt(ctx, *socket, *addr, *serverID)
-		}
 		os.Exit(runAccepted(try, *window, 5*time.Second))
 	case "refused":
-		os.Exit(runRefused(*socket, *addr, *serverID, *window))
+		os.Exit(runRefused(try, *window, 5*time.Second, refusalFloor))
 	default:
 		fmt.Fprintf(os.Stderr, "client: --expect must be accepted or refused, got %q\n", *expect)
 		os.Exit(2)
@@ -153,14 +153,21 @@ func runAccepted(try attemptFunc, window, pause time.Duration) int {
 	}
 }
 
-// runRefused needs the caller to hold its SVID and to be refused by the
-// frontend, on each try of the window. An error before the call (no SVID
-// yet) is not a refusal, so it is retried until it passes.
-func runRefused(socket, addr, serverID string, window time.Duration) int {
+// refusalFloor is the number of TLS alerts from the fleet that proves a
+// refusal.
+const refusalFloor = 3
+
+// runRefused needs the caller to hold its SVID and to get at least floor TLS
+// alerts from the fleet. An error before the call (no SVID yet) is retried.
+// A broken pipe or a reset connection is inconclusive: the fleet closes after
+// its alert while the client still writes, so the answer can show up this way.
+// It counts for nothing and fails nothing. An answer of the application
+// handler of the fleet fails the check, because the fleet did not refuse.
+func runRefused(try attemptFunc, window, pause time.Duration, floor int) int {
 	deadline := time.Now().Add(window)
 	refused := 0
 	for time.Now().Before(deadline) {
-		code, msg, err := attempt(context.Background(), socket, addr, serverID)
+		code, msg, err := try(context.Background())
 		switch {
 		case err != nil:
 			fmt.Printf("waiting: %v\n", err)
@@ -172,15 +179,17 @@ func runRefused(socket, addr, serverID string, window time.Duration) int {
 			// A TLS alert that the fleet sent.
 			refused++
 			fmt.Printf("REFUSED %d code=%s: %s\n", refused, code, msg)
+			if refused >= floor {
+				return 0
+			}
+		case code == codes.Unavailable || code == codes.DeadlineExceeded:
+			fmt.Printf("inconclusive: code=%s: %s\n", code, msg)
 		default:
 			fmt.Printf("FAILED: the frontend did not refuse this caller: code=%s: %s\n", code, msg)
 			return 1
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(pause)
 	}
-	if refused < 3 {
-		fmt.Printf("FAILED: %d refusals, want at least 3\n", refused)
-		return 1
-	}
-	return 0
+	fmt.Printf("FAILED: %d refusals, want at least %d\n", refused, floor)
+	return 1
 }

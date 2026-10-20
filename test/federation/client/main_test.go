@@ -43,3 +43,48 @@ func TestRunAccepted(t *testing.T) {
 		})
 	}
 }
+
+// sequence returns an attemptFunc that gives the answers in order, then keeps
+// giving the last one.
+func sequence(answers ...[2]any) attemptFunc {
+	i := 0
+	return func(context.Context) (codes.Code, string, error) {
+		a := answers[min(i, len(answers)-1)]
+		i++
+		return a[0].(codes.Code), a[1].(string), nil
+	}
+}
+
+const (
+	tlsAlert   = "error reading server preface: remote error: tls: unknown certificate authority"
+	brokenPipe = "connection error: desc = \"transport: write tcp 10.0.0.1:1->10.0.0.2:50051: write: broken pipe\""
+)
+
+// TestRunRefused pins the refusal check. A broken pipe between the alerts of
+// the fleet is inconclusive, an answer of the handler fails, and too few
+// alerts fail.
+func TestRunRefused(t *testing.T) {
+	t.Parallel()
+	alert := [2]any{codes.Unavailable, tlsAlert}
+	pipe := [2]any{codes.Unavailable, brokenPipe}
+	reset := [2]any{codes.Unavailable, "connection reset by peer"}
+	for _, tc := range []struct {
+		name string
+		try  attemptFunc
+		want int
+	}{
+		{"alerts with a broken pipe between", sequence(alert, alert, pipe, alert), 0},
+		{"alerts with a reset between", sequence(alert, reset, alert, alert), 0},
+		{"handler answer", sequence(alert, [2]any{codes.NotFound, "get Sandbox: not found"}), 1},
+		{"handler answer after a broken pipe", sequence(pipe, [2]any{codes.PermissionDenied, "x"}), 1},
+		{"too few alerts", sequence(alert, alert, pipe), 1},
+		{"client rejects the fleet", sequence([2]any{codes.Unavailable, "x509: certificate signed by unknown authority"}), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := runRefused(tc.try, 60*time.Millisecond, 5*time.Millisecond, refusalFloor); got != tc.want {
+				t.Fatalf("runRefused = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
