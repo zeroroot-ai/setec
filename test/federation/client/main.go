@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Command client is the caller of the federation exit test (setec#251). It runs in a Pod of one trust domain, takes its SVID from the
-// SPIRE agent of that domain, and calls the frontend of the setec fleet in
+// Command client is the caller of the federation exit test (setec#251). It runs
+// in a Pod of one trust domain, takes its SVID from the SPIRE agent of that domain, and calls the frontend of the setec fleet in
 // another trust domain. It reports whether the frontend accepted it.
 //
 // The call is Wait on a sandbox ID that is not valid. A frontend that
