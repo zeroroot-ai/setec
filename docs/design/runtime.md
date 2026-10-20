@@ -34,6 +34,8 @@ A snapshot also holds the page cache and the file system state of its image disk
 
 Firecracker has no static template for Granite Rapids. `m8i` is the custom template that Firecracker tests on that CPU, from the release that `firecracker.env` pins: it turns off the features that the T2 template turns off, so each m8i node shows one feature set. The file, its source and its license are in `cpu-templates/`. `TestCPUTemplates_AreValid` checks the format of each template, and the e2e scenario `TestLauncher_CPUTemplateSnapshotLoads` loads a snapshot in a class with the template on m8i nodes. The CPU of a GitHub-hosted runner is never m8i, so the scenario runs each day against the setec installed on the m8i nodes of staging (`make e2e-cpu-template`, which installs nothing).
 
+The drill and hosted use the instance types `m8i.2xlarge` and `m8i.4xlarge` only, so `m8i` covers the whole list. A class that names a template that the image does not hold fails at launch with the reason `BadSpec`. The message names the template and lists the templates of the image.
+
 ## Node preparation
 
 A node needs `/dev/kvm` and `/dev/net/tun`, and the kernel modules `tun`, `sch_ingress`, `cls_matchall` and `act_mirred` for the tap device and the traffic redirects of the launcher. Nothing else is installed on the node: Firecracker, the guest kernel and the guest agent come in the launcher image. `firecracker.env` and `kernel/kernel.env` pin their releases.
