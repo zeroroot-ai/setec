@@ -64,7 +64,7 @@ func attempt(ctx context.Context, socket, addr, serverID string) (codes.Code, st
 	}
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		return codes.OK, "", err
+		return codes.OK, "", fmt.Errorf("dial the fleet frontend: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
