@@ -7,8 +7,7 @@
 #
 # Triggers: merge_group is the gate before a merge. A push to main sends the
 # result for refs/heads/main to code scanning, so an alert closes when its
-# fix merges, not at the next weekly run. The weekly run on Tuesday at
-# 08:00 UTC is the deep scan. workflow_dispatch forces a scan on demand.
+# fix merges. workflow_dispatch forces a scan on demand.
 #
 # The merge_group run does not upload. Its temporary gh-readonly-queue ref is
 # often gone before the upload call, which then fails with "ref not found".
@@ -19,8 +18,6 @@ on:
   push:
     branches: [main]
   merge_group:
-  schedule:
-    - cron: "0 8 * * 2"
   workflow_dispatch:
 
 permissions:

@@ -64,7 +64,7 @@ answers the question about the runtime.
 
 ## Where this runs
 
-The soak is too long for the merge gate. It belongs to the scheduled
+The soak is too long for the merge gate. It belongs to the
 exit test that keeps members up, which already runs a
 bank of always-on members on a real model. The script's own arithmetic
 is checked offline on every PR:

@@ -139,7 +139,7 @@ e2e-cpu-template: ## Run the CPU template snapshot test on m8i nodes (setec#239)
 #     SETEC_E2E_INSTALLED_NAMESPACE=setec-system SETEC_E2E_RELEASE=<release> \
 #     SETEC_E2E_SANDBOX_NAMESPACE=setec-sandboxes make e2e-cpu-template
 #
-# The hosted exit test exit-test-setec-cpu-template runs it on staging each day.
+# The hosted exit test exit-test-setec-cpu-template runs it on staging.
 	SETEC_E2E_CONTEXT="$(SETEC_E2E_CONTEXT)" \
 	SETEC_E2E_ALLOW_ANY_CLUSTER="$(SETEC_E2E_ALLOW_ANY_CLUSTER)" \
 	SETEC_E2E_INSTALLED_NAMESPACE="$(SETEC_E2E_INSTALLED_NAMESPACE)" \

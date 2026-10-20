@@ -851,8 +851,8 @@ jobs:
         run: bash scripts/__tests__/ci-required-gate.test.sh
 
       # scripts/e2e-summary.sh decides whether an e2e pass is green. It runs
-      # nightly, not on a PR, so a regression in it would otherwise surface
-      # only as a green nightly that verified nothing.
+      # on dispatch, not on a PR, so a regression in it would otherwise surface
+      # only as a green run that verified nothing.
       - name: Mutation-test the e2e pass verdict
         run: bash scripts/__tests__/e2e-summary.test.sh
 
@@ -932,8 +932,8 @@ jobs:
   permissive-floor:
     uses: zeroroot-ai/.github/.github/workflows/permissive-floor.yml@58931387de5d0f2925ee29fa9781822b1e3a100d # v0.20.0
 
-  # An exit test never runs on a pull request, and it runs on a
-  # schedule. The org guard reads every exit-test-*.yml here
+  # An exit test never runs on a pull request. The org
+  # guard reads every exit-test-*.yml here
   # (zeroroot-ai/.github#200).
   exit-tests-off-pr:
     uses: zeroroot-ai/.github/.github/workflows/exit-tests-off-pr.yml@58931387de5d0f2925ee29fa9781822b1e3a100d # v0.20.0

@@ -11,7 +11,7 @@ and today only one of them has a CI job.
 
 | Scenario | Object store | Sandbox-capable nodes | CI job |
 |---|---|---|---|
-| `TestSession_ReattachByHandle` | no | 1 | `e2e` / `suites (suites)`, nightly |
+| `TestSession_ReattachByHandle` | no | 1 | `e2e` / `suites (suites)`, on dispatch |
 | `TestSessionCheckpoint_SuspendIdleResume` | yes | 1 | none (setec#16) |
 | `TestSessionCheckpoint_DrainResumeOnOtherNode` | yes | **2** | none (setec#16) |
 

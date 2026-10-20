@@ -20,18 +20,14 @@
 # one /workspace) runs in the same job, with its failing fixture. It used to
 # have a workflow of its own on the runc backend.
 #
-# Triggers: the nightly schedule and manual `workflow_dispatch`. The suite
-# takes tens of minutes, so it does not gate a merge (exit tests run on main
-# and on a schedule, never on a pull request).
+# Trigger: manual `workflow_dispatch`. The suite takes tens of minutes, so
+# it does not gate a merge (exit tests never run on a pull request).
 
 name: exit-test-launcher
 
 on:
+  # The suite is too long for the merge gate. A person starts it (setec#298).
   workflow_dispatch:
-  # Nightly. The suite is too long for the merge gate, but "not on every
-  # merge" must not mean "never" (setec#298).
-  schedule:
-    - cron: '0 4 * * *'
 
 permissions:
   contents: read
@@ -506,49 +502,3 @@ jobs:
             chain6.log
             chain6-fixture.log
           if-no-files-found: ignore
-
-  # ----------------------------------------------------------------------
-  # notify — make a red nightly loud.
-  #
-  # The suite runs on a schedule, and a scheduled workflow that fails is the
-  # quietest thing in GitHub: no PR turns red, no merge is blocked, and the
-  # only trace is a row in a list nobody opens. So the run files its own
-  # report. Deduplicated by the title: a suite that stays broken for a week
-  # updates one issue rather than opening seven.
-  # ----------------------------------------------------------------------
-  notify:
-    needs: [launcher]
-    if: failure() && github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: File or update the tracking issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: 'e2e: the nightly run is failing'
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
-            --search "\"${TITLE}\" in:title" --json number --jq '.[0].number // empty')"
-          # printf rather than a heredoc: a heredoc terminator must sit at
-          # column 0, and a line at column 0 would end this YAML block scalar.
-          # Leading whitespace also has to stay out of the body itself — an
-          # indented line renders as a code block in a GitHub issue.
-          body="$(printf '%s\n' \
-            "The nightly \`e2e / launcher\` run failed: ${RUN_URL}" \
-            "" \
-            "These are the Go e2e scenarios: the docs/design/isolation.md invariants," \
-            "egress confinement, the session lifecycle, the chain-6 exit test, and" \
-            "the \`TestEnv_KVMPresent\` guard. A red run here means one of those" \
-            "invariants is unverified, not that CI is untidy." \
-            "" \
-            "Check the job summary for the PASS/FAIL/SKIP list before triaging: a SKIP" \
-            "is also a failure of coverage, and the run warns on one.")"
-          if [ -n "${existing}" ]; then
-            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
-          else
-            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${TITLE}" --body "${body}"
-          fi
