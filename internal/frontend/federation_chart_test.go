@@ -138,3 +138,22 @@ func TestFederationChart_GlobalTrustDomainWins(t *testing.T) {
 		t.Fatalf("render error = %v, want the missing bundle source of the client in global.test", err)
 	}
 }
+
+// TestFederationChart_PassesTheBootstrapBundle checks that the bundle of a
+// client domain reaches the ClusterFederatedTrustDomain. SPIRE needs it for
+// the first fetch with the https_spiffe profile (setec#251).
+func TestFederationChart_PassesTheBootstrapBundle(t *testing.T) {
+	t.Parallel()
+	out, err := renderFederation(t,
+		"frontend.clients[0].name=outside",
+		"frontend.clients[0].spiffeID=spiffe://install-b.test/ns/gibson/sa/daemon",
+		"frontend.clients[0].federation.bundleEndpointURL=https://spire.install-b.test:8443",
+		"frontend.clients[0].federation.endpointSPIFFEID=spiffe://install-b.test/spire/server",
+		"frontend.clients[0].federation.trustDomainBundle=bootstrap-bundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `trustDomainBundle: "bootstrap-bundle"`) {
+		t.Errorf("render lacks the bootstrap bundle:\n%s", out)
+	}
+}
