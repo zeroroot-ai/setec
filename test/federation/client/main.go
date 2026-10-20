@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Zero Root AI
 
-// Command client is the caller of the federation exit test (setec#251). It runs
-// in a Pod of one trust domain, takes its SVID from the SPIRE agent of that domain, and calls the frontend of the setec fleet in
-// another trust domain. It reports whether the frontend accepted it.
+// Command client is the caller of the federation exit test (setec#251).
+// It runs in a Pod of one trust domain and takes its SVID from the SPIRE
+// agent of that domain. It calls the frontend of the setec fleet in another
+// trust domain, and it reports whether the frontend accepted it.
 //
 // The call is Wait on a sandbox ID that is not valid. A frontend that
 // accepts the caller answers InvalidArgument. A frontend that refuses the
@@ -68,7 +69,8 @@ func attempt(ctx context.Context, socket, addr, serverID string) (codes.Code, st
 	defer func() { _ = conn.Close() }()
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_, err = pb.NewSandboxServiceClient(conn).Wait(cctx, &pb.WaitRequest{Tenant: "federation", SandboxId: "not-a-sandbox-id"})
+	req := &pb.WaitRequest{Tenant: "federation", SandboxId: "not-a-sandbox-id"}
+	_, err = pb.NewSandboxServiceClient(conn).Wait(cctx, req)
 	st, _ := status.FromError(err)
 	return st.Code(), err.Error(), nil
 }
