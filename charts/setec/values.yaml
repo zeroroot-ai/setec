@@ -552,6 +552,9 @@ frontend:
   #         bundleEndpointURL: https://spire.onprem.example:8443
   #         bundleEndpointProfile: https_spiffe   # or https_web
   #         endpointSPIFFEID: spiffe://onprem.example/spire/server
+  #         # The https_spiffe profile needs the bundle of that domain for
+  #         # the first fetch (spire-server bundle show -format spiffe).
+  #         trustDomainBundle: '{"keys": [...]}'
   clients: []
   replicas: 1
   resources:
