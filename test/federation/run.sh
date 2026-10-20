@@ -46,15 +46,18 @@ diagnose() {
     kubectl -n "spire-$x" logs "spire-$x-server-0" -c spire-server --tail=80 || true
     kubectl -n "spire-$x" logs -l app.kubernetes.io/name=server -c spire-controller-manager --tail=60 || true
   done
+  kubectl -n spire-a logs -l app.kubernetes.io/name=agent --tail=40 || true
+  kubectl -n spire-b logs -l app.kubernetes.io/name=agent --tail=40 || true
   kubectl -n "$FLEET_NS" logs deploy/"$FLEET_RELEASE"-frontend --tail=80 || true
   kubectl -n "$FLEET_NS" describe deploy/"$FLEET_RELEASE"-frontend || true
   echo "::endgroup::"
 }
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then diagnose; fi; exit "$rc"' EXIT
 
-# install_spire <letter> <trust domain> <trust domain of the one it federates with>
+# install_spire <letter> <trust domain> <health port of the agent>
+# The agents use the host network, so each one needs a port of its own.
 install_spire() {
-  local x="$1" td="$2" peer="$3"
+  local x="$1" td="$2" port="$3"
   kubectl create namespace "spire-$x" --dry-run=client -o yaml | kubectl apply -f -
   helm upgrade --install "spire-$x" spire --repo "$SPIRE_REPO" --version "$SPIRE_VERSION" \
     --namespace "spire-$x" \
@@ -66,7 +69,18 @@ install_spire() {
     --set spiffe-oidc-discovery-provider.enabled=false \
     --set spire-server.federation.enabled=true \
     --set "spire-agent.socketPath=/run/spire/agent-sockets-$x/spire-agent.sock" \
-    --set "spire-server.controllerManager.identities.clusterSPIFFEIDs.default.federatesWith={$peer}" \
+    --set "spire-agent.healthChecks.port=$port" \
+    --wait --timeout 10m
+}
+
+# register_federation <letter> <trust domain of the peer> makes the default
+# registration entries of the SPIRE <letter> list the peer under
+# federatesWith, so each workload gets the bundle of the peer. SPIRE refuses
+# the entry until it holds that bundle, so this runs after the federation.
+register_federation() {
+  helm upgrade "spire-$1" spire --repo "$SPIRE_REPO" --version "$SPIRE_VERSION" \
+    --namespace "spire-$1" --reuse-values \
+    --set "spire-server.controllerManager.identities.clusterSPIFFEIDs.default.federatesWith={$2}" \
     --wait --timeout 10m
 }
 
@@ -142,9 +156,9 @@ POD
 echo "::group::SPIRE servers"
 helm upgrade --install spire-crds spire-crds --repo "$SPIRE_REPO" --version "$SPIRE_CRDS_VERSION" \
   --namespace spire-crds --create-namespace --wait
-install_spire a "$TD_A" "$TD_B"
-install_spire b "$TD_B" "$TD_A"
-install_spire c "$TD_C" "$TD_B"
+install_spire a "$TD_A" 9982
+install_spire b "$TD_B" 9983
+install_spire c "$TD_C" 9984
 echo "::endgroup::"
 
 bundle a > "$WORK/a.json"
@@ -178,6 +192,12 @@ jq -n --arg tdb "$TD_B" --arg tda "$TD_A" --rawfile bundle "$WORK/a.json" \
 helm upgrade --install "$FLEET_RELEASE" "$ROOT/charts/setec" --namespace "$FLEET_NS" --create-namespace \
   -f "$ROOT/hack/chart-launcher-values.yaml" -f "$WORK/fleet-values.json"
 kubectl -n "$FLEET_NS" rollout status deploy/"$FLEET_RELEASE"-frontend --timeout=300s
+
+# Each workload gets the bundle of its peer. The fleet lists a, the installs
+# list b.
+register_federation a "$TD_B"
+register_federation b "$TD_A"
+register_federation c "$TD_B"
 
 echo "::group::the caller in the federated domain a reaches the fleet in b"
 run_client a accepted 8m0s
