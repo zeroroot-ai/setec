@@ -44,14 +44,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "client: --spiffe-socket, --addr and --server-spiffe-id are required")
 		os.Exit(2)
 	}
+	try := func(ctx context.Context) (codes.Code, string, error) {
+		return attempt(ctx, *socket, *addr, *serverID)
+	}
 	switch *expect {
 	case "accepted":
-		try := func(ctx context.Context) (codes.Code, string, error) {
-			return attempt(ctx, *socket, *addr, *serverID)
-		}
 		os.Exit(runAccepted(try, *window, 5*time.Second))
 	case "refused":
-		os.Exit(runRefused(*socket, *addr, *serverID, *window))
+		os.Exit(runRefused(try, *window, 5*time.Second, refusalFloor))
 	default:
 		fmt.Fprintf(os.Stderr, "client: --expect must be accepted or refused, got %q\n", *expect)
 		os.Exit(2)
@@ -153,14 +153,52 @@ func runAccepted(try attemptFunc, window, pause time.Duration) int {
 	}
 }
 
-// runRefused needs the caller to hold its SVID and to be refused by the
-// frontend, on each try of the window. An error before the call (no SVID
-// yet) is not a refusal, so it is retried until it passes.
-func runRefused(socket, addr, serverID string, window time.Duration) int {
+// isTransportFailure reports whether the answer comes from the transport of
+// the client (grpc-go) and not from a handler of the fleet. A handler status
+// can hold any text, so the prefix of the transport is part of the proof.
+func isTransportFailure(code codes.Code, msg string) bool {
+	return code == codes.Unavailable &&
+		(strings.Contains(msg, "connection error:") || strings.Contains(msg, "authentication handshake failed"))
+}
+
+// isServerAlert reports whether the fleet sent a TLS alert at the handshake.
+func isServerAlert(code codes.Code, msg string) bool {
+	return isTransportFailure(code, msg) && strings.Contains(msg, "remote error: tls:")
+}
+
+// isClientTransportError reports a failure of the write or the read of the
+// client. The fleet closes after its alert while the client still writes, so
+// this proves nothing either way. grpc-go gives it as "connection error: desc
+// = ..." or, when the write fails after the connection is up, as "desc =
+// write tcp ...: write: broken pipe" (charts run 39455771427). Any other
+// Unavailable and any DeadlineExceeded can come from a caller that got in, so
+// they are not here.
+func isClientTransportError(code codes.Code, msg string) bool {
+	if code != codes.Unavailable {
+		return false
+	}
+	text := strings.Contains(msg, "write: broken pipe") || strings.Contains(msg, "connection reset by peer")
+	conn := strings.Contains(msg, "connection error:") ||
+		strings.Contains(msg, "desc = write tcp ") || strings.Contains(msg, "desc = read tcp ")
+	return text && conn
+}
+
+// refusalFloor is the number of TLS alerts from the fleet that proves a
+// refusal.
+const refusalFloor = 3
+
+// runRefused needs the caller to hold its SVID and to get at least floor TLS
+// alerts from the fleet. An error before the call (no SVID yet) is retried.
+// A broken pipe or a reset connection of the client transport is
+// inconclusive: the fleet closes after its alert while the client still
+// writes. It counts for nothing and fails nothing. Every other answer fails
+// the check, because the caller got in: an answer of the handler, any other
+// Unavailable, and a deadline.
+func runRefused(try attemptFunc, window, pause time.Duration, floor int) int {
 	deadline := time.Now().Add(window)
 	refused := 0
 	for time.Now().Before(deadline) {
-		code, msg, err := attempt(context.Background(), socket, addr, serverID)
+		code, msg, err := try(context.Background())
 		switch {
 		case err != nil:
 			fmt.Printf("waiting: %v\n", err)
@@ -168,19 +206,21 @@ func runRefused(socket, addr, serverID string, window time.Duration) int {
 			// The client refused the fleet. The fleet did not refuse the client.
 			fmt.Printf("FAILED: the client rejected the fleet, not the reverse: %s\n", msg)
 			return 1
-		case code == codes.Unavailable && strings.Contains(msg, "remote error: tls:"):
+		case isServerAlert(code, msg):
 			// A TLS alert that the fleet sent.
 			refused++
 			fmt.Printf("REFUSED %d code=%s: %s\n", refused, code, msg)
+			if refused >= floor {
+				return 0
+			}
+		case isClientTransportError(code, msg):
+			fmt.Printf("inconclusive: code=%s: %s\n", code, msg)
 		default:
 			fmt.Printf("FAILED: the frontend did not refuse this caller: code=%s: %s\n", code, msg)
 			return 1
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(pause)
 	}
-	if refused < 3 {
-		fmt.Printf("FAILED: %d refusals, want at least 3\n", refused)
-		return 1
-	}
-	return 0
+	fmt.Printf("FAILED: %d refusals, want at least %d\n", refused, floor)
+	return 1
 }
