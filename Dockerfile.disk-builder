@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # The disk builder image (docs/design/storage.md): setec-disk-builder and
 # mksquashfs 4.6, which reads the image as a tar stream (-tar).
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.3@sha256:f24164268fc1e741bbdc0066dbadcf1c8426c5a8489f0729c02c3905a53032fd AS builder
 # GOTOOLCHAIN=local makes a toolchain mismatch fail the build instead of
 # downloading a toolchain.
 ARG GOTOOLCHAIN=local

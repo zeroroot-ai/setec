@@ -24,7 +24,7 @@
 # build host and compiles for TARGETOS/TARGETARCH (CGO is disabled). setec
 # publishes each image for linux/amd64 only (docs/design/runtime.md), so the two are the
 # same on a CI runner. The runtime stage has no RUN steps.
-FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM ghcr.io/zeroroot-ai/mirror/golang:1.27.3@sha256:f24164268fc1e741bbdc0066dbadcf1c8426c5a8489f0729c02c3905a53032fd AS builder
 # The builder image carries exactly the Go that go.mod names, and the org
 # guard (check-go-toolchain.sh, .github#22) fails a PR where they differ.
 # GOTOOLCHAIN=local makes a mismatch fail the build instead of downloading a
