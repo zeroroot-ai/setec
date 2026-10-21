@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.127.9](https://github.com/zeroroot-ai/setec/compare/v0.127.8...v0.127.9) (2026-10-21)
+
+
+### Bug Fixes
+
+* **federation:** a broken pipe is inconclusive in the refusal check ([#337](https://github.com/zeroroot-ai/setec/issues/337)) ([60f1112](https://github.com/zeroroot-ai/setec/commit/60f1112878dec792fe00f579ea2492b85d4c511f))
+* **federation:** accept only a caller that passed enrollment ([#336](https://github.com/zeroroot-ai/setec/issues/336)) ([c0a9513](https://github.com/zeroroot-ai/setec/commit/c0a9513e02f5016ac28f251fdf9f39fb526132ff))
+* **launcher:** fail at launch with a clear error for an unknown CPU template ([#331](https://github.com/zeroroot-ai/setec/issues/331)) ([fff43b4](https://github.com/zeroroot-ai/setec/commit/fff43b411ab314240e5e09177f5fdee7672d3cce))
+* **launcher:** ship c8i and r8i CPU templates ([#332](https://github.com/zeroroot-ai/setec/issues/332)) ([d851a2f](https://github.com/zeroroot-ai/setec/commit/d851a2f5bd27cb13c53a5b75b2b218313434a210))
+
 ## [0.127.8](https://github.com/zeroroot-ai/setec/compare/v0.127.7...v0.127.8) (2026-10-18)
 
 
