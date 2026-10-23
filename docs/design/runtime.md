@@ -40,4 +40,4 @@ The hosted guard (`scripts/check-fleet-instance-types.py` in hosted) allows c8i,
 
 ## Node preparation
 
-A node needs `/dev/kvm` and `/dev/net/tun`, and the kernel modules `tun`, `sch_ingress`, `cls_matchall` and `act_mirred` for the tap device and the traffic redirects of the launcher. Nothing else is installed on the node: Firecracker, the guest kernel and the guest agent come in the launcher image. `firecracker.env` and `kernel/kernel.env` pin their releases.
+A node needs `/dev/kvm` and `/dev/net/tun`, and the kernel modules `tun`, `sch_ingress`, `cls_u32` and `act_mirred` for the tap device and the traffic redirects of the launcher. Nothing else is installed on the node: Firecracker, the guest kernel and the guest agent come in the launcher image. `firecracker.env` and `kernel/kernel.env` pin their releases.

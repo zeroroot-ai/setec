@@ -226,7 +226,7 @@ jobs:
           print("KVM API version:", version)
           assert version == 12, "unexpected KVM API version"
           PY2
-          for m in tun sch_ingress cls_matchall act_mirred; do sudo modprobe "$m"; done
+          for m in tun sch_ingress cls_u32 act_mirred; do sudo modprobe "$m"; done
           test -c /dev/net/tun
 
       - name: Create the kind cluster

@@ -84,7 +84,7 @@ func fakePodInterface(t *testing.T) netlink.Link {
 	return link
 }
 
-// checkRedirects checks that each link has one matchall redirect when
+// checkRedirects checks that each link has one u32 redirect when
 // want is true, and no filter when want is false.
 func checkRedirects(t *testing.T, want bool, links ...netlink.Link) {
 	t.Helper()
@@ -96,8 +96,15 @@ func checkRedirects(t *testing.T, want bool, links ...netlink.Link) {
 			}
 			continue
 		}
-		if err != nil || len(fs) != 1 || fs[0].Type() != "matchall" {
-			t.Fatalf("filters of %s = %v, %v; want one matchall redirect", l.Attrs().Name, fs, err)
+		if err != nil || len(fs) != 1 || fs[0].Type() != "u32" {
+			t.Fatalf("filters of %s = %v, %v; want one u32 redirect", l.Attrs().Name, fs, err)
+		}
+		u, ok := fs[0].(*netlink.U32)
+		if !ok || len(u.Actions) != 1 {
+			t.Fatalf("filter of %s = %#v; want one action", l.Attrs().Name, fs[0])
+		}
+		if m, ok := u.Actions[0].(*netlink.MirredAction); !ok || m.MirredAction != netlink.TCA_EGRESS_REDIR {
+			t.Fatalf("action of %s = %#v; want an egress mirred redirect", l.Attrs().Name, u.Actions[0])
 		}
 	}
 }
