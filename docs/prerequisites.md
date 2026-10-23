@@ -39,7 +39,7 @@ kvm-ok   # from the cpu-checker package on Debian/Ubuntu-like distros
 
 - **x86-64 (amd64).** Each published setec image is `linux/amd64`.
 - **`/dev/net/tun`** and the kernel modules `tun`, `sch_ingress`,
-  `cls_matchall` and `act_mirred`. The launcher joins its machine to the
+  `cls_u32` and `act_mirred`. The launcher joins its machine to the
   Pod network with a tap device and two traffic redirects.
 - **Kubernetes 1.35 or later.** Each launcher Pod mounts the signed disk of
   its image as an image volume.
