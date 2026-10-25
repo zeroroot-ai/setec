@@ -119,6 +119,22 @@ jobs:
             grep -q -- "--- PASS: $t " "$RUNNER_TEMP/netns.log" || { echo "::error::$t did not PASS"; exit 1; }
           done
 
+      # The launcher redirects the Pod frames to its tap device. Some node
+      # kernels do not build cls_matchall (Amazon Linux 2023, setec#342), so
+      # the runner refuses that module first: the test then proves that the
+      # launcher does not need it.
+      - name: Run the launcher network test with no cls_matchall
+        run: |
+          set -euo pipefail
+          echo "install cls_matchall /bin/false" | sudo tee /etc/modprobe.d/setec-no-matchall.conf >/dev/null
+          sudo modprobe -r cls_matchall 2>/dev/null || true
+          if sudo modprobe cls_matchall 2>/dev/null; then echo "::error::cls_matchall still loads"; exit 1; fi
+          go test -c -o "$RUNNER_TEMP/launcher.test" ./internal/launcher/
+          sudo SETEC_NETNS_TEST=1 unshare -nu "$RUNNER_TEMP/launcher.test" \
+            -test.run '^TestTCNetwork_JoinAndLeave$' -test.v | tee "$RUNNER_TEMP/launcher-netns.log"
+          grep -q -- "--- PASS: TestTCNetwork_JoinAndLeave " "$RUNNER_TEMP/launcher-netns.log" \
+            || { echo "::error::TestTCNetwork_JoinAndLeave did not PASS"; exit 1; }
+
   lint:
     name: Lint (golangci-lint + buf)
     runs-on: ubuntu-latest

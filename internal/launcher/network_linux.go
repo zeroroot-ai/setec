@@ -21,8 +21,8 @@ const PodInterface = "eth0"
 // TCNetwork joins the machine with a tap device and two tc filters: each
 // frame that arrives on eth0 goes to tap0, and each frame from tap0 goes
 // out of eth0. No NAT and no bridge exist. It needs CAP_NET_ADMIN and
-// /dev/net/tun, and the node needs the kernel modules sch_ingress,
-// cls_matchall and act_mirred.
+// /dev/net/tun, and the node needs the kernel modules sch_ingress, cls_u32
+// and act_mirred.
 type TCNetwork struct{}
 
 // Join implements Network.
@@ -92,7 +92,11 @@ func (TCNetwork) Connect() error {
 	return redirect(tapLink, eth)
 }
 
-// redirect sends each frame that arrives on from out of to.
+// redirect sends each frame that arrives on from out of to. The filter is
+// u32 with no selector, which matches every frame. It is not matchall,
+// because some distribution kernels do not build cls_matchall: Amazon Linux
+// 2023 sets no CONFIG_NET_CLS_MATCHALL, and every launcher Sandbox on such a
+// node failed here. cls_u32 is in each of them.
 func redirect(from, to netlink.Link) error {
 	q := &netlink.Ingress{
 		LinkIndex: from.Attrs().Index, Handle: netlink.MakeHandle(0xffff, 0), Parent: netlink.HANDLE_INGRESS,
@@ -100,7 +104,7 @@ func redirect(from, to netlink.Link) error {
 	if err := netlink.QdiscAdd(q); err != nil && !errors.Is(err, unix.EEXIST) {
 		return fmt.Errorf("ingress qdisc on %s: %w", from.Attrs().Name, err)
 	}
-	f := &netlink.MatchAll{
+	f := &netlink.U32{
 		LinkIndex: from.Attrs().Index, Parent: netlink.MakeHandle(0xffff, 0), Protocol: unix.ETH_P_ALL,
 		Actions: []netlink.Action{netlink.NewMirredAction(to.Attrs().Index)},
 	}
