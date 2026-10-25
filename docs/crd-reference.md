@@ -118,7 +118,8 @@ Two consequences worth stating plainly:
   rendered, and the dropped entry is recorded on the
   `setec.zeroroot.ai/suppressed-allow` annotation. A SandboxClass may
   deliberately re-open a range for its own Sandboxes via
-  `spec.egressExemptCIDRs`.
+  `spec.egressExemptCIDRs`. An exemption inside a reserved range opens
+  only the prefix it names.
 
 Rules are IPv4. Traffic that matches no rule is denied, so on a
 dual-stack cluster IPv6 egress is denied outright.

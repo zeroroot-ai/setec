@@ -978,9 +978,20 @@ func exceptFor(base string, reserved []string) (except []string, covered bool, e
 }
 
 // subtractExempt removes a class's exempted ranges from the cluster-wide
-// reserved list. An exemption matches only an exact reserved entry or a
-// range that contains it, so a class cannot widen its reach beyond what
-// the operator wrote down by naming a range that merely overlaps.
+// reserved list. The reserved list is the deny side: it becomes the
+// ipBlock.except list, so what it no longer holds is reachable.
+//
+// An exemption has three cases against one reserved entry:
+//
+//   - The exemption equals or contains the entry. The entry is dropped.
+//   - The exemption lies strictly inside the entry. The entry is replaced
+//     by the minimal set of prefixes that cover the entry except the
+//     exemption. The class reaches exactly the exempt prefix and nothing
+//     else in the entry.
+//   - The exemption is disjoint from the entry. The entry is unchanged.
+//
+// The reserved list passed in is never changed, so another class keeps
+// the full range.
 func subtractExempt(reserved, exempt []string) ([]string, error) {
 	if len(exempt) == 0 {
 		return reserved, nil
@@ -1003,18 +1014,62 @@ func subtractExempt(reserved, exempt []string) ([]string, error) {
 		}
 		rp = rp.Masked()
 
-		var dropped bool
+		pieces := []netip.Prefix{rp}
 		for _, e := range exemptPrefixes {
-			if e.Overlaps(rp) && e.Bits() <= rp.Bits() {
-				dropped = true
-				break
-			}
+			pieces = cutPrefix(pieces, e)
 		}
-		if !dropped {
+		if len(pieces) == 1 && pieces[0] == rp {
+			// Untouched: keep the operator's original spelling.
 			out = append(out, r)
+			continue
+		}
+		for _, piece := range pieces {
+			out = append(out, piece.String())
 		}
 	}
 	return out, nil
+}
+
+// cutPrefix removes hole from every prefix in set. A prefix that hole
+// contains is dropped. A prefix that contains hole is replaced by its
+// sibling prefixes along the path to hole. Any other prefix is kept.
+func cutPrefix(set []netip.Prefix, hole netip.Prefix) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(set))
+	for _, p := range set {
+		switch {
+		case !p.Overlaps(hole):
+			out = append(out, p)
+		case hole.Bits() <= p.Bits():
+			// hole contains p.
+		default:
+			// p strictly contains hole. Walk from p down to hole and
+			// keep the sibling at each level.
+			cur := p
+			for cur.Bits() < hole.Bits() {
+				lo, hi := splitPrefix(cur)
+				if lo.Overlaps(hole) {
+					out = append(out, hi)
+					cur = lo
+				} else {
+					out = append(out, lo)
+					cur = hi
+				}
+			}
+		}
+	}
+	return out
+}
+
+// splitPrefix returns the two halves of p. The caller makes sure p is
+// not a single address.
+func splitPrefix(p netip.Prefix) (lo, hi netip.Prefix) {
+	bits := p.Bits() + 1
+	lo = netip.PrefixFrom(p.Addr(), bits).Masked()
+	b := p.Addr().AsSlice()
+	b[p.Bits()/8] |= 0x80 >> (p.Bits() % 8)
+	addr, _ := netip.AddrFromSlice(b)
+	hi = netip.PrefixFrom(addr, bits).Masked()
+	return lo, hi
 }
 
 // appendAnnotation returns annotations with the key/value added, creating

@@ -324,7 +324,7 @@ func TestResolversFor_ClusterDNSNeedsAnAllowance(t *testing.T) {
 			wantDNS: []string{"8.8.8.8"},
 		},
 		{
-			// egressExemptCIDRs drops a reserved entry only when the
+			// egressExemptCIDRs drops a reserved entry when the
 			// exemption covers it whole (subtractExempt), so the class
 			// exempts the range the resolver sits in. The resolver is
 			// then outside the effective reserved ranges, and an ipBlock

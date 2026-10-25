@@ -154,10 +154,17 @@ Two operator flags define the posture:
   resolvers, and a class with none left cannot start a Sandbox.
 
 A `SandboxClass` may re-open specific reserved ranges for its own
-Sandboxes via `spec.egressExemptCIDRs`. An `allow` entry whose `cidr`
-lies entirely inside a still-reserved range is dropped rather than
-rendered, and recorded on the `setec.zeroroot.ai/suppressed-allow`
-annotation.
+Sandboxes via `spec.egressExemptCIDRs`. An exemption that covers a whole
+reserved range drops that range for the class. An exemption that lies
+inside a reserved range opens exactly that prefix. For example,
+`10.60.0.66/32` inside `10.0.0.0/8` opens one address, and the rest of
+`10.0.0.0/8` stays denied. The operator renders the rest of the range
+as the `ipBlock.except` list. Other classes keep the full reserved
+range. An `allow` entry whose `cidr` lies entirely inside a
+still-reserved range is dropped rather than rendered, and recorded on
+the `setec.zeroroot.ai/suppressed-allow` annotation. The `allow` entry
+still sets the port, so an exemption plus an `allow` entry for
+`10.60.0.66` on TCP 6443 reaches that one address on that one port.
 
 A `SandboxClass` reaches an in-cluster Service through
 `spec.egressAllowSelectors` (setec#76), never through an address. The
@@ -279,7 +286,8 @@ and tenants reference by name. A class carries:
 - `defaultNetworkMode`, `defaultEgressAllow`: the posture applied when a
   Sandbox declares no `spec.network`. Unset resolves to `none`.
 - `egressExemptCIDRs`: ranges this class may reach despite the
-  cluster-wide reserved list.
+  cluster-wide reserved list. A range inside a reserved range opens
+  only that range.
 - `egressAllowSelectors`: in-cluster Pods this class may reach, by
   namespace and Pod labels on listed ports. The route to a Service.
 - `nodeSelector`: additive node-selector merged into every Pod.
