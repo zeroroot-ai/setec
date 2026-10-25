@@ -105,9 +105,7 @@ func redirect(from, to netlink.Link) error {
 		return fmt.Errorf("ingress qdisc on %s: %w", from.Attrs().Name, err)
 	}
 	f := &netlink.U32{
-		FilterAttrs: netlink.FilterAttrs{
-			LinkIndex: from.Attrs().Index, Parent: netlink.MakeHandle(0xffff, 0), Protocol: unix.ETH_P_ALL,
-		},
+		LinkIndex: from.Attrs().Index, Parent: netlink.MakeHandle(0xffff, 0), Protocol: unix.ETH_P_ALL,
 		Actions: []netlink.Action{netlink.NewMirredAction(to.Attrs().Index)},
 	}
 	if err := netlink.FilterAdd(f); err != nil {
