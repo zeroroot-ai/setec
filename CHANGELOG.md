@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.128.0](https://github.com/zeroroot-ai/setec/compare/v0.127.9...v0.128.0) (2026-10-25)
+
+
+### Features
+
+* **netpol:** an exemption opens its own prefix inside a reserved range ([#344](https://github.com/zeroroot-ai/setec/issues/344)) ([e3d0823](https://github.com/zeroroot-ai/setec/commit/e3d08231e679ef21607be34b8e761e2c48496b29))
+
+
+### Bug Fixes
+
+* **image:** move the distroless base to the digest with ca-certificates 20250419+deb13u1 ([54bd02e](https://github.com/zeroroot-ai/setec/commit/54bd02e2b0e229089629bebd9067eaea2d9b3a7c))
+* **image:** move the distroless base to the patched ca-certificates ([#341](https://github.com/zeroroot-ai/setec/issues/341)) ([54bd02e](https://github.com/zeroroot-ai/setec/commit/54bd02e2b0e229089629bebd9067eaea2d9b3a7c))
+* **launcher:** redirect the Pod frames with a u32 filter, not matchall ([#343](https://github.com/zeroroot-ai/setec/issues/343)) ([14b0ce0](https://github.com/zeroroot-ai/setec/commit/14b0ce0543f1dd32baba0acdb71c4722e8d6338f))
+
 ## [0.127.9](https://github.com/zeroroot-ai/setec/compare/v0.127.8...v0.127.9) (2026-10-21)
 
 
