@@ -10,7 +10,7 @@
 <p align="center">The sandbox layer behind <a href="https://zeroroot.ai">zeroroot.ai</a>, the zero-trust agent factory. Useful standalone.</p>
 
 <p align="center">
-  <a href="https://github.com/zeroroot-ai/setec/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/zeroroot-ai/setec/ci.yml?branch=main&label=ci"></a>
+  <a href="https://github.com/zeroroot-ai/setec/actions/workflows/go-ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/zeroroot-ai/setec/go-ci.yml?branch=main&label=ci"></a>
   <a href="https://github.com/zeroroot-ai/setec/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/zeroroot-ai/setec?include_prereleases&sort=semver"></a>
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <a href="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec"><img alt="OSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/zeroroot-ai/setec/badge"></a>
