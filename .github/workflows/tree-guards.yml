@@ -34,19 +34,19 @@ concurrency:
 
 jobs:
   brand-guard:
-    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@7626d9726b593f0e33bc668626e0dbe8771eee19 # v0.20.1
+    uses: zeroroot-ai/.github/.github/workflows/brand-guard.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
 
   link-check:
-    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@7626d9726b593f0e33bc668626e0dbe8771eee19 # v0.20.1
+    uses: zeroroot-ai/.github/.github/workflows/link-check.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
 
   # Every workflow file is a valid workflow. A reference to a step or a matrix
   # key that does not exist is not an error to GitHub: it is an empty string
   # (zeroroot-ai/.github#185).
   workflow-lint:
-    uses: zeroroot-ai/.github/.github/workflows/workflow-lint.yml@7626d9726b593f0e33bc668626e0dbe8771eee19 # v0.20.1
+    uses: zeroroot-ai/.github/.github/workflows/workflow-lint.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
 
   # Each ADR citation names a live ADR of the public index docs/adr-index.md,
   # a copy of the file in zeroroot-ai/gibson (gibson#908). The action runs its
   # self-test with known wrong citations before it scans this tree.
   adr-citations:
-    uses: zeroroot-ai/.github/.github/workflows/adr-citations.yml@7626d9726b593f0e33bc668626e0dbe8771eee19 # v0.20.1
+    uses: zeroroot-ai/.github/.github/workflows/adr-citations.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
