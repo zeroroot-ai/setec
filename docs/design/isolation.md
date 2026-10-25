@@ -22,7 +22,7 @@ A Sandbox runs code that `setec` does not trust. This page lists each control th
 - `external-only`: egress to the internet on every port, with the reserved ranges removed. No ingress. DNS only to the configured resolvers.
 - `egress-allow-list`: egress only to the entries of `network.allow`, each on its own ports, with the same reserved ranges removed.
 
-The reserved ranges cover private, link-local and metadata addresses in IPv4 and IPv6 (`charts/setec/values.yaml`, `netpol.reservedCIDRs`). A class can exempt a range with `spec.egressExemptCIDRs`.
+The reserved ranges cover private, link-local and metadata addresses in IPv4 and IPv6 (`charts/setec/values.yaml`, `netpol.reservedCIDRs`). A class can exempt a range with `spec.egressExemptCIDRs`. The exemption opens exactly the prefix it names, even when the prefix lies inside a larger reserved range. Other classes keep the full range.
 
 ## The namespace
 
