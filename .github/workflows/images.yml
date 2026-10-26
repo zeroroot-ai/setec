@@ -72,7 +72,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   setec:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -96,7 +96,7 @@ jobs:
         CMD=manager
 
   setec-node-agent:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -120,7 +120,7 @@ jobs:
         CMD=node-agent
 
   setec-frontend:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -144,7 +144,7 @@ jobs:
         CMD=frontend
 
   setec-device-plugin:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -169,7 +169,7 @@ jobs:
 
   setec-launcher:
     needs: runtime-pin
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
@@ -194,7 +194,7 @@ jobs:
         FIRECRACKER_SHA256=${{ needs.runtime-pin.outputs.firecracker_sha256 }}
 
   setec-disk-builder:
-    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@4bf8d348295c9a501b97cc2ffbdc0873c285b6f2 # v0.21.1
+    uses: zeroroot-ai/.github/.github/workflows/reusable-image-build.yml@9e8c9f5b6f1ff36c0dd7cefe24fcf739c95b2055 # v0.21.2
     permissions:
       # the reusable build never writes repo contents (.github#323)
       contents: read
