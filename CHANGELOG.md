@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.129.0](https://github.com/zeroroot-ai/setec/compare/v0.128.0...v0.129.0) (2026-10-26)
+
+
+### Features
+
+* **chart:** sandboxClasses.specOverrides changes one class for one install ([#353](https://github.com/zeroroot-ai/setec/issues/353)) ([59e0bb7](https://github.com/zeroroot-ai/setec/commit/59e0bb75704bda447e09f0b679b67e83e326f9e1))
+
 ## [0.128.0](https://github.com/zeroroot-ai/setec/compare/v0.127.9...v0.128.0) (2026-10-25)
 
 
