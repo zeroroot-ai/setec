@@ -15,7 +15,7 @@ import (
 
 // renderClasses renders templates/sandboxclass-default.yaml with the values
 // and returns each SandboxClass spec by name, or the helm error output.
-func renderClasses(t *testing.T, sets ...string) (map[string]map[string]any, string) {
+func renderClasses(t *testing.T, sets ...string) (specs map[string]map[string]any, helmErr string) {
 	t.Helper()
 	helm, err := exec.LookPath("helm")
 	if err != nil {
@@ -36,8 +36,8 @@ func renderClasses(t *testing.T, sets ...string) (map[string]map[string]any, str
 	if err := cmd.Run(); err != nil {
 		return nil, errb.String()
 	}
-	specs := map[string]map[string]any{}
-	for _, doc := range strings.Split(out.String(), "\n---") {
+	specs = map[string]map[string]any{}
+	for doc := range strings.SplitSeq(out.String(), "\n---") {
 		var obj struct {
 			Metadata struct {
 				Name string `json:"name"`
@@ -99,5 +99,15 @@ func TestSandboxClassChart_SpecOverrideOfAnUnknownClassFails(t *testing.T) {
 	_, errOut := renderClasses(t, "sandboxClasses.specOverrides.nope.default=true")
 	if !strings.Contains(errOut, `sandboxClasses.specOverrides names class "nope"`) {
 		t.Fatalf("the render did not refuse the unknown class, helm said: %q", errOut)
+	}
+}
+
+// TestSandboxClassChart_SpecOverrideOfASecondDefaultFails checks that the
+// guard against two default classes reads the specs after the overrides.
+func TestSandboxClassChart_SpecOverrideOfASecondDefaultFails(t *testing.T) {
+	t.Parallel()
+	_, errOut := renderClasses(t, "sandboxClasses.specOverrides.connector.default=true")
+	if !strings.Contains(errOut, "more than one class with spec.default: true") {
+		t.Fatalf("the render did not refuse a second default class, helm said: %q", errOut)
 	}
 }

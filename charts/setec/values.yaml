@@ -669,7 +669,10 @@ sandboxClasses:
   # empty value replaces too. The render fails when a key names no class,
   # so an override cannot go stale without notice.
   #
-  # It is per install only. The chart default stays empty. An install sets,
+  # An override can widen a class, for example with egressExemptCIDRs or
+  # maxResources. So it is a security decision of the install. Review it
+  # like the class list. It is per install only. The chart default stays
+  # empty. An install sets,
   # for example:
   #
   #   specOverrides:

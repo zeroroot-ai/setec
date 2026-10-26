@@ -1,11 +1,4 @@
 {{- if .Values.sandboxClasses.enabled }}
-{{- $defaults := 0 }}
-{{- range .Values.sandboxClasses.classes }}
-{{- if .spec.default }}{{ $defaults = add1 $defaults }}{{ end }}
-{{- end }}
-{{- if gt $defaults 1 }}
-{{- fail "sandboxClasses.classes declares more than one class with spec.default: true; the resolver refuses to default until the ambiguity is resolved." }}
-{{- end }}
 {{- $overrides := .Values.sandboxClasses.specOverrides | default dict }}
 {{- $names := list }}
 {{- range .Values.sandboxClasses.classes }}{{ $names = append $names .name }}{{ end }}
@@ -14,13 +7,27 @@
 {{- fail (printf "sandboxClasses.specOverrides names class %q, and sandboxClasses.classes has no class of that name. Remove the override or add the class." $name) }}
 {{- end }}
 {{- end }}
+{{- /* The spec of each class after its override. Each key of an override
+     replaces that key of the spec whole. A deep merge would drop a false or
+     an empty value without notice. Every check below reads these specs, so
+     an override cannot get past a check. */}}
+{{- $specs := dict }}
 {{- range $class := .Values.sandboxClasses.classes }}
 {{- $spec := deepCopy $class.spec }}
-{{- /* Each key of an override replaces that key of the spec whole. A deep
-     merge would drop a false or an empty value without notice. */}}
 {{- range $key, $value := (index $overrides $class.name | default dict) }}
 {{- $_ := set $spec $key (deepCopy $value) }}
 {{- end }}
+{{- $_ := set $specs $class.name $spec }}
+{{- end }}
+{{- $defaults := 0 }}
+{{- range $name, $spec := $specs }}
+{{- if $spec.default }}{{ $defaults = add1 $defaults }}{{ end }}
+{{- end }}
+{{- if gt $defaults 1 }}
+{{- fail "sandboxClasses.classes declares more than one class with spec.default: true, with sandboxClasses.specOverrides applied; the resolver refuses to default until the ambiguity is resolved." }}
+{{- end }}
+{{- range $class := .Values.sandboxClasses.classes }}
+{{- $spec := index $specs $class.name }}
 {{- if not $spec.defaultNetworkMode }}
 {{- fail (printf "SandboxClass %q sets no spec.defaultNetworkMode. A Sandbox that declares no spec.network would resolve to deny-all; state the posture explicitly." $class.name) }}
 {{- end }}
