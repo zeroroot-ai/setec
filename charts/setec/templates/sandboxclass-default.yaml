@@ -6,8 +6,22 @@
 {{- if gt $defaults 1 }}
 {{- fail "sandboxClasses.classes declares more than one class with spec.default: true; the resolver refuses to default until the ambiguity is resolved." }}
 {{- end }}
+{{- $overrides := .Values.sandboxClasses.specOverrides | default dict }}
+{{- $names := list }}
+{{- range .Values.sandboxClasses.classes }}{{ $names = append $names .name }}{{ end }}
+{{- range $name := keys $overrides | sortAlpha }}
+{{- if not (has $name $names) }}
+{{- fail (printf "sandboxClasses.specOverrides names class %q, and sandboxClasses.classes has no class of that name. Remove the override or add the class." $name) }}
+{{- end }}
+{{- end }}
 {{- range $class := .Values.sandboxClasses.classes }}
-{{- if not $class.spec.defaultNetworkMode }}
+{{- $spec := deepCopy $class.spec }}
+{{- /* Each key of an override replaces that key of the spec whole. A deep
+     merge would drop a false or an empty value without notice. */}}
+{{- range $key, $value := (index $overrides $class.name | default dict) }}
+{{- $_ := set $spec $key (deepCopy $value) }}
+{{- end }}
+{{- if not $spec.defaultNetworkMode }}
 {{- fail (printf "SandboxClass %q sets no spec.defaultNetworkMode. A Sandbox that declares no spec.network would resolve to deny-all; state the posture explicitly." $class.name) }}
 {{- end }}
 ---
@@ -29,6 +43,6 @@ metadata:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "20"
 spec:
-{{- toYaml $class.spec | nindent 2 }}
+{{- toYaml $spec | nindent 2 }}
 {{- end }}
 {{- end }}

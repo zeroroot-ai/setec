@@ -316,6 +316,18 @@ spec:
   default: true
 ```
 
+The chart renders the classes of `sandboxClasses.classes`. To change one
+class for one install, set `sandboxClasses.specOverrides`. Each key names
+a class. Each top-level key of its value replaces that key of the class
+spec whole. The render fails when a key names no class. For example:
+
+```yaml
+sandboxClasses:
+  specOverrides:
+    tool:
+      egressExemptCIDRs: ["10.60.0.66/32"]
+```
+
 The validating webhook rejects any Sandbox that violates the class
 ceilings or picks a disallowed network mode. The reconciler performs
 the same check as defense in depth, so manually-created CRs that skip
