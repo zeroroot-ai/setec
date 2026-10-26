@@ -661,6 +661,24 @@ sandboxClasses:
           - none
         egressExemptCIDRs: []
         egressAllowSelectors: []
+  # specOverrides changes one class for one install, with no second copy of
+  # the list above. Each key is the name of a class in `classes`. Each value
+  # is a partial SandboxClass spec. Each top-level key of it replaces that
+  # key of the class spec whole: a list such as egressExemptCIDRs replaces
+  # the list, and a map such as maxResources replaces the map. A false or an
+  # empty value replaces too. The render fails when a key names no class,
+  # so an override cannot go stale without notice.
+  #
+  # An override can widen a class, for example with egressExemptCIDRs or
+  # maxResources. So it is a security decision of the install. Review it
+  # like the class list. It is per install only. The chart default stays
+  # empty. An install sets,
+  # for example:
+  #
+  #   specOverrides:
+  #     tool:
+  #       egressExemptCIDRs: ["10.60.0.66/32"]
+  specOverrides: {}
 
 # ---------------------------------------------------------------------------
 # Phase 3: snapshot, restore, pause/resume, pre-warmed pool.
