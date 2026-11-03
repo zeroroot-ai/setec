@@ -37,6 +37,11 @@ jobs:
       - name: Install helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # A kind cluster on a GitHub-hosted runner hits the default inotify
+      # limits, and the kubelet loses pod logs (gibson#1331). Raise them
+      # before the step that starts kind.
+      - uses: zeroroot-ai/.github/.github/actions/raise-inotify-limits@78606607ff7c6192237bb05b4610af6bbe16e8ee # v0.22.0
+
       - name: Create the kind cluster
         uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
