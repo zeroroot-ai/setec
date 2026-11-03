@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.129.1](https://github.com/zeroroot-ai/setec/compare/v0.129.0...v0.129.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **status:** bound a Pending Sandbox by its lifecycle timeout ([#361](https://github.com/zeroroot-ai/setec/issues/361)) ([6fc2c2a](https://github.com/zeroroot-ai/setec/commit/6fc2c2aed84e59e9ccb4cf97241c092c32a4fa61)), closes [#357](https://github.com/zeroroot-ai/setec/issues/357)
+
 ## [0.129.0](https://github.com/zeroroot-ai/setec/compare/v0.128.0...v0.129.0) (2026-10-26)
 
 
