@@ -75,6 +75,14 @@ func withStatus(s setecv1alpha1.SandboxStatus) func(*setecv1alpha1.Sandbox) {
 	return func(sb *setecv1alpha1.Sandbox) { sb.Status = s }
 }
 
+// withCreation sets metadata.creationTimestamp on the Sandbox. The Pending
+// timeout clock runs from it when the workload never started.
+func withCreation(at time.Time) func(*setecv1alpha1.Sandbox) {
+	return func(sb *setecv1alpha1.Sandbox) {
+		sb.CreationTimestamp = metav1.NewTime(at)
+	}
+}
+
 // TestDerive exercises every documented mapping rule in the deriver.
 func TestDerive(t *testing.T) {
 	t.Parallel()
@@ -443,6 +451,43 @@ func TestDerive(t *testing.T) {
 				PodName:            "demo-vm",
 				StartedAt:          ptrTime(t0),
 				LastTransitionTime: ptrTime(tMin(11)),
+			},
+		},
+		{
+			// setec#357: an unschedulable Pod stays Pending and never sets
+			// StartedAt, so the timeout is measured from creationTimestamp.
+			name: "Pending beyond lifecycle.timeout transitions to Failed/Timeout",
+			sandbox: newSandbox(
+				withTimeout(5*time.Minute),
+				withCreation(t0),
+			),
+			pod: newPod(func(p *corev1.Pod) {
+				p.Status.Phase = corev1.PodPending
+			}),
+			now: tMin(6),
+			want: setecv1alpha1.SandboxStatus{
+				Phase:              setecv1alpha1.SandboxPhaseFailed,
+				Reason:             ReasonTimeout,
+				PodName:            "demo-vm",
+				LastTransitionTime: ptrTime(tMin(6)),
+			},
+		},
+		{
+			// setec#357: a Pending Sandbox still inside its timeout window
+			// must not be failed early.
+			name: "Pending within lifecycle.timeout remains Pending",
+			sandbox: newSandbox(
+				withTimeout(5*time.Minute),
+				withCreation(t0),
+			),
+			pod: newPod(func(p *corev1.Pod) {
+				p.Status.Phase = corev1.PodPending
+			}),
+			now: tMin(4),
+			want: setecv1alpha1.SandboxStatus{
+				Phase:              setecv1alpha1.SandboxPhasePending,
+				PodName:            "demo-vm",
+				LastTransitionTime: ptrTime(tMin(4)),
 			},
 		},
 		{

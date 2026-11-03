@@ -127,7 +127,19 @@ func Derive(
 		return setPhase(out, setecv1alpha1.SandboxPhasePending, ReasonSessionVMRestarting, now)
 	}
 
-	return fromPodPhase(out, pod, now, sb)
+	out = fromPodPhase(out, pod, now, sb)
+
+	// A Sandbox can stay Pending forever: unschedulable (no node fits its
+	// request), an image still pulling, or a readiness probe that never
+	// passes. The lifecycle timeout bounds that too (setec#357). Before the
+	// workload runs there is no startedAt, so timedOut measures from the
+	// Sandbox creationTimestamp. A Pending Sandbox past the timeout fails
+	// terminally, and the controller deletes its Pod as it does for a
+	// Running one.
+	if out.Phase == setecv1alpha1.SandboxPhasePending && timedOut(sb, out.StartedAt, now) {
+		return setPhase(out, setecv1alpha1.SandboxPhaseFailed, ReasonTimeout, now)
+	}
+	return out
 }
 
 // fromPodPhase maps the phase of a Pod to the status of a Sandbox that is
@@ -310,21 +322,28 @@ func imagePullStuck(pod *corev1.Pod, now time.Time) bool {
 	return check(pod.Status.InitContainerStatuses)
 }
 
-// timedOut reports whether a Running Sandbox has exceeded its configured
-// lifecycle timeout. A nil timeout (either Lifecycle omitted or Timeout unset
-// or zero) means "no timeout".
+// timedOut reports whether a Sandbox has exceeded its configured lifecycle
+// timeout. A nil timeout (either Lifecycle omitted or Timeout unset or zero)
+// means "no timeout". The clock runs from startedAt once the workload runs.
+// Before that startedAt is nil, so it runs from the Sandbox
+// creationTimestamp, which bounds a Sandbox that never leaves Pending
+// (setec#357).
 func timedOut(sb *setecv1alpha1.Sandbox, startedAt *metav1.Time, now time.Time) bool {
 	if sb == nil || sb.Spec.Lifecycle == nil || sb.Spec.Lifecycle.Timeout == nil {
-		return false
-	}
-	if startedAt == nil {
 		return false
 	}
 	d := sb.Spec.Lifecycle.Timeout.Duration
 	if d <= 0 {
 		return false
 	}
-	return now.Sub(startedAt.Time) > d
+	start := startedAt
+	if start == nil {
+		start = &sb.CreationTimestamp
+	}
+	if start.IsZero() {
+		return false
+	}
+	return now.Sub(start.Time) > d
 }
 
 // declaresReadiness reports whether any container of pod has a
