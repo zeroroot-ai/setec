@@ -60,7 +60,7 @@ jobs:
           echo "node_agent_image=ghcr.io/zeroroot-ai/setec-node-agent:${sha_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -235,7 +235,7 @@ jobs:
       - uses: zeroroot-ai/.github/.github/actions/raise-inotify-limits@78606607ff7c6192237bb05b4610af6bbe16e8ee # v0.22.0
 
       - name: Create the kind cluster
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ${{ env.KIND_CLUSTER }}
           config: hack/kind-launcher.yaml

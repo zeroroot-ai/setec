@@ -43,7 +43,7 @@ jobs:
       - uses: zeroroot-ai/.github/.github/actions/raise-inotify-limits@78606607ff7c6192237bb05b4610af6bbe16e8ee # v0.22.0
 
       - name: Create the kind cluster
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ${{ env.KIND_CLUSTER }}
           config: hack/kind-federation.yaml
