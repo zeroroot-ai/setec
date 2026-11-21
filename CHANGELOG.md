@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.130.0](https://github.com/zeroroot-ai/setec/compare/v0.129.0...v0.130.0) (2026-11-21)
+
+
+### Features
+
+* **frontend:** place files in the sandbox before the workload starts ([#371](https://github.com/zeroroot-ai/setec/issues/371)) ([2fb7ae8](https://github.com/zeroroot-ai/setec/commit/2fb7ae831d3b26214dff98b19ec04f1747de5871))
+
+
+### Bug Fixes
+
+* raise go and klauspost/compress for two advisories ([#368](https://github.com/zeroroot-ai/setec/issues/368)) ([690606c](https://github.com/zeroroot-ai/setec/commit/690606c2c21e4e7beb858ad44c5b8159c8e25e0d))
+* **status:** bound a Pending Sandbox by its lifecycle timeout ([#361](https://github.com/zeroroot-ai/setec/issues/361)) ([6fc2c2a](https://github.com/zeroroot-ai/setec/commit/6fc2c2aed84e59e9ccb4cf97241c092c32a4fa61)), closes [#357](https://github.com/zeroroot-ai/setec/issues/357)
+
 ## [0.129.0](https://github.com/zeroroot-ai/setec/compare/v0.128.0...v0.129.0) (2026-10-26)
 
 
