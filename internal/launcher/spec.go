@@ -16,8 +16,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/zeroroot-ai/setec/internal/guestagent"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 // Spec is what the operator writes into the launcher Pod.
@@ -67,10 +69,22 @@ type Spec struct {
 	// the command and environment of the Sandbox applied by the operator.
 	Workload *guestagent.Process `json:"workload,omitempty"`
 
+	// Files are copied into the machine before the workload starts
+	// (docs/design/files.md). A spec with files has a workload.
+	Files []File `json:"files,omitempty"`
+
 	// Identity, when set, makes the launcher sign the identity tokens of
 	// the Sandbox (setec#235). Nil for a warm pool base, which belongs to
 	// no Sandbox.
 	Identity *IdentitySpec `json:"identity,omitempty"`
+}
+
+// File is one file for the machine: the path in the machine, the file on
+// the Pod that holds its content, and its mode.
+type File struct {
+	Path   string `json:"path"`
+	Source string `json:"source"`
+	Mode   uint32 `json:"mode"`
 }
 
 // Source is exactly one of a boot and a snapshot.
@@ -174,12 +188,34 @@ func (s *Spec) validateSource() error {
 		}
 	}
 	switch {
+	case len(s.Files) > 0 && s.Workload == nil:
+		return errors.New("launcher: files need a workload that starts after them")
 	case s.Base && (s.Workload != nil || s.Source.Boot == nil):
 		return errors.New("launcher: a base boots and runs no workload")
 	case s.Source.Boot != nil && s.Workload == nil && !s.Base:
 		return errors.New("launcher: a boot needs a workload; an empty argv runs the image entry point")
 	}
+	if err := s.validateFiles(); err != nil {
+		return err
+	}
 	return s.validateIdentity()
+}
+
+// validateFiles reports a problem of the files of s: each path is a clean
+// path below the directory of the files, and each source is absolute.
+func (s *Spec) validateFiles() error {
+	for i, f := range s.Files {
+		if !strings.HasPrefix(f.Path, sandboxfiles.Dir+"/") || filepath.Clean(f.Path) != f.Path {
+			return fmt.Errorf("launcher: files[%d]: the path %q must be a clean path below %s", i, f.Path, sandboxfiles.Dir)
+		}
+		if !filepath.IsAbs(f.Source) {
+			return fmt.Errorf("launcher: files[%d]: the source must be an absolute path", i)
+		}
+		if f.Mode&^0o555 != 0 {
+			return fmt.Errorf("launcher: files[%d]: the mode %04o grants a write, setuid or setgid bit", i, f.Mode)
+		}
+	}
+	return nil
 }
 
 // validate reports a problem of the paths of a snapshot source.

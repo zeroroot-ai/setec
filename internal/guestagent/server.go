@@ -229,6 +229,34 @@ func (s *Server) inRoot(p string) (string, error) {
 	return filepath.Join(s.Sup.Root, filepath.Clean(p)), nil
 }
 
+// copyInDirMode is the mode of a directory that copy-in makes: the owner of
+// the agent writes, and the workload user reads and enters.
+const copyInDirMode os.FileMode = 0o700 | 0o055
+
+// mkdirAllExact makes dir and its missing parents with copyInDirMode, whatever
+// the umask of the agent. A directory that exists keeps its mode.
+func mkdirAllExact(dir string) error {
+	var made []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+		made = append(made, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if err := os.MkdirAll(dir, copyInDirMode); err != nil {
+		return errwrap.Wrap(err, "os.MkdirAll")
+	}
+	for _, d := range made {
+		if err := os.Chmod(d, copyInDirMode); err != nil {
+			return errwrap.Wrap(err, "os.Chmod")
+		}
+	}
+	return nil
+}
+
 func (s *Server) copyIn(r *bufio.Reader, req Request) error {
 	path, err := s.inRoot(req.Path)
 	if err != nil {
@@ -238,11 +266,18 @@ func (s *Server) copyIn(r *bufio.Reader, req Request) error {
 	if mode == 0 {
 		mode = 0o644
 	}
+	if err := mkdirAllExact(filepath.Dir(path)); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // a path the launcher names
 	if err != nil {
 		return errwrap.Wrap(err, "os.OpenFile")
 	}
 	n, err := io.CopyN(f, r, req.Size)
+	if err == nil {
+		// The umask of the agent must not change the mode that the launcher asked for.
+		err = f.Chmod(mode)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

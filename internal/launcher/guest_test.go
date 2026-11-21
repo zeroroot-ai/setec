@@ -127,6 +127,98 @@ func TestGuest_AfterStartBootConfiguresTheNetworkThenStartsTheWorkload(t *testin
 	}
 }
 
+// TestGuest_AfterStartPlacesTheFilesBeforeTheWorkloadStarts proves that the
+// workload finds each file of the Sandbox with its content and its mode from
+// its first instruction (docs/design/files.md). The workload exits 0 only when
+// it reads both files, and 9 otherwise.
+func TestGuest_AfterStartPlacesTheFilesBeforeTheWorkloadStarts(t *testing.T) {
+	dir, err := os.MkdirTemp("", "lf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	agentSock := filepath.Join(dir, "agent.sock")
+	ln, err := net.Listen("unix", agentSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exits := make(chan int, 1)
+	srv := &guestagent.Server{Sup: testSupervisor(), Net: &recNet{}, Console: os.Stderr,
+		ReportExit: func(code int) error { exits <- code; return nil }}
+	go func() { _ = srv.Serve(t.Context(), ln) }()
+	uds := filepath.Join(dir, VsockSocket)
+	fakeMux(t, uds, agentSock)
+
+	script := filepath.Join(dir, "machine", "skill", "scripts", "run.sh")
+	data := filepath.Join(dir, "machine", "skill", "data.txt")
+	srcA, srcB := filepath.Join(dir, "f0"), filepath.Join(dir, "f1")
+	if err := os.WriteFile(srcA, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcB, []byte("payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := &Guest{UDS: uds, ResolvConf: filepath.Join(dir, "none"), Files: []File{
+		{Path: script, Source: srcA, Mode: 0o555}, {Path: data, Source: srcB, Mode: 0o444},
+	}}
+	pn := PodNet{Address: netip.MustParsePrefix("10.42.0.7/32"), MAC: "02:00:00:00:00:07", MTU: 1500,
+		Gateway: netip.MustParseAddr("10.42.0.1")}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	check := "test -x " + script + " && test \"$(cat " + data + ")\" = payload && " + script
+	if err := g.AfterStart(&guestagent.Process{Argv: []string{"sh", "-c", check + "; exit $?"}})(ctx, pn, Booted); err != nil {
+		t.Fatalf("AfterStart: %v", err)
+	}
+	select {
+	case code := <-exits:
+		if code != 0 {
+			t.Fatalf("the workload exit = %d, want 0: it did not find the files", code)
+		}
+	case <-ctx.Done():
+		t.Fatal("the workload did not report an exit")
+	}
+	fi, err := os.Stat(script)
+	if err != nil || fi.Mode().Perm() != 0o555 {
+		t.Fatalf("script mode = %v, %v; want 555", fi, err)
+	}
+}
+
+// TestGuest_AfterStartStopsWhenAFileCannotBePlaced proves that a file that
+// the launcher cannot read stops the launch before the workload starts.
+func TestGuest_AfterStartStopsWhenAFileCannotBePlaced(t *testing.T) {
+	dir, err := os.MkdirTemp("", "lg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	agentSock := filepath.Join(dir, "agent.sock")
+	ln, err := net.Listen("unix", agentSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exits := make(chan int, 1)
+	srv := &guestagent.Server{Sup: testSupervisor(), Net: &recNet{}, Console: os.Stderr,
+		ReportExit: func(code int) error { exits <- code; return nil }}
+	go func() { _ = srv.Serve(t.Context(), ln) }()
+	uds := filepath.Join(dir, VsockSocket)
+	fakeMux(t, uds, agentSock)
+	g := &Guest{UDS: uds, ResolvConf: filepath.Join(dir, "none"), Files: []File{
+		{Path: filepath.Join(dir, "machine", "a"), Source: filepath.Join(dir, "missing"), Mode: 0o444},
+	}}
+	pn := PodNet{Address: netip.MustParsePrefix("10.42.0.7/32"), MAC: "02:00:00:00:00:07", MTU: 1500,
+		Gateway: netip.MustParseAddr("10.42.0.1")}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := g.AfterStart(&guestagent.Process{Argv: []string{"true"}})(ctx, pn, Booted); err == nil {
+		t.Fatal("AfterStart succeeded with a file that cannot be read")
+	}
+	select {
+	case code := <-exits:
+		t.Fatalf("the workload started and exited with %d", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 // TestGuest_ExecRelaysStdioAndTheExitCode runs the relay of
 // `setec-launcher exec` against the real guest agent server.
 func TestGuest_ExecRelaysStdioAndTheExitCode(t *testing.T) {

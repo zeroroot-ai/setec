@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +18,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	setecLimits "github.com/zeroroot-ai/setec/internal/limits"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 // The launcher Pod (docs/design/runtime.md). One setec container starts a
@@ -104,6 +106,22 @@ var LauncherMemoryOverhead = resource.MustParse("256Mi")
 
 // IdentitySecretName is the name of the identity Secret of a Sandbox.
 func IdentitySecretName(sandbox string) string { return sandbox + "-identity" }
+
+// The files of a Sandbox (docs/design/files.md). The operator keeps the
+// content of spec.files in the Secret <name>-files, and only the launcher
+// container mounts it. The launcher copies each file into the machine before
+// the workload starts.
+const (
+	launcherFilesVolume    = "files"
+	launcherFilesMountPath = "/etc/setec/files"
+)
+
+// FilesSecretName is the name of the files Secret of a Sandbox.
+func FilesSecretName(sandbox string) string { return sandbox + "-files" }
+
+// FilesSecretKey is the key in the files Secret of the file at index i of
+// spec.files.
+func FilesSecretKey(i int) string { return "f" + strconv.Itoa(i) }
 
 const (
 
@@ -230,6 +248,15 @@ type launcherSpec struct {
 	WorkDir         string                `json:"workDir"`
 	Source          launcherSource        `json:"source"`
 	Workload        *launcherProcess      `json:"workload,omitempty"`
+	Files           []launcherFile        `json:"files,omitempty"`
+}
+
+// launcherFile is one file for the machine: the path in the machine, the
+// file in the mounted Secret that holds its content, and its mode.
+type launcherFile struct {
+	Path   string `json:"path"`
+	Source string `json:"source"`
+	Mode   uint32 `json:"mode"`
 }
 
 type launcherSource struct {
@@ -379,6 +406,18 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 			Name: launcherIdentityVolume, MountPath: launcherIdentityMountPath, ReadOnly: true,
 		})
 	}
+	if len(spec.Files) > 0 {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: launcherFilesVolume,
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: FilesSecretName(sb.Name), DefaultMode: new(int32(0o400)),
+			},
+		})
+		c := &pod.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name: launcherFilesVolume, MountPath: launcherFilesMountPath, ReadOnly: true,
+		})
+	}
 	if sb.Spec.IsSession() {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: WorkspaceVolumeName,
@@ -476,6 +515,12 @@ func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work res
 	// none. A boot and the load of a base start the workload of the Sandbox.
 	if !opts.Restore && !opts.Base {
 		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
+		for i, f := range sb.Spec.Files {
+			spec.Files = append(spec.Files, launcherFile{
+				Path: sandboxfiles.MachinePath(f.Path), Source: launcherFilesMountPath + "/" + FilesSecretKey(i),
+				Mode: sandboxfiles.ModeOf(f),
+			})
+		}
 		for _, e := range sb.Spec.Env {
 			if e.ValueFrom == nil {
 				spec.Workload.Env = append(spec.Workload.Env, e.Name+"="+e.Value)

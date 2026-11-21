@@ -716,3 +716,64 @@ func TestLaunch_ReportsTheRuntimeOfTheBoundClass(t *testing.T) {
 		t.Fatalf("runtime of an unresolved class = %q, want empty", resp.GetRuntime())
 	}
 }
+
+// TestLaunch_FilesBecomeSpecFiles proves that the files of a launch request
+// reach the Sandbox spec with their content and their mode, and that a zero
+// mode stays unset so the default mode applies.
+func TestLaunch_FilesBecomeSpecFiles(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+	s := &Service{Client: c, AuthDisabled: true, DefaultNamespace: "team-a"}
+	resp, err := s.Launch(context.Background(), &setecv1grpc.LaunchRequest{
+		Image: "alpine:3.19", Command: []string{"sh"},
+		Files: []*setecv1grpc.SandboxFile{
+			{Path: "skill/scripts/run.sh", Content: []byte("#!/bin/sh\n"), Mode: 0o555},
+			{Path: "skill/SKILL.md", Content: []byte("# skill\n")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch(): %v", err)
+	}
+	sb := &setecv1alpha1.Sandbox{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: resp.Namespace, Name: resp.Name}, sb); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.Spec.Files) != 2 || sb.Spec.Files[0].Mode == nil || *sb.Spec.Files[0].Mode != 0o555 ||
+		string(sb.Spec.Files[0].Content) != "#!/bin/sh\n" || sb.Spec.Files[1].Mode != nil {
+		t.Fatalf("files = %+v", sb.Spec.Files)
+	}
+}
+
+// TestLaunch_RefusesBadFiles proves that the frontend refuses a file that the
+// rules of the files refuse, and files on a launch from a snapshot.
+func TestLaunch_RefusesBadFiles(t *testing.T) {
+	t.Parallel()
+	s := &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: "team-a"}
+	big := make([]byte, 512<<10+1)
+	cases := []struct {
+		name  string
+		req   *setecv1grpc.LaunchRequest
+		files []*setecv1grpc.SandboxFile
+	}{
+		{"path leaves the directory", &setecv1grpc.LaunchRequest{Image: "x", Command: []string{"x"}},
+			[]*setecv1grpc.SandboxFile{{Path: "../x", Content: []byte("x")}}},
+		{"write bit", &setecv1grpc.LaunchRequest{Image: "x", Command: []string{"x"}},
+			[]*setecv1grpc.SandboxFile{{Path: "a", Content: []byte("x"), Mode: 0o644}}},
+		{"above the size bound", &setecv1grpc.LaunchRequest{Image: "x", Command: []string{"x"}},
+			[]*setecv1grpc.SandboxFile{{Path: "a", Content: big}}},
+		{"from a snapshot", &setecv1grpc.LaunchRequest{FromSnapshot: "snap"},
+			[]*setecv1grpc.SandboxFile{{Path: "a", Content: []byte("x")}}},
+		{"review snapshot", &setecv1grpc.LaunchRequest{ReviewSnapshot: "snap"},
+			[]*setecv1grpc.SandboxFile{{Path: "a", Content: []byte("x")}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.req.Files = tc.files
+			_, err := s.Launch(context.Background(), tc.req)
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("code = %s (%v), want InvalidArgument", got, err)
+			}
+		})
+	}
+}

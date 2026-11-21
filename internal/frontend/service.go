@@ -28,6 +28,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
 	"google.golang.org/grpc/codes"
@@ -151,6 +152,12 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		return nil, err
 	}
 
+	if req.GetFromSnapshot() != "" || req.GetReviewSnapshot() != "" {
+		if len(req.GetFiles()) > 0 {
+			return nil, status.Error(codes.InvalidArgument,
+				"files cannot be set with from_snapshot or review_snapshot: the workload of the snapshot already runs")
+		}
+	}
 	if req.GetFromSnapshot() != "" {
 		return s.launchFromSnapshot(ctx, ns, pair, req)
 	}
@@ -216,6 +223,11 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 	for k, v := range req.GetEnv() {
 		sb.Spec.Env = append(sb.Spec.Env, corev1.EnvVar{Name: k, Value: v})
 	}
+	files, err := filesFromProto(req.GetFiles())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	sb.Spec.Files = files
 
 	if err := s.Client.Create(ctx, sb); err != nil {
 		return nil, status.Errorf(grpcCodeFor(err),
@@ -899,6 +911,30 @@ func grpcCodeFor(err error) codes.Code {
 // into its Sandbox.spec.network.allow form. It does not judge the entry:
 // the CRD schema refuses a malformed one when the Sandbox is created, and
 // grpcCodeFor reports that refusal as InvalidArgument.
+// filesFromProto maps the files of a launch request and applies the rules of
+// the files of a Sandbox. A zero mode means the default mode.
+func filesFromProto(in []*setecv1grpc.SandboxFile) ([]setecv1alpha1.SandboxFile, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]setecv1alpha1.SandboxFile, 0, len(in))
+	for _, f := range in {
+		file := setecv1alpha1.SandboxFile{Path: f.GetPath(), Content: f.GetContent()}
+		if m := f.GetMode(); m != 0 {
+			if m > 0o7777 {
+				return nil, fmt.Errorf("files: the mode %o is not a permission mode", m)
+			}
+			mode := int32Of(m)
+			file.Mode = &mode
+		}
+		out = append(out, file)
+	}
+	if err := sandboxfiles.Validate(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func networkAllowFromProto(a *setecv1grpc.NetworkAllow) setecv1alpha1.NetworkAllow {
 	out := setecv1alpha1.NetworkAllow{
 		Host: a.GetHost(),

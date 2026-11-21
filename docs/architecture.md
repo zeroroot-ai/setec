@@ -36,5 +36,6 @@ This page describes how `setec` works on `main` today. Each statement names the 
 - [Isolation](design/isolation.md): the Pod, the network and the restore checks.
 - [Lifecycles](design/lifecycles.md): ephemeral and session Sandboxes, suspend, idle eviction, the warm pool and exec.
 - [Storage](design/storage.md): the scratch volume, the session workspace and the snapshot store.
+- [Files](design/files.md): the files that a launch places in the machine before the workload starts.
 - [Runtime](design/runtime.md): the launcher runtime, its parts and the node preparation.
 - [Threat model](design/threat-model.md): what the machine boundary protects, and who may call `setec`.

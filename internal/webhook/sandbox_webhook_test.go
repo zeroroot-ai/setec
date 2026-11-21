@@ -430,3 +430,49 @@ func TestClientNamespaceGetter_NilReceiver(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestValidateCreate_Files(t *testing.T) {
+	t.Parallel()
+	mk := func(mut func(*setecv1alpha1.Sandbox)) *setecv1alpha1.Sandbox {
+		sb := mkSandbox("", 1, "512Mi", "")
+		mut(sb)
+		return sb
+	}
+	m := int32(0o555)
+	tests := []struct {
+		name    string
+		sb      *setecv1alpha1.Sandbox
+		wantMsg string
+	}{
+		{name: "valid files", sb: mk(func(sb *setecv1alpha1.Sandbox) {
+			sb.Spec.Files = []setecv1alpha1.SandboxFile{{Path: "s/run.sh", Content: []byte("x"), Mode: &m}}
+		})},
+		{name: "a path that leaves the directory", sb: mk(func(sb *setecv1alpha1.Sandbox) {
+			sb.Spec.Files = []setecv1alpha1.SandboxFile{{Path: "../x", Content: []byte("x")}}
+		}), wantMsg: "spec.files[0]"},
+		{name: "a review sandbox", sb: mk(func(sb *setecv1alpha1.Sandbox) {
+			sb.Spec.Review = true
+			sb.Spec.Files = []setecv1alpha1.SandboxFile{{Path: "a", Content: []byte("x")}}
+		}), wantMsg: "review"},
+		{name: "a restore", sb: mk(func(sb *setecv1alpha1.Sandbox) {
+			sb.Spec.SnapshotRef = &setecv1alpha1.SandboxSnapshotRef{Name: "snap"}
+			sb.Spec.Files = []setecv1alpha1.SandboxFile{{Path: "a", Content: []byte("x")}}
+		}), wantMsg: "restores"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			errs := structuralErrors(tc.sb)
+			joined := ""
+			for _, e := range errs {
+				joined += e.Error() + "\n"
+			}
+			switch {
+			case tc.wantMsg == "" && len(errs) != 0:
+				t.Fatalf("structuralErrors = %v", errs)
+			case tc.wantMsg != "" && !strings.Contains(joined, tc.wantMsg):
+				t.Fatalf("structuralErrors = %q, want %q", joined, tc.wantMsg)
+			}
+		})
+	}
+}

@@ -17,6 +17,7 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 - [Isolation](./design/isolation.md) &mdash; the Pod, the network, the namespace, and the checks on a restored Sandbox.
 - [Lifecycles](./design/lifecycles.md) &mdash; ephemeral and session Sandboxes, idle eviction, suspend, limits, and the warm pool.
 - [Storage](./design/storage.md) &mdash; the scratch volume, the session workspace, the snapshot store, and the encryption rule of each.
+- [Files](./design/files.md) &mdash; the files that a launch places in the machine before the workload starts, their bounds, and their path into the machine.
 - [Runtime](./design/runtime.md) &mdash; the launcher runtime, its parts, and the node preparation.
 - [Threat model](./design/threat-model.md) &mdash; what the machine boundary protects, and who may call `setec`.
 

@@ -224,6 +224,22 @@ message LaunchRequest {
   // the sandbox; the loaded machine already runs its workload. A session
   // lifecycle is refused. It cannot be combined with review_snapshot.
   string from_snapshot = 10;
+  // files are placed in the machine, read-only, below /setec/files before
+  // the workload starts. The total content is at most 512 KiB. A review
+  // sandbox and a launch with from_snapshot refuse files, because the
+  // workload of those already runs.
+  repeated SandboxFile files = 11;
+}
+
+// SandboxFile is one file that Launch places in the machine of the sandbox.
+// It mirrors Sandbox.spec.files.
+message SandboxFile {
+  // path is relative to /setec/files. It is clean and has no ".." element.
+  string path = 1;
+  bytes content = 2;
+  // mode is the permission bits. It has no write, setuid or setgid bit, so
+  // it is at most 0555. Zero means 0444.
+  uint32 mode = 3;
 }
 
 // LaunchResponse identifies the Sandbox created for the caller.

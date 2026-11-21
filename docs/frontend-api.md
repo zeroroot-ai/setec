@@ -554,3 +554,16 @@ enforces per-tenant request rate limits.
   mechanism.
 - SPIFFE mode covers the frontend's server surface only. The node-agent
   and the outbound dialers remain file-based.
+
+## Place files in the sandbox (`files`)
+
+`Launch` takes a list `files`. Each entry has `path`, `content` and `mode`.
+The operator places each file in the machine, read-only, below `/setec/files`
+before the workload starts. See [Files](design/files.md).
+
+- `path` is relative to `/setec/files`. It is clean and has no `..` element.
+- `mode` is at most `0555`. Zero means `0444`.
+- The total content is at most 512 KiB. The number of files has no bound.
+- `files` and `from_snapshot` are not combined. `files` and `review_snapshot`
+  are not combined. The workload of a snapshot already runs.
+- A launch that breaks a rule gets `INVALID_ARGUMENT`.

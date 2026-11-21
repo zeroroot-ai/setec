@@ -175,6 +175,35 @@ func TestServer_CopyInAndOut(t *testing.T) {
 	}
 }
 
+// TestServer_CopyInMakesTheDirectoriesAndSetsTheModeExactly proves that the
+// files of a Sandbox (docs/design/files.md) land below directories that the
+// agent makes, with the mode that the launcher named, whatever the umask.
+func TestServer_CopyInMakesTheDirectoriesAndSetsTheModeExactly(t *testing.T) {
+	h := startServer(t, nil)
+	old := unix.Umask(0o077)
+	defer unix.Umask(old)
+	root := t.TempDir()
+	path := filepath.Join(root, "files", "skill", "scripts", "run.sh")
+	data := []byte("#!/bin/sh\necho hi\n")
+	if _, _, resp := h.call(t, Request{Op: OpCopyIn, Path: path, Size: int64(len(data)), Mode: 0o555}, data); !resp.OK {
+		t.Fatalf("copy-in: %s", resp.Error)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o555 {
+		t.Fatalf("file mode = %o, want 555", fi.Mode().Perm())
+	}
+	di, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if di.Mode().Perm()&0o055 != 0o055 || di.Mode().Perm()&0o022 != 0 {
+		t.Fatalf("directory mode = %o, want readable and enterable by others, writable by none", di.Mode().Perm())
+	}
+}
+
 // TestServer_RefusesAPeerThatIsNotTheLauncher proves the peer check: the
 // command allows vsock CID 2 only, so a process in the machine and the
 // workload network cannot reach the agent.

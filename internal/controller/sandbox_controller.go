@@ -1498,6 +1498,9 @@ func (r *SandboxReconciler) createPod(
 	if ierr != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the identity of the Sandbox: %w", ierr))
 	}
+	if ferr := r.ensureFiles(ctx, sb); ferr != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the files of the Sandbox: %w", ferr))
+	}
 	pod, err := podspec.BuildLauncher(sb, podspec.LauncherOptions{
 		Identity: identity,
 		// The scratch size resolves with the class: the Sandbox's own
