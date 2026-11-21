@@ -23,7 +23,10 @@ func TestSpecValidate_Files(t *testing.T) {
 		{name: "outside the directory", files: []File{{Path: "/etc/passwd", Source: "/etc/setec/files/f0", Mode: 0o444}}, wantErr: "below /setec/files"},
 		{name: "dot dot", files: []File{{Path: "/setec/files/../etc/x", Source: "/etc/setec/files/f0", Mode: 0o444}}, wantErr: "below /setec/files"},
 		{name: "the directory itself", files: []File{{Path: "/setec/files", Source: "/etc/setec/files/f0", Mode: 0o444}}, wantErr: "below /setec/files"},
-		{name: "relative source", files: []File{{Path: "/setec/files/a", Source: "f0", Mode: 0o444}}, wantErr: "absolute"},
+		{name: "relative source", files: []File{{Path: "/setec/files/a", Source: "f0", Mode: 0o444}}, wantErr: "key of the files Secret"},
+		{name: "source outside the Secret", files: []File{{Path: "/setec/files/a", Source: "/etc/shadow", Mode: 0o444}}, wantErr: "key of the files Secret"},
+		{name: "source with a dot dot", files: []File{{Path: "/setec/files/a", Source: "/etc/setec/files/../shadow", Mode: 0o444}}, wantErr: "key of the files Secret"},
+		{name: "source that is the manifest", files: []File{{Path: "/setec/files/a", Source: "/etc/setec/files/manifest.json", Mode: 0o444}}, wantErr: "key of the files Secret"},
 		{name: "write bit", files: []File{{Path: "/setec/files/a", Source: "/etc/setec/files/f0", Mode: 0o644}}, wantErr: "write"},
 		{name: "no workload", files: []File{{Path: "/setec/files/a", Source: "/etc/setec/files/f0", Mode: 0o444}}, noLoad: true, wantErr: "workload"},
 	}

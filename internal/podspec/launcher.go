@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -113,38 +112,11 @@ func IdentitySecretName(sandbox string) string { return sandbox + "-identity" }
 // the workload starts.
 const (
 	launcherFilesVolume    = "files"
-	launcherFilesMountPath = "/etc/setec/files"
+	launcherFilesMountPath = sandboxfiles.MountDir
 )
 
 // FilesSecretName is the name of the files Secret of a Sandbox.
 func FilesSecretName(sandbox string) string { return sandbox + "-files" }
-
-// FilesManifestKey is the key in the files Secret of the manifest: the JSON
-// list of the path in the machine, the source file and the mode of each
-// file. The launcher reads it from the mounted Secret, so the spec in the
-// environment of the launcher stays the same size for any number of files.
-const FilesManifestKey = "manifest.json"
-
-// FilesManifest returns the manifest of the files of sb, for the files
-// Secret.
-func FilesManifest(sb *setecv1alpha1.Sandbox) ([]byte, error) {
-	list := make([]launcherFile, 0, len(sb.Spec.Files))
-	for i, f := range sb.Spec.Files {
-		list = append(list, launcherFile{
-			Path: sandboxfiles.MachinePath(f.Path), Source: launcherFilesMountPath + "/" + FilesSecretKey(i),
-			Mode: sandboxfiles.ModeOf(f),
-		})
-	}
-	raw, err := json.Marshal(list)
-	if err != nil {
-		return nil, errwrap.Wrap(err, "json.Marshal")
-	}
-	return raw, nil
-}
-
-// FilesSecretKey is the key in the files Secret of the file at index i of
-// spec.files.
-func FilesSecretKey(i int) string { return "f" + strconv.Itoa(i) }
 
 const (
 
@@ -272,14 +244,6 @@ type launcherSpec struct {
 	Source          launcherSource        `json:"source"`
 	Workload        *launcherProcess      `json:"workload,omitempty"`
 	FilesManifest   string                `json:"filesManifest,omitempty"`
-}
-
-// launcherFile is one file for the machine: the path in the machine, the
-// file in the mounted Secret that holds its content, and its mode.
-type launcherFile struct {
-	Path   string `json:"path"`
-	Source string `json:"source"`
-	Mode   uint32 `json:"mode"`
 }
 
 type launcherSource struct {
@@ -539,7 +503,7 @@ func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work res
 	if !opts.Restore && !opts.Base {
 		spec.Workload = &launcherProcess{Argv: append([]string(nil), sb.Spec.Command...)}
 		if len(sb.Spec.Files) > 0 {
-			spec.FilesManifest = launcherFilesMountPath + "/" + FilesManifestKey
+			spec.FilesManifest = launcherFilesMountPath + "/" + sandboxfiles.ManifestKey
 		}
 		for _, e := range sb.Spec.Env {
 			if e.ValueFrom == nil {

@@ -16,6 +16,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/launcher"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 func launcherOrFatal(t *testing.T) *corev1.Pod {
@@ -553,17 +554,17 @@ func TestBuildLauncher_MountsTheFilesSecretForTheLauncherOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the launcher refuses the spec: %v", err)
 	}
-	if s.FilesManifest != launcherFilesMountPath+"/"+FilesManifestKey {
+	if s.FilesManifest != launcherFilesMountPath+"/"+sandboxfiles.ManifestKey {
 		t.Fatalf("manifest path = %q", s.FilesManifest)
 	}
 	// The mounted Secret holds the manifest. The test writes it where the
 	// spec names it relative to a temporary directory, as the kubelet would.
-	raw, err := FilesManifest(sb)
+	data, err := sandboxfiles.SecretData(sb.Spec.Files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.FilesManifest = filepath.Join(t.TempDir(), FilesManifestKey)
-	if err := os.WriteFile(s.FilesManifest, raw, 0o600); err != nil {
+	s.FilesManifest = filepath.Join(t.TempDir(), sandboxfiles.ManifestKey)
+	if err := os.WriteFile(s.FilesManifest, data[sandboxfiles.ManifestKey], 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.LoadFiles(); err != nil {

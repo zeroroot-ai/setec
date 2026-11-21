@@ -15,6 +15,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 // ensureFiles keeps the content of spec.files of a Sandbox in the Secret
@@ -27,14 +28,9 @@ func (r *SandboxReconciler) ensureFiles(ctx context.Context, sb *setecv1alpha1.S
 	if len(sb.Spec.Files) == 0 {
 		return nil
 	}
-	manifest, err := podspec.FilesManifest(sb)
+	data, err := sandboxfiles.SecretData(sb.Spec.Files)
 	if err != nil {
-		return fmt.Errorf("make the files manifest: %w", err)
-	}
-	data := make(map[string][]byte, len(sb.Spec.Files)+1)
-	data[podspec.FilesManifestKey] = manifest
-	for i, f := range sb.Spec.Files {
-		data[podspec.FilesSecretKey(i)] = f.Content
+		return fmt.Errorf("make the files Secret data: %w", err)
 	}
 	key := types.NamespacedName{Namespace: sb.Namespace, Name: podspec.FilesSecretName(sb.Name)}
 	sec := &corev1.Secret{}

@@ -225,8 +225,8 @@ message LaunchRequest {
   // lifecycle is refused. It cannot be combined with review_snapshot.
   string from_snapshot = 10;
   // files are placed in the machine, read-only, below /setec/files before
-  // the workload starts. The total size is at most 512 KiB: the content, the
-  // paths and 64 bytes for each file. A review
+  // the workload starts. The data of the files Secret is at most 512 KiB:
+  // the content, the keys and the manifest of the paths. A review
   // sandbox and a launch with from_snapshot refuse files, because the
   // workload of those already runs.
   repeated SandboxFile files = 11;

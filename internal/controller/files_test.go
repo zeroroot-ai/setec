@@ -18,6 +18,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/podspec"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 // TestEnsureFiles_KeepsTheContentInASecretTheSandboxOwns proves that the
@@ -59,8 +60,8 @@ func TestEnsureFiles_KeepsTheContentInASecretTheSandboxOwns(t *testing.T) {
 	if !metav1.IsControlledBy(sec, a) {
 		t.Fatalf("the files Secret is not owned by the Sandbox: %+v", sec.OwnerReferences)
 	}
-	if len(sec.Data) != 3 || !bytes.Contains(sec.Data[podspec.FilesManifestKey], []byte("/setec/files/s/run.sh")) || !bytes.Equal(sec.Data[podspec.FilesSecretKey(0)], []byte("#!/bin/sh\n")) ||
-		!bytes.Equal(sec.Data[podspec.FilesSecretKey(1)], []byte("payload")) {
+	if len(sec.Data) != 3 || !bytes.Contains(sec.Data[sandboxfiles.ManifestKey], []byte("/setec/files/s/run.sh")) || !bytes.Equal(sec.Data[sandboxfiles.SecretKey(0)], []byte("#!/bin/sh\n")) ||
+		!bytes.Equal(sec.Data[sandboxfiles.SecretKey(1)], []byte("payload")) {
 		t.Fatalf("secret data = %v", sec.Data)
 	}
 

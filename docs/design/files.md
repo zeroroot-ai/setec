@@ -30,9 +30,10 @@ read-only for the workload.
 - The guest agent makes the directories of a path with the owner root and the
   mode `0755`. The workload user can read and enter them. It cannot write to
   them or to the files. A workload that runs as root can still change them.
-- The total size is at most 512 KiB, because a Secret holds at most 1 MiB. The
-  size of a file is its content, its path and 64 bytes. The number of files has
-  no bound of its own.
+- The data of the files Secret is at most 512 KiB, because a Secret holds at
+  most 1 MiB. The check measures the data that the operator writes: each
+  content, each key and the manifest, with the escapes of its JSON. The number of
+  files has no bound of its own.
 - `spec.files` does not change after the create. The webhook refuses a change.
 - The write never follows a symbolic link. A link in the image, in a
   directory of the path or as the file, makes the launch fail.

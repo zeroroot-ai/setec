@@ -7,10 +7,13 @@
 package sandboxfiles
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -20,15 +23,64 @@ import (
 // path below it.
 const Dir = "/setec/files"
 
-// MaxTotalBytes is the bound on the total size of the files of one Sandbox.
-// The size of a file is its content, its path and PerFileOverhead. The
-// operator keeps the content and a manifest of the paths in a Secret, and a
-// Secret holds at most 1 MiB. The number of files has no bound of its own.
-const MaxTotalBytes = 512 << 10
+// MaxSecretBytes is the bound on the data of the files Secret of one
+// Sandbox: the keys and the values, with the manifest as the operator writes
+// it. A Secret holds at most 1 MiB. The number of files has no bound of its
+// own.
+const MaxSecretBytes = 512 << 10
 
-// PerFileOverhead is the size that each file adds to the total for its entry
-// in the manifest and its key in the Secret.
-const PerFileOverhead = 64
+// MountDir is where the launcher container mounts the files Secret.
+const MountDir = "/etc/setec/files"
+
+// ManifestKey is the key in the files Secret of the manifest.
+const ManifestKey = "manifest.json"
+
+// SecretKey is the key in the files Secret of the content of the file at
+// index i of spec.files.
+func SecretKey(i int) string { return "f" + strconv.Itoa(i) }
+
+// sourcePattern is the form of the source of a manifest entry.
+var sourcePattern = regexp.MustCompile(`^` + regexp.QuoteMeta(MountDir) + `/f[0-9]+$`)
+
+// ValidSource reports whether src is the path of a content key of the files
+// Secret, the only form that the operator writes.
+func ValidSource(src string) bool { return sourcePattern.MatchString(src) }
+
+// Entry is one entry of the manifest: the path in the machine, the file in
+// the mounted Secret that holds the content, and the mode.
+type Entry struct {
+	Path   string `json:"path"`
+	Source string `json:"source"`
+	Mode   uint32 `json:"mode"`
+}
+
+// SecretData returns the data of the files Secret of files, exactly as the
+// operator writes it: the manifest and the content of each file. The
+// webhook and the frontend measure this value, so the bound cannot differ
+// from the write.
+func SecretData(files []setecv1alpha1.SandboxFile) (map[string][]byte, error) {
+	list := make([]Entry, 0, len(files))
+	data := make(map[string][]byte, len(files)+1)
+	for i, f := range files {
+		list = append(list, Entry{Path: MachinePath(f.Path), Source: MountDir + "/" + SecretKey(i), Mode: ModeOf(f)})
+		data[SecretKey(i)] = f.Content
+	}
+	manifest, err := json.Marshal(list)
+	if err != nil {
+		return nil, fmt.Errorf("marshal the files manifest: %w", err)
+	}
+	data[ManifestKey] = manifest
+	return data, nil
+}
+
+// SecretSize is the size of the data of a Secret: each key and each value.
+func SecretSize(data map[string][]byte) int {
+	n := 0
+	for k, v := range data {
+		n += len(k) + len(v)
+	}
+	return n
+}
 
 // DefaultMode is the mode of a file that names none.
 const DefaultMode = 0o444
@@ -71,11 +123,10 @@ func ValidatePath(rel string) error {
 
 // Validate reports the first problem of files: a bad path, a path that
 // appears twice or that is the directory of another path, a mode that
-// grants a write bit, a setuid bit or a setgid bit, or a total content
-// above MaxTotalBytes.
+// grants a write bit, a setuid bit or a setgid bit, or a files Secret
+// above MaxSecretBytes. The Secret is measured as the operator writes it.
 func Validate(files []setecv1alpha1.SandboxFile) error {
 	seen := make(map[string]struct{}, len(files))
-	total := 0
 	for i, f := range files {
 		if err := ValidatePath(f.Path); err != nil {
 			return fmt.Errorf("files[%d]: %w", i, err)
@@ -87,10 +138,6 @@ func Validate(files []setecv1alpha1.SandboxFile) error {
 		if f.Mode != nil && (*f.Mode < 0 || *f.Mode&^allowedModeBits != 0) {
 			return fmt.Errorf("files[%d]: the mode %04o must grant no write, setuid or setgid bit (at most 0555)", i, *f.Mode)
 		}
-		total += len(f.Content) + len(f.Path) + PerFileOverhead
-		if total > MaxTotalBytes {
-			return fmt.Errorf("files: the total size of the content, the paths and %d bytes for each file is above %d bytes", PerFileOverhead, MaxTotalBytes)
-		}
 	}
 	for p := range seen {
 		for dir := path.Dir(p); dir != "."; dir = path.Dir(dir) {
@@ -98,6 +145,13 @@ func Validate(files []setecv1alpha1.SandboxFile) error {
 				return fmt.Errorf("files: the path %q is a file and the directory of %q", dir, p)
 			}
 		}
+	}
+	data, err := SecretData(files)
+	if err != nil {
+		return err
+	}
+	if n := SecretSize(data); n > MaxSecretBytes {
+		return fmt.Errorf("files: the Secret of the files would hold %d bytes, above %d", n, MaxSecretBytes)
 	}
 	return nil
 }

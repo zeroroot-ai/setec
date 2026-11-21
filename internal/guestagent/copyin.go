@@ -56,7 +56,7 @@ func copyInto(root, abs string, mode os.FileMode, r io.Reader, size int64) error
 	}
 	defer func() { _ = unix.Close(dirFD) }()
 	fd, err := unix.Openat2(dirFD, name, &unix.OpenHow{
-		Flags:   unix.O_WRONLY | unix.O_CREAT | unix.O_TRUNC | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		Flags:   unix.O_WRONLY | unix.O_CREAT | unix.O_TRUNC | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK,
 		Mode:    uint64(mode.Perm()),
 		Resolve: symlinkFree,
 	})
@@ -64,6 +64,13 @@ func copyInto(root, abs string, mode os.FileMode, r io.Reader, size int64) error
 		return errwrap.Wrap(err, "unix.Openat2")
 	}
 	f := os.NewFile(uintptr(fd), name)
+	// O_NONBLOCK keeps the open of a FIFO from waiting for a reader. Only a
+	// regular file takes the content.
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = f.Close()
+		return fmt.Errorf("copy-in: %q is not a regular file", abs)
+	}
 	n, err := io.CopyN(f, r, size)
 	if err == nil {
 		// The umask of the agent must not change the mode that the launcher asked for.

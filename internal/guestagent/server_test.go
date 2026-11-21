@@ -302,7 +302,7 @@ func TestCopyInto_RefusesASymbolicLinkInThePath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for name, target := range map[string]string{"linkdir": outside, "abslink": outside} {
+	for name, target := range map[string]string{"linkdir": outside, "abslink": outside, "rellink": "../outside"} {
 		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
 			t.Fatal(err)
 		}
@@ -313,6 +313,7 @@ func TestCopyInto_RefusesASymbolicLinkInThePath(t *testing.T) {
 	cases := []struct{ name, path string }{
 		{"a link as a directory", "/linkdir/sub/f"},
 		{"an absolute link as a directory", "/abslink/f"},
+		{"a relative link as a directory", "/rellink/f"},
 		{"a link as the file", "/real/linkfile"},
 	}
 	for _, tc := range cases {
@@ -333,5 +334,33 @@ func TestCopyInto_RefusesASymbolicLinkInThePath(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(root, "real", "ok"))
 	if err != nil || string(got) != "payload" {
 		t.Fatalf("content = %q, %v", got, err)
+	}
+}
+
+// TestCopyInto_RefusesATargetThatIsNotARegularFile proves that a FIFO in the
+// image neither blocks the write nor takes it, with a reader and without.
+func TestCopyInto_RefusesATargetThatIsNotARegularFile(t *testing.T) {
+	root := t.TempDir()
+	fifo := filepath.Join(root, "pipe")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- copyInto(root, "/pipe", 0o444, strings.NewReader("payload"), 7) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("copy-in wrote to a FIFO with no reader")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("copy-in blocked on a FIFO")
+	}
+	reader, err := os.OpenFile(fifo, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if err := copyInto(root, "/pipe", 0o444, strings.NewReader("payload"), 7); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("copy-in to a FIFO with a reader = %v", err)
 	}
 }

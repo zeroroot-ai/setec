@@ -40,13 +40,10 @@ func TestValidate(t *testing.T) {
 		{name: "write bit", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o644)))}, wantErr: "write"},
 		{name: "setuid bit", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o4555)))}, wantErr: "setuid"},
 		{name: "negative mode", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(-1)))}, wantErr: "mode"},
-		{name: "total at the bound", files: []setecv1alpha1.SandboxFile{
-			file("a", strings.Repeat("x", MaxTotalBytes-len("a")-PerFileOverhead), nil),
-		}},
-		{name: "total above the bound", files: []setecv1alpha1.SandboxFile{
-			file("a", strings.Repeat("x", MaxTotalBytes-len("a")-PerFileOverhead+1), nil),
-		}, wantErr: "total"},
-		{name: "many long paths above the bound", files: manyFiles(2000, 200), wantErr: "total"},
+		{name: "Secret at the bound", files: []setecv1alpha1.SandboxFile{file("a", strings.Repeat("x", contentAtBound()), nil)}},
+		{name: "Secret above the bound", files: []setecv1alpha1.SandboxFile{file("a", strings.Repeat("x", contentAtBound()+1), nil)}, wantErr: "Secret"},
+		{name: "many long paths above the bound", files: manyFiles(2000, 200), wantErr: "Secret"},
+		{name: "escaped characters above the bound", files: manyEscaped(2000, 100), wantErr: "Secret"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,6 +57,27 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// contentAtBound is the content length of one file named "a" that makes the
+// Secret exactly MaxSecretBytes.
+func contentAtBound() int {
+	data, err := SecretData([]setecv1alpha1.SandboxFile{file("a", "", nil)})
+	if err != nil {
+		panic(err)
+	}
+	return MaxSecretBytes - SecretSize(data)
+}
+
+// manyEscaped makes n files with paths of pathLen characters that JSON writes
+// as six bytes each, such as "<" and U+2028.
+func manyEscaped(n, pathLen int) []setecv1alpha1.SandboxFile {
+	files := make([]setecv1alpha1.SandboxFile, 0, n)
+	pad := strings.Repeat("<", pathLen-4-len(strconv.Itoa(n)))
+	for i := range n {
+		files = append(files, file(pad+"\u2028>&/"+strconv.Itoa(i), "", nil))
+	}
+	return files
 }
 
 func manyFiles(n, pathLen int) []setecv1alpha1.SandboxFile {
@@ -92,5 +110,37 @@ func TestModeOfAndMachinePath(t *testing.T) {
 	}
 	if got := MachinePath("s/run.sh"); got != "/setec/files/s/run.sh" {
 		t.Fatalf("path = %s", got)
+	}
+}
+
+// TestSecretOfAcceptedFilesFitsInASecret proves that the bound is measured on
+// the data that the operator writes. For paths that JSON escapes, it finds the
+// largest request that Validate accepts and checks that its Secret holds less
+// than 1 MiB, and that the next size up is refused.
+func TestSecretOfAcceptedFilesFitsInASecret(t *testing.T) {
+	t.Parallel()
+	for name, char := range map[string]string{"ascii": "a", "angle": "<", "ampersand": "&", "line separator": "\u2028"} {
+		accepted := 0
+		for pathLen := 1; pathLen <= 512; pathLen++ {
+			files := make([]setecv1alpha1.SandboxFile, 0, 1500)
+			for i := range 1500 {
+				p := strconv.Itoa(i)
+				files = append(files, file(strings.Repeat(char, pathLen)+"/"+p, "", nil))
+			}
+			if err := Validate(files); err != nil {
+				break
+			}
+			accepted = pathLen
+			data, err := SecretData(files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := SecretSize(data); n > 1<<20 {
+				t.Fatalf("%s: accepted files make a Secret of %d bytes", name, n)
+			}
+		}
+		if accepted == 0 || accepted == 512 {
+			t.Fatalf("%s: the bound never applied, accepted = %d", name, accepted)
+		}
 	}
 }

@@ -563,7 +563,7 @@ before the workload starts. See [Files](design/files.md).
 
 - `path` is relative to `/setec/files`. It is clean and has no `..` element.
 - `mode` is at most `0555`. Zero means `0444`.
-- The total size is at most 512 KiB: the content, the paths and 64 bytes for each file. The number of files has no bound of its own.
+- The data of the files Secret is at most 512 KiB: the content, the keys and the manifest of the paths. The number of files has no bound of its own.
 - `files` and `from_snapshot` are not combined. `files` and `review_snapshot`
   are not combined. The workload of a snapshot already runs.
 - A launch that breaks a rule gets `INVALID_ARGUMENT`.

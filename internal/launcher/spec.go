@@ -233,8 +233,8 @@ func (s *Spec) validateFiles() error {
 		if !strings.HasPrefix(f.Path, sandboxfiles.Dir+"/") || filepath.Clean(f.Path) != f.Path {
 			return fmt.Errorf("launcher: files[%d]: the path %q must be a clean path below %s", i, f.Path, sandboxfiles.Dir)
 		}
-		if !filepath.IsAbs(f.Source) {
-			return fmt.Errorf("launcher: files[%d]: the source must be an absolute path", i)
+		if !sandboxfiles.ValidSource(f.Source) {
+			return fmt.Errorf("launcher: files[%d]: the source %q must be a key of the files Secret below %s", i, f.Source, sandboxfiles.MountDir)
 		}
 		if f.Mode&^0o555 != 0 {
 			return fmt.Errorf("launcher: files[%d]: the mode %04o grants a write, setuid or setgid bit", i, f.Mode)

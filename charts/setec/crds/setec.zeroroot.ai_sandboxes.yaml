@@ -272,8 +272,8 @@ spec:
               files:
                 description: |-
                   Files are placed in the machine, read-only, below /setec/files before
-                  the workload starts. The total size is at most 512 KiB: the content, the
-                  paths and 64 bytes for each file. The files do not change after the create.
+                  the workload starts. The data of the files Secret is at most 512 KiB:
+                  the content, the keys and the manifest of the paths. The files do not change after the create.
                   The operator keeps the content in a Secret that the Sandbox owns, and the
                   launcher copies it into the machine over the control channel of the
                   guest agent, never over the network of the Sandbox. Files are refused
