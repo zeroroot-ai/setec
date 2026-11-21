@@ -43,6 +43,8 @@ type Guest struct {
 	TakenAtFile string
 	// ResolvConf is the resolv.conf of the Pod that the guest takes.
 	ResolvConf string
+	// Files are copied into the machine before the workload starts.
+	Files []File
 }
 
 // dial opens a connection to guest port through the Firecracker socket.
@@ -158,9 +160,55 @@ func (g *Guest) AfterStart(workload *guestagent.Process) func(context.Context, P
 		if workload == nil {
 			return nil
 		}
+		if err := g.placeFiles(rctx); err != nil {
+			return err
+		}
 		_, err := g.Call(rctx, guestagent.Request{Op: guestagent.OpStart, Process: workload})
 		return err
 	}
+}
+
+// placeFiles copies each file of g into the machine, over the control
+// channel of the guest agent. It runs before the workload starts, so the
+// workload sees every file from its first instruction. The files leave the
+// launcher through the vsock device, never through the network of the Pod.
+func (g *Guest) placeFiles(ctx context.Context) error {
+	for _, f := range g.Files {
+		data, err := os.ReadFile(f.Source)
+		if err != nil {
+			return fmt.Errorf("read the content of %s: %w", f.Path, err)
+		}
+		if err := g.CopyIn(ctx, f.Path, f.Mode, data); err != nil {
+			return fmt.Errorf("place %s in the machine: %w", f.Path, err)
+		}
+	}
+	return nil
+}
+
+// CopyIn writes data to path in the machine with mode, through the guest
+// agent.
+func (g *Guest) CopyIn(ctx context.Context, path string, mode uint32, data []byte) error {
+	c, r, err := g.dial(ctx, guestagent.ControlPort)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	if err := guestagent.WriteLine(c, guestagent.Request{
+		Op: guestagent.OpCopyIn, Path: path, Size: int64(len(data)), Mode: mode,
+	}); err != nil {
+		return err
+	}
+	if _, err := c.Write(data); err != nil {
+		return errwrap.Wrap(err, "net.Conn.Write")
+	}
+	var resp guestagent.Response
+	if err := guestagent.ReadLine(r, &resp); err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("guest agent %s: %s", guestagent.OpCopyIn, resp.Error)
+	}
+	return nil
 }
 
 // uniquify gives a loaded guest a new identity (check 2 of docs/design/isolation.md).
@@ -204,7 +252,7 @@ func (g *Guest) tellResumed(ctx context.Context) error {
 // the Pod.
 func NewGuest(s *Spec) *Guest {
 	host, _ := os.Hostname()
-	g := &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf", Hostname: host}
+	g := &Guest{UDS: filepath.Join(s.WorkDir, VsockSocket), ResolvConf: "/etc/resolv.conf", Hostname: host, Files: s.Files}
 	if s.Source.Snapshot != nil {
 		g.TakenAtFile = s.Source.Snapshot.TakenAt
 	}

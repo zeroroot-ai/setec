@@ -398,6 +398,28 @@ type Lifecycle struct {
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
+// SandboxFile is one file that the operator places in the machine of a
+// Sandbox before the workload starts (docs/design/files.md).
+type SandboxFile struct {
+	// Path is the place of the file below the directory /setec/files in the
+	// machine. It is relative, clean, and has no ".." element. The
+	// directories of the path are made with the owner root and the mode 0755.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	// +required
+	Path string `json:"path"`
+
+	// Content is the content of the file.
+	// +required
+	Content []byte `json:"content"`
+
+	// Mode is the permission bits of the file. It has no write bit, no
+	// setuid bit and no setgid bit, so the mode is at most 0555. Empty
+	// means 0444.
+	// +optional
+	Mode *int32 `json:"mode,omitempty"`
+}
+
 // SandboxSpec defines the desired state of a Sandbox.
 type SandboxSpec struct {
 	// SandboxClassName is the name of the cluster-scoped SandboxClass this
@@ -432,6 +454,18 @@ type SandboxSpec struct {
 	// Resources declares the CPU and memory budget for the microVM.
 	// +required
 	Resources Resources `json:"resources"`
+
+	// Files are placed in the machine, read-only, below /setec/files before
+	// the workload starts. The data of the files Secret is at most 512 KiB:
+	// the content, the keys and the manifest of the paths. The files do not change after the create.
+	// The operator keeps the content in a Secret that the Sandbox owns, and the
+	// launcher copies it into the machine over the control channel of the
+	// guest agent, never over the network of the Sandbox. Files are refused
+	// on a review Sandbox and on a Sandbox that restores a snapshot, because
+	// the workload of those already runs.
+	// +listType=atomic
+	// +optional
+	Files []SandboxFile `json:"files,omitempty"`
 
 	// Network describes the egress policy. Optional; when omitted the
 	// SandboxClass default applies, and when the class states no default

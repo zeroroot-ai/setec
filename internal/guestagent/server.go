@@ -230,26 +230,14 @@ func (s *Server) inRoot(p string) (string, error) {
 }
 
 func (s *Server) copyIn(r *bufio.Reader, req Request) error {
-	path, err := s.inRoot(req.Path)
-	if err != nil {
-		return err
+	if !filepath.IsAbs(req.Path) {
+		return fmt.Errorf("path %q is not absolute", req.Path)
 	}
 	mode := os.FileMode(req.Mode & 0o7777)
 	if mode == 0 {
 		mode = 0o644
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // a path the launcher names
-	if err != nil {
-		return errwrap.Wrap(err, "os.OpenFile")
-	}
-	n, err := io.CopyN(f, r, req.Size)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return fmt.Errorf("copy-in: wrote %d of %d bytes: %w", n, req.Size, err)
-	}
-	return nil
+	return copyInto(s.Sup.Root, filepath.Clean(req.Path), mode, r, req.Size)
 }
 
 func (s *Server) copyOut(c net.Conn, req Request) {

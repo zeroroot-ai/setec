@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,6 +24,7 @@ import (
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 	"github.com/zeroroot-ai/setec/internal/snapshot"
 	"github.com/zeroroot-ai/setec/internal/tenancy"
 
@@ -134,6 +136,9 @@ func (v *SandboxValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *s
 			"spec.lifecycle.mode is immutable: cannot change %q to %q; delete the Sandbox and create a new one",
 			oldMode, newMode)
 	}
+	if !equality.Semantic.DeepEqual(oldObj.Spec.Files, newObj.Spec.Files) {
+		return nil, errors.New("spec.files is immutable: delete the Sandbox and create a new one")
+	}
 	return v.validate(ctx, newObj)
 }
 
@@ -220,6 +225,23 @@ func structuralErrors(sb *setecv1alpha1.Sandbox) []error {
 		errs = append(errs, fmt.Errorf(
 			"spec.desiredState=Suspended requires spec.lifecycle.mode=session (effective mode is %q)",
 			sb.Spec.EffectiveLifecycleMode()))
+	}
+	return append(errs, fileErrors(sb)...)
+}
+
+// fileErrors are the problems of the files of sb (docs/design/files.md). A
+// review Sandbox and a Sandbox that restores a snapshot already run their
+// workload, so no file can arrive before it.
+func fileErrors(sb *setecv1alpha1.Sandbox) []error {
+	if len(sb.Spec.Files) == 0 {
+		return nil
+	}
+	var errs []error
+	if sb.Spec.Review || (sb.Spec.SnapshotRef != nil && sb.Spec.SnapshotRef.Name != "") {
+		errs = append(errs, errors.New("spec.files cannot be set on a review Sandbox or on a Sandbox that restores a snapshot"))
+	}
+	if err := sandboxfiles.Validate(sb.Spec.Files); err != nil {
+		errs = append(errs, fmt.Errorf("spec.%w", err))
 	}
 	return errs
 }

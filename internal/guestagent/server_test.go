@@ -175,6 +175,35 @@ func TestServer_CopyInAndOut(t *testing.T) {
 	}
 }
 
+// TestServer_CopyInMakesTheDirectoriesAndSetsTheModeExactly proves that the
+// files of a Sandbox (docs/design/files.md) land below directories that the
+// agent makes, with the mode that the launcher named, whatever the umask.
+func TestServer_CopyInMakesTheDirectoriesAndSetsTheModeExactly(t *testing.T) {
+	h := startServer(t, nil)
+	old := unix.Umask(0o077)
+	defer unix.Umask(old)
+	root := t.TempDir()
+	path := filepath.Join(root, "files", "skill", "scripts", "run.sh")
+	data := []byte("#!/bin/sh\necho hi\n")
+	if _, _, resp := h.call(t, Request{Op: OpCopyIn, Path: path, Size: int64(len(data)), Mode: 0o555}, data); !resp.OK {
+		t.Fatalf("copy-in: %s", resp.Error)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o555 {
+		t.Fatalf("file mode = %o, want 555", fi.Mode().Perm())
+	}
+	di, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if di.Mode().Perm()&0o055 != 0o055 || di.Mode().Perm()&0o022 != 0 {
+		t.Fatalf("directory mode = %o, want readable and enterable by others, writable by none", di.Mode().Perm())
+	}
+}
+
 // TestServer_RefusesAPeerThatIsNotTheLauncher proves the peer check: the
 // command allows vsock CID 2 only, so a process in the machine and the
 // workload network cannot reach the agent.
@@ -258,5 +287,80 @@ func TestLookupUser(t *testing.T) {
 		if (err != nil) != tc.wantErr || uid != tc.uid || gid != tc.gid || home != tc.home {
 			t.Errorf("lookupUser(%q) = %d %d %q %v", tc.user, uid, gid, home, err)
 		}
+	}
+}
+
+// TestCopyInto_RefusesASymbolicLinkInThePath proves that a link in the image
+// cannot send a write outside the root: a link as a directory, a link as the
+// file, and an absolute link all fail, and nothing lands outside the root.
+func TestCopyInto_RefusesASymbolicLinkInThePath(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{root, outside, filepath.Join(root, "real")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{"linkdir": outside, "abslink": outside, "rellink": "../outside"} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(outside, "victim"), filepath.Join(root, "real", "linkfile")); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, path string }{
+		{"a link as a directory", "/linkdir/sub/f"},
+		{"an absolute link as a directory", "/abslink/f"},
+		{"a relative link as a directory", "/rellink/f"},
+		{"a link as the file", "/real/linkfile"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := copyInto(root, tc.path, 0o444, strings.NewReader("payload"), 7)
+			if err == nil {
+				t.Fatal("copy-in followed a symbolic link")
+			}
+			entries, rerr := os.ReadDir(outside)
+			if rerr != nil || len(entries) != 0 {
+				t.Fatalf("the write left the root: %v, %v", entries, rerr)
+			}
+		})
+	}
+	if err := copyInto(root, "/real/ok", 0o444, strings.NewReader("payload"), 7); err != nil {
+		t.Fatalf("a plain path failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "real", "ok"))
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+}
+
+// TestCopyInto_RefusesATargetThatIsNotARegularFile proves that a FIFO in the
+// image neither blocks the write nor takes it, with a reader and without.
+func TestCopyInto_RefusesATargetThatIsNotARegularFile(t *testing.T) {
+	root := t.TempDir()
+	fifo := filepath.Join(root, "pipe")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- copyInto(root, "/pipe", 0o444, strings.NewReader("payload"), 7) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("copy-in wrote to a FIFO with no reader")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("copy-in blocked on a FIFO")
+	}
+	reader, err := os.OpenFile(fifo, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if err := copyInto(root, "/pipe", 0o444, strings.NewReader("payload"), 7); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("copy-in to a FIFO with a reader = %v", err)
 	}
 }

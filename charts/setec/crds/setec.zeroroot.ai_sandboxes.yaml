@@ -269,6 +269,46 @@ spec:
                   - name
                   type: object
                 type: array
+              files:
+                description: |-
+                  Files are placed in the machine, read-only, below /setec/files before
+                  the workload starts. The data of the files Secret is at most 512 KiB:
+                  the content, the keys and the manifest of the paths. The files do not change after the create.
+                  The operator keeps the content in a Secret that the Sandbox owns, and the
+                  launcher copies it into the machine over the control channel of the
+                  guest agent, never over the network of the Sandbox. Files are refused
+                  on a review Sandbox and on a Sandbox that restores a snapshot, because
+                  the workload of those already runs.
+                items:
+                  description: |-
+                    SandboxFile is one file that the operator places in the machine of a
+                    Sandbox before the workload starts (docs/design/files.md).
+                  properties:
+                    content:
+                      description: Content is the content of the file.
+                      format: byte
+                      type: string
+                    mode:
+                      description: |-
+                        Mode is the permission bits of the file. It has no write bit, no
+                        setuid bit and no setgid bit, so the mode is at most 0555. Empty
+                        means 0444.
+                      format: int32
+                      type: integer
+                    path:
+                      description: |-
+                        Path is the place of the file below the directory /setec/files in the
+                        machine. It is relative, clean, and has no ".." element. The
+                        directories of the path are made with the owner root and the mode 0755.
+                      maxLength: 512
+                      minLength: 1
+                      type: string
+                  required:
+                  - content
+                  - path
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               image:
                 description: |-
                   Image is the OCI reference the microVM will run. Pull policy follows

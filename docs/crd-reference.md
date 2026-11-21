@@ -65,6 +65,10 @@ status:
 | `network.allow[].ports[].port` | int32 (`1`–`65535`) | yes | — | Destination port, or the first port of the range when `endPort` is set. |
 | `network.allow[].ports[].endPort` | int32 (`1`–`65535`) | no | — | Last port of the range. It must not be lower than `port`. `port: 1` with `endPort: 65535` permits every port of the protocol. |
 | `network.allow[].cidr` | string | no | — | Address block this entry is pinned to, replacing resolution of `host` for that rule. Set it when the destination range is genuinely known, or when the name does not resolve from inside the cluster. |
+| `files` | []object | no | `[]` | Files that the operator places in the machine before the workload starts. See [Files](design/files.md). The data of the files Secret (content, keys and manifest) is at most 512 KiB. The files do not change after the create. Rejected on a review Sandbox and on a Sandbox that restores a snapshot. |
+| `files[].path` | string (`maxLength: 512`) | yes | — | Place of the file below `/setec/files`. Relative, clean, no `..` element, and no path appears twice. |
+| `files[].content` | bytes | yes | — | Content of the file. |
+| `files[].mode` | int32 | no | `0444` | Permission bits. At most `0555`: no write, setuid or setgid bit. |
 | `lifecycle` | object | no | `{}` | Lifecycle selection and runtime constraints applied to the Sandbox. |
 | `lifecycle.mode` | enum `ephemeral` \| `session` | no | `ephemeral` | Which lifecycle the Sandbox follows (docs/design/lifecycles.md). `ephemeral` is today's run-to-completion behavior, unchanged. `session` is long-lived with a durable `/workspace` PVC and explicit teardown. **Immutable** — the admission webhook rejects any update that changes the effective mode. See [`spec.lifecycle.mode`](#speclifecyclemode). |
 | `lifecycle.workspace` | object | no (session only) | `{}` | Durable per-session workspace volume configuration. Rejected at admission unless `lifecycle.mode: session`. |

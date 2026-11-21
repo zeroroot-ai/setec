@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
 	"github.com/zeroroot-ai/setec/internal/launcher"
+	"github.com/zeroroot-ai/setec/internal/sandboxfiles"
 )
 
 func launcherOrFatal(t *testing.T) *corev1.Pod {
@@ -511,5 +513,110 @@ func TestBuildLauncher_EphemeralStorageLimit(t *testing.T) {
 	}
 	if got, want := res.Requests[corev1.ResourceEphemeralStorage], resource.MustParse("1Gi"); got.Cmp(want) != 0 {
 		t.Fatalf("ephemeral-storage request = %s, want %s", got.String(), want.String())
+	}
+}
+
+// TestBuildLauncher_MountsTheFilesSecretForTheLauncherOnly proves that the
+// files of a Sandbox (docs/design/files.md) reach the launcher as a Secret
+// volume and as the files list of the spec, and that the launcher accepts
+// the spec.
+func TestBuildLauncher_MountsTheFilesSecretForTheLauncherOnly(t *testing.T) {
+	sb := launcherSandbox()
+	m := int32(0o555)
+	sb.Spec.Files = []setecv1alpha1.SandboxFile{
+		{Path: "skill/scripts/run.sh", Content: []byte("#!/bin/sh\n"), Mode: &m},
+		{Path: "skill/SKILL.md", Content: []byte("# skill\n")},
+	}
+	pod, err := BuildLauncher(sb, launcherOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == launcherFilesVolume {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil || vol.Secret == nil || vol.Secret.SecretName != FilesSecretName(sb.Name) {
+		t.Fatalf("files volume = %+v", vol)
+	}
+	mounted := false
+	for _, vm := range pod.Spec.Containers[0].VolumeMounts {
+		if vm.Name == launcherFilesVolume {
+			mounted = vm.ReadOnly && vm.MountPath == launcherFilesMountPath
+		}
+	}
+	if !mounted {
+		t.Fatal("the launcher container does not mount the files Secret read-only")
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil {
+		t.Fatalf("the launcher refuses the spec: %v", err)
+	}
+	if s.FilesManifest != launcherFilesMountPath+"/"+sandboxfiles.ManifestKey {
+		t.Fatalf("manifest path = %q", s.FilesManifest)
+	}
+	// The mounted Secret holds the manifest. The test writes it where the
+	// spec names it relative to a temporary directory, as the kubelet would.
+	data, err := sandboxfiles.SecretData(sb.Spec.Files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FilesManifest = filepath.Join(t.TempDir(), sandboxfiles.ManifestKey)
+	if err := os.WriteFile(s.FilesManifest, data[sandboxfiles.ManifestKey], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LoadFiles(); err != nil {
+		t.Fatalf("the launcher refuses the manifest: %v", err)
+	}
+	want := []launcher.File{
+		{Path: "/setec/files/skill/scripts/run.sh", Source: launcherFilesMountPath + "/f0", Mode: 0o555},
+		{Path: "/setec/files/skill/SKILL.md", Source: launcherFilesMountPath + "/f1", Mode: 0o444},
+	}
+	if len(s.Files) != len(want) || s.Files[0] != want[0] || s.Files[1] != want[1] {
+		t.Fatalf("files = %+v, want %+v", s.Files, want)
+	}
+}
+
+// TestBuildLauncher_SpecSizeDoesNotGrowWithTheFiles proves that the launcher
+// spec in the environment has the same size for one file and for thousands,
+// so the limit of 128 KiB for one environment string never stops a launch.
+func TestBuildLauncher_SpecSizeDoesNotGrowWithTheFiles(t *testing.T) {
+	t.Parallel()
+	size := func(n int) int {
+		sb := launcherSandbox()
+		for i := range n {
+			sb.Spec.Files = append(sb.Spec.Files, setecv1alpha1.SandboxFile{
+				Path: strings.Repeat("d", 200) + "/" + strconv.Itoa(i), Content: []byte("x"),
+			})
+		}
+		pod, err := BuildLauncher(sb, launcherOpts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(pod.Spec.Containers[0].Env[0].Value)
+	}
+	one, many := size(1), size(5000)
+	if one != many {
+		t.Fatalf("spec size with one file = %d, with 5000 files = %d", one, many)
+	}
+	if many > 100<<10 {
+		t.Fatalf("spec size = %d, want well below 128 KiB", many)
+	}
+}
+
+// TestBuildLauncher_NoFilesNoVolume proves that a Sandbox with no files has
+// no files volume and no files in the spec.
+func TestBuildLauncher_NoFilesNoVolume(t *testing.T) {
+	t.Parallel()
+	pod := launcherOrFatal(t)
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == launcherFilesVolume {
+			t.Fatal("a Sandbox with no files has a files volume")
+		}
+	}
+	if strings.Contains(pod.Spec.Containers[0].Env[0].Value, "filesManifest") {
+		t.Fatal("the spec names a files manifest")
 	}
 }
