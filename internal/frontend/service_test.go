@@ -777,3 +777,13 @@ func TestLaunch_RefusesBadFiles(t *testing.T) {
 		})
 	}
 }
+
+// TestFilesFromProto_RefusesAModeAbove7777 proves the first check of the
+// mode: a value that is not a permission mode.
+func TestFilesFromProto_RefusesAModeAbove7777(t *testing.T) {
+	t.Parallel()
+	_, err := filesFromProto([]*setecv1grpc.SandboxFile{{Path: "a", Content: []byte("x"), Mode: 0o10000}})
+	if err == nil || !strings.Contains(err.Error(), "not a permission mode") {
+		t.Fatalf("filesFromProto = %v, want a permission mode error", err)
+	}
+}

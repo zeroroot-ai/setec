@@ -477,3 +477,29 @@ func TestValidateCreate_Files(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateUpdate_FilesAreImmutable proves that a change of spec.files is
+// refused and that an update that leaves the files alone passes.
+func TestValidateUpdate_FilesAreImmutable(t *testing.T) {
+	t.Parallel()
+	v := &SandboxValidator{Resolver: class.NewResolver(newFakeClient(t))}
+	old := mkSandbox("", 1, "512Mi", "")
+	old.Spec.Files = []setecv1alpha1.SandboxFile{{Path: "a", Content: []byte("x")}}
+	same := old.DeepCopy()
+	if _, err := v.ValidateUpdate(t.Context(), old, same); err != nil {
+		t.Fatalf("an update that keeps the files: %v", err)
+	}
+	for name, mut := range map[string]func(*setecv1alpha1.Sandbox){
+		"content": func(sb *setecv1alpha1.Sandbox) { sb.Spec.Files[0].Content = []byte("y") },
+		"added": func(sb *setecv1alpha1.Sandbox) {
+			sb.Spec.Files = append(sb.Spec.Files, setecv1alpha1.SandboxFile{Path: "b"})
+		},
+		"removed": func(sb *setecv1alpha1.Sandbox) { sb.Spec.Files = nil },
+	} {
+		next := old.DeepCopy()
+		mut(next)
+		if _, err := v.ValidateUpdate(t.Context(), old, next); err == nil || !strings.Contains(err.Error(), "immutable") {
+			t.Fatalf("%s: ValidateUpdate = %v, want an immutable error", name, err)
+		}
+	}
+}

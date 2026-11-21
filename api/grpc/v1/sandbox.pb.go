@@ -220,7 +220,8 @@ type LaunchRequest struct {
 	// lifecycle is refused. It cannot be combined with review_snapshot.
 	FromSnapshot string `protobuf:"bytes,10,opt,name=from_snapshot,json=fromSnapshot,proto3" json:"from_snapshot,omitempty"`
 	// files are placed in the machine, read-only, below /setec/files before
-	// the workload starts. The total content is at most 512 KiB. A review
+	// the workload starts. The total size is at most 512 KiB: the content, the
+	// paths and 64 bytes for each file. A review
 	// sandbox and a launch with from_snapshot refuse files, because the
 	// workload of those already runs.
 	Files         []*SandboxFile `protobuf:"bytes,11,rep,name=files,proto3" json:"files,omitempty"`

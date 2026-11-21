@@ -69,9 +69,14 @@ type Spec struct {
 	// the command and environment of the Sandbox applied by the operator.
 	Workload *guestagent.Process `json:"workload,omitempty"`
 
-	// Files are copied into the machine before the workload starts
-	// (docs/design/files.md). A spec with files has a workload.
-	Files []File `json:"files,omitempty"`
+	// FilesManifest is the path of the JSON list of files to copy into the
+	// machine before the workload starts (docs/design/files.md). The list
+	// is a file, not part of the spec, because the environment of a process
+	// holds at most 128 KiB in one string. LoadFiles reads it into Files. A
+	// spec with files has a workload.
+	FilesManifest string `json:"filesManifest,omitempty"`
+	// Files is the content of the manifest.
+	Files []File `json:"-"`
 
 	// Identity, when set, makes the launcher sign the identity tokens of
 	// the Sandbox (setec#235). Nil for a warm pool base, which belongs to
@@ -188,7 +193,7 @@ func (s *Spec) validateSource() error {
 		}
 	}
 	switch {
-	case len(s.Files) > 0 && s.Workload == nil:
+	case (len(s.Files) > 0 || s.FilesManifest != "") && s.Workload == nil:
 		return errors.New("launcher: files need a workload that starts after them")
 	case s.Base && (s.Workload != nil || s.Source.Boot == nil):
 		return errors.New("launcher: a base boots and runs no workload")
@@ -199,6 +204,26 @@ func (s *Spec) validateSource() error {
 		return err
 	}
 	return s.validateIdentity()
+}
+
+// LoadFiles reads the manifest of the files and checks it.
+func (s *Spec) LoadFiles() error {
+	if s.FilesManifest == "" {
+		return nil
+	}
+	if !filepath.IsAbs(s.FilesManifest) {
+		return errors.New("launcher: the files manifest must be an absolute path")
+	}
+	raw, err := os.ReadFile(s.FilesManifest)
+	if err != nil {
+		return fmt.Errorf("launcher: read the files manifest: %w", err)
+	}
+	var files []File
+	if err := json.Unmarshal(raw, &files); err != nil {
+		return fmt.Errorf("launcher: parse the files manifest: %w", err)
+	}
+	s.Files = files
+	return s.validateFiles()
 }
 
 // validateFiles reports a problem of the files of s: each path is a clean

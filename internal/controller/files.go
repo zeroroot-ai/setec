@@ -4,10 +4,8 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,20 +18,27 @@ import (
 )
 
 // ensureFiles keeps the content of spec.files of a Sandbox in the Secret
-// <name>-files (docs/design/files.md). Only the launcher container mounts
-// it. A Sandbox with no files gets no Secret. A Secret of an earlier Sandbox
-// of the same name is replaced.
+// <name>-files (docs/design/files.md), with a manifest of the paths and
+// modes. Only the launcher container mounts it. A Sandbox with no files gets
+// no Secret. The files of a Sandbox never change, so a Secret that it owns is
+// not written again. A Secret of an earlier Sandbox of the same name is
+// replaced.
 func (r *SandboxReconciler) ensureFiles(ctx context.Context, sb *setecv1alpha1.Sandbox) error {
 	if len(sb.Spec.Files) == 0 {
 		return nil
 	}
-	data := make(map[string][]byte, len(sb.Spec.Files))
+	manifest, err := podspec.FilesManifest(sb)
+	if err != nil {
+		return fmt.Errorf("make the files manifest: %w", err)
+	}
+	data := make(map[string][]byte, len(sb.Spec.Files)+1)
+	data[podspec.FilesManifestKey] = manifest
 	for i, f := range sb.Spec.Files {
 		data[podspec.FilesSecretKey(i)] = f.Content
 	}
 	key := types.NamespacedName{Namespace: sb.Namespace, Name: podspec.FilesSecretName(sb.Name)}
 	sec := &corev1.Secret{}
-	err := r.Get(ctx, key, sec)
+	err = r.Get(ctx, key, sec)
 	if err == nil && !metav1.IsControlledBy(sec, sb) {
 		if derr := r.Delete(ctx, sec); derr != nil && !apierrors.IsNotFound(derr) {
 			return fmt.Errorf("replace the files Secret of an earlier Sandbox: %w", derr)
@@ -42,13 +47,7 @@ func (r *SandboxReconciler) ensureFiles(ctx context.Context, sb *setecv1alpha1.S
 	}
 	switch {
 	case err == nil:
-		if sameData(sec.Data, data) {
-			return nil
-		}
-		sec.Data = data
-		if uerr := r.Update(ctx, sec); uerr != nil {
-			return fmt.Errorf("update the files Secret: %w", uerr)
-		}
+		// spec.files is immutable, so the Secret that the Sandbox owns holds its content.
 		return nil
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("get the files Secret: %w", err)
@@ -63,8 +62,4 @@ func (r *SandboxReconciler) ensureFiles(ctx context.Context, sb *setecv1alpha1.S
 		return fmt.Errorf("create the files Secret: %w", err)
 	}
 	return nil
-}
-
-func sameData(a, b map[string][]byte) bool {
-	return maps.EqualFunc(a, b, bytes.Equal)
 }

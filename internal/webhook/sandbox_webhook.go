@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -134,6 +135,9 @@ func (v *SandboxValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *s
 		return nil, fmt.Errorf(
 			"spec.lifecycle.mode is immutable: cannot change %q to %q; delete the Sandbox and create a new one",
 			oldMode, newMode)
+	}
+	if !equality.Semantic.DeepEqual(oldObj.Spec.Files, newObj.Spec.Files) {
+		return nil, errors.New("spec.files is immutable: delete the Sandbox and create a new one")
 	}
 	return v.validate(ctx, newObj)
 }

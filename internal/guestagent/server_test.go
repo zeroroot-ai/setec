@@ -289,3 +289,49 @@ func TestLookupUser(t *testing.T) {
 		}
 	}
 }
+
+// TestCopyInto_RefusesASymbolicLinkInThePath proves that a link in the image
+// cannot send a write outside the root: a link as a directory, a link as the
+// file, and an absolute link all fail, and nothing lands outside the root.
+func TestCopyInto_RefusesASymbolicLinkInThePath(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{root, outside, filepath.Join(root, "real")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{"linkdir": outside, "abslink": outside} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(outside, "victim"), filepath.Join(root, "real", "linkfile")); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, path string }{
+		{"a link as a directory", "/linkdir/sub/f"},
+		{"an absolute link as a directory", "/abslink/f"},
+		{"a link as the file", "/real/linkfile"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := copyInto(root, tc.path, 0o444, strings.NewReader("payload"), 7)
+			if err == nil {
+				t.Fatal("copy-in followed a symbolic link")
+			}
+			entries, rerr := os.ReadDir(outside)
+			if rerr != nil || len(entries) != 0 {
+				t.Fatalf("the write left the root: %v, %v", entries, rerr)
+			}
+		})
+	}
+	if err := copyInto(root, "/real/ok", 0o444, strings.NewReader("payload"), 7); err != nil {
+		t.Fatalf("a plain path failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "real", "ok"))
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+}

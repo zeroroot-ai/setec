@@ -41,11 +41,12 @@ func TestValidate(t *testing.T) {
 		{name: "setuid bit", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o4555)))}, wantErr: "setuid"},
 		{name: "negative mode", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(-1)))}, wantErr: "mode"},
 		{name: "total at the bound", files: []setecv1alpha1.SandboxFile{
-			file("a", strings.Repeat("x", MaxTotalBytes/2), nil), file("b", strings.Repeat("x", MaxTotalBytes/2), nil),
+			file("a", strings.Repeat("x", MaxTotalBytes-len("a")-PerFileOverhead), nil),
 		}},
 		{name: "total above the bound", files: []setecv1alpha1.SandboxFile{
-			file("a", strings.Repeat("x", MaxTotalBytes/2), nil), file("b", strings.Repeat("x", MaxTotalBytes/2+1), nil),
+			file("a", strings.Repeat("x", MaxTotalBytes-len("a")-PerFileOverhead+1), nil),
 		}, wantErr: "total"},
+		{name: "many long paths above the bound", files: manyFiles(2000, 200), wantErr: "total"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,6 +60,15 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func manyFiles(n, pathLen int) []setecv1alpha1.SandboxFile {
+	files := make([]setecv1alpha1.SandboxFile, 0, n)
+	for i := range n {
+		p := strconv.Itoa(i)
+		files = append(files, file(strings.Repeat("d", pathLen-len(p)-1)+"/"+p, "", nil))
+	}
+	return files
 }
 
 func TestManyFilesAreNotLimitedByCount(t *testing.T) {

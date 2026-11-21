@@ -456,8 +456,9 @@ type SandboxSpec struct {
 	Resources Resources `json:"resources"`
 
 	// Files are placed in the machine, read-only, below /setec/files before
-	// the workload starts. The total of the content is at most 512 KiB. The
-	// operator keeps the content in a Secret that the Sandbox owns, and the
+	// the workload starts. The total size is at most 512 KiB: the content, the
+	// paths and 64 bytes for each file. The files do not change after the create.
+	// The operator keeps the content in a Secret that the Sandbox owns, and the
 	// launcher copies it into the machine over the control channel of the
 	// guest agent, never over the network of the Sandbox. Files are refused
 	// on a review Sandbox and on a Sandbox that restores a snapshot, because

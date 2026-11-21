@@ -59,7 +59,7 @@ func TestEnsureFiles_KeepsTheContentInASecretTheSandboxOwns(t *testing.T) {
 	if !metav1.IsControlledBy(sec, a) {
 		t.Fatalf("the files Secret is not owned by the Sandbox: %+v", sec.OwnerReferences)
 	}
-	if len(sec.Data) != 2 || !bytes.Equal(sec.Data[podspec.FilesSecretKey(0)], []byte("#!/bin/sh\n")) ||
+	if len(sec.Data) != 3 || !bytes.Contains(sec.Data[podspec.FilesManifestKey], []byte("/setec/files/s/run.sh")) || !bytes.Equal(sec.Data[podspec.FilesSecretKey(0)], []byte("#!/bin/sh\n")) ||
 		!bytes.Equal(sec.Data[podspec.FilesSecretKey(1)], []byte("payload")) {
 		t.Fatalf("secret data = %v", sec.Data)
 	}
@@ -78,7 +78,7 @@ func TestEnsureFiles_KeepsTheContentInASecretTheSandboxOwns(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: podspec.FilesSecretName("b")}, sec); err != nil {
 		t.Fatal(err)
 	}
-	if !metav1.IsControlledBy(sec, b) || len(sec.Data) != 1 || string(sec.Data["f0"]) != "new" {
+	if !metav1.IsControlledBy(sec, b) || len(sec.Data) != 2 || string(sec.Data["f0"]) != "new" {
 		t.Fatalf("the stale Secret was not replaced: %+v", sec)
 	}
 }

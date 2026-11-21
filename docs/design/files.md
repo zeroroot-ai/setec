@@ -10,8 +10,10 @@ read-only for the workload.
    `Sandbox`.
 2. The frontend and the admission webhook check the files with one set of
    rules (`internal/sandboxfiles`).
-3. The operator keeps the content in the Secret `<name>-files`. The Sandbox
-   owns the Secret, so it goes away with the Sandbox.
+3. The operator keeps the content and a manifest of the paths and modes in the
+   Secret `<name>-files`. The Sandbox owns the Secret, so it goes away with the
+   Sandbox. The launcher reads the manifest from the mounted Secret, so the
+   spec in its environment has the same size for any number of files.
 4. Only the launcher container mounts the Secret. The machine cannot read it.
 5. The launcher copies each file into the machine through the control channel
    of the guest agent (`copy-in`). The channel is the vsock device. The files
@@ -28,8 +30,15 @@ read-only for the workload.
 - The guest agent makes the directories of a path with the owner root and the
   mode `0755`. The workload user can read and enter them. It cannot write to
   them or to the files. A workload that runs as root can still change them.
-- The total content is at most 512 KiB, because a Secret holds at most 1 MiB.
-  The number of files has no bound.
+- The total size is at most 512 KiB, because a Secret holds at most 1 MiB. The
+  size of a file is its content, its path and 64 bytes. The number of files has
+  no bound of its own.
+- `spec.files` does not change after the create. The webhook refuses a change.
+- The write never follows a symbolic link. A link in the image, in a
+  directory of the path or as the file, makes the launch fail.
+- Do not use `files` for a credential. The content stays in `spec.files` of the
+  Sandbox object, and each principal that can read the Sandbox can read it. The
+  Secret only limits the content to the launcher container of the Pod.
 - A review Sandbox and a Sandbox that restores a snapshot take no files. The
   workload of those already runs.
 

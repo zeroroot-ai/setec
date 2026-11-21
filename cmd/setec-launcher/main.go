@@ -52,6 +52,9 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 	if err != nil {
 		return report(termLog, &launcher.Error{Reason: launcher.ReasonBadSpec, Err: err})
 	}
+	if err := spec.LoadFiles(); err != nil {
+		return report(termLog, &launcher.Error{Reason: launcher.ReasonBadSpec, Err: err})
+	}
 	guest := launcher.NewGuest(spec)
 	l := &launcher.Launcher{
 		Spec:             spec,

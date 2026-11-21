@@ -20,10 +20,15 @@ import (
 // path below it.
 const Dir = "/setec/files"
 
-// MaxTotalBytes is the bound on the total content of the files of one
-// Sandbox. The operator keeps the content in a Secret, and a Secret holds at
-// most 1 MiB.
+// MaxTotalBytes is the bound on the total size of the files of one Sandbox.
+// The size of a file is its content, its path and PerFileOverhead. The
+// operator keeps the content and a manifest of the paths in a Secret, and a
+// Secret holds at most 1 MiB. The number of files has no bound of its own.
 const MaxTotalBytes = 512 << 10
+
+// PerFileOverhead is the size that each file adds to the total for its entry
+// in the manifest and its key in the Secret.
+const PerFileOverhead = 64
 
 // DefaultMode is the mode of a file that names none.
 const DefaultMode = 0o444
@@ -82,9 +87,9 @@ func Validate(files []setecv1alpha1.SandboxFile) error {
 		if f.Mode != nil && (*f.Mode < 0 || *f.Mode&^allowedModeBits != 0) {
 			return fmt.Errorf("files[%d]: the mode %04o must grant no write, setuid or setgid bit (at most 0555)", i, *f.Mode)
 		}
-		total += len(f.Content)
+		total += len(f.Content) + len(f.Path) + PerFileOverhead
 		if total > MaxTotalBytes {
-			return fmt.Errorf("files: the total content is above %d bytes", MaxTotalBytes)
+			return fmt.Errorf("files: the total size of the content, the paths and %d bytes for each file is above %d bytes", PerFileOverhead, MaxTotalBytes)
 		}
 	}
 	for p := range seen {
