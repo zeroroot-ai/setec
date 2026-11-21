@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -57,10 +58,8 @@ func ValidatePath(rel string) error {
 	case path.Clean(rel) != rel:
 		return errors.New("the path must be clean: no empty, \".\" or \"..\" element")
 	}
-	for _, el := range strings.Split(rel, "/") {
-		if el == ".." {
-			return errors.New("the path must be clean: no \"..\" element")
-		}
+	if slices.Contains(strings.Split(rel, "/"), "..") {
+		return errors.New("the path must be clean: no \"..\" element")
 	}
 	return nil
 }

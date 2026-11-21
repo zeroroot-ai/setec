@@ -15,8 +15,6 @@ func file(path, content string, mode *int32) setecv1alpha1.SandboxFile {
 	return setecv1alpha1.SandboxFile{Path: path, Content: []byte(content), Mode: mode}
 }
 
-func modeOf(m int32) *int32 { return &m }
-
 func TestValidate(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -25,8 +23,8 @@ func TestValidate(t *testing.T) {
 		wantErr string
 	}{
 		{name: "no files", files: nil},
-		{name: "a nested file", files: []setecv1alpha1.SandboxFile{file("skill/scripts/run.sh", "x", modeOf(0o555))}},
-		{name: "mode 0444", files: []setecv1alpha1.SandboxFile{file("a", "x", modeOf(0o444))}},
+		{name: "a nested file", files: []setecv1alpha1.SandboxFile{file("skill/scripts/run.sh", "x", new(int32(0o555)))}},
+		{name: "mode 0444", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o444)))}},
 		{name: "empty path", files: []setecv1alpha1.SandboxFile{file("", "x", nil)}, wantErr: "empty"},
 		{name: "absolute path", files: []setecv1alpha1.SandboxFile{file("/etc/passwd", "x", nil)}, wantErr: "relative"},
 		{name: "dot dot", files: []setecv1alpha1.SandboxFile{file("a/../../b", "x", nil)}, wantErr: "clean"},
@@ -39,9 +37,9 @@ func TestValidate(t *testing.T) {
 		{name: "long path", files: []setecv1alpha1.SandboxFile{file(strings.Repeat("a", 513), "x", nil)}, wantErr: "longer"},
 		{name: "same path twice", files: []setecv1alpha1.SandboxFile{file("a", "x", nil), file("a", "y", nil)}, wantErr: "twice"},
 		{name: "file and directory", files: []setecv1alpha1.SandboxFile{file("a", "x", nil), file("a/b", "y", nil)}, wantErr: "directory"},
-		{name: "write bit", files: []setecv1alpha1.SandboxFile{file("a", "x", modeOf(0o644))}, wantErr: "write"},
-		{name: "setuid bit", files: []setecv1alpha1.SandboxFile{file("a", "x", modeOf(0o4555))}, wantErr: "setuid"},
-		{name: "negative mode", files: []setecv1alpha1.SandboxFile{file("a", "x", modeOf(-1))}, wantErr: "mode"},
+		{name: "write bit", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o644)))}, wantErr: "write"},
+		{name: "setuid bit", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(0o4555)))}, wantErr: "setuid"},
+		{name: "negative mode", files: []setecv1alpha1.SandboxFile{file("a", "x", new(int32(-1)))}, wantErr: "mode"},
 		{name: "total at the bound", files: []setecv1alpha1.SandboxFile{
 			file("a", strings.Repeat("x", MaxTotalBytes/2), nil), file("b", strings.Repeat("x", MaxTotalBytes/2), nil),
 		}},
@@ -65,7 +63,7 @@ func TestValidate(t *testing.T) {
 
 func TestManyFilesAreNotLimitedByCount(t *testing.T) {
 	t.Parallel()
-	var files []setecv1alpha1.SandboxFile
+	files := make([]setecv1alpha1.SandboxFile, 0, 2000)
 	for i := range 2000 {
 		files = append(files, file("d/"+strconv.Itoa(i)+"/f", "x", nil))
 	}
@@ -79,7 +77,7 @@ func TestModeOfAndMachinePath(t *testing.T) {
 	if got := ModeOf(file("a", "x", nil)); got != DefaultMode {
 		t.Fatalf("default mode = %o", got)
 	}
-	if got := ModeOf(file("a", "x", modeOf(0o555))); got != 0o555 {
+	if got := ModeOf(file("a", "x", new(int32(0o555)))); got != 0o555 {
 		t.Fatalf("mode = %o", got)
 	}
 	if got := MachinePath("s/run.sh"); got != "/setec/files/s/run.sh" {

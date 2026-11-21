@@ -152,11 +152,8 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 		return nil, err
 	}
 
-	if req.GetFromSnapshot() != "" || req.GetReviewSnapshot() != "" {
-		if len(req.GetFiles()) > 0 {
-			return nil, status.Error(codes.InvalidArgument,
-				"files cannot be set with from_snapshot or review_snapshot: the workload of the snapshot already runs")
-		}
+	if err := refuseFilesOnSnapshot(req); err != nil {
+		return nil, err
 	}
 	if req.GetFromSnapshot() != "" {
 		return s.launchFromSnapshot(ctx, ns, pair, req)
@@ -911,6 +908,16 @@ func grpcCodeFor(err error) codes.Code {
 // into its Sandbox.spec.network.allow form. It does not judge the entry:
 // the CRD schema refuses a malformed one when the Sandbox is created, and
 // grpcCodeFor reports that refusal as InvalidArgument.
+// refuseFilesOnSnapshot refuses files on a launch from a snapshot and on a
+// review launch: the workload of the snapshot already runs.
+func refuseFilesOnSnapshot(req *setecv1grpc.LaunchRequest) error {
+	if (req.GetFromSnapshot() != "" || req.GetReviewSnapshot() != "") && len(req.GetFiles()) > 0 {
+		return status.Error(codes.InvalidArgument,
+			"files cannot be set with from_snapshot or review_snapshot: the workload of the snapshot already runs")
+	}
+	return nil
+}
+
 // filesFromProto maps the files of a launch request and applies the rules of
 // the files of a Sandbox. A zero mode means the default mode.
 func filesFromProto(in []*setecv1grpc.SandboxFile) ([]setecv1alpha1.SandboxFile, error) {

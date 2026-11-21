@@ -463,10 +463,11 @@ func TestValidateCreate_Files(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			errs := structuralErrors(tc.sb)
-			joined := ""
+			msgs := make([]string, 0, len(errs))
 			for _, e := range errs {
-				joined += e.Error() + "\n"
+				msgs = append(msgs, e.Error())
 			}
+			joined := strings.Join(msgs, "\n")
 			switch {
 			case tc.wantMsg == "" && len(errs) != 0:
 				t.Fatalf("structuralErrors = %v", errs)
