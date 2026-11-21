@@ -1,6 +1,6 @@
 module github.com/zeroroot-ai/setec
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
@@ -105,7 +105,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jedisct1/go-minisign v0.0.0-20211028175153-1c139d1cc84b // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
