@@ -1432,6 +1432,29 @@ disk_push_refused "a push role with no ServiceAccount" "needs a named ServiceAcc
 note "disk Job labels"
 render "$workdir/instance.yaml" --show-only templates/deployment.yaml
 assert_contains "$workdir/instance.yaml" "the operator gets the release name for the labels of its Jobs" "--instance-name=setec"
+# Placement of the disk Job Pods (the operator makes them, so the chart passes
+# the placement as one flag, and the unit tests of internal/controller check
+# the Pods).
+# ---------------------------------------------------------------------------
+note "disk Job placement"
+render "$workdir/placement-default.yaml" --show-only templates/deployment.yaml
+assert_absent "$workdir/placement-default.yaml" "no placement flag by default" "--disk-job-placement"
+render "$workdir/placement-set.yaml" --show-only templates/deployment.yaml \
+	--set launcher.diskBuilder.nodeSelector.pool=sandbox \
+	--set 'launcher.diskBuilder.tolerations[0].key=sandbox' --set 'launcher.diskBuilder.tolerations[0].operator=Exists' \
+	--set launcher.diskBuilder.priorityClassName=jobs
+python3 - "$workdir/placement-set.yaml" >"$workdir/placement-set.out" 2>&1 <<'PY' && pass "the operator gets the placement of the disk Jobs as JSON" || fail "disk Job placement: $(cat "$workdir/placement-set.out")"
+import json, sys, yaml
+for d in yaml.safe_load_all(open(sys.argv[1])):
+    if isinstance(d, dict) and d.get("kind") == "Deployment":
+        args = [a for c in d["spec"]["template"]["spec"]["containers"] for a in c["args"] if a.startswith("--disk-job-placement=")]
+        if len(args) != 1:
+            sys.exit(f"flags: {args}")
+        got = json.loads(args[0].split("=", 1)[1])
+        want = {"nodeSelector": {"pool": "sandbox"}, "tolerations": [{"key": "sandbox", "operator": "Exists"}], "priorityClassName": "jobs"}
+        if got != want:
+            sys.exit(f"got {got}, want {want}")
+PY
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then

@@ -204,6 +204,7 @@ kubectl delete namespace setec-system
 | `devicePlugin.affinity` | `{}` | Pod affinity of the device plugin. The scheduler applies it with `devicePlugin.nodeSelector`. |
 | `devicePlugin.kubeletDir` | `/var/lib/kubelet` | Root directory of the kubelet on the node. The chart mounts `<kubeletDir>/device-plugins` at `/var/lib/kubelet/device-plugins` in the container. Set `nodeAgent.kubeletPodsDir` to match. |
 | `devicePlugin.priorityClassName` | `system-node-critical` | Priority class of the device plugin Pods. An empty value renders none. Use it where a ResourceQuota limits `system-node-critical` to `kube-system`. |
+| `launcher.diskBuilder.nodeSelector`, `tolerations`, `affinity`, `priorityClassName` | empty | Placement of the Pods of the disk Jobs. The key `kubernetes.io/arch=amd64` of the selector is fixed. |
 | `nodeAgent.nodeSelector` | `{}` | Node labels that limit the node agent. The keys join the fixed `kubernetes.io/arch=amd64`. |
 | `nodeAgent.affinity` | `{}` | Pod affinity of the node agent. |
 | `nodeAgent.tolerations` | `[{operator: Exists, effect: NoSchedule}]` | Tolerations of the node agent. |
