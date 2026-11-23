@@ -265,6 +265,7 @@ The chart denies all traffic of each Pod in its own namespace by default, with D
 - The frontend takes gRPC only from `systemPolicy.frontendCallers` and reaches the API server. The list is required when the frontend is on.
 - The node agent takes gRPC from the operator and reaches the snapshot store.
 - Each metrics port admits the Pods of `systemPolicy.metricsScrapers`. Each entry names the namespace and the Pod labels of one scraper.
+- The disk build Job and the image verify Job reach the `hosts` of each `launcher.imageSources` entry, and the disk registry. An entry whose `registry` is an IPv4 address, such as a pull-through mirror in the cluster, lists no `hosts`. The policy then allows that address and port (443 when the registry names none) and no other destination.
 
 The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. Cilium is the network plugin of every cluster that runs setec, so the chart always renders these objects. `development/k3s` installs Cilium for the local cluster.
 

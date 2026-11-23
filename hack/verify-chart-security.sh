@@ -708,6 +708,47 @@ else
 	fail "a scraper with no namespace failed for another reason: $(tail -n1 "$workdir/sp-noscrapens.err")"
 fi
 
+# An image source at an IP address lists no hosts (setec#381). The disk Jobs
+# reach that address and port, and no other new destination. A source at a
+# name still needs its hosts.
+MIRROR=(--set 'launcher.imageSources[0].registry=ghcr.io'
+	--set 'launcher.imageSources[0].hosts={ghcr.io}'
+	--set 'launcher.imageSources[1].registry=10.43.0.5:5000')
+render "$workdir/sp-ipsource.yaml" "${MIRROR[@]}"
+render "$workdir/sp-ipsource-base.yaml" --set 'launcher.imageSources[0].registry=ghcr.io' --set 'launcher.imageSources[0].hosts={ghcr.io}'
+if python3 - "$workdir/sp-ipsource.yaml" "$workdir/sp-ipsource-base.yaml" >"$workdir/sp-ipsource.out" 2>&1 <<'PY'
+import sys, yaml
+def dests(path, comp):
+    out = set()
+    for d in yaml.safe_load_all(open(path)):
+        if isinstance(d, dict) and d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith(comp):
+            for e in d["spec"].get("egress") or []:
+                ports = tuple(p["port"] for tp in e.get("toPorts") or [] for p in tp.get("ports") or [])
+                for f in e.get("toFQDNs") or []:
+                    out.add((f.get("matchName") or f.get("matchPattern"), ports))
+                for c in e.get("toCIDR") or []:
+                    out.add((c, ports))
+    return out
+for comp in ("-disk-builder", "-image-verify"):
+    new = dests(sys.argv[1], comp) - dests(sys.argv[2], comp)
+    if new != {("10.43.0.5/32", ("5000",))}:
+        sys.exit(f"{comp}: the new destinations are {sorted(new)}, want only 10.43.0.5/32 on 5000")
+PY
+then
+	pass "an image source at an IP address with no hosts renders, and the Jobs reach that address and port only"
+else
+	fail "image source at an IP address: $(cat "$workdir/sp-ipsource.out")"
+fi
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set 'launcher.imageSources[0].registry=registry.example.com' \
+	>/dev/null 2>"$workdir/sp-nohosts.err"; then
+	fail "an image source at a name with no hosts must fail the render"
+elif grep -qF "needs its hosts" "$workdir/sp-nohosts.err"; then
+	pass "an image source at a name with no hosts fails the render"
+else
+	fail "a source with no hosts failed for another reason: $(tail -n1 "$workdir/sp-nohosts.err")"
+fi
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2
