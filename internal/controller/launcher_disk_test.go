@@ -379,15 +379,18 @@ type clock struct{ t time.Time }
 func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
+// failedMessage is the message of the Job condition that failJob writes.
+const failedMessage = "BackoffLimitExceeded"
+
 // failJob marks the Job name as failed at the time of the clock.
-func failJob(t *testing.T, r *SandboxReconciler, c *clock, name, msg string) {
+func failJob(t *testing.T, r *SandboxReconciler, c *clock, name string) {
 	t.Helper()
 	job := &batchv1.Job{}
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "setec-system", Name: name}, job); err != nil {
 		t.Fatalf("the Job %s: %v", name, err)
 	}
 	job.Status.Conditions = []batchv1.JobCondition{{
-		Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: msg, LastTransitionTime: metav1.NewTime(c.now()),
+		Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: failedMessage, LastTransitionTime: metav1.NewTime(c.now()),
 	}}
 	if err := r.Status().Update(context.Background(), job); err != nil {
 		t.Fatal(err)
@@ -400,7 +403,7 @@ func jobNames(t *testing.T, r *SandboxReconciler) []string {
 	if err := r.List(context.Background(), jobs); err != nil {
 		t.Fatal(err)
 	}
-	var names []string
+	names := make([]string, 0, len(jobs.Items))
 	for i := range jobs.Items {
 		names = append(names, jobs.Items[i].Name)
 	}
@@ -426,7 +429,7 @@ func TestEnsureLauncherDisk_AFailedBuildStartsANewAttempt(t *testing.T) {
 	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 		t.Fatalf("first call = %t, %v; want a new Job", done, err)
 	}
-	failJob(t, r, clk, base, "BackoffLimitExceeded")
+	failJob(t, r, clk, base)
 
 	clk.advance(10 * time.Second)
 	_, done, err := r.ensureLauncherDisk(ctx, sb)
@@ -458,7 +461,30 @@ func TestEnsureLauncherDisk_AFailedBuildStartsANewAttempt(t *testing.T) {
 	if job.Annotations[attemptAnnotation] != "2" || *job.Spec.TTLSecondsAfterFinished != diskJobTTLSeconds {
 		t.Fatalf("attempt 2 = %v, ttl %d", job.Annotations, *job.Spec.TTLSecondsAfterFinished)
 	}
+}
 
+// TestEnsureLauncherDisk_TheNewAttemptIsShared: a second Sandbox waits on the
+// new Job, and the new Job still counts after the failed Job of attempt 1
+// has expired.
+func TestEnsureLauncherDisk_TheNewAttemptIsShared(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	clk := &clock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	r.DiskBuilder.Now = clk.now
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("56", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
+	base, _ := diskJobName(image, testDiskKeyID)
+	second := base + "-a2"
+	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	failJob(t, r, clk, base)
+	clk.advance(time.Minute)
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+		t.Fatalf("after the backoff = %t, %v; want a new Job", done, err)
+	}
 	// A second Sandbox shares the new Job. The failed Job of attempt 1 can
 	// expire and the new Job still counts.
 	if err := r.Delete(ctx, &batchv1.Job{Name: base, Namespace: "setec-system"}); err != nil {
@@ -496,7 +522,7 @@ func TestEnsureLauncherDisk_AFailedSeriesStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 1; n < diskBuildAttempts(); n++ {
-		failJob(t, r, clk, diskAttemptJobName(base, n), "BackoffLimitExceeded")
+		failJob(t, r, clk, diskAttemptJobName(base, n))
 		clk.advance(diskBuildBackoff[n-1] + time.Second)
 		if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 			t.Fatalf("attempt %d after its backoff = %t, %v; want the next attempt", n, done, err)
@@ -514,7 +540,7 @@ func TestEnsureLauncherDisk_AFailedSeriesStops(t *testing.T) {
 		t.Fatalf("the last attempt ttl = %d, want %d", *job.Spec.TTLSecondsAfterFinished, diskJobLastTTLSeconds)
 	}
 
-	failJob(t, r, clk, last, "BackoffLimitExceeded")
+	failJob(t, r, clk, last)
 	for range 3 {
 		clk.advance(30 * time.Minute)
 		_, done, err := r.ensureLauncherDisk(ctx, sb)
@@ -563,7 +589,7 @@ func TestEnsureLauncherDisk_AFailedJobOf0130(t *testing.T) {
 	if err := r.Create(ctx, old); err != nil {
 		t.Fatal(err)
 	}
-	failJob(t, r, clk, base, "BackoffLimitExceeded")
+	failJob(t, r, clk, base)
 	clk.advance(time.Minute)
 	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
 		t.Fatalf("a failed Job of 0.130 = %t, %v; want a new attempt", done, err)
@@ -595,7 +621,7 @@ func TestWaitForLauncherDisk_SaysWhatHappened(t *testing.T) {
 	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 		t.Fatal(err)
 	}
-	failJob(t, r, clk, base, "BackoffLimitExceeded")
+	failJob(t, r, clk, base)
 
 	_, proceed, res, err := r.waitForLauncherDisk(ctx, sb)
 	if proceed || err != nil || res.RequeueAfter != diskBuildBackoff[0] {
@@ -616,7 +642,7 @@ func TestWaitForLauncherDisk_SaysWhatHappened(t *testing.T) {
 		if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
 			t.Fatal(err)
 		}
-		failJob(t, r, clk, diskAttemptJobName(base, n+1), "BackoffLimitExceeded")
+		failJob(t, r, clk, diskAttemptJobName(base, n+1))
 	}
 	if _, proceed, _, err := r.waitForLauncherDisk(ctx, sb); proceed || err != nil {
 		t.Fatalf("after the last attempt = %t, %v", proceed, err)
