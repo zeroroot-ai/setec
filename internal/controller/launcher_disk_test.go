@@ -905,8 +905,22 @@ func TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish(t *testing.T) {
 	noSeed(t, j, cfg.SigningSecret)
 	check, build, publish := spec.InitContainers[0], spec.InitContainers[1], spec.Containers[0]
 
-	// The two containers that push.
-	for _, c := range []corev1.Container{check, publish} {
+	checkPushHolders(t, j, cfg, check, publish)
+	checkBuildHoldsNoPush(t, j, cfg, build)
+	checkVerifyHoldsNoPush(t, cfg, image)
+	// The image of a tenant is an argument of each container and never a mount.
+	for _, c := range []corev1.Container{check, build, publish} {
+		if c.Args[len(c.Args)-1] != image {
+			t.Fatalf("the %s container args = %v; want the image digest last", c.Name, c.Args)
+		}
+	}
+}
+
+// checkPushHolders checks the two containers that push: the provider, the push
+// role, one token with the push audience, and none of the pull access.
+func checkPushHolders(t *testing.T, j *batchv1.Job, cfg DiskBuilderConfig, holders ...corev1.Container) {
+	t.Helper()
+	for _, c := range holders {
 		if !slices.Equal(c.Args[:2], []string{"--push-auth", "ecr"}) {
 			t.Fatalf("the %s container args = %v; want --push-auth ecr first", c.Name, c.Args)
 		}
@@ -926,8 +940,15 @@ func TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// The container that reads the image of a tenant.
+// checkBuildHoldsNoPush checks the container that reads the image of a tenant:
+// no push provider, no push role, no push token, no push Secret, and a pull
+// token with an audience that differs from the audience of the push token. The
+// trust policy of the push role requires the push audience, so the pull token
+// cannot assume it.
+func checkBuildHoldsNoPush(t *testing.T, j *batchv1.Job, cfg DiskBuilderConfig, build corev1.Container) {
+	t.Helper()
 	if slices.Contains(build.Args, "--push-auth") {
 		t.Fatalf("the build container holds a push provider: %v", build.Args)
 	}
@@ -944,15 +965,16 @@ func TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish(t *testing.T) {
 			t.Fatalf("the build container mounts the push access %s", m.Name)
 		}
 	}
-	// The one token of the build container has the audience of the pull token,
-	// which differs from the audience of the push token. The trust policy of
-	// the push role requires the push audience, so the pull token cannot
-	// assume it.
-	if got := tokenAudiences(j, build); len(got) != 1 || got[awsTokenVolume] != awsTokenAudience || got[awsTokenVolume] == cfg.PushAWSAudience {
+	got := tokenAudiences(j, build)
+	if len(got) != 1 || got[awsTokenVolume] != awsTokenAudience || got[awsTokenVolume] == cfg.PushAWSAudience {
 		t.Fatalf("the build container tokens = %v; want only the pull token with the audience %s", got, awsTokenAudience)
 	}
+}
 
-	// The image verify Job reads an image too. It gets no push access.
+// checkVerifyHoldsNoPush checks that the image verify Job, which reads an image
+// too, gets no push access.
+func checkVerifyHoldsNoPush(t *testing.T, cfg DiskBuilderConfig, image string) {
+	t.Helper()
 	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
 	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
 	v := verifyJob(cfg, "v", cls, image)
@@ -963,12 +985,6 @@ func TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish(t *testing.T) {
 	for _, vol := range v.Spec.Template.Spec.Volumes {
 		if vol.Name == awsPushTokenVolume || vol.Name == registryVolume {
 			t.Fatalf("the verify Job has the volume %s", vol.Name)
-		}
-	}
-	// The image of a tenant is an argument of each container and never a mount.
-	for _, c := range []corev1.Container{check, build, publish} {
-		if c.Args[len(c.Args)-1] != image {
-			t.Fatalf("the %s container args = %v; want the image digest last", c.Name, c.Args)
 		}
 	}
 }

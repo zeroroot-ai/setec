@@ -302,7 +302,9 @@ func runMain() int {
 		setupLog.Error(nil, "--disk-pull-aws-role-arn needs --disk-pull-provider=ecr: the role is used by that provider")
 		return 1
 	}
-	if err := controller.ValidatePushIdentity(diskPushProviders, diskPushAWSRoleARN, diskPushAWSAudience, diskServiceAccount); err != nil {
+	if err := controller.ValidatePushIdentity(
+		diskPushProviders, diskPushAWSRoleARN, diskPushAWSAudience, diskServiceAccount,
+	); err != nil {
 		setupLog.Error(err, "The disk push identity is not valid")
 		return 1
 	}

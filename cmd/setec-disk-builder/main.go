@@ -68,7 +68,8 @@ func runMain() int {
 			"). Repeat it for each provider. check and publish refuse it: they hold the push credential")
 	var pushAuth stringList
 	flag.Var(&pushAuth, "push-auth",
-		"check, publish: a cloud credential provider that pushes to a private disk repository ("+strings.Join(registryauth.Names(), ", ")+
+		"check, publish: a cloud credential provider that pushes to a private disk repository ("+
+			strings.Join(registryauth.Names(), ", ")+
 			"). Repeat it for each provider. build and verify refuse it: they read the image of a tenant")
 	flag.Parse()
 	if flag.NArg() != 2 {
@@ -81,21 +82,9 @@ func runMain() int {
 	marker := filepath.Join(*work, "exists")
 	disk := filepath.Join(*work, diskbuilder.DiskFile)
 	cmdName := flag.Arg(0)
-	if err := checkRegistryAuthUse(cmdName, registryAuth); err != nil {
-		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
-		return 2
-	}
-	if err := checkPushAuthUse(cmdName, pushAuth); err != nil {
-		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
-		return 2
-	}
-	pull, err := pullKeychain(registryAuth)
-	if err != nil {
-		return fail(err)
-	}
-	push, err := pushKeychain(pushAuth)
-	if err != nil {
-		return fail(err)
+	pull, push, code := authKeychains(cmdName, registryAuth, pushAuth)
+	if code != 0 {
+		return code
 	}
 	switch cmdName {
 	case "verify":
@@ -163,6 +152,27 @@ func runMain() int {
 	}
 }
 
+// authKeychains checks that each provider flag belongs to the command, and
+// builds the keychain that reads the image registries and the keychain that
+// pushes to the disk repository. It returns a non-zero exit code on an error.
+func authKeychains(command string, pullNames, pushNames []string) (pull, push authn.Keychain, code int) {
+	for _, err := range []error{checkRegistryAuthUse(command, pullNames), checkPushAuthUse(command, pushNames)} {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
+			return nil, nil, 2
+		}
+	}
+	pull, err := pullKeychain(pullNames)
+	if err != nil {
+		return nil, nil, fail(err)
+	}
+	push, err = pushKeychain(pushNames)
+	if err != nil {
+		return nil, nil, fail(err)
+	}
+	return pull, push, 0
+}
+
 // stringList is a flag that collects each value.
 type stringList []string
 
@@ -223,7 +233,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr,
 		"       setec-disk-builder [--registry-auth PROVIDER]... [--work DIR] build IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr,
-		"       setec-disk-builder [--push-auth PROVIDER]... --disk-repo REPO --key-id ID [--work DIR] publish IMAGE@sha256:DIGEST")
+		"       setec-disk-builder [--push-auth PROVIDER]... "+
+			"--disk-repo REPO --key-id ID [--work DIR] publish IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr,
 		"       setec-disk-builder [--registry-auth PROVIDER]... "+
 			"[--issuer I --identity ID | (SETEC_VERIFY_PUBLIC_KEY)] verify IMAGE@sha256:DIGEST")
