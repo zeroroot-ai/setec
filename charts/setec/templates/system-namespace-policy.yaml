@@ -3,8 +3,9 @@ The network policy of the setec namespace (values.yaml systemPolicy). Cilium
 enforces it.
 
   1. default deny  One CiliumClusterwideNetworkPolicy selects each Pod of the
-                   namespace. It allows DNS to kube-dns and nothing else, in
-                   both directions.
+                   namespace. It allows DNS and nothing else. DNS goes to
+                   systemPolicy.dns: the CoreDNS or kube-dns Pods of
+                   kube-system by default.
   2. operator      the API server out, the webhook port from the API server,
                    the nodes and systemPolicy.webhookCallers, the node agent
                    gRPC out when snapshots are on, and its metrics port from
@@ -38,6 +39,16 @@ engine enforces. hack/verify-chart-security.sh renders both files and fails
 when a Pod of the namespace has no allow it needs, or when the default deny is
 missing.
 */}}
+{{- define "setec.dnsPorts" -}}
+- ports:
+    - port: "53"
+      protocol: UDP
+    - port: "53"
+      protocol: TCP
+  rules:
+    dns:
+      - matchPattern: "*"
+{{- end }}
 {{- define "setec.diskRegistryEgress" -}}
 {{- if .isIP }}
 - toCIDR:
@@ -106,6 +117,7 @@ repeated here. */}}
 {{- $ns := .Values.namespace }}
 {{- $fn := include "setec.fullname" . }}
 {{- $sp := .Values.systemPolicy }}
+{{- $dns := include "setec.systemDNS" . | fromJson }}
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:
@@ -123,19 +135,24 @@ spec:
   ingress:
     - {}
   egress:
+    {{- if $dns.podLabels }}
+    {{- /* Cilium names the source of a label. A label with no source is a Kubernetes label. */}}
+    {{- $peer := dict "k8s:io.kubernetes.pod.namespace" $dns.namespace }}
+    {{- range $k, $v := $dns.podLabels }}
+    {{- $peer = set $peer (ternary $k (printf "k8s:%s" $k) (contains ":" $k)) $v }}
+    {{- end }}
     - toEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s:k8s-app: kube-dns
+            {{- toYaml $peer | nindent 12 }}
       toPorts:
-        - ports:
-            - port: "53"
-              protocol: UDP
-            - port: "53"
-              protocol: TCP
-          rules:
-            dns:
-              - matchPattern: "*"
+        {{- include "setec.dnsPorts" . | nindent 8 }}
+    {{- end }}
+    {{- if $dns.cidrs }}
+    - toCIDR:
+        {{- toYaml $dns.cidrs | nindent 8 }}
+      toPorts:
+        {{- include "setec.dnsPorts" . | nindent 8 }}
+    {{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

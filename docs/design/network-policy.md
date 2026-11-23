@@ -27,6 +27,7 @@ The Sandbox namespaces have their own default deny. It is a plain NetworkPolicy 
 | Objects | `CiliumClusterwideNetworkPolicy`, `CiliumNetworkPolicy` | `networking.k8s.io/v1` `NetworkPolicy` |
 | Template | `charts/setec/templates/system-namespace-policy.yaml` | `charts/setec/templates/system-namespace-networkpolicy.yaml` |
 | Cluster needs | Cilium as the network plugin | a network plugin that enforces NetworkPolicy |
+| DNS | the Pods or CIDRs of `systemPolicy.dns` (kube-dns by default) | the same value |
 | API server | named by entity (`kube-apiserver`) | CIDRs of its endpoints (`systemPolicy.networkPolicy.apiServer`) |
 | Image registries | host names (`launcher.imageSources[].hosts`) | CIDRs and ports (`systemPolicy.networkPolicy.egress.imageSources`) |
 | Disk registry | host name, or the address when it is an IP | CIDRs and ports (`egress.diskRegistry`), or the address when it is an IP |
