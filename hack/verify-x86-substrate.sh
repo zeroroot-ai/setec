@@ -33,6 +33,11 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The default systemPolicy.engine is cilium, and the chart refuses to render
+# Cilium objects when the cluster has no Cilium CRDs. helm template reads no
+# cluster, so it gets the kinds from these flags.
+CILIUM_API=(--api-versions cilium.io/v2/CiliumNetworkPolicy
+	--api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy)
 # The launcher values that the chart requires (hack/chart-launcher-values.yaml).
 LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 WORKFLOW_DIR=".github/workflows"
@@ -137,7 +142,7 @@ trap 'rm -rf "$workdir"' EXIT
 render() {
 	local out="$1"
 	shift
-	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+	"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={sandbox-workloads}" \
 		"$@" >"$out"

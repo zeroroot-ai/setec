@@ -328,6 +328,8 @@ jobs:
         # here is the chart default.
         run: |
           helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+            --api-versions cilium.io/v2/CiliumNetworkPolicy \
+            --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy \
             --set sandboxNamespaces={sandbox-workloads} \
             --set webhook.certManager.enabled=true >/dev/null
 
@@ -379,6 +381,8 @@ jobs:
         # required the same way as above.
         run: |
           helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+            --api-versions cilium.io/v2/CiliumNetworkPolicy \
+            --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy \
             --set snapshots.enabled=true \
             --set nodeAgent.enabled=true \
             --set webhook.enabled=true \
@@ -391,6 +395,8 @@ jobs:
           # refuses to render it, so assert that refusal too, and the
           # guard cannot rot into a no-op (setec#175).
           if helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+               --api-versions cilium.io/v2/CiliumNetworkPolicy \
+               --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy \
                --set snapshots.enabled=true \
                --set nodeAgent.enabled=true \
                --set webhook.enabled=true \
@@ -408,6 +414,8 @@ jobs:
         # above.
         run: |
           helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+            --api-versions cilium.io/v2/CiliumNetworkPolicy \
+            --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy \
             --set frontend.enabled=true \
             --set credentials.spiffe.trustDomain=example.org \
             --set 'frontend.clients[0].name=saas' \
@@ -416,6 +424,33 @@ jobs:
             --set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon' \
             --set webhook.certManager.enabled=true \
             --set sandboxNamespaces={sandbox-workloads} >/dev/null
+
+      - name: Helm template (networkpolicy engine, a cluster with no Cilium)
+        # setec#378: a cluster whose network plugin is not Cilium installs
+        # with systemPolicy.engine=networkpolicy. This render passes no
+        # --api-versions flag, so it sees no Cilium CRD, and the chart must
+        # render plain NetworkPolicy objects only. The default engine must
+        # refuse the same cluster with a message.
+        run: |
+          set -euo pipefail
+          helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+            --set systemPolicy.engine=networkpolicy \
+            --set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10/32}' \
+            --set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={198.51.100.0/24}' \
+            --set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={203.0.113.5/32}' \
+            --set webhook.certManager.enabled=true \
+            --set sandboxNamespaces={sandbox-workloads} > /tmp/np-render.yaml
+          if grep -q 'cilium.io' /tmp/np-render.yaml; then
+            echo "::error::the networkpolicy engine rendered a Cilium object"
+            exit 1
+          fi
+          if helm template setec charts/setec -f hack/chart-launcher-values.yaml \
+               --set webhook.certManager.enabled=true \
+               --set sandboxNamespaces={sandbox-workloads} >/dev/null 2>/tmp/cilium.err; then
+            echo "::error::the cilium engine rendered on a cluster with no Cilium CRD"
+            exit 1
+          fi
+          grep -q 'has no CRD for' /tmp/cilium.err
 
   # ---- docker build validity (fast tier / pull_request) ----
   # Expensive (image build) but no push and no deploy -- a compile-validity

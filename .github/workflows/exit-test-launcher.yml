@@ -8,9 +8,9 @@
 # KVM_GET_API_VERSION 12). The `launcher` job creates a kind cluster on that
 # runner. The workers mount the runner's /dev, so the device plugin offers
 # /dev/kvm and /dev/net/tun to the launcher Pods. The cluster runs Cilium, the
-# network plugin of every cluster that runs setec (D76): NetworkPolicy is
-# enforced, and the chart's CiliumNetworkPolicy objects of its own namespace
-# install.
+# default policy engine of the chart (docs/design/network-policy.md):
+# NetworkPolicy is enforced, and the chart's CiliumNetworkPolicy objects of
+# its own namespace install.
 # hack/kind-launcher.yaml has the details. No metal node, no AWS account.
 #
 # The launcher is the only runtime. The Kata, gVisor and runc backends, the

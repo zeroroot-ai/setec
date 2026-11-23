@@ -34,6 +34,11 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The default systemPolicy.engine is cilium, and the chart refuses to render
+# Cilium objects when the cluster has no Cilium CRDs. helm template reads no
+# cluster, so it gets the kinds from these flags.
+CILIUM_API=(--api-versions cilium.io/v2/CiliumNetworkPolicy
+	--api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy)
 # The launcher values that the chart requires (hack/chart-launcher-values.yaml).
 LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 
@@ -75,7 +80,7 @@ assert_render_fails() {
 	local desc="$1" want="$2"
 	shift 2
 	local err="$workdir/err.txt"
-	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "$@" >/dev/null 2>"$err"; then
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "$@" >/dev/null 2>"$err"; then
 		fail "$desc — render unexpectedly succeeded"
 		return
 	fi
@@ -152,7 +157,7 @@ fi
 # The one source: all three surfaces use the Workload API.
 # ---------------------------------------------------------------------------
 note "the SPIFFE Workload API"
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" >"$workdir/spiffe.yaml"
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" >"$workdir/spiffe.yaml"
 strip_comments "$workdir/spiffe.yaml" "$workdir/spiffe.stripped.yaml"
 if has_pem "$workdir/spiffe.stripped.yaml" >"$workdir/pem.txt"; then
 	fail "a PEM credential flag or Secret volume renders: $(tr '\n' ' ' <"$workdir/pem.txt")"
@@ -162,13 +167,13 @@ fi
 
 # --show-only isolates each component's document so an assertion cannot be
 # satisfied by the same flag on a different component.
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/frontend.yaml >"$workdir/spiffe-frontend.yaml"
 strip_comments "$workdir/spiffe-frontend.yaml" "$workdir/spiffe-frontend.stripped.yaml"
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/daemonset.yaml >"$workdir/spiffe-nodeagent.yaml"
 strip_comments "$workdir/spiffe-nodeagent.yaml" "$workdir/spiffe-nodeagent.stripped.yaml"
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--show-only templates/deployment.yaml >"$workdir/spiffe-operator.yaml"
 strip_comments "$workdir/spiffe-operator.yaml" "$workdir/spiffe-operator.stripped.yaml"
 
@@ -204,7 +209,7 @@ FOREIGN=(
 	--set 'frontend.clients[1].name=onprem'
 	--set 'frontend.clients[1].spiffeID=spiffe://onprem.example/ns/gibson/sa/gibson-daemon'
 )
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" "${FOREIGN[@]}" \
 	--set 'frontend.clients[1].federation.bundleEndpointURL=https://spire.onprem.example:8443' \
 	--set 'frontend.clients[1].federation.endpointSPIFFEID=spiffe://onprem.example/spire/server' \
 	--show-only templates/federation.yaml >"$workdir/federation.yaml"
@@ -243,18 +248,18 @@ PATH_CLIENT=(
 	--set 'systemPolicy.frontendCallers[0].podLabels.app\.kubernetes\.io/component=daemon'
 )
 for td in alpha.example beta.example; do
-	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${PATH_CLIENT[@]}" --set "global.spire.trustDomain=${td}" \
+	"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${PATH_CLIENT[@]}" --set "global.spire.trustDomain=${td}" \
 		--show-only templates/frontend.yaml >"$workdir/path-${td}.yaml"
 	assert_contains "$workdir/path-${td}.yaml" "global.spire.trustDomain=${td} builds the client ID in ${td}" \
 		"--client=daemon=spiffe://${td}/platform/daemon"
 done
 assert_absent "$workdir/path-beta.example.yaml" "the second install holds no ID of the first" \
 	"spiffe://alpha.example/"
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${PATH_CLIENT[@]}" --set credentials.spiffe.trustDomain=gamma.example \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${PATH_CLIENT[@]}" --set credentials.spiffe.trustDomain=gamma.example \
 	--show-only templates/frontend.yaml >"$workdir/path-own.yaml"
 assert_contains "$workdir/path-own.yaml" "with no global value, the fleet trust domain builds the ID" \
 	"--client=daemon=spiffe://gamma.example/platform/daemon"
-"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
+"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" "${BASE[@]}" "${SPIFFE[@]}" \
 	--set 'frontend.clients[1].name=daemon' \
 	--set 'frontend.clients[1].spiffePath=/platform/daemon' \
 	--set global.spire.trustDomain=example.org >"$workdir/path-federation.yaml"

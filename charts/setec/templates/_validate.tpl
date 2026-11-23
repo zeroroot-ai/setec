@@ -10,6 +10,7 @@ real manifest (validate.yaml) so render failures surface during
 {{- include "setec.validateSnapshotS3" . -}}
 {{- include "setec.validateSandboxClasses" . -}}
 {{- include "setec.validateOperatorSelector" . -}}
+{{- include "setec.validateSystemPolicy" . -}}
 {{- end -}}
 
 {{/*

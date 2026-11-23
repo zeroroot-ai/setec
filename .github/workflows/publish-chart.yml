@@ -80,6 +80,8 @@ jobs:
           mkdir -p /tmp/pulled
           helm pull "oci://ghcr.io/zeroroot-ai/charts/setec" --version "$ver" --destination /tmp/pulled
           helm template setec "/tmp/pulled/setec-$ver.tgz" \
+            --api-versions cilium.io/v2/CiliumNetworkPolicy \
+            --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy \
             --set webhook.certManager.enabled=true \
             --set webhook.certManager.issuerRef.name=probe \
             --set 'sandboxNamespaces={probe}' \

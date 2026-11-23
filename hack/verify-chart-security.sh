@@ -29,6 +29,11 @@ set -euo pipefail
 
 CHART_DIR="${1:-charts/setec}"
 HELM="${HELM:-helm}"
+# The default systemPolicy.engine is cilium, and the chart refuses to render
+# Cilium objects when the cluster has no Cilium CRDs. helm template reads no
+# cluster, so it gets the kinds from these flags.
+CILIUM_API=(--api-versions cilium.io/v2/CiliumNetworkPolicy
+	--api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy)
 # The launcher values that the chart requires (hack/chart-launcher-values.yaml).
 LAUNCHER_VALUES="$(dirname "$0")/chart-launcher-values.yaml"
 NS_A="sandbox-workloads"
@@ -71,7 +76,7 @@ assert_absent() {
 render() {
 	local out="$1"
 	shift
-	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+	"$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 		"$@" >"$out"
@@ -247,7 +252,7 @@ assert_contains "$workdir/all-on.yaml" "the operator gets the launcher flags" \
 	"--launcher-image=" \
 	"--disk-repo=" \
 	"--disk-public-key="
-if "$HELM" template setec "$CHART_DIR" \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	>/dev/null 2>&1; then
@@ -358,13 +363,13 @@ assert_contains "$workdir/fe-scope.stripped.yaml" "the frontend gets the pair gr
 	"name: setec-frontend-scope" \
 	"name: setec-sandbox-host-guard-pairs" \
 	"setec.zeroroot.ai/sandbox-namespace: \"true\""
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true "${FE[@]}" >/dev/null 2>&1; then
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true "${FE[@]}" >/dev/null 2>&1; then
 	pass "a frontend install renders with no static sandboxNamespaces"
 else
 	fail "a frontend install must render with no static sandboxNamespaces: the frontend makes the pair namespaces"
 fi
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
@@ -375,7 +380,7 @@ else
 	pass "a frontend with no enrolled client fails the render"
 fi
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set frontend.enabled=true \
@@ -409,7 +414,7 @@ assert_contains "$workdir/operator.stripped.yaml" "default reserved list reaches
 	"ff00::/8" \
 	"169.254.0.0/16"
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'netpol.reservedCIDRs={10.0.0.0/8,169.254.0.0/16}' \
@@ -419,7 +424,7 @@ else
 	pass "an IPv4-only reserved list fails the render"
 fi
 
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 	--set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'netpol.reservedCIDRs={fc00::/7,fe80::/10}' \
@@ -574,7 +579,7 @@ allowance_refused() {
 	local desc="$1" entries="$2"
 	printf 'sandboxClasses:\n  classes:\n    - name: t\n      spec:\n        defaultNetworkMode: none\n        egressAllowSelectors: %s\n' \
 		"$entries" >"$workdir/allowance-bad.yaml"
-	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" \
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" \
 		--set webhook.certManager.enabled=true \
 		--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 		-f "$workdir/allowance-bad.yaml" >/dev/null 2>&1; then
@@ -655,8 +660,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# The setec namespace has its own network policy (D76): a default deny with
-# DNS, and one allow for each component (templates/system-namespace-policy.yaml).
+# The setec namespace has its own network policy (docs/design/network-policy.md):
+# a default deny with DNS, and one allow for each component
+# (templates/system-namespace-policy.yaml, the cilium engine).
 # hack/check-system-policy.py checks the render. Each fixture below is a
 # render with one piece removed, and the checker must refuse it.
 # ---------------------------------------------------------------------------
@@ -726,7 +732,7 @@ for fx in no-deny no-node-agent no-frontend no-disk-builder no-image-verify \
 		pass "fixture $fx: the checker refuses it"
 	fi
 done
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
 	--set frontend.enabled=true --set frontend.tlsCertSecretName=fe-tls --set frontend.tlsClientCASecretName=fe-ca \
 	--set 'frontend.clients[0].name=saas' \
 	--set 'frontend.clients[0].spiffeID=spiffe://example.org/ns/gibson/sa/gibson-daemon' \
@@ -766,7 +772,7 @@ then
 else
 	fail "webhook callers: $(cat "$workdir/sp-webhook.out")"
 fi
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
 	--set 'systemPolicy.webhookCallers[0].namespace=gibson' \
 	>/dev/null 2>"$workdir/sp-nowhlabels.err"; then
 	fail "a webhook caller with no podLabels must fail the render"
@@ -775,7 +781,7 @@ elif grep -qF "systemPolicy.webhookCallers" "$workdir/sp-nowhlabels.err"; then
 else
 	fail "a webhook caller with no podLabels failed for another reason: $(tail -n1 "$workdir/sp-nowhlabels.err")"
 fi
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
 	--set "sandboxNamespaces={${NS_A},${NS_B}}" \
 	--set 'systemPolicy.metricsScrapers[0].namespace=' \
 	--set 'systemPolicy.metricsScrapers[0].podLabels.app\.kubernetes\.io/name=prometheus' \
@@ -818,7 +824,7 @@ then
 else
 	fail "image source at an IP address: $(cat "$workdir/sp-ipsource.out")"
 fi
-if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
 	--set 'launcher.imageSources[0].registry=registry.example.com' \
 	>/dev/null 2>"$workdir/sp-nohosts.err"; then
 	fail "an image source at a name with no hosts must fail the render"
@@ -827,6 +833,185 @@ elif grep -qF "needs its hosts" "$workdir/sp-nohosts.err"; then
 else
 	fail "a source with no hosts failed for another reason: $(tail -n1 "$workdir/sp-nohosts.err")"
 fi
+
+# ---------------------------------------------------------------------------
+# The two policy engines (setec#378). A cluster with no Cilium refuses the
+# default engine with a message, and installs with the networkpolicy engine,
+# which renders plain NetworkPolicy objects only. These renders pass no
+# --api-versions flag, so they see a cluster with no Cilium CRDs.
+# ---------------------------------------------------------------------------
+note "the cilium engine needs the Cilium CRDs, the networkpolicy engine does not (setec#378)"
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	>/dev/null 2>"$workdir/eng-nocrd.err"; then
+	fail "the cilium engine rendered Cilium objects on a cluster with no Cilium CRDs"
+elif grep -qF "has no CRD for CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy" "$workdir/eng-nocrd.err" \
+	&& grep -qF "systemPolicy.engine=networkpolicy" "$workdir/eng-nocrd.err"; then
+	pass "the cilium engine refuses a cluster with no Cilium CRDs, and names the other engine"
+else
+	fail "the cilium engine failed with another message: $(tail -n2 "$workdir/eng-nocrd.err")"
+fi
+if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set systemPolicy.engine=none >/dev/null 2>"$workdir/eng-bad.err"; then
+	fail "an unknown systemPolicy.engine must fail the render"
+elif grep -qF "systemPolicy.engine=\"none\" is not valid" "$workdir/eng-bad.err"; then
+	pass "an unknown systemPolicy.engine fails the render"
+else
+	fail "an unknown engine failed with another message: $(tail -n1 "$workdir/eng-bad.err")"
+fi
+
+# The inputs that the networkpolicy engine needs, for a cluster with flannel.
+# The disk registry and the image source are names, so each gets its CIDRs.
+NP=(--set systemPolicy.engine=networkpolicy
+	--set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10/32}'
+	--set 'systemPolicy.networkPolicy.webhookSourceCIDRs={10.42.0.0/24}'
+	--set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={198.51.100.0/24}'
+	--set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={203.0.113.5/32}')
+NP_ALL=("${NP[@]}" "${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
+	--set snapshots.s3.enabled=true --set snapshots.s3.bucket=setec-snapshots --set snapshots.s3.pathStyle=false
+	--set 'systemPolicy.networkPolicy.egress.snapshotStore.cidrs={198.18.0.0/24}'
+	--set 'systemPolicy.networkPolicy.egress.sigstore.cidrs={198.19.0.0/24}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}'
+	--set 'systemPolicy.webhookCallers[0].namespace=gibson'
+	--set 'systemPolicy.webhookCallers[0].podLabels.app\.kubernetes\.io/component=webhook-gate')
+npender() {
+	local out="$1"
+	shift
+	"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		--set "sandboxNamespaces={${NS_A},${NS_B}}" "$@" >"$out"
+}
+npender "$workdir/np-all.yaml" "${NP_ALL[@]}"
+npender "$workdir/np-default.yaml" "${NP[@]}"
+assert_absent "$workdir/np-all.yaml" "the networkpolicy engine renders no Cilium object" "cilium.io"
+assert_contains "$workdir/np-all.yaml" "the networkpolicy engine renders a namespace deny and a policy for each component" \
+	"name: setec-default-deny" "name: setec-operator" "name: setec-frontend" "name: setec-node-agent" \
+	"name: setec-disk-builder" "name: setec-image-verify"
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/np-all.yaml" setec-system >"$workdir/np-all.out"; then
+	pass "each component has an allow under a default deny with DNS, with the networkpolicy engine"
+else
+	fail "the networkpolicy engine policy is incomplete: $(cat "$workdir/np-all.out")"
+fi
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/np-default.yaml" setec-system >"$workdir/np-default.out"; then
+	pass "the default install has the default deny and the operator allow, with the networkpolicy engine"
+else
+	fail "the default networkpolicy install is incomplete: $(cat "$workdir/np-default.out")"
+fi
+# The Sandbox namespaces have the same default deny under both engines. It
+# is a plain NetworkPolicy, so Cilium is not needed.
+assert_contains "$workdir/np-all.yaml" "the Sandbox namespaces keep the baseline default deny with the networkpolicy engine" \
+	"name: setec-sandbox-baseline-deny" "podSelector: {}" "namespace: ${NS_A}" "namespace: ${NS_B}"
+assert_contains "$workdir/np-all.yaml" "the networkpolicy engine renders the host guard of the Sandbox namespaces" \
+	"name: setec-sandbox-host-guard"
+python3 - "$workdir/np-all.yaml" "$workdir" <<'PY'
+import copy, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+out = sys.argv[2]
+def save(name, ds):
+    yaml.safe_dump_all(ds, open(f"{out}/np-{name}.yaml", "w"))
+def netpol(d, suffix):
+    return d.get("kind") == "NetworkPolicy" and d["metadata"]["name"].endswith(suffix)
+save("no-deny", [d for d in docs if not netpol(d, "-default-deny")])
+for fx, suffix in (("no-node-agent", "-node-agent"), ("no-frontend", "-frontend"),
+                   ("no-disk-builder", "-disk-builder"), ("no-image-verify", "-image-verify")):
+    save(fx, [d for d in docs if not netpol(d, suffix)])
+def edit(name, suffix, fn):
+    c = copy.deepcopy(docs)
+    for d in c:
+        if netpol(d, suffix):
+            fn(d)
+    save(name, c)
+# A Job policy that reaches the world: the whole address space with no except list.
+edit("builder-world", "-disk-builder", lambda d: d["spec"]["egress"].append(
+    {"to": [{"ipBlock": {"cidr": "0.0.0.0/0"}}], "ports": [{"port": 443, "protocol": "TCP"}]}))
+edit("verify-world-v6", "-image-verify", lambda d: d["spec"]["egress"].append(
+    {"to": [{"ipBlock": {"cidr": "::/0"}}], "ports": [{"port": 443, "protocol": "TCP"}]}))
+# A rule with no port allows every port. A rule with no peer allows every peer.
+edit("rule-no-port", "-disk-builder", lambda d: d["spec"]["egress"][0].pop("ports"))
+edit("rule-no-peer", "-operator", lambda d: d["spec"]["egress"][0].pop("to"))
+# A metrics peer that matches Pods of every namespace.
+def widen(d):
+    for rule in d["spec"].get("ingress") or []:
+        for peer in rule.get("from") or []:
+            if "namespaceSelector" in peer:
+                peer["namespaceSelector"] = {"matchExpressions": [{"key": "kubernetes.io/metadata.name", "operator": "Exists"}]}
+edit("any-namespace", "-operator", widen)
+PY
+# The disk registry at an IP address needs no CIDR, and a fixture proves the
+# checker reads it.
+npender "$workdir/np-diskip.yaml" "${NP[@]}" --set 'launcher.diskRepo=10.43.0.9:5000/disks' \
+	--set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs=null'
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/np-diskip.yaml" setec-system >"$workdir/np-diskip.out" \
+	&& grep -qF 'cidr: "10.43.0.9/32"' "$workdir/np-diskip.yaml"; then
+	pass "a disk repository at an IP address is reached with no CIDR value"
+else
+	fail "a disk repository at an IP address: $(cat "$workdir/np-diskip.out")"
+fi
+# A build policy that does not reach the disk registry (an IP address here,
+# because the checker cannot read a name).
+python3 - "$workdir/np-diskip.yaml" "$workdir/np-builder-no-disk-registry.yaml" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+for d in docs:
+    if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"].endswith("-disk-builder"):
+        d["spec"]["egress"] = [e for e in d["spec"]["egress"]
+                               if not any((t.get("ipBlock") or {}).get("cidr") == "10.43.0.9/32" for t in e["to"])]
+yaml.safe_dump_all(docs, open(sys.argv[2], "w"))
+PY
+for fx in no-deny no-node-agent no-frontend no-disk-builder no-image-verify builder-world verify-world-v6 \
+	rule-no-port rule-no-peer builder-no-disk-registry any-namespace; do
+	if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/np-$fx.yaml" setec-system >/dev/null; then
+		fail "networkpolicy fixture $fx: the checker passed a render with a defect"
+	else
+		pass "networkpolicy fixture $fx: the checker refuses it"
+	fi
+done
+# A whole-family CIDR leaves out the reserved ranges, so a Job cannot reach the
+# cluster networks through it.
+npender "$workdir/np-public.yaml" "${NP[@]}" --set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={0.0.0.0/0}'
+if python3 "$(dirname "$0")/check-system-policy.py" "$workdir/np-public.yaml" setec-system >"$workdir/np-public.out" \
+	&& grep -qF -- '- "10.0.0.0/8"' "$workdir/np-public.yaml"; then
+	pass "a 0.0.0.0/0 destination leaves out the reserved ranges"
+else
+	fail "a 0.0.0.0/0 destination: $(cat "$workdir/np-public.out")"
+fi
+# An IP image source under this engine gets its address and port only.
+npender "$workdir/np-ipsource.yaml" "${NP[@]}" --set 'launcher.imageSources[0].registry=10.43.0.5:5000'
+if grep -qF 'cidr: "10.43.0.5/32"' "$workdir/np-ipsource.yaml" && grep -qF "port: 5000" "$workdir/np-ipsource.yaml"; then
+	pass "an image source at an IP address with no hosts renders its address and port, with the networkpolicy engine"
+else
+	fail "an image source at an IP address renders no allow, with the networkpolicy engine"
+fi
+# Each input that the engine needs fails the render with a message that names it.
+np_refused() {
+	local desc="$1" want="$2"
+	shift 2
+	if "$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		--set systemPolicy.engine=networkpolicy "$@" >/dev/null 2>"$workdir/np-refused.err"; then
+		fail "$desc must fail the render"
+	elif grep -qF -- "$want" "$workdir/np-refused.err"; then
+		pass "$desc fails the render"
+	else
+		fail "$desc failed with another message: $(tail -n1 "$workdir/np-refused.err")"
+	fi
+}
+np_refused "no API server CIDR" "systemPolicy.networkPolicy.apiServer.cidrs is required" \
+	--set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={198.51.100.0/24}' \
+	--set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={203.0.113.5/32}'
+np_refused "an image source at a name with no CIDR" "systemPolicy.networkPolicy.egress.imageSources.cidrs is required" \
+	--set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10/32}' \
+	--set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={203.0.113.5/32}'
+np_refused "a disk registry at a name with no CIDR" "systemPolicy.networkPolicy.egress.diskRegistry.cidrs is required" \
+	--set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10/32}' \
+	--set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={198.51.100.0/24}'
+np_refused "a snapshot store at a name with no CIDR" "systemPolicy.networkPolicy.egress.snapshotStore.cidrs is required" \
+	"${NP[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true \
+	--set snapshots.s3.enabled=true --set snapshots.s3.bucket=b --set snapshots.s3.pathStyle=false \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}' \
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}'
+np_refused "a value that is not a CIDR" "is not a CIDR" "${NP[@]}" \
+	--set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10}'
+np_refused "an empty port list" "must list at least one port" "${NP[@]}" \
+	--set 'systemPolicy.networkPolicy.egress.imageSources.ports=null'
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
