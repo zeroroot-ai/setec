@@ -135,6 +135,17 @@ devicePlugin:
   # offers its devices.
   tolerations:
     - operator: Exists
+  # -- nodeSelector limits the plugin to the nodes that match. The keys come
+  # on top of the fixed selector (kubernetes.io/arch=amd64,
+  # kubernetes.io/os=linux), and a fixed key wins. Empty runs the plugin on
+  # each amd64 Linux node. Set the label of the sandbox node pool, so the
+  # plugin takes no slot on a node that has no /dev/kvm and runs no launcher
+  # Pod. Use the same labels as nodeAgent.nodeSelector.
+  nodeSelector: {}
+  # -- affinity is the Pod affinity of the plugin. The scheduler applies it
+  # together with nodeSelector. Use it for a rule that a node selector cannot
+  # state, such as a node label with an operator.
+  affinity: {}
   resources:
     requests:
       cpu: 10m
@@ -479,9 +490,18 @@ nodeAgent:
     # for reproducible deploys.
     tag: ""
     pullPolicy: IfNotPresent
-  # -- nodeSelector of the node agent. Empty runs it on each node; the
-  # agent exits on a node with no /dev/kvm.
+  # -- nodeSelector of the node agent. The keys come on top of the fixed
+  # selector kubernetes.io/arch=amd64, and a fixed key wins. Empty runs it on
+  # each amd64 node; the agent exits on a node with no /dev/kvm.
   nodeSelector: {}
+  # -- affinity is the Pod affinity of the node agent. The scheduler applies
+  # it together with nodeSelector.
+  affinity: {}
+  # -- tolerations of the node agent. The default matches each NoSchedule
+  # taint, so the agent runs on each node that has KVM.
+  tolerations:
+    - operator: Exists
+      effect: NoSchedule
   # -- kubeletPodsDir is the Pod directory of the kubelet. The agent finds
   # the work volume of each launcher Pod under it to stage a restore and to
   # take a snapshot.
@@ -508,6 +528,12 @@ frontend:
     # for reproducible deploys.
     tag: ""
     pullPolicy: IfNotPresent
+  # nodeSelector, tolerations and affinity place the frontend Pods. The
+  # frontend mounts the SPIFFE Workload API socket of its node, so it needs a
+  # node that runs a SPIRE agent. Empty leaves the placement to the scheduler.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   # listenAddr is the gRPC bind address inside the Pod.
   listenAddr: ":50051"
   # servicePort is the ClusterIP service port.

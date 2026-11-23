@@ -52,6 +52,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
+setec.mergedNodeSelector renders one node selector from the fixed keys of a
+component and the keys that an install adds. Call it with
+(dict "fixed" <map> "user" <map>). A fixed key wins over the same key in
+"user", so an install cannot clear the arch or the OS gate of a component
+(docs/design/runtime.md).
+*/}}
+{{- define "setec.mergedNodeSelector" -}}
+{{- toYaml (merge (dict) .fixed (.user | default dict)) -}}
+{{- end -}}
+
+{{/*
 Name of the ServiceAccount the Deployment uses. If serviceAccount.create
 is true and no explicit name is given, fall back to the full chart name.
 */}}

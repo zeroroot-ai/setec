@@ -183,6 +183,23 @@ else
 	fail "the device plugin must mount exactly two host paths (the kubelet plugin directory and /dev)"
 fi
 
+# Placement values (setec#382). The fixed arch and OS keys stay, the keys of
+# an install come on top, and a fixed key wins over the same key of an install.
+render "$workdir/devplugin-placed.yaml" --show-only templates/device-plugin-daemonset.yaml \
+	--set 'devicePlugin.nodeSelector.setec\.zeroroot\.ai/pool=sandbox' \
+	--set 'devicePlugin.nodeSelector.kubernetes\.io/arch=arm64' \
+	--set 'devicePlugin.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=node.kubernetes.io/instance-type' \
+	--set 'devicePlugin.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=Exists'
+assert_contains "$workdir/devplugin-placed.yaml" "devicePlugin.nodeSelector joins the fixed selector and affinity renders" \
+	"kubernetes.io/arch: amd64" \
+	"kubernetes.io/os: linux" \
+	"setec.zeroroot.ai/pool: sandbox" \
+	"node.kubernetes.io/instance-type"
+assert_absent "$workdir/devplugin-placed.yaml" "a fixed selector key wins over the value of an install" \
+	"kubernetes.io/arch: arm64"
+assert_absent "$workdir/devplugin.stripped.yaml" "the default device plugin has no affinity" "affinity:"
+assert_absent "$workdir/devplugin.stripped.yaml" "the default device plugin has no extra selector key" "setec.zeroroot.ai/pool"
+
 # ---------------------------------------------------------------------------
 # The node agent has no Kubernetes credentials (setec#198).
 #

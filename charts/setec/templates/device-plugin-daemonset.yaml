@@ -51,9 +51,16 @@ spec:
           type: RuntimeDefault
       tolerations:
         {{- toYaml .Values.devicePlugin.tolerations | nindent 8 }}
+      {{- /* The arch and OS keys are fixed: the plugin image is single-arch
+      linux/amd64 (docs/design/runtime.md). The keys of devicePlugin.nodeSelector
+      come on top, so an install can limit the plugin to its sandbox node
+      pool. */}}
       nodeSelector:
-        kubernetes.io/arch: amd64
-        kubernetes.io/os: linux
+        {{- include "setec.mergedNodeSelector" (dict "fixed" (dict "kubernetes.io/arch" "amd64" "kubernetes.io/os" "linux") "user" .Values.devicePlugin.nodeSelector) | nindent 8 }}
+      {{- with .Values.devicePlugin.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: device-plugin
           image: "{{ .Values.devicePlugin.image.repository }}:{{ .Values.devicePlugin.image.tag | default .Chart.AppVersion }}"
