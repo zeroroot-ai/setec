@@ -8,7 +8,7 @@ the parts of the runtime.
 
 ## KVM
 
-Firecracker is a [Kernel-based Virtual Machine](https://www.linux-kvm.org/)
+Firecracker is a [Kernel-based Virtual Machine](https://docs.kernel.org/virt/kvm/index.html)
 (KVM) monitor. It boots a guest kernel inside a hardware-virtualized
 context that the CPU and the Linux KVM subsystem provide. That hardware
 boundary is what makes microVM isolation stronger than shared-kernel
