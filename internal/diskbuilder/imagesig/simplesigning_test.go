@@ -85,7 +85,7 @@ func pushSimpleSignature(t *testing.T, ref name.Digest, key simpleKey, text, sig
 // registry for a nil handler, and returns its reference by digest.
 func signedImage(t *testing.T, wrap func(http.Handler) http.Handler) name.Digest {
 	t.Helper()
-	var h http.Handler = registry.New()
+	h := http.Handler(registry.New())
 	if wrap != nil {
 		h = wrap(h)
 	}
@@ -135,7 +135,7 @@ func TestVerifyImage_SimpleSigning(t *testing.T) {
 // that the key did not sign, and a payload of another type do not verify.
 func TestVerifyImage_SimpleSigningRefusals(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
+	for caseName, tc := range map[string]struct {
 		text   func(digest string) []byte
 		signed func(digest string) []byte
 	}{
@@ -156,7 +156,7 @@ func TestVerifyImage_SimpleSigningRefusals(t *testing.T) {
 			},
 		},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(caseName, func(t *testing.T) {
 			t.Parallel()
 			ref := signedImage(t, nil)
 			key := newSimpleKey(t)

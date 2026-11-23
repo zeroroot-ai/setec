@@ -302,7 +302,9 @@ func verifyFailed(resultFile string, err error) int {
 
 // runVerify checks the cosign signature of image against policy. It exits
 // 0 when the image verifies, 1 when it does not, and 2 on a bad policy.
-func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp, resultFile string, pull authn.Keychain) int {
+func runVerify(
+	image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp, resultFile string, pull authn.Keychain,
+) int {
 	if err := policy.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
 		return 2

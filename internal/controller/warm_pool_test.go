@@ -419,7 +419,7 @@ func TestVerifyCause(t *testing.T) {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "v-abc", Namespace: "setec-system", Labels: map[string]string{batchv1.JobNameLabel: "v"}},
+		Name: "v-abc", Namespace: "setec-system", Labels: map[string]string{batchv1.JobNameLabel: "v"},
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
 			Name: builderContainer,
 			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
