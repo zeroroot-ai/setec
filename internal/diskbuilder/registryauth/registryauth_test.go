@@ -180,4 +180,10 @@ func TestNew(t *testing.T) {
 	if got, want := Names(), slices.Sorted(slices.Values(diskbuilder.PullProviders)); !slices.Equal(got, want) {
 		t.Fatalf("names = %v, diskbuilder.PullProviders = %v; they must be equal", got, want)
 	}
+	// Each push provider is a provider that the builder knows.
+	for _, n := range diskbuilder.PushProviders {
+		if !slices.Contains(Names(), n) {
+			t.Fatalf("diskbuilder.PushProviders names %q, which the builder does not know (%v)", n, Names())
+		}
+	}
 }

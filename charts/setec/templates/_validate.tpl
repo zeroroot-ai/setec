@@ -13,6 +13,7 @@ real manifest (validate.yaml) so render failures surface during
 {{- $_ := include "setec.devicePluginHostDir" . -}}
 {{- include "setec.validateSystemPolicy" . -}}
 {{- include "setec.validateDiskBuilderPull" . -}}
+{{- include "setec.validateDiskBuilderPush" . -}}
 {{- end -}}
 
 {{/*
@@ -138,4 +139,60 @@ render and not the first disk build.
 {{- if and $pull.aws.roleArn (not (include "setec.diskBuilderServiceAccountName" .)) -}}
 {{- fail "launcher.diskBuilder.pull.aws.roleArn needs a named ServiceAccount for the disk Jobs: the token that the role trusts belongs to it. Set launcher.diskBuilder.serviceAccount.create=true or give it a name." -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Disk builder push access (setec#393). The same rules as the flags of the
+operator (controller.ValidatePushIdentity), so a mistake fails the render and
+not the first disk build. The provider ecr needs a web identity role, because
+the identity of the Pod or of the node reaches the build container too. The
+audience of the push token differs from the audience of the pull token,
+because both tokens belong to one ServiceAccount.
+*/}}
+{{- define "setec.validateDiskBuilderPush" -}}
+{{- $push := .Values.launcher.diskBuilder.push -}}
+{{- range $p := $push.providers -}}
+{{- if not (has $p (list "ecr")) -}}
+{{- fail (printf "launcher.diskBuilder.push.providers: %q is not a known provider. Use \"ecr\"." $p) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $push.aws.roleArn (not (has "ecr" $push.providers)) -}}
+{{- fail "launcher.diskBuilder.push.aws.roleArn needs launcher.diskBuilder.push.providers to hold \"ecr\": the provider uses the role." -}}
+{{- end -}}
+{{- if and (has "ecr" $push.providers) (not $push.aws.roleArn) -}}
+{{- fail "launcher.diskBuilder.push.providers holds \"ecr\", so launcher.diskBuilder.push.aws.roleArn is required. The identity of the Pod or of the node reaches the build container too. Only a web identity token, which only the check and publish containers hold, keeps the push right out of the build container." -}}
+{{- end -}}
+{{- if and $push.aws.roleArn (not (hasPrefix "arn:" $push.aws.roleArn)) -}}
+{{- fail (printf "launcher.diskBuilder.push.aws.roleArn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>), got %q" $push.aws.roleArn) -}}
+{{- end -}}
+{{- if and $push.aws.roleArn (not (include "setec.diskBuilderServiceAccountName" .)) -}}
+{{- fail "launcher.diskBuilder.push.aws.roleArn needs a named ServiceAccount for the disk Jobs: the token that the role trusts belongs to it. Set launcher.diskBuilder.serviceAccount.create=true or give it a name." -}}
+{{- end -}}
+{{- if and $push.aws.roleArn (or (not $push.aws.audience) (eq $push.aws.audience "sts.amazonaws.com")) -}}
+{{- fail "launcher.diskBuilder.push.aws.audience must name an audience other than sts.amazonaws.com, the audience of the pull token. With the same audience the build container could assume the push role." -}}
+{{- end -}}
+{{- if and (has "ecr" $push.providers) (not .Values.launcher.diskRepo) -}}
+{{- fail "launcher.diskBuilder.push.providers needs launcher.diskRepo: it names the repository that the Job pushes to." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+setec.pushHosts returns, as a JSON list, the hosts that the disk Job reaches to
+push, besides the disk registry: launcher.diskBuilder.push.hosts, and with the
+provider ecr and a disk repository in an ECR registry, the ECR API and the STS
+endpoint of its region. The cilium engine allows them.
+*/}}
+{{- define "setec.pushHosts" -}}
+{{- $push := .Values.launcher.diskBuilder.push -}}
+{{- $hosts := $push.hosts | default list -}}
+{{- if and (has "ecr" $push.providers) .Values.launcher.diskRepo -}}
+{{- $registry := (include "setec.registryAddress" .Values.launcher.diskRepo | fromJson).host -}}
+{{- $re := "^[0-9]{12}\\.dkr\\.ecr\\.([a-z0-9-]+)\\.(amazonaws\\.com(?:\\.cn)?)$" -}}
+{{- if regexMatch $re $registry -}}
+{{- $region := regexReplaceAll $re $registry "${1}" -}}
+{{- $domain := regexReplaceAll $re $registry "${2}" -}}
+{{- $hosts = concat $hosts (list (printf "api.ecr.%s.%s" $region $domain) (printf "sts.%s.%s" $region $domain)) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson (uniq $hosts) -}}
 {{- end -}}

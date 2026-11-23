@@ -109,6 +109,9 @@ func runMain() int {
 		diskPullSecret      string
 		diskPullProviders   []string
 		diskPullAWSRoleARN  string
+		diskPushProviders   []string
+		diskPushAWSRoleARN  string
+		diskPushAWSAudience string
 		diskServiceAccount  string
 		operatorNamespace   string
 		warmPoolNamespace   string
@@ -166,6 +169,16 @@ func runMain() int {
 	pflag.StringVar(&diskPullAWSRoleARN, "disk-pull-aws-role-arn", "",
 		"Optional IAM role that the build container and the image verify Job assume with a web identity token of the "+
 			"Job ServiceAccount, to read Amazon ECR. The role grants pull rights only. Needs --disk-pull-provider=ecr.")
+	pflag.StringArrayVar(&diskPushProviders, "disk-push-provider", nil,
+		"A cloud credential provider that the check and publish containers of the disk Job use to push to "+
+			"--disk-repo ("+strings.Join(diskbuilder.PushProviders, ", ")+"). Repeat it for each provider. "+
+			"The build container and the image verify Job never get it. A provider needs --disk-push-aws-role-arn.")
+	pflag.StringVar(&diskPushAWSRoleARN, "disk-push-aws-role-arn", "",
+		"The IAM role that the check and publish containers assume with a web identity token of the Job "+
+			"ServiceAccount, to push to Amazon ECR. Needs --disk-push-provider=ecr and --disk-service-account.")
+	pflag.StringVar(&diskPushAWSAudience, "disk-push-aws-audience", "setec-disk-push",
+		"The audience of the push token. It must differ from sts.amazonaws.com, the audience of the pull token, "+
+			"so that the token of the build container cannot assume the push role.")
 	pflag.StringVar(&diskServiceAccount, "disk-service-account", "",
 		"Optional ServiceAccount of the disk Job Pods. An identity that the cloud binds to a ServiceAccount needs one.")
 	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
@@ -287,6 +300,12 @@ func runMain() int {
 	}
 	if diskPullAWSRoleARN != "" && !slices.Contains(diskPullProviders, "ecr") {
 		setupLog.Error(nil, "--disk-pull-aws-role-arn needs --disk-pull-provider=ecr: the role is used by that provider")
+		return 1
+	}
+	if err := controller.ValidatePushIdentity(
+		diskPushProviders, diskPushAWSRoleARN, diskPushAWSAudience, diskServiceAccount,
+	); err != nil {
+		setupLog.Error(err, "The disk push identity is not valid")
 		return 1
 	}
 
@@ -438,6 +457,7 @@ func runMain() int {
 		Image: diskBuilderImage, Namespace: operatorNamespace,
 		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
 		PullSecret: diskPullSecret, PullProviders: diskPullProviders, PullAWSRoleARN: diskPullAWSRoleARN,
+		PushProviders: diskPushProviders, PushAWSRoleARN: diskPushAWSRoleARN, PushAWSAudience: diskPushAWSAudience,
 		ServiceAccount:  diskServiceAccount,
 		ImageRegistries: imageRegistries,
 		Reader:          mgr.GetAPIReader(),

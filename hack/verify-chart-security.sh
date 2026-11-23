@@ -1339,6 +1339,91 @@ for engine in cilium networkpolicy; do
 		--set observability.otlpEndpoint=otel.example.com:port
 done
 
+# Push access of the disk Jobs (setec#393). The check and publish containers
+# push to the disk repository with a cloud identity of their own. The build
+# container never holds it. The Job is made by the operator, so the chart
+# renders its flags and its egress, and the unit tests of internal/controller
+# check the Job shape.
+# ---------------------------------------------------------------------------
+note "disk Job push access (setec#393)"
+PUSH_ROLE=arn:aws:iam::123456789012:role/setec-push
+ECR_DISK=(--set launcher.diskRepo=123456789012.dkr.ecr.eu-west-1.amazonaws.com/setec-disks
+	--set 'launcher.imageSources[0].registry=ghcr.io' --set 'launcher.imageSources[0].hosts={ghcr.io}')
+PUSH=(--set 'launcher.diskBuilder.push.providers={ecr}' --set "launcher.diskBuilder.push.aws.roleArn=$PUSH_ROLE")
+render "$workdir/push-default.yaml" "${ECR_DISK[@]}"
+assert_absent "$workdir/push-default.yaml" "no push flag by default" "--disk-push-"
+assert_absent "$workdir/push-default.yaml" "no ECR host is allowed by default" "api.ecr."
+render "$workdir/push-set.yaml" "${ECR_DISK[@]}" "${PUSH[@]}"
+assert_contains "$workdir/push-set.yaml" "the operator gets the push provider, the role and the audience" \
+	"--disk-push-provider=ecr" \
+	"--disk-push-aws-role-arn=$PUSH_ROLE" \
+	"--disk-push-aws-audience=setec-disk-push"
+assert_absent "$workdir/push-set.yaml" "the push role is not the pull role" "--disk-pull-aws-role-arn"
+assert_contains "$workdir/push-set.yaml" "the cilium engine allows the ECR API and the STS endpoint of the region of the disk repository" \
+	'matchName: "api.ecr.eu-west-1.amazonaws.com"' \
+	'matchName: "sts.eu-west-1.amazonaws.com"'
+# The two hosts reach the disk build Job only. No other policy gets them.
+if python3 - "$workdir/push-set.yaml" >"$workdir/push-hosts.out" 2>&1 <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+hosts = {"api.ecr.eu-west-1.amazonaws.com", "sts.eu-west-1.amazonaws.com"}
+for d in docs:
+    if d.get("kind") != "CiliumNetworkPolicy":
+        continue
+    got = {f["matchName"] for e in d["spec"].get("egress") or [] for f in e.get("toFQDNs") or []}
+    name = d["metadata"]["name"]
+    if name.endswith("-disk-builder"):
+        if not hosts <= got:
+            sys.exit(f"{name} lacks {hosts - got}")
+    elif hosts & got:
+        sys.exit(f"{name} reaches {hosts & got}")
+PY
+then
+	pass "the ECR hosts reach the disk build Job only"
+else
+	fail "the ECR hosts reach a Pod that has no use for them: $(cat "$workdir/push-hosts.out")"
+fi
+render "$workdir/push-hosts.yaml" "${ECR_DISK[@]}" "${PUSH[@]}" --set 'launcher.diskBuilder.push.hosts={ecr-fips.example.test,sts.eu-west-1.amazonaws.com}'
+assert_contains "$workdir/push-hosts.yaml" "an extra push host is allowed" 'matchName: "ecr-fips.example.test"'
+if [ "$(grep -cF 'matchName: "sts.eu-west-1.amazonaws.com"' "$workdir/push-hosts.yaml")" -eq 1 ]; then
+	pass "a host that is derived and listed is allowed once"
+else
+	fail "a host that is derived and listed appears more than once"
+fi
+render "$workdir/push-np.yaml" "${ECR_DISK[@]}" "${PUSH[@]}" "${NP[@]}" --set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={0.0.0.0/0}'
+assert_absent "$workdir/push-np.yaml" "the networkpolicy engine renders no Cilium object with a push identity" "cilium.io"
+assert_contains "$workdir/push-np.yaml" "the operator gets the push flags under the networkpolicy engine" "--disk-push-provider=ecr"
+render "$workdir/push-both.yaml" "${ECR_DISK[@]}" "${PUSH[@]}" --set 'launcher.diskBuilder.pull.providers={ecr}' \
+	--set launcher.diskBuilder.pull.aws.roleArn=arn:aws:iam::123456789012:role/setec-pull
+assert_contains "$workdir/push-both.yaml" "the pull role and the push role are two flags" \
+	"--disk-pull-aws-role-arn=arn:aws:iam::123456789012:role/setec-pull" "--disk-push-aws-role-arn=$PUSH_ROLE"
+disk_push_refused() {
+	local desc="$1" want="$2"
+	shift 2
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		--set "sandboxNamespaces={${NS_A}}" "$@" >/dev/null 2>"$workdir/push-refused.err"; then
+		fail "$desc must fail the render"
+	elif grep -qF -- "$want" "$workdir/push-refused.err"; then
+		pass "$desc fails the render"
+	else
+		fail "$desc failed with another message: $(tail -n1 "$workdir/push-refused.err")"
+	fi
+}
+disk_push_refused "a push provider with no role" "launcher.diskBuilder.push.aws.roleArn is required" \
+	--set 'launcher.diskBuilder.push.providers={ecr}'
+disk_push_refused "a push role with no provider" "needs launcher.diskBuilder.push.providers" \
+	--set "launcher.diskBuilder.push.aws.roleArn=$PUSH_ROLE"
+disk_push_refused "an unknown push provider" "is not a known provider" \
+	--set 'launcher.diskBuilder.push.providers={gcr}'
+disk_push_refused "a push role that is not an ARN" "must be an IAM role ARN" \
+	--set 'launcher.diskBuilder.push.providers={ecr}' --set launcher.diskBuilder.push.aws.roleArn=push
+disk_push_refused "the pull audience for the push token" "other than sts.amazonaws.com" "${PUSH[@]}" \
+	--set launcher.diskBuilder.push.aws.audience=sts.amazonaws.com
+disk_push_refused "an empty push audience" "other than sts.amazonaws.com" "${PUSH[@]}" \
+	--set launcher.diskBuilder.push.aws.audience=
+disk_push_refused "a push role with no ServiceAccount" "needs a named ServiceAccount" "${PUSH[@]}" \
+	--set launcher.diskBuilder.serviceAccount.create=false
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

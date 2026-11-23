@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,22 @@ type DiskBuilderConfig struct {
 	// rights and no push right: the Job ServiceAccount is the same for each
 	// container, and the check and publish containers hold no token.
 	PullAWSRoleARN string
+	// PushProviders name the cloud credential providers that the check and
+	// publish containers use to push to the disk repository, such as "ecr".
+	// Only those two containers get the provider and its identity. The build
+	// container and the image verify container never do.
+	PushProviders []string
+	// PushAWSRoleARN is the IAM role that the check and publish containers
+	// assume with a web identity token. The operator projects a second token
+	// of the Job ServiceAccount into those two containers, for the audience
+	// PushAWSAudience, which differs from the audience of the pull token. The
+	// trust policy of the push role requires that audience, so the token of
+	// the build container, which has the audience of the pull token, cannot
+	// assume the push role.
+	PushAWSRoleARN string
+	// PushAWSAudience is the audience of the push token. The IAM OpenID
+	// Connect provider of the cluster lists it as a client ID.
+	PushAWSAudience string
 	// ServiceAccount is the ServiceAccount of the Job Pods. Empty means the
 	// default of the namespace. The Pod has no API token. An identity that
 	// the cloud binds to a ServiceAccount (IAM roles for service accounts,
@@ -133,6 +150,10 @@ const (
 	awsTokenDir      = "/var/run/secrets/setec/aws" //nolint:gosec // a path
 	awsTokenAudience = "sts.amazonaws.com"          //nolint:gosec // the audience of a token
 	awsTokenSeconds  = 3600
+	// The web identity token of the check and publish containers. Its audience
+	// is PushAWSAudience, so the pull token cannot assume the push role.
+	awsPushTokenVolume = "aws-push-token"                  //nolint:gosec // a volume name
+	awsPushTokenDir    = "/var/run/secrets/setec/aws-push" //nolint:gosec // a path
 	// builderWorkDir is the emptyDir of a disk builder Job.
 	builderWorkDir   = "/work"
 	diskBuildRequeue = 5 * time.Second
@@ -511,6 +532,68 @@ func (cfg DiskBuilderConfig) grantPull(spec *corev1.PodSpec, c *corev1.Container
 	}
 }
 
+// ValidatePushIdentity checks the flags of the push identity at startup, so a
+// mistake stops the operator and does not wait for the first disk build. A
+// provider must be one that the builder knows. The provider ecr needs a web
+// identity role, because that is the one way that keeps the push identity out
+// of the build container: the identity that the cluster gives to a Pod (EKS
+// Pod Identity, the role of the node) reaches each container of the Job Pod.
+// The audience of the push token must differ from the audience of the pull
+// token, because the two tokens belong to the same ServiceAccount and the
+// audience is the one claim that tells them apart.
+func ValidatePushIdentity(providers []string, roleARN, audience, serviceAccount string) error {
+	for _, p := range providers {
+		if !slices.Contains(diskbuilder.PushProviders, p) {
+			return fmt.Errorf("--disk-push-provider %q is not known (known: %s)", p, strings.Join(diskbuilder.PushProviders, ", "))
+		}
+	}
+	hasECR := slices.Contains(providers, "ecr")
+	switch {
+	case roleARN != "" && !hasECR:
+		return errors.New("--disk-push-aws-role-arn needs --disk-push-provider=ecr: the role is used by that provider")
+	case hasECR && roleARN == "":
+		return errors.New("--disk-push-provider=ecr needs --disk-push-aws-role-arn. The identity of the Pod or of the node " +
+			"reaches the build container too, so only a web identity token, which only the check and publish containers hold, keeps the push identity out of it")
+	case roleARN != "" && !strings.HasPrefix(roleARN, "arn:"):
+		return fmt.Errorf("--disk-push-aws-role-arn must be an IAM role ARN, got %q", roleARN)
+	case roleARN != "" && serviceAccount == "":
+		return errors.New("--disk-push-aws-role-arn needs --disk-service-account: the token that the role trusts belongs to it")
+	case roleARN != "" && (audience == "" || audience == awsTokenAudience):
+		return fmt.Errorf("--disk-push-aws-audience must name an audience other than %s, the audience of the pull token. "+
+			"With the same audience the build container could assume the push role", awsTokenAudience)
+	}
+	return nil
+}
+
+// grantPush gives container c the means to push to the disk repository with
+// an identity of the cloud: the providers, and the web identity token of the
+// push role. Only the check and publish containers call it. The container
+// that reads an image gets none of it (grantPull). The token volume is added
+// once, and each of the two containers mounts it.
+func (cfg DiskBuilderConfig) grantPush(spec *corev1.PodSpec, c *corev1.Container) {
+	args := make([]string, 0, 2*len(cfg.PushProviders)+len(c.Args))
+	for _, p := range cfg.PushProviders {
+		args = append(args, "--push-auth", p)
+	}
+	c.Args = append(args, c.Args...)
+	if cfg.PushAWSRoleARN == "" {
+		return
+	}
+	if !slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == awsPushTokenVolume }) {
+		seconds := int64(awsTokenSeconds)
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: awsPushTokenVolume, Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+				Audience: cfg.PushAWSAudience, ExpirationSeconds: &seconds, Path: "token",
+			}}},
+		}})
+	}
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: awsPushTokenVolume, MountPath: awsPushTokenDir, ReadOnly: true})
+	c.Env = append(c.Env,
+		corev1.EnvVar{Name: "AWS_ROLE_ARN", Value: cfg.PushAWSRoleARN},
+		corev1.EnvVar{Name: "AWS_WEB_IDENTITY_TOKEN_FILE", Value: awsPushTokenDir + "/token"},
+		corev1.EnvVar{Name: "AWS_ROLE_SESSION_NAME", Value: "setec-disk-publisher"})
+}
+
 // diskJob is the Job that makes the disk of image for the key keyID. The
 // containers share the work volume. Only check and publish mount the push
 // credential, and only publish mounts the signature. The build container,
@@ -543,16 +626,17 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *bat
 	}
 	build := container(builderContainer, []string{"--work", builderWorkDir, "build", image}, nil, nil)
 	cfg.grantPull(spec, &build)
-	spec.InitContainers = []corev1.Container{
-		container(checkContainer, []string{"--disk-repo", diskRepo, "--key-id", keyID, "check", image}, pushMounts, pushEnv),
-		build,
-	}
+	check := container(checkContainer, []string{"--disk-repo", diskRepo, "--key-id", keyID, "check", image}, pushMounts, pushEnv)
+	cfg.grantPush(spec, &check)
+	spec.InitContainers = []corev1.Container{check, build}
 	pubMounts := append(append([]corev1.VolumeMount{}, pushMounts...),
 		corev1.VolumeMount{Name: "signature", MountPath: signatureDir, ReadOnly: true})
-	spec.Containers = []corev1.Container{container(publishContainer, []string{
+	publish := container(publishContainer, []string{
 		"--disk-repo", diskRepo, "--key-id", keyID, "--work", builderWorkDir,
 		"--signature-file", signatureDir + "/" + signatureKey, tempDirFlag, builderWorkDir, "publish", image,
-	}, pubMounts, pushEnv)}
+	}, pubMounts, pushEnv)
+	cfg.grantPush(spec, &publish)
+	spec.Containers = []corev1.Container{publish}
 	return job
 }
 

@@ -400,6 +400,17 @@ spec:
   egress:
     {{- include "setec.imageSourceEgress" (dict "sources" $sources "diskRegistry" $registry "endpoints" $sp.credentialEndpoints) | nindent 4 }}
     {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
+    {{- $pushHosts := include "setec.pushHosts" $ | fromJsonArray }}
+    {{- if $pushHosts }}
+    - toFQDNs:
+        {{- range $pushHosts }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    {{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

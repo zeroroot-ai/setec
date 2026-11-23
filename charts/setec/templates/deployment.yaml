@@ -100,6 +100,13 @@ spec:
             {{- with .diskBuilder.pull.aws.roleArn }}
             - --disk-pull-aws-role-arn={{ . }}
             {{- end }}
+            {{- range .diskBuilder.push.providers }}
+            - --disk-push-provider={{ . }}
+            {{- end }}
+            {{- with .diskBuilder.push.aws.roleArn }}
+            - --disk-push-aws-role-arn={{ . }}
+            - --disk-push-aws-audience={{ $.Values.launcher.diskBuilder.push.aws.audience }}
+            {{- end }}
             {{- with (include "setec.diskBuilderServiceAccountName" $) }}
             - --disk-service-account={{ . }}
             {{- end }}

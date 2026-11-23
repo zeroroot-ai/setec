@@ -420,7 +420,7 @@ Pick one of these ways. A pull Secret answers first when it names the registry.
 | EKS Pod Identity (ECR) | `pull.providers: [ecr]`, a Pod Identity association of `serviceAccount.name` | The container credentials that the cluster gives to the Pod |
 | Node role (ECR) | `pull.providers: [ecr]` | The instance role of the node |
 
-With `pull.aws.roleArn`, only the build container and the image verify container get the token. With the other two cloud ways, the cluster gives the identity to each container of the Job pod, so the identity must grant pull rights only. Give the push credential to check and publish with `launcher.diskBuilder.registrySecret`. An identity that can push to the disk repository must not reach the Job pod.
+With `pull.aws.roleArn`, only the build container and the image verify container get the token. With the other two cloud ways, the cluster gives the identity to each container of the Job pod, so the identity must grant pull rights only. Give the push credential to check and publish with `launcher.diskBuilder.registrySecret`, or with `launcher.diskBuilder.push` (see "Pushing to a private disk repository"). An identity of the Pod or of the node that can push to the disk repository must not reach the Job pod.
 
 #### Amazon ECR
 
@@ -449,6 +449,36 @@ With `pull.aws.roleArn`, only the build container and the image verify container
 The ECR provider reads the account and the region from the registry host, so one install reads registries of more than one account and region. The token lasts twelve hours, and the builder asks again before it ends. Another cloud adds a provider in `internal/diskbuilder/registryauth` and a name in `diskbuilder.PullProviders`. The values and the Job stay the same.
 
 The system namespace policy still limits the Job pod to the registries of `launcher.imageSources`. The Job needs these destinations to get a token: the ECR API and the STS endpoint for a web identity, the Pod Identity agent for Pod Identity, and the instance metadata service for the node role. Give the first as hosts under the `cilium` engine, or as CIDRs in `systemPolicy.networkPolicy.egress.imageSources` under the `networkpolicy` engine. The last two have no host name. Give them in `systemPolicy.credentialEndpoints` as a CIDR and its ports: `169.254.170.23/32` on port 80 for the Pod Identity agent, and `169.254.169.254/32` on port 80 for the instance metadata service. Both engines read this value. The check and publish containers share the network of the Job pod, so they reach these addresses too.
+
+### Pushing to a private disk repository
+
+The check and publish containers of the disk Job push the disk and its signature to `launcher.diskRepo`. A static Secret (`launcher.diskBuilder.registrySecret`) cannot hold the credential of Amazon ECR, because an ECR token lasts twelve hours. `launcher.diskBuilder.push` gives those two containers a cloud identity instead, behind the same `registryauth.Provider` interface as the pull side. The two sides stay apart:
+
+- The push identity reaches the check and publish containers only. The build container and the image verify Job read the image of a tenant, and they hold no part of it. A unit test of the Job shape proves this (`TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish`).
+- The pull Secret and the pull role stay with the build container and the image verify Job. The image of a tenant still reaches the build container only.
+- A static `registrySecret` still works beside a provider, and answers first.
+
+The provider `ecr` needs `push.aws.roleArn`. The operator projects a second token of the Job ServiceAccount into the check and publish containers, and the builder assumes the role with it. The chart refuses a provider with no role. The reason is that the identity of the Pod (EKS Pod Identity) or of the node reaches each container of the Job pod, so it would give the push right to the build container too. Use `registrySecret` and a token refresher if you cannot use a web identity.
+
+Both tokens belong to the same ServiceAccount, so the audience is the one claim that tells them apart. The pull token has the audience `sts.amazonaws.com`. The push token has the audience `push.aws.audience` (default `setec-disk-push`). The two audiences must differ, and the render fails when they do not. Without that, the build container could use its own token to assume the push role.
+
+1. Create the ECR repository of `launcher.diskRepo`. ECR makes none on a push.
+2. Add the audience as a client ID to the IAM OpenID Connect provider of the cluster: `aws iam add-client-id-to-open-id-connect-provider --open-id-connect-provider-arn <arn> --client-id setec-disk-push`.
+3. Create an IAM role with `ecr:GetAuthorizationToken`, and on the disk repository `ecr:BatchCheckLayerAvailability`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload` and `ecr:PutImage`.
+4. Trust the OIDC provider for the ServiceAccount of the disk Jobs, `system:serviceaccount:<namespace>:<fullname>-disk-builder`, with the condition `<issuer>:aud` equal to `setec-disk-push`. Give the pull role the condition `<issuer>:aud` equal to `sts.amazonaws.com`.
+5. Set the values:
+
+   ```yaml
+   launcher:
+     diskRepo: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/setec-disks
+     diskBuilder:
+       push:
+         providers: [ecr]
+         aws:
+           roleArn: arn:aws:iam::123456789012:role/setec-disk-push
+   ```
+
+The `cilium` engine allows `api.ecr.<region>.amazonaws.com` and `sts.<region>.amazonaws.com` for the disk Job by itself, from the region of the disk repository. `push.hosts` adds more, for example the hosts of a FIPS endpoint. The `networkpolicy` engine reads the CIDRs of `systemPolicy.networkPolicy.egress.diskRegistry`. List the ECR API and the STS endpoint there too, as the flannel example above does with `0.0.0.0/0`. The disk Job pod shares one network, so these destinations are open to its three containers.
 
 ### Sandbox egress posture
 

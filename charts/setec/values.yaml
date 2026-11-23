@@ -102,7 +102,8 @@ launcher:
     signingSecret: ""
     # -- registrySecret is an optional kubernetes.io/dockerconfigjson Secret
     # with the push credentials of diskRepo. Only the check and publish
-    # containers of the disk Job mount it.
+    # containers of the disk Job mount it. A registry with a short-lived token,
+    # such as Amazon ECR, needs push instead.
     registrySecret: ""
     # -- pull gives the container that reads the launcher image the means to
     # read a private registry. That container is the build container of the
@@ -137,6 +138,47 @@ launcher:
         # ServiceAccount, or the role of the node. Those identities reach
         # each container of the Job Pod, so they too must grant pull only.
         roleArn: ""
+    # -- push gives the containers that push the disk the means to push to a
+    # private disk repository (diskRepo) with a cloud identity, with no static
+    # Secret. Those containers are the check and publish containers of the disk
+    # Job. The build container and the image verify Job never get it, because
+    # they read the image of a tenant. With nothing set, the repository takes
+    # registrySecret, as before. registrySecret and a provider work together:
+    # the Secret answers first.
+    push:
+      # -- providers name the clouds that give a short-lived registry token by
+      # an identity of the Job. One is known: "ecr" (Amazon ECR). An ECR token
+      # lasts twelve hours, so a static Secret cannot hold it. The provider
+      # needs aws.roleArn. The identity of the Pod or of the node (EKS Pod
+      # Identity, the role of the node) reaches each container of the Job Pod,
+      # so it would give the push right to the build container too. The chart
+      # refuses it. Create the repository first: ECR makes none on a push.
+      providers: []
+      aws:
+        # -- roleArn is an IAM role for the provider "ecr". The operator projects
+        # a second token of the Job ServiceAccount into the check and publish
+        # containers only, and the builder assumes the role with it. The
+        # build container holds no such token. The role grants
+        # ecr:GetAuthorizationToken, and for the disk repository
+        # ecr:BatchCheckLayerAvailability, ecr:BatchGetImage,
+        # ecr:GetDownloadUrlForLayer, ecr:InitiateLayerUpload,
+        # ecr:UploadLayerPart, ecr:CompleteLayerUpload and ecr:PutImage.
+        roleArn: ""
+        # -- audience is the audience of the push token. It must not be
+        # sts.amazonaws.com, which is the audience of the pull token. Both
+        # tokens belong to the same ServiceAccount, so the audience is the one
+        # claim that tells them apart. Add it as a client ID to the IAM OpenID
+        # Connect provider of the cluster, and require it in the trust policy
+        # of the push role with a condition on the claim aud. Then the pull
+        # token of the build container cannot assume the push role.
+        audience: setec-disk-push
+      # -- hosts are further hosts that the disk Job reaches to push, for the
+      # cilium engine. With the provider "ecr" and a disk repository of an ECR
+      # registry (<account>.dkr.ecr.<region>.amazonaws.com), the chart adds
+      # api.ecr.<region>.amazonaws.com and sts.<region>.amazonaws.com by
+      # itself. List more here, for example the hosts of a FIPS endpoint. The
+      # networkpolicy engine reads systemPolicy.networkPolicy.egress.diskRegistry.
+      hosts: []
     # -- serviceAccount is the ServiceAccount of the disk Job Pods. The Pods
     # have no API token. A cloud identity that is bound to a ServiceAccount
     # (IAM roles for service accounts, EKS Pod Identity) needs this named
