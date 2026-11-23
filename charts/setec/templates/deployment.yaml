@@ -7,17 +7,21 @@ metadata:
     {{- include "setec.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
+  # The selector names the component, so it matches no Pod of the device
+  # plugin, the frontend or the node agent. Each of them carries the same
+  # name and instance labels and its own component label. Setec 0.130 and
+  # older had no component in the selector. An upgrade from them needs the
+  # one-time step of the README ("Upgrading from 0.130"), because a
+  # Deployment selector is immutable. The check
+  # "setec.validateOperatorSelector" tells an install to run it.
   selector:
     matchLabels:
       {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
   template:
     metadata:
       labels:
         {{- include "setec.selectorLabels" . | nindent 8 }}
-        # Distinguish the operator Pod from the other components (device plugin,
-        # frontend, node-agent) which all share name/instance selector labels
-        # but carry their own component label. Additive only — not part of the
-        # immutable Deployment selector.
         app.kubernetes.io/component: operator
     spec:
       serviceAccountName: {{ include "setec.serviceAccountName" . }}

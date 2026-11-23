@@ -1,0 +1,29 @@
+# The operator Deployment of Setec 0.130.x, reduced to the fields that a
+# selector check reads (helm template of chart 0.130.1, release name setec).
+# Its selector has no component label, so it also matches the Pods of the
+# device plugin and the node agent. hack/check-selectors.py reads this file
+# to prove that the Deployment of this chart adopts the Pods of that
+# Deployment after the step "Upgrading from 0.130" of the chart README.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: setec
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: setec
+    app.kubernetes.io/part-of: setec
+    app.kubernetes.io/version: v0.130.1
+    helm.sh/chart: setec-0.130.1
+  name: setec
+  namespace: setec-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: setec
+      app.kubernetes.io/name: setec
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: operator
+        app.kubernetes.io/instance: setec
+        app.kubernetes.io/name: setec

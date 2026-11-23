@@ -94,6 +94,54 @@ A rolling update of the operator Deployment does not disrupt existing
 sole replica) and continues where the previous one left off, using the
 Kubernetes API as the source of truth.
 
+### Upgrading from 0.130
+
+Setec 0.130 and older gave the operator Deployment a selector with the
+`app.kubernetes.io/name` and `app.kubernetes.io/instance` labels only. The
+device plugin and the node agent Pods carry the same two labels, so that
+selector also matched them. For example, `kubectl logs deploy/setec` could
+show the log of a device plugin Pod. The selector now also holds
+`app.kubernetes.io/component: operator`. The selectors of the device plugin,
+the node agent and the frontend already held their component. Each Service
+and the PodDisruptionBudget select one component too. No Pod of one
+component matches the selector of another.
+
+A Deployment selector cannot change. Run this step once, before the upgrade
+of a release that runs 0.130 or older. A new install and a later upgrade need
+no step.
+
+1. Delete the operator Deployment and keep its Pods and ReplicaSets.
+   Use the namespace and the full name of your release.
+
+   ```bash
+   kubectl -n setec-system delete deployment setec --cascade=orphan
+   ```
+
+2. Upgrade the release as usual.
+
+   ```bash
+   helm upgrade setec ./charts/setec --namespace setec-system
+   ```
+
+The operator Pods keep running between the two steps, so webhook admission
+stays up. The new Deployment selects the labels of the old Pods, adopts the
+orphaned ReplicaSet, and then rolls its Pods. The PodDisruptionBudget keeps
+one replica up during the roll. `hack/check-selectors.py` proves that the
+selector of this chart matches the Pod labels of 0.130
+(`hack/testdata/operator-deployment-0.130.yaml`). The chart tests run it with
+`hack/verify-chart-security.sh`.
+
+If you skip step 1, `helm install` and `helm upgrade` stop before they change
+anything. The message names the command of step 1. This check reads the live
+Deployment, so a plain `helm template` does not show it. A tool that renders
+the chart without the cluster, such as Argo CD, gets the API error
+`field is immutable` at the sync. Run step 1, then sync again. With Flux, run
+step 1, then reconcile the `HelmRelease`.
+
+If you delete the Deployment without `--cascade=orphan`, the Pods end at once.
+Webhook admission then fails until the new Pods are ready, because
+`webhook.failurePolicy` is `Fail`.
+
 ## Uninstalling
 
 Remove the operator without touching user `Sandbox` resources:

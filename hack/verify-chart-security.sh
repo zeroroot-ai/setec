@@ -576,6 +576,68 @@ allowance_refused "a port with an unknown protocol fails the render" \
 	'[{"podSelector":{"matchLabels":{"a":"b"}},"ports":[{"protocol":"ICMP","port":53}]}]'
 
 # ---------------------------------------------------------------------------
+# Disjoint selectors (setec#383). The operator Deployment, the device plugin,
+# the node agent and the frontend each select their own Pods only, and each
+# Service and the PodDisruptionBudget select the Pods of one workload. The
+# new Deployment also selects the Pods of a 0.130 Deployment, so the step
+# "Upgrading from 0.130" of the chart README adopts them.
+# ---------------------------------------------------------------------------
+note "disjoint selectors (setec#383)"
+SEL_ALL=("${FE[@]}" --set nodeAgent.enabled=true --set snapshots.enabled=true
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}')
+render "$workdir/sel-all.yaml" "${SEL_ALL[@]}"
+OLD_DEPLOYMENT="$(dirname "$0")/testdata/operator-deployment-0.130.yaml"
+if python3 "$(dirname "$0")/check-selectors.py" "$workdir/sel-all.yaml" --adopt "$OLD_DEPLOYMENT" >"$workdir/sel-all.out"; then
+	pass "each selector matches its own Pods only, and the Deployment adopts the Pods of 0.130"
+else
+	fail "the selectors overlap: $(cat "$workdir/sel-all.out")"
+fi
+python3 - "$workdir/sel-all.yaml" "$workdir" <<'PY'
+import copy, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+def save(name, ds):
+    yaml.safe_dump_all(ds, open(f"{sys.argv[2]}/sel-{name}.yaml", "w"))
+# The selector of 0.130: no component label.
+old = copy.deepcopy(docs)
+for d in old:
+    if d["kind"] == "Deployment" and d["metadata"]["name"] == "setec":
+        del d["spec"]["selector"]["matchLabels"]["app.kubernetes.io/component"]
+save("old-selector", old)
+# A Service that selects the Pods of every component.
+wide = copy.deepcopy(docs)
+for d in wide:
+    if d["kind"] == "Service" and d["metadata"]["name"].endswith("-node-agent"):
+        del d["spec"]["selector"]["app.kubernetes.io/component"]
+save("wide-service", wide)
+# A PodDisruptionBudget that selects the Pods of every component.
+pdb = copy.deepcopy(docs)
+for d in pdb:
+    if d["kind"] == "PodDisruptionBudget":
+        del d["spec"]["selector"]["matchLabels"]["app.kubernetes.io/component"]
+save("wide-pdb", pdb)
+# A Deployment selector that does not select the Pods of 0.130.
+noadopt = copy.deepcopy(docs)
+for d in noadopt:
+    if d["kind"] == "Deployment" and d["metadata"]["name"] == "setec":
+        d["spec"]["selector"]["matchLabels"]["app.kubernetes.io/part-of"] = "setec"
+        d["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/part-of"] = "setec"
+save("no-adoption", noadopt)
+PY
+for fx in old-selector wide-service wide-pdb; do
+	if python3 "$(dirname "$0")/check-selectors.py" "$workdir/sel-$fx.yaml" >/dev/null; then
+		fail "fixture $fx: the checker passed overlapping selectors"
+	else
+		pass "fixture $fx: the checker refuses it"
+	fi
+done
+if python3 "$(dirname "$0")/check-selectors.py" "$workdir/sel-no-adoption.yaml" --adopt "$OLD_DEPLOYMENT" >/dev/null; then
+	fail "fixture no-adoption: the checker passed a selector that cannot adopt the Pods of 0.130"
+else
+	pass "fixture no-adoption: the checker refuses it"
+fi
+
+# ---------------------------------------------------------------------------
 # The setec namespace has its own network policy (D76): a default deny with
 # DNS, and one allow for each component (templates/system-namespace-policy.yaml).
 # hack/check-system-policy.py checks the render. Each fixture below is a
