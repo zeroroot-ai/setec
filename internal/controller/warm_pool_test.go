@@ -410,3 +410,28 @@ func TestStampImage(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyCause: the status of a class says which check failed. The cause is
+// the termination message of the verify container, and the message of the Job
+// condition is the fallback.
+func TestVerifyCause(t *testing.T) {
+	t.Parallel()
+	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "v-abc", Namespace: "setec-system", Labels: map[string]string{batchv1.JobNameLabel: "v"}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: builderContainer,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				ExitCode: 1, Message: "img: the image has no signature. It looked for a Sigstore bundle and the .sig tag\n",
+			}},
+		}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pod).Build()
+	if got := verifyCause(context.Background(), c, "setec-system", "v", "BackoffLimitExceeded"); !strings.Contains(got, "looked for a Sigstore bundle") {
+		t.Fatalf("cause = %q; want the termination message", got)
+	}
+	if got := verifyCause(context.Background(), c, "setec-system", "other", "BackoffLimitExceeded"); got != "BackoffLimitExceeded" {
+		t.Fatalf("cause with no Pod = %q; want the fallback", got)
+	}
+}
