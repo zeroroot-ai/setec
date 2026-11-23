@@ -28,7 +28,9 @@ helm upgrade --install setec charts/setec \
 
 `nodeAgent.nodeSelector` is empty by default, so the agent runs on each
 node. Set it to the label of the fleet nodes to keep the agent off the
-other nodes. The agent runs privileged because it reads and writes the
+other nodes. Use the same label for `devicePlugin.nodeSelector`. The chart
+adds the fixed key `kubernetes.io/arch=amd64` to both. `nodeAgent.affinity`
+and `nodeAgent.tolerations` give a rule that a node selector cannot state. The agent runs privileged because it reads and writes the
 work volumes of the launcher Pods under the kubelet directory, as root.
 
 ## Snapshot state

@@ -26,13 +26,14 @@ spec:
       hostNetwork: false
       {{- /* kubernetes.io/arch is hardcoded, not values-driven: the sandbox
       substrate is x86 only (docs/design/runtime.md) and node-agent images are published
-      single-arch linux/amd64 (setec#186). Extra keys merge from values;
-      the arch key is omitted there so it cannot be overridden. */}}
+      single-arch linux/amd64 (setec#186). The keys of nodeAgent.nodeSelector
+      come on top. A fixed key wins, so the arch key cannot be overridden. */}}
       nodeSelector:
-        kubernetes.io/arch: amd64
-        {{- with omit .Values.nodeAgent.nodeSelector "kubernetes.io/arch" }}
+        {{- include "setec.mergedNodeSelector" (dict "fixed" (dict "kubernetes.io/arch" "amd64") "user" .Values.nodeAgent.nodeSelector) | nindent 8 }}
+      {{- with .Values.nodeAgent.affinity }}
+      affinity:
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       # The agent is privileged because it reads and writes the work
       # volumes of the launcher Pods under the kubelet directory, as root.
       containers:
@@ -140,8 +141,7 @@ spec:
             type: Directory
         {{- end }}
       tolerations:
-        - operator: Exists
-          effect: NoSchedule
+        {{- toYaml .Values.nodeAgent.tolerations | nindent 8 }}
 ---
 apiVersion: v1
 kind: ServiceAccount

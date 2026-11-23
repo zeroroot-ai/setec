@@ -152,6 +152,26 @@ kubectl delete namespace setec-system
 | `nodeSelector` | `{}` | Constrain the operator Pod to matching Nodes. |
 | `tolerations` | `[]` | Toleration list for the operator Pod. |
 | `affinity` | `{}` | Affinity / anti-affinity rules for the operator Pod. |
+| `devicePlugin.nodeSelector` | `{}` | Node labels that limit the device plugin. The keys join the fixed `kubernetes.io/arch=amd64` and `kubernetes.io/os=linux`, and a fixed key wins. |
+| `devicePlugin.affinity` | `{}` | Pod affinity of the device plugin. The scheduler applies it with `devicePlugin.nodeSelector`. |
+| `nodeAgent.nodeSelector` | `{}` | Node labels that limit the node agent. The keys join the fixed `kubernetes.io/arch=amd64`. |
+| `nodeAgent.affinity` | `{}` | Pod affinity of the node agent. |
+| `nodeAgent.tolerations` | `[{operator: Exists, effect: NoSchedule}]` | Tolerations of the node agent. |
+| `frontend.nodeSelector`, `frontend.tolerations`, `frontend.affinity` | empty | Placement of the frontend Pods. |
+
+Limit the device plugin and the node agent to the node pool that has
+`/dev/kvm`. Use the same label for both, for example:
+
+```yaml
+devicePlugin:
+  nodeSelector:
+    setec.zeroroot.ai/pool: sandbox
+nodeAgent:
+  nodeSelector:
+    setec.zeroroot.ai/pool: sandbox
+```
+
+A node outside the pool then runs neither Pod and offers no devices.
 
 ## Example Sandbox
 
