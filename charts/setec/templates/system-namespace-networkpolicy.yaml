@@ -144,6 +144,7 @@ only when it is an image source, and also reaches the Sigstore trust root.
 {{- $sp := .Values.systemPolicy }}
 {{- $np := $sp.networkPolicy }}
 {{- $reserved := .Values.netpol.reservedCIDRs }}
+{{- $dns := include "setec.systemDNS" . | fromJson }}
 {{- $apiRule := dict "cidrs" $np.apiServer.cidrs "ports" $np.apiServer.ports "reserved" $reserved }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -160,11 +161,11 @@ spec:
     - Egress
   egress:
     - to:
-        {{- if $np.dns.podLabels }}
-        {{- include "setec.npPodPeers" (list (dict "namespace" $np.dns.namespace "podLabels" $np.dns.podLabels)) | nindent 8 }}
+        {{- if $dns.podLabels }}
+        {{- include "setec.npPodPeers" (list (dict "namespace" $dns.namespace "podLabels" $dns.podLabels)) | nindent 8 }}
         {{- end }}
-        {{- if $np.dns.cidrs }}
-        {{- include "setec.npCIDRs" (dict "cidrs" $np.dns.cidrs "reserved" $reserved) | nindent 8 }}
+        {{- if $dns.cidrs }}
+        {{- include "setec.npCIDRs" (dict "cidrs" $dns.cidrs "reserved" $reserved) | nindent 8 }}
         {{- end }}
       ports:
         - port: 53

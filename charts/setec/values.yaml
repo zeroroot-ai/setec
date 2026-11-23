@@ -343,14 +343,6 @@ systemPolicy:
   # netpol.reservedCIDRs, so a Job cannot reach the cluster networks. That
   # is the widest choice, for a registry that has no stable address range.
   networkPolicy:
-    # dns is where the Pods of the namespace resolve names. The default is
-    # CoreDNS or kube-dns of kube-system. Set cidrs for a resolver that is not
-    # a Pod, such as a node-local cache. namespace and podLabels go together.
-    dns:
-      namespace: kube-system
-      podLabels:
-        k8s-app: kube-dns
-      cidrs: []
     # apiServer is the API server, which the operator and the frontend
     # reach. Required. cidrs are the addresses of its endpoints
     # (kubectl get endpoints kubernetes -n default), not the address of the
@@ -400,6 +392,21 @@ systemPolicy:
       snapshotStore:
         cidrs: []
         ports: []
+  # dns is where the Pods of the namespace resolve names. Both engines read
+  # it. Each part is optional, and the Pods may use one or both of the parts:
+  #   namespace and podLabels  the DNS Pods, for example CoreDNS under
+  #                            other labels, or in another namespace.
+  #   cidrs                    DNS servers that are not Pods, such as a
+  #                            node-local cache (169.254.20.10/32).
+  # With none set, the peer is the CoreDNS or kube-dns Pods of kube-system
+  # (the label k8s-app=kube-dns). Set namespace and podLabels together. Giving
+  # only cidrs removes the kube-dns peer. systemPolicy.networkPolicy.dns, the
+  # path of version 0.131, still works and wins when set. It is deprecated and
+  # the chart drops it in the next minor version.
+  dns:
+    namespace: ""
+    podLabels: {}
+    cidrs: []
   # frontendCallers are the callers that may reach the frontend gRPC port.
   # Each entry is a namespace and the labels of its Pods (a Gibson daemon in
   # this cluster), or a cidr (a Gibson cluster elsewhere, which reaches the

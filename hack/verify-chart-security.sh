@@ -1098,6 +1098,98 @@ np_refused "a value that is not a CIDR" "is not a CIDR" "${NP[@]}" \
 np_refused "an empty port list" "must list at least one port" "${NP[@]}" \
 	--set 'systemPolicy.networkPolicy.egress.imageSources.ports=null'
 
+# ---------------------------------------------------------------------------
+# The DNS peer of the namespace deny (setec#390). Both engines read
+# systemPolicy.dns. The default is kube-dns of kube-system. A changed peer
+# replaces it in each engine, and a value that is not a peer fails the render.
+# ---------------------------------------------------------------------------
+note "the DNS peer of the setec namespace policy (setec#390)"
+# dns_peers <render> <engine> prints the DNS peers of the default deny, one for
+# each line: "pod <namespace> <labels>" or "cidr <cidr>".
+dns_peers() {
+	python3 - "$1" "$2" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+if sys.argv[2] == "cilium":
+    deny = [d for d in docs if d.get("kind") == "CiliumClusterwideNetworkPolicy"][0]
+    for rule in deny["spec"]["egress"]:
+        for peer in rule.get("toEndpoints") or []:
+            labels = dict(peer["matchLabels"])
+            ns = labels.pop("k8s:io.kubernetes.pod.namespace")
+            print("pod", ns, ",".join(f"{k.removeprefix('k8s:')}={v}" for k, v in sorted(labels.items())))
+        for c in rule.get("toCIDR") or []:
+            print("cidr", c)
+        if not (rule.get("toEndpoints") or rule.get("toCIDR")):
+            sys.exit("a DNS rule has no peer")
+        for tp in rule["toPorts"]:
+            if {(p["port"], p["protocol"]) for p in tp["ports"]} != {("53", "UDP"), ("53", "TCP")}:
+                sys.exit("DNS ports are not 53 UDP and TCP")
+else:
+    deny = [d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"].endswith("-default-deny")][0]
+    for rule in deny["spec"]["egress"]:
+        if not rule.get("to"):
+            sys.exit("a DNS rule has no peer")
+        for peer in rule["to"]:
+            if "podSelector" in peer:
+                ns = peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
+                print("pod", ns, ",".join(f"{k}={v}" for k, v in sorted(peer["podSelector"]["matchLabels"].items())))
+            else:
+                print("cidr", peer["ipBlock"]["cidr"])
+PY
+}
+dns_case() {
+	local engine="$1" name="$2" want="$3"
+	shift 3
+	local extra=()
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	render "$workdir/dns-$engine-$name.yaml" "${extra[@]}" "$@"
+	local got
+	got="$(dns_peers "$workdir/dns-$engine-$name.yaml" "$engine" 2>&1)" || {
+		fail "DNS peer, $engine, $name: $got"
+		return
+	}
+	if [ "$got" = "$want" ]; then
+		pass "DNS peer, $engine engine, $name"
+	else
+		fail "DNS peer, $engine engine, $name: got [$got], want [$want]"
+	fi
+}
+for engine in cilium networkpolicy; do
+	dns_case "$engine" default "pod kube-system k8s-app=kube-dns"
+	dns_case "$engine" other-pods "pod dns-system app=my-dns,tier=dns" \
+		--set systemPolicy.dns.namespace=dns-system \
+		--set systemPolicy.dns.podLabels.app=my-dns --set systemPolicy.dns.podLabels.tier=dns
+	dns_case "$engine" cidrs-only "cidr 169.254.20.10/32" \
+		--set 'systemPolicy.dns.cidrs={169.254.20.10/32}'
+	dns_case "$engine" pods-and-cidrs "$(printf 'pod dns-system app=my-dns\ncidr 169.254.20.10/32')" \
+		--set systemPolicy.dns.namespace=dns-system --set systemPolicy.dns.podLabels.app=my-dns \
+		--set 'systemPolicy.dns.cidrs={169.254.20.10/32}'
+	# The path of version 0.131 still works, and wins.
+	dns_case "$engine" old-path "pod dns-system app=my-dns" \
+		--set systemPolicy.networkPolicy.dns.namespace=dns-system \
+		--set systemPolicy.networkPolicy.dns.podLabels.app=my-dns
+done
+dns_refused() {
+	local engine="$1" desc="$2" want="$3"
+	shift 3
+	local extra=(--set "systemPolicy.engine=$engine")
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		"${extra[@]}" "$@" >/dev/null 2>"$workdir/dns-refused.err"; then
+		fail "$desc, $engine, must fail the render"
+	elif grep -qF -- "$want" "$workdir/dns-refused.err"; then
+		pass "$desc fails the render, $engine engine"
+	else
+		fail "$desc, $engine, failed with another message: $(tail -n1 "$workdir/dns-refused.err")"
+	fi
+}
+for engine in cilium networkpolicy; do
+	dns_refused "$engine" "a DNS namespace with no Pod labels" "systemPolicy.dns: set both namespace and podLabels" \
+		--set systemPolicy.dns.namespace=dns-system
+	dns_refused "$engine" "a DNS value that is not a CIDR" "systemPolicy.dns.cidrs" \
+		--set 'systemPolicy.dns.cidrs={169.254.20.10}'
+done
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

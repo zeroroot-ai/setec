@@ -327,13 +327,23 @@ verify the expected new manifests appear via `helm template`.
 
 ### The network policy of the setec namespace
 
-The chart denies all traffic of each Pod in its own namespace by default, with DNS to kube-dns allowed (`templates/system-namespace-policy.yaml`). One policy for each component then allows only the traffic setec uses:
+The chart denies all traffic of each Pod in its own namespace by default, with DNS allowed to `systemPolicy.dns` (`templates/system-namespace-policy.yaml`). One policy for each component then allows only the traffic setec uses:
 
 - The operator reaches the API server, takes webhook calls on 9443, and reaches the node agent gRPC port when snapshots are on.
 - The frontend takes gRPC only from `systemPolicy.frontendCallers` and reaches the API server. The list is required when the frontend is on.
 - The node agent takes gRPC from the operator and reaches the snapshot store.
 - Each metrics port admits the Pods of `systemPolicy.metricsScrapers`. Each entry names the namespace and the Pod labels of one scraper.
 - The disk build Job and the image verify Job reach the `hosts` of each `launcher.imageSources` entry, and the disk registry. An entry whose `registry` is an IPv4 address, such as a pull-through mirror in the cluster, lists no `hosts`. The policy then allows that address and port (443 when the registry names none) and no other destination.
+
+DNS goes to the CoreDNS or kube-dns Pods of `kube-system` (the label `k8s-app=kube-dns`) unless `systemPolicy.dns` says otherwise. Both engines read this one value. Set `namespace` and `podLabels` for DNS Pods under other labels or in another namespace. Set `cidrs` for a resolver that is not a Pod, such as a node-local cache. With only `cidrs`, the policy has no kube-dns peer.
+
+```yaml
+systemPolicy:
+  dns:
+    cidrs: ["169.254.20.10/32"]   # node-local DNS cache
+```
+
+`systemPolicy.networkPolicy.dns` (version 0.131) still works and wins when set. It is deprecated, and the next minor version drops it.
 
 The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. That policy is a plain NetworkPolicy, so it works under both engines below.
 

@@ -25,6 +25,42 @@ one of the two.
 {{- end -}}
 
 {{/*
+setec.systemDNS returns, as JSON, where the Pods of the namespace resolve
+names. Both engines read it. The value is systemPolicy.dns. With no namespace,
+no Pod label and no CIDR, it is the Pods of CoreDNS or kube-dns in kube-system.
+The old path systemPolicy.networkPolicy.dns still wins when an install sets it.
+It is deprecated and the chart drops it in the next minor version.
+*/}}
+{{- define "setec.systemDNS" -}}
+{{- $sp := .Values.systemPolicy -}}
+{{- $d := $sp.dns | default dict -}}
+{{- $old := dict -}}
+{{- if $sp.networkPolicy -}}
+{{- $old = $sp.networkPolicy.dns | default dict -}}
+{{- end -}}
+{{- if $old -}}
+{{- $d = $old -}}
+{{- end -}}
+{{- $namespace := $d.namespace | default "" -}}
+{{- $labels := $d.podLabels | default dict -}}
+{{- $cidrs := $d.cidrs | default list -}}
+{{- if or $namespace $labels -}}
+{{- if not (and $namespace $labels) -}}
+{{- fail "systemPolicy.dns: set both namespace and podLabels, or neither and list cidrs only" -}}
+{{- end -}}
+{{- else if not $cidrs -}}
+{{- $namespace = "kube-system" -}}
+{{- $labels = dict "k8s-app" "kube-dns" -}}
+{{- end -}}
+{{- range $c := $cidrs -}}
+{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]+$" (toString $c)) -}}
+{{- fail (printf "systemPolicy.dns.cidrs: %q is not a CIDR. Write an address and a prefix length, such as 169.254.20.10/32." $c) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson (dict "namespace" $namespace "podLabels" $labels "cidrs" $cidrs) -}}
+{{- end -}}
+
+{{/*
 setec.registryAddress splits the registry of an image source or of the disk
 repository into its host and port. The port is 443 when the registry names
 none. isIP is true for an IPv4 address. A registry at an address needs no host
@@ -44,6 +80,7 @@ that the engine of the install needs.
 {{- define "setec.validateSystemPolicy" -}}
 {{- $sp := .Values.systemPolicy -}}
 {{- $engine := include "setec.systemPolicyEngine" . -}}
+{{- $_ := include "setec.systemDNS" . -}}
 {{- range $c := $sp.webhookCallers -}}
 {{- if not (and $c.namespace $c.podLabels) -}}
 {{- fail "systemPolicy.webhookCallers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the caller is pinned too." -}}
@@ -94,7 +131,7 @@ empty would allow every port, so an empty list is refused too.
 {{- fail "systemPolicy.networkPolicy.apiServer.cidrs is required with systemPolicy.engine=networkpolicy. A plain NetworkPolicy cannot name the API server, so list the addresses of its endpoints as CIDRs (kubectl get endpoints kubernetes -n default). The operator and the frontend reach only these addresses, on systemPolicy.networkPolicy.apiServer.ports." -}}
 {{- end -}}
 {{- include "setec.validateNetworkPolicyPorts" (dict "name" "systemPolicy.networkPolicy.apiServer.ports" "ports" $np.apiServer.ports) -}}
-{{- range $name, $dest := dict "apiServer" $np.apiServer "dns" $np.dns "egress.imageSources" $np.egress.imageSources "egress.diskRegistry" $np.egress.diskRegistry "egress.sigstore" $np.egress.sigstore "egress.snapshotStore" $np.egress.snapshotStore -}}
+{{- range $name, $dest := dict "apiServer" $np.apiServer "egress.imageSources" $np.egress.imageSources "egress.diskRegistry" $np.egress.diskRegistry "egress.sigstore" $np.egress.sigstore "egress.snapshotStore" $np.egress.snapshotStore -}}
 {{- range $c := ($dest.cidrs | default list) -}}
 {{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]+$" (toString $c)) -}}
 {{- fail (printf "systemPolicy.networkPolicy %s: %q is not a CIDR. Write an address and a prefix length, such as 192.0.2.10/32." $name $c) -}}
@@ -105,13 +142,6 @@ empty would allow every port, so an empty list is refused too.
 {{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]+$" (toString $c)) -}}
 {{- fail (printf "systemPolicy.networkPolicy.webhookSourceCIDRs: %q is not a CIDR. Write an address and a prefix length, such as 192.0.2.10/32." $c) -}}
 {{- end -}}
-{{- end -}}
-{{- if or $np.dns.podLabels $np.dns.namespace -}}
-{{- if not (and $np.dns.podLabels $np.dns.namespace) -}}
-{{- fail "systemPolicy.networkPolicy.dns: set both namespace and podLabels, or neither and list cidrs only" -}}
-{{- end -}}
-{{- else if not $np.dns.cidrs -}}
-{{- fail "systemPolicy.networkPolicy.dns: name the DNS Pods (namespace and podLabels) or list their cidrs. Every Pod of the namespace needs DNS." -}}
 {{- end -}}
 {{- with .Values.launcher.diskRepo -}}
 {{- $disk := include "setec.registryAddress" . | fromJson -}}
