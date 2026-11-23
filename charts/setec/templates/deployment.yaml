@@ -108,6 +108,14 @@ spec:
             - --disk-push-aws-audience={{ $.Values.launcher.diskBuilder.push.aws.audience }}
             {{- end }}
             - --instance-name={{ $.Release.Name }}
+            {{- $placement := dict }}
+            {{- with .diskBuilder.nodeSelector }}{{ $_ := set $placement "nodeSelector" . }}{{ end }}
+            {{- with .diskBuilder.tolerations }}{{ $_ := set $placement "tolerations" . }}{{ end }}
+            {{- with .diskBuilder.affinity }}{{ $_ := set $placement "affinity" . }}{{ end }}
+            {{- with .diskBuilder.priorityClassName }}{{ $_ := set $placement "priorityClassName" . }}{{ end }}
+            {{- if $placement }}
+            - {{ printf "--disk-job-placement=%s" (toJson $placement) | quote }}
+            {{- end }}
             {{- with (include "setec.diskBuilderServiceAccountName" $) }}
             - --disk-service-account={{ . }}
             {{- end }}

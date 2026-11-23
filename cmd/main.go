@@ -114,6 +114,7 @@ func runMain() int {
 		diskPushAWSAudience string
 		diskServiceAccount  string
 		instanceName        string
+		diskJobPlacement    string
 		operatorNamespace   string
 		warmPoolNamespace   string
 		keptPinnedLimit     string
@@ -183,6 +184,9 @@ func runMain() int {
 	pflag.StringVar(&instanceName, "instance-name", "",
 		"Optional name of the release that runs the operator. It becomes the label app.kubernetes.io/instance "+
 			"of the disk Jobs, their Pods and their ConfigMaps.")
+	pflag.StringVar(&diskJobPlacement, "disk-job-placement", "",
+		"Optional JSON that says where the disk Job Pods may run: nodeSelector, tolerations, affinity and "+
+			"priorityClassName. The key kubernetes.io/arch=amd64 of the node selector is fixed.")
 	pflag.StringVar(&diskServiceAccount, "disk-service-account", "",
 		"Optional ServiceAccount of the disk Job Pods. An identity that the cloud binds to a ServiceAccount needs one.")
 	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
@@ -457,6 +461,11 @@ func runMain() int {
 		}
 	}
 
+	placement, err := controller.ParseDiskJobPlacement(diskJobPlacement)
+	if err != nil {
+		setupLog.Error(err, "--disk-job-placement is not valid")
+		return 1
+	}
 	diskBuilderCfg := controller.DiskBuilderConfig{
 		Image: diskBuilderImage, Namespace: operatorNamespace,
 		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
@@ -464,6 +473,7 @@ func runMain() int {
 		PushProviders: diskPushProviders, PushAWSRoleARN: diskPushAWSRoleARN, PushAWSAudience: diskPushAWSAudience,
 		ServiceAccount:  diskServiceAccount,
 		Instance:        instanceName,
+		Placement:       placement,
 		ImageRegistries: imageRegistries,
 		Reader:          mgr.GetAPIReader(),
 	}

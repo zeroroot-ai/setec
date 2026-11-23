@@ -1079,3 +1079,55 @@ func TestBuilderJobs_LabelsNameTheOperatorAndTheRelease(t *testing.T) {
 		t.Fatal("the Job has an instance label with no instance name")
 	}
 }
+
+// TestBuilderJobs_Placement is the placement of the disk Job Pods. With no
+// value, the Pods keep the fixed architecture selector and nothing else. With a
+// value, the build, check, publish and image verify Pods get it, and the fixed
+// architecture key wins over the key of an install.
+func TestBuilderJobs_Placement(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
+	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed"}
+	for name, job := range map[string]*batchv1.Job{
+		"disk": diskJob(cfg, "r", "b", image, testDiskKeyID), "verify": verifyJob(cfg, "v", cls, image),
+	} {
+		spec := job.Spec.Template.Spec
+		if len(spec.NodeSelector) != 1 || spec.NodeSelector["kubernetes.io/arch"] != "amd64" ||
+			spec.Tolerations != nil || spec.Affinity != nil || spec.PriorityClassName != "" {
+			t.Fatalf("the %s Job pod has placement with none set: %+v", name, spec)
+		}
+	}
+	placement, err := ParseDiskJobPlacement(`{"nodeSelector":{"pool":"sandbox","kubernetes.io/arch":"arm64"},` +
+		`"tolerations":[{"key":"sandbox","operator":"Exists","effect":"NoSchedule"}],` +
+		`"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":` +
+		`[{"matchExpressions":[{"key":"zone","operator":"In","values":["a"]}]}]}}},"priorityClassName":"jobs"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Placement = placement
+	for name, job := range map[string]*batchv1.Job{
+		"disk": diskJob(cfg, "r", "b", image, testDiskKeyID), "verify": verifyJob(cfg, "v", cls, image),
+	} {
+		spec := job.Spec.Template.Spec
+		if spec.NodeSelector["pool"] != "sandbox" || spec.NodeSelector["kubernetes.io/arch"] != "amd64" {
+			t.Fatalf("the %s Job node selector = %v; want the pool key and the fixed arch key", name, spec.NodeSelector)
+		}
+		if len(spec.Tolerations) != 1 || spec.Tolerations[0].Key != "sandbox" || spec.Affinity == nil || spec.PriorityClassName != "jobs" {
+			t.Fatalf("the %s Job pod placement = %+v", name, spec)
+		}
+	}
+}
+
+func TestParseDiskJobPlacement(t *testing.T) {
+	t.Parallel()
+	if p, err := ParseDiskJobPlacement(""); err != nil || p.NodeSelector != nil || p.Tolerations != nil {
+		t.Fatalf("an empty value: %+v, %v", p, err)
+	}
+	for _, bad := range []string{`{"nodeSelectors":{}}`, `{"tolerations":"x"}`, `nope`} {
+		if _, err := ParseDiskJobPlacement(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}

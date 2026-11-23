@@ -179,6 +179,16 @@ launcher:
       # itself. List more here, for example the hosts of a FIPS endpoint. The
       # networkpolicy engine reads systemPolicy.networkPolicy.egress.diskRegistry.
       hosts: []
+    # -- nodeSelector, tolerations, affinity and priorityClassName say where the
+    # Pods of the disk Jobs run (build, check, publish and image verify). Use
+    # them where the amd64 nodes carry a taint, or where only some nodes may
+    # run a Job. The key kubernetes.io/arch=amd64 of the selector is fixed,
+    # because the disk builder image is single-arch. With none set, the Pods use
+    # the default scheduling.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    priorityClassName: ""
     # -- serviceAccount is the ServiceAccount of the disk Job Pods. The Pods
     # have no API token. A cloud identity that is bound to a ServiceAccount
     # (IAM roles for service accounts, EKS Pod Identity) needs this named

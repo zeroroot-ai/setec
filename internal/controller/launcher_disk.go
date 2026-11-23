@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,6 +94,9 @@ type DiskBuilderConfig struct {
 	// app.kubernetes.io/instance, so that a check of the namespace finds the
 	// objects of the release. Empty leaves the label out.
 	Instance string
+	// Placement says where the Job Pods may run. The zero value keeps the
+	// default scheduling, with the fixed architecture selector.
+	Placement DiskJobPlacement
 	// ServiceAccount is the ServiceAccount of the Job Pods. Empty means the
 	// default of the namespace. The Pod has no API token. An identity that
 	// the cloud binds to a ServiceAccount (IAM roles for service accounts,
@@ -123,6 +127,44 @@ func (cfg DiskBuilderConfig) objectLabels(component string) map[string]string {
 		labels["app.kubernetes.io/instance"] = cfg.Instance
 	}
 	return labels
+}
+
+// DiskJobPlacement is where the Pods of the disk Jobs may run. The chart
+// values launcher.diskBuilder.nodeSelector, tolerations, affinity and
+// priorityClassName fill it. A cluster that taints its amd64 nodes, or limits
+// the nodes where a Job may run, needs it. The key kubernetes.io/arch of the
+// selector is fixed: the disk builder image is single-arch linux/amd64, and a
+// value cannot override it.
+type DiskJobPlacement struct {
+	NodeSelector      map[string]string   `json:"nodeSelector,omitempty"`
+	Tolerations       []corev1.Toleration `json:"tolerations,omitempty"`
+	Affinity          *corev1.Affinity    `json:"affinity,omitempty"`
+	PriorityClassName string              `json:"priorityClassName,omitempty"`
+}
+
+// ParseDiskJobPlacement reads the JSON of the flag --disk-job-placement. An
+// empty string is the zero placement. A field that the type does not know is an
+// error, so a misspelled key stops the operator at start.
+func ParseDiskJobPlacement(raw string) (DiskJobPlacement, error) {
+	var p DiskJobPlacement
+	if raw == "" {
+		return p, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return DiskJobPlacement{}, fmt.Errorf("the disk Job placement: %w", err)
+	}
+	return p, nil
+}
+
+// nodeSelector is the node selector of a Job Pod: the keys of the install,
+// and the fixed architecture key on top.
+func (p DiskJobPlacement) nodeSelector() map[string]string {
+	out := make(map[string]string, len(p.NodeSelector)+1)
+	maps.Copy(out, p.NodeSelector)
+	out["kubernetes.io/arch"] = "amd64"
+	return out
 }
 
 func (cfg DiskBuilderConfig) now() time.Time {
@@ -690,7 +732,10 @@ func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string,
 						RunAsNonRoot: new(true), RunAsUser: new(int64(65532)), RunAsGroup: new(int64(65532)),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
-					NodeSelector: map[string]string{"kubernetes.io/arch": "amd64"},
+					NodeSelector:      cfg.Placement.nodeSelector(),
+					Tolerations:       cfg.Placement.Tolerations,
+					Affinity:          cfg.Placement.Affinity,
+					PriorityClassName: cfg.Placement.PriorityClassName,
 					Containers: []corev1.Container{{
 						Name:  builderContainer,
 						Image: cfg.Image,
