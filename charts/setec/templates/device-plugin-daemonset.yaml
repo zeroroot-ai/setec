@@ -13,8 +13,9 @@ EXCEPTIONS TO THE SECURE POD RULE. Two Pods of this chart touch the host on
 purpose, and each one is named here with its reason:
 
   1. This DaemonSet. It runs as root and mounts two host paths: the kubelet
-     device plugin directory, because the kubelet finds a plugin by its
-     socket there, and /dev (at /host/dev), so the plugin can see whether
+     device plugin directory (devicePlugin.kubeletDir, default
+     /var/lib/kubelet), because the kubelet finds a plugin by its socket
+     there, and /dev (at /host/dev), so the plugin can see whether
      each device exists. It is not privileged, it drops every capability, it has no
      ServiceAccount token and no host network.
   2. The launcher Pod (internal/podspec/launcher.go). It has the one
@@ -45,7 +46,9 @@ spec:
       hostNetwork: false
       hostPID: false
       hostIPC: false
-      priorityClassName: system-node-critical
+      {{- with .Values.devicePlugin.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -89,7 +92,7 @@ spec:
       volumes:
         - name: device-plugins
           hostPath:
-            path: /var/lib/kubelet/device-plugins
+            path: {{ include "setec.devicePluginHostDir" . }}
             type: Directory
         - name: dev
           hostPath:

@@ -158,3 +158,18 @@ An entry with both, or with neither, fails the render.
 {{- fail (printf "frontend.clients entry %q: set spiffeID or spiffePath" $c.name) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+setec.devicePluginHostDir returns the directory on the node that holds the
+socket of the kubelet and the sockets of the device plugins. It is
+devicePlugin.kubeletDir and /device-plugins. The kubelet root directory is
+/var/lib/kubelet by default. A distribution may move it. The path inside the
+container stays /var/lib/kubelet/device-plugins, so the plugin needs no flag.
+*/}}
+{{- define "setec.devicePluginHostDir" -}}
+{{- $dir := (.Values.devicePlugin.kubeletDir | default "/var/lib/kubelet") | toString | trimSuffix "/" -}}
+{{- if not (regexMatch "^/[^[:space:]]+$" $dir) -}}
+{{- fail (printf "devicePlugin.kubeletDir=%q is not valid. Give the absolute path of the kubelet root directory on the node, such as /var/lib/kubelet. The chart adds /device-plugins." $dir) -}}
+{{- end -}}
+{{- printf "%s/device-plugins" $dir -}}
+{{- end -}}
