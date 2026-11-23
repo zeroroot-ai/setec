@@ -857,3 +857,171 @@ func TestEnsureLauncherDisk_RefusesASeedThatNoLauncherTrusts(t *testing.T) {
 		t.Fatalf("ensureLauncherDisk with no Secret = %v", err)
 	}
 }
+
+// pushCfg is an install that reads and pushes with the identity of a cloud:
+// two web identity roles, with a token of each, on one ServiceAccount.
+func pushCfg() DiskBuilderConfig {
+	return DiskBuilderConfig{
+		Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed",
+		PullSecret: "image-pull", PullProviders: []string{"ecr"},
+		PullAWSRoleARN: "arn:aws:iam::123456789012:role/setec-pull",
+		PushProviders:  []string{"ecr"},
+		PushAWSRoleARN: "arn:aws:iam::123456789012:role/setec-push", PushAWSAudience: "setec-disk-push",
+		ServiceAccount: "setec-disk-builder",
+	}
+}
+
+// tokenAudiences returns the audience of each projected token that container
+// c mounts, by volume name.
+func tokenAudiences(job *batchv1.Job, c corev1.Container) map[string]string {
+	out := map[string]string{}
+	vols := map[string]corev1.Volume{}
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		vols[v.Name] = v
+	}
+	for _, m := range c.VolumeMounts {
+		if v := vols[m.Name]; v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if src.ServiceAccountToken != nil {
+					out[v.Name] = src.ServiceAccountToken.Audience
+				}
+			}
+		}
+	}
+	return out
+}
+
+// TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish is setec#393. The
+// check and publish containers push to the disk repository with a web
+// identity of their own, and no static push Secret. The build container and
+// the image verify container, which read the image of a tenant, hold no part
+// of it: no provider, no token, no role.
+func TestBuilderJobs_PushIdentityReachesOnlyCheckAndPublish(t *testing.T) {
+	t.Parallel()
+	cfg := pushCfg()
+	image := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/tool@sha256:" + strings.Repeat("ab", 32)
+	j := diskJob(cfg, "r", "b", image, testDiskKeyID)
+	spec := j.Spec.Template.Spec
+	noSeed(t, j, cfg.SigningSecret)
+	check, build, publish := spec.InitContainers[0], spec.InitContainers[1], spec.Containers[0]
+
+	// The two containers that push.
+	for _, c := range []corev1.Container{check, publish} {
+		if !slices.Equal(c.Args[:2], []string{"--push-auth", "ecr"}) {
+			t.Fatalf("the %s container args = %v; want --push-auth ecr first", c.Name, c.Args)
+		}
+		if slices.Contains(c.Args, "--registry-auth") {
+			t.Fatalf("the %s container holds a pull provider: %v", c.Name, c.Args)
+		}
+		if envOf(c, "AWS_ROLE_ARN") != cfg.PushAWSRoleARN || envOf(c, "AWS_WEB_IDENTITY_TOKEN_FILE") != awsPushTokenDir+"/token" {
+			t.Fatalf("the %s container env = %v; want the push role and the push token", c.Name, c.Env)
+		}
+		got := tokenAudiences(j, c)
+		if len(got) != 1 || got[awsPushTokenVolume] != cfg.PushAWSAudience {
+			t.Fatalf("the %s container tokens = %v; want only the push token with the push audience", c.Name, got)
+		}
+		for _, v := range mountsOf(j, c) {
+			if v.Name == pullVolume || v.Name == awsTokenVolume {
+				t.Fatalf("the %s container mounts the pull access %s", c.Name, v.Name)
+			}
+		}
+	}
+
+	// The container that reads the image of a tenant.
+	if slices.Contains(build.Args, "--push-auth") {
+		t.Fatalf("the build container holds a push provider: %v", build.Args)
+	}
+	if envOf(build, "AWS_ROLE_ARN") != cfg.PullAWSRoleARN {
+		t.Fatalf("the build container AWS_ROLE_ARN = %q; want the pull role %q", envOf(build, "AWS_ROLE_ARN"), cfg.PullAWSRoleARN)
+	}
+	for _, e := range build.Env {
+		if strings.Contains(e.Value, "push") || e.Value == cfg.PushAWSRoleARN {
+			t.Fatalf("the build container env %s=%s names the push identity", e.Name, e.Value)
+		}
+	}
+	for _, m := range build.VolumeMounts {
+		if m.Name == awsPushTokenVolume || m.Name == registryVolume || m.MountPath == awsPushTokenDir {
+			t.Fatalf("the build container mounts the push access %s", m.Name)
+		}
+	}
+	// The one token of the build container has the audience of the pull token,
+	// which differs from the audience of the push token. The trust policy of
+	// the push role requires the push audience, so the pull token cannot
+	// assume it.
+	if got := tokenAudiences(j, build); len(got) != 1 || got[awsTokenVolume] != awsTokenAudience || got[awsTokenVolume] == cfg.PushAWSAudience {
+		t.Fatalf("the build container tokens = %v; want only the pull token with the audience %s", got, awsTokenAudience)
+	}
+
+	// The image verify Job reads an image too. It gets no push access.
+	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
+	v := verifyJob(cfg, "v", cls, image)
+	vc := v.Spec.Template.Spec.Containers[0]
+	if slices.Contains(vc.Args, "--push-auth") || envOf(vc, "AWS_ROLE_ARN") != cfg.PullAWSRoleARN {
+		t.Fatalf("the verify container = %v %v; want no push provider and the pull role", vc.Args, vc.Env)
+	}
+	for _, vol := range v.Spec.Template.Spec.Volumes {
+		if vol.Name == awsPushTokenVolume || vol.Name == registryVolume {
+			t.Fatalf("the verify Job has the volume %s", vol.Name)
+		}
+	}
+	// The image of a tenant is an argument of each container and never a mount.
+	for _, c := range []corev1.Container{check, build, publish} {
+		if c.Args[len(c.Args)-1] != image {
+			t.Fatalf("the %s container args = %v; want the image digest last", c.Name, c.Args)
+		}
+	}
+}
+
+// With no push value, no container has a push provider, a push role or a push
+// token. A static push Secret still works beside a provider: the Secret
+// answers first.
+func TestBuilderJobs_NoPushIdentityByDefault(t *testing.T) {
+	t.Parallel()
+	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed", RegistrySecret: "disk-push"}
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	j := diskJob(cfg, "r", "b", image, testDiskKeyID)
+	for _, c := range append(append([]corev1.Container{}, j.Spec.Template.Spec.InitContainers...), j.Spec.Template.Spec.Containers...) {
+		if slices.Contains(c.Args, "--push-auth") || envOf(c, "AWS_ROLE_ARN") != "" || len(tokenAudiences(j, c)) != 0 {
+			t.Fatalf("the %s container has a push identity with no push value: %v %v", c.Name, c.Args, c.Env)
+		}
+	}
+	// A static push Secret and a push provider work together: the Secret
+	// answers first.
+	cfg.PushProviders, cfg.PushAWSRoleARN, cfg.PushAWSAudience, cfg.ServiceAccount = []string{"ecr"},
+		"arn:aws:iam::123456789012:role/setec-push", "setec-disk-push", "sa"
+	j = diskJob(cfg, "r", "b", image, testDiskKeyID)
+	if got := envOf(j.Spec.Template.Spec.InitContainers[0], "DOCKER_CONFIG"); got != registryDir {
+		t.Fatalf("the check container DOCKER_CONFIG = %q; want %q beside the provider", got, registryDir)
+	}
+}
+
+func TestValidatePushIdentity(t *testing.T) {
+	t.Parallel()
+	const role = "arn:aws:iam::123456789012:role/setec-push"
+	for _, tc := range []struct {
+		name      string
+		providers []string
+		role, aud string
+		sa        string
+		want      string
+	}{
+		{name: "nothing set"},
+		{name: "ecr with a role", providers: []string{"ecr"}, role: role, aud: "setec-disk-push", sa: "sa"},
+		{name: "unknown provider", providers: []string{"gcr"}, want: "not known"},
+		{name: "ecr with no role", providers: []string{"ecr"}, aud: "setec-disk-push", sa: "sa", want: "needs --disk-push-aws-role-arn"},
+		{name: "a role with no provider", role: role, aud: "setec-disk-push", sa: "sa", want: "needs --disk-push-provider=ecr"},
+		{name: "a role that is not an ARN", providers: []string{"ecr"}, role: "push", aud: "setec-disk-push", sa: "sa", want: "IAM role ARN"},
+		{name: "no ServiceAccount", providers: []string{"ecr"}, role: role, aud: "setec-disk-push", want: "needs --disk-service-account"},
+		{name: "the pull audience", providers: []string{"ecr"}, role: role, aud: awsTokenAudience, sa: "sa", want: "other than"},
+		{name: "no audience", providers: []string{"ecr"}, role: role, sa: "sa", want: "other than"},
+	} {
+		err := ValidatePushIdentity(tc.providers, tc.role, tc.aud, tc.sa)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: err = %v; want none", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err = %v; want one that holds %q", tc.name, err, tc.want)
+		}
+	}
+}

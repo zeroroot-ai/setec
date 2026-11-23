@@ -41,6 +41,14 @@ import (
 // provider of each name, and its test keeps both lists equal.
 var PullProviders = []string{"ecr"}
 
+// PushProviders are the names of the cloud credential providers that the
+// check and publish containers accept in --push-auth, to push to a private
+// disk repository. The two lists are apart on purpose: the push side holds a
+// write credential, and the build container never sees it. The operator checks
+// a name against this list at startup. The test of internal/diskbuilder/registryauth
+// keeps each name a provider that the builder knows.
+var PushProviders = []string{"ecr"}
+
 // ImageConfigPath is where the disk holds the image config.
 const ImageConfigPath = ".setec/image.json"
 
