@@ -78,8 +78,10 @@ launcher:
   # these entries, by name (systemPolicy, D76). hosts lists the registry
   # host and each host that serves its blobs: a registry often sends a
   # blob download to another host. A host that starts with "*." matches
-  # one more name level. Only a disk registry at an IP address (a local
-  # registry) may list no hosts: the disk Jobs reach it already.
+  # one more name level. A registry at an IPv4 address (a pull-through
+  # mirror or a local registry) lists no hosts. It serves its own blobs, so
+  # the policy lets the disk Jobs reach that address and its port (443 when
+  # the registry names none), and no other new destination.
   imageSources:
     - registry: ghcr.io
       hosts:
