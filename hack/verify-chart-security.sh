@@ -187,6 +187,33 @@ if [ "$(grep -c 'hostPath:' "$workdir/devplugin.stripped.yaml")" -eq 2 ]; then
 else
 	fail "the device plugin must mount exactly two host paths (the kubelet plugin directory and /dev)"
 fi
+assert_contains "$workdir/devplugin.stripped.yaml" "the default priority class is system-node-critical" \
+	"priorityClassName: system-node-critical"
+assert_contains "$workdir/devplugin.stripped.yaml" "the plugin directory is mounted at the path that the plugin expects" \
+	"mountPath: /var/lib/kubelet/device-plugins"
+# A moved kubelet root directory changes the host path, and keeps the path in
+# the container (setec#391).
+render "$workdir/devplugin-moved.yaml" --show-only templates/device-plugin-daemonset.yaml \
+	--set devicePlugin.kubeletDir=/var/snap/k8s/common/var/lib/kubelet/
+strip_comments "$workdir/devplugin-moved.yaml" "$workdir/devplugin-moved.stripped.yaml"
+assert_contains "$workdir/devplugin-moved.stripped.yaml" "a moved kubelet directory sets the host path of the plugin socket directory" \
+	"path: /var/snap/k8s/common/var/lib/kubelet/device-plugins" \
+	"mountPath: /var/lib/kubelet/device-plugins"
+assert_absent "$workdir/devplugin-moved.stripped.yaml" "a moved kubelet directory leaves no default host path" "path: /var/lib/kubelet/device-plugins"
+# An empty class renders none, and another class renders as named.
+render "$workdir/devplugin-noclass.yaml" --show-only templates/device-plugin-daemonset.yaml --set devicePlugin.priorityClassName=
+strip_comments "$workdir/devplugin-noclass.yaml" "$workdir/devplugin-noclass.stripped.yaml"
+assert_absent "$workdir/devplugin-noclass.stripped.yaml" "an empty priority class renders none" "priorityClassName"
+render "$workdir/devplugin-class.yaml" --show-only templates/device-plugin-daemonset.yaml --set devicePlugin.priorityClassName=node-plugins
+assert_contains "$workdir/devplugin-class.yaml" "a named priority class renders as written" "priorityClassName: node-plugins"
+if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set devicePlugin.kubeletDir=var/lib/kubelet >/dev/null 2>"$workdir/devplugin-badpath.err"; then
+	fail "a relative devicePlugin.kubeletDir must fail the render"
+elif grep -qF "devicePlugin.kubeletDir" "$workdir/devplugin-badpath.err"; then
+	pass "a relative devicePlugin.kubeletDir fails the render"
+else
+	fail "a relative kubelet directory failed for another reason: $(tail -n1 "$workdir/devplugin-badpath.err")"
+fi
 
 # Placement values (setec#382). The fixed arch and OS keys stay, the keys of
 # an install come on top, and a fixed key wins over the same key of an install.

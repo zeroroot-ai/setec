@@ -185,6 +185,18 @@ devicePlugin:
   # -- count is how many launcher Pods one node may run at one time. Each
   # takes one share of each device. 110 is the default Pod limit of a node.
   count: 110
+  # -- kubeletDir is the root directory of the kubelet on the node. The
+  # plugin socket directory is kubeletDir/device-plugins, and the chart
+  # mounts that host path at /var/lib/kubelet/device-plugins in the
+  # container. A distribution may move the kubelet root directory, for example
+  # a snap install of Kubernetes. Set nodeAgent.kubeletPodsDir to match.
+  kubeletDir: /var/lib/kubelet
+  # -- priorityClassName is the priority class of the plugin Pods. A node
+  # that has no plugin offers no device, so the default is system-node-critical.
+  # Some managed clusters limit that class to kube-system with a ResourceQuota,
+  # and then the DaemonSet makes no Pod. Name another class, or set an empty
+  # value to render none.
+  priorityClassName: system-node-critical
   # -- tolerations default to matching every taint, so each fleet node
   # offers its devices.
   tolerations:
