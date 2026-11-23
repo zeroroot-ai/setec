@@ -9,6 +9,27 @@ real manifest (validate.yaml) so render failures surface during
 {{- include "setec.validateCredentials" . -}}
 {{- include "setec.validateSnapshotS3" . -}}
 {{- include "setec.validateSandboxClasses" . -}}
+{{- include "setec.validateOperatorSelector" . -}}
+{{- end -}}
+
+{{/*
+Operator Deployment selector (setec#383). Setec 0.130 and older had a selector with
+the name and instance labels only, so it also matched the Pods of the device
+plugin and the node agent. The selector now holds the component label too.
+A Deployment selector is immutable, so an upgrade from such a release stops
+with an API error that does not say what to do. When the live Deployment
+still has the old selector, stop the render and give the step. lookup reads
+the cluster during helm install and helm upgrade. It returns nothing during
+helm template, so a template render is not affected.
+*/}}
+{{- define "setec.validateOperatorSelector" -}}
+{{- $live := lookup "apps/v1" "Deployment" .Values.namespace (include "setec.fullname" .) -}}
+{{- if $live -}}
+{{- $sel := (($live.spec).selector).matchLabels | default dict -}}
+{{- if not (hasKey $sel "app.kubernetes.io/component") -}}
+{{- fail (printf "the Deployment %s/%s has the selector of Setec 0.130 or older, which also matches the device plugin and node agent Pods. A selector cannot change, so delete the Deployment without its Pods, then run this upgrade again: kubectl -n %s delete deployment %s --cascade=orphan. The operator Pods keep running, and the new Deployment adopts them. See the section \"Upgrading from 0.130\" of the chart README." .Values.namespace (include "setec.fullname" .) .Values.namespace (include "setec.fullname" .)) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
