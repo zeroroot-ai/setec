@@ -61,6 +61,81 @@ It is deprecated and the chart drops it in the next minor version.
 {{- end -}}
 
 {{/*
+setec.otlpTarget returns, as JSON, the collector that the operator exports
+traces to. The value is observability.otlpEndpoint, the same value that sets
+the flag --otlp-endpoint of the operator. The result is empty when tracing is
+off. host and port come from a host:port address, and a scheme in front is
+ignored. A port of 443 is the one that the gRPC client dials when the address
+names none. isIP is true for an IPv4 or IPv6 address, and cidr is that address
+as a CIDR. inCluster is true for the name of a Service of the cluster
+(<service>.<namespace>.svc).
+*/}}
+{{- define "setec.otlpTarget" -}}
+{{- $o := .Values.observability -}}
+{{- if and $o.enabled $o.otlpEndpoint -}}
+{{- $raw := toString $o.otlpEndpoint -}}
+{{- if contains "://" $raw -}}
+{{- $raw = (urlParse $raw).host -}}
+{{- end -}}
+{{- $raw = first (splitList "/" $raw) -}}
+{{- $host := "" -}}
+{{- $port := "443" -}}
+{{- if hasPrefix "[" $raw -}}
+{{- $host = trimPrefix "[" (first (splitList "]" $raw)) -}}
+{{- $rest := trimPrefix ":" (last (splitList "]" $raw)) -}}
+{{- if $rest -}}{{- $port = $rest -}}{{- end -}}
+{{- else -}}
+{{- $parts := splitList ":" $raw -}}
+{{- $host = first $parts -}}
+{{- if gt (len $parts) 1 -}}{{- $port = last $parts -}}{{- end -}}
+{{- end -}}
+{{- if or (not $host) (not (regexMatch "^[0-9]+$" $port)) (lt (int $port) 1) (gt (int $port) 65535) -}}
+{{- fail (printf "observability.otlpEndpoint=%q is not valid. Write host:port, such as otel-collector.monitoring.svc:4317." $o.otlpEndpoint) -}}
+{{- end -}}
+{{- $isV4 := regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host -}}
+{{- $isV6 := contains ":" $host -}}
+{{- toJson (dict "host" $host "port" $port "isIP" (or $isV4 $isV6) "cidr" (printf "%s/%s" $host (ternary "32" "128" $isV4)) "inCluster" (regexMatch "\\.svc(\\.|$)" $host)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+setec.validateOtlp checks that the policy can name the collector of the
+traces under the engine of the install. A policy that does not name it drops
+the export, and the operator logs a failed export only.
+*/}}
+{{- define "setec.validateOtlp" -}}
+{{- $t := include "setec.otlpTarget" . | default "{}" | fromJson -}}
+{{- if $t.host -}}
+{{- $sp := .Values.systemPolicy -}}
+{{- $peer := $sp.otlp | default dict -}}
+{{- if or $peer.namespace $peer.podLabels -}}
+{{- if not (and $peer.namespace $peer.podLabels) -}}
+{{- fail "systemPolicy.otlp: set both namespace and podLabels, or neither" -}}
+{{- end -}}
+{{- end -}}
+{{- $havePeer := and $peer.namespace $peer.podLabels -}}
+{{- if eq (include "setec.systemPolicyEngine" .) "cilium" -}}
+{{- if and $t.inCluster (not $havePeer) -}}
+{{- fail (printf "observability.otlpEndpoint names a Service of the cluster (%s). A policy by host name cannot match a Service, because the network plugin sees the Pod behind it. Give the namespace and the Pod labels of the collector in systemPolicy.otlp." $t.host) -}}
+{{- end -}}
+{{- else -}}
+{{- $e := .Values.systemPolicy.networkPolicy.egress.otlp | default dict -}}
+{{- if and (not $havePeer) (not $t.isIP) (not $e.cidrs) -}}
+{{- fail (printf "systemPolicy.networkPolicy.egress.otlp.cidrs is required with systemPolicy.engine=networkpolicy when observability.otlpEndpoint names a host (%s). A plain NetworkPolicy cannot match a host name, so list the CIDRs of the collector, or give the namespace and Pod labels of a collector in this cluster in systemPolicy.otlp." $t.host) -}}
+{{- end -}}
+{{- range $c := ($e.cidrs | default list) -}}
+{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]+$" (toString $c)) -}}
+{{- fail (printf "systemPolicy.networkPolicy.egress.otlp.cidrs: %q is not a CIDR. Write an address and a prefix length, such as 192.0.2.10/32." $c) -}}
+{{- end -}}
+{{- end -}}
+{{- if $e.ports -}}
+{{- include "setec.validateNetworkPolicyPorts" (dict "name" "systemPolicy.networkPolicy.egress.otlp.ports" "ports" $e.ports) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 setec.registryAddress splits the registry of an image source or of the disk
 repository into its host and port. The port is 443 when the registry names
 none. isIP is true for an IPv4 address. A registry at an address needs no host
@@ -81,6 +156,7 @@ that the engine of the install needs.
 {{- $sp := .Values.systemPolicy -}}
 {{- $engine := include "setec.systemPolicyEngine" . -}}
 {{- $_ := include "setec.systemDNS" . -}}
+{{- $_ := include "setec.validateOtlp" . -}}
 {{- range $c := $sp.webhookCallers -}}
 {{- if not (and $c.namespace $c.podLabels) -}}
 {{- fail "systemPolicy.webhookCallers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the caller is pinned too." -}}

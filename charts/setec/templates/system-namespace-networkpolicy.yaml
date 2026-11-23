@@ -6,7 +6,10 @@ state. docs/design/network-policy.md says what each engine enforces.
 
   1. default deny  One policy selects each Pod of the namespace. It denies all
                    ingress. It allows egress to DNS and nothing else.
-  2. operator      the API server out, the webhook port from the API server
+  2. operator      the API server out, the collector of traces out when
+                   observability.otlpEndpoint is set (systemPolicy.otlp, or
+                   systemPolicy.networkPolicy.egress.otlp), the webhook port
+                   from the API server
                    addresses, systemPolicy.networkPolicy.webhookSourceCIDRs and
                    systemPolicy.webhookCallers, the node agent gRPC out when
                    snapshots are on, and its metrics port from the scrapers.
@@ -200,6 +203,23 @@ spec:
       ports:
         - port: 50052
           protocol: TCP
+    {{- end }}
+    {{- $otlp := include "setec.otlpTarget" . | default "{}" | fromJson }}
+    {{- if $otlp.host }}
+    {{- /* The collector of traces: the Pods of systemPolicy.otlp, or the CIDRs
+    of egress.otlp and the address of an IP endpoint. */}}
+    {{- if and $sp.otlp $sp.otlp.podLabels }}
+    - to:
+        {{- include "setec.npPodPeers" (list (dict "namespace" $sp.otlp.namespace "podLabels" $sp.otlp.podLabels)) | nindent 8 }}
+      ports:
+        {{- include "setec.npPorts" (list $otlp.port) | nindent 8 }}
+    {{- else }}
+    {{- $otlpCIDRs := $np.egress.otlp.cidrs | default list }}
+    {{- if $otlp.isIP }}
+    {{- $otlpCIDRs = append $otlpCIDRs $otlp.cidr }}
+    {{- end }}
+    {{- include "setec.npEgressRule" (dict "cidrs" $otlpCIDRs "ports" ($np.egress.otlp.ports | default (list $otlp.port)) "reserved" $reserved) | nindent 4 }}
+    {{- end }}
     {{- end }}
   ingress:
     - from:

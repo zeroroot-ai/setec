@@ -6,7 +6,10 @@ enforces it.
                    namespace. It allows DNS and nothing else. DNS goes to
                    systemPolicy.dns: the CoreDNS or kube-dns Pods of
                    kube-system by default.
-  2. operator      the API server out, the webhook port from the API server,
+  2. operator      the API server out, the collector of traces out when
+                   observability.otlpEndpoint is set (the host name, the
+                   address, or the Pods of systemPolicy.otlp), the webhook
+                   port from the API server,
                    the nodes and systemPolicy.webhookCallers, the node agent
                    gRPC out when snapshots are on, and its metrics port from
                    the scrapers.
@@ -48,6 +51,36 @@ missing.
   rules:
     dns:
       - matchPattern: "*"
+{{- end }}
+{{- /*
+setec.otlpEgress renders the egress rule of the operator to the collector of
+its traces. Call it with (dict "target" <setec.otlpTarget> "peer"
+<systemPolicy.otlp>). A collector in this cluster is a Pod peer. An address is
+a CIDR. Any other name is a host name. A Service name of the cluster cannot be
+matched by host name, and the render stops for it (setec.validateOtlp).
+*/ -}}
+{{- define "setec.otlpEgress" -}}
+{{- $t := .target }}
+{{- $peer := .peer | default dict }}
+{{- if and $peer.namespace $peer.podLabels }}
+{{- $labels := dict "k8s:io.kubernetes.pod.namespace" $peer.namespace }}
+{{- range $k, $v := $peer.podLabels }}
+{{- $labels = set $labels (ternary $k (printf "k8s:%s" $k) (contains ":" $k)) $v }}
+{{- end }}
+- toEndpoints:
+    - matchLabels:
+        {{- toYaml $labels | nindent 8 }}
+{{- else if $t.isIP }}
+- toCIDR:
+    - {{ $t.cidr | quote }}
+{{- else }}
+- toFQDNs:
+    - matchName: {{ $t.host | quote }}
+{{- end }}
+  toPorts:
+    - ports:
+        - port: {{ $t.port | quote }}
+          protocol: TCP
 {{- end }}
 {{- define "setec.diskRegistryEgress" -}}
 {{- if .isIP }}
@@ -179,6 +212,10 @@ spec:
         - ports:
             - port: "50052"
               protocol: TCP
+    {{- end }}
+    {{- $otlp := include "setec.otlpTarget" . | default "{}" | fromJson }}
+    {{- if $otlp.host }}
+    {{- include "setec.otlpEgress" (dict "target" $otlp "peer" $sp.otlp) | nindent 4 }}
     {{- end }}
   ingress:
     - fromEntities:

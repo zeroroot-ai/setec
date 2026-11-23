@@ -9,7 +9,7 @@ Each Pod of the setec namespace denies all traffic, except DNS. One policy for e
 
 | Pod | Allowed in | Allowed out |
 |---|---|---|
-| operator | the admission webhook port (9443) from the API server and `systemPolicy.webhookCallers`, metrics from the scrapers | the API server, the node agent gRPC port when snapshots are on |
+| operator | the admission webhook port (9443) from the API server and `systemPolicy.webhookCallers`, metrics from the scrapers | the API server, the node agent gRPC port when snapshots are on, the trace collector when `observability.enabled` is true |
 | frontend | gRPC from `systemPolicy.frontendCallers`, metrics from the scrapers | the API server |
 | node agent | gRPC from the operator when snapshots are on, metrics from the scrapers | the snapshot store when `snapshots.s3.enabled` is true |
 | device plugin | nothing | nothing (it talks to the kubelet over a unix socket) |
@@ -32,6 +32,7 @@ The Sandbox namespaces have their own default deny. It is a plain NetworkPolicy 
 | Image registries | host names (`launcher.imageSources[].hosts`) | CIDRs and ports (`systemPolicy.networkPolicy.egress.imageSources`) |
 | Disk registry | host name, or the address when it is an IP | CIDRs and ports (`egress.diskRegistry`), or the address when it is an IP |
 | Sigstore trust root | host names (`systemPolicy.sigstoreHosts`) | CIDRs and ports (`egress.sigstore`), optional |
+| Trace collector | host name, address, or the Pods of `systemPolicy.otlp` | CIDRs and ports (`egress.otlp`), the address of an IP endpoint, or the Pods of `systemPolicy.otlp` |
 | Snapshot store | host name, or the address of an IP endpoint | CIDRs and ports (`egress.snapshotStore`), or the address of an IP endpoint |
 | Webhook callers | the API server, the nodes, and `webhookCallers` | `apiServer.cidrs`, `webhookSourceCIDRs`, and `webhookCallers` |
 
