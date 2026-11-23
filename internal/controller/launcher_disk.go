@@ -88,6 +88,11 @@ type DiskBuilderConfig struct {
 	// PushAWSAudience is the audience of the push token. The IAM OpenID
 	// Connect provider of the cluster lists it as a client ID.
 	PushAWSAudience string
+	// Instance is the name of the release that runs the operator. It goes on
+	// each Job, Pod and ConfigMap that the operator makes as the label
+	// app.kubernetes.io/instance, so that a check of the namespace finds the
+	// objects of the release. Empty leaves the label out.
+	Instance string
 	// ServiceAccount is the ServiceAccount of the Job Pods. Empty means the
 	// default of the namespace. The Pod has no API token. An identity that
 	// the cloud binds to a ServiceAccount (IAM roles for service accounts,
@@ -99,6 +104,25 @@ type DiskBuilderConfig struct {
 	Reader client.Reader
 	// Now is the clock of the retry backoff. Nil means time.Now.
 	Now func() time.Time
+}
+
+// objectLabels are the labels of each object that the operator makes in its
+// own namespace for the disk builder: the Jobs, their Pods and the signature
+// ConfigMaps. The component label is the one that the chart policy selects a
+// Pod by. The others say who made the object and for which release, so that
+// a check that expects each object to have a manager finds one. The label
+// app.kubernetes.io/name is not here: a Service or a policy of the chart
+// selects by name and instance, and no Job Pod may match it.
+func (cfg DiskBuilderConfig) objectLabels(component string) map[string]string {
+	labels := map[string]string{
+		componentLabel:                 component,
+		"app.kubernetes.io/managed-by": "setec-operator",
+		"app.kubernetes.io/part-of":    "setec",
+	}
+	if cfg.Instance != "" {
+		labels["app.kubernetes.io/instance"] = cfg.Instance
+	}
+	return labels
 }
 
 func (cfg DiskBuilderConfig) now() time.Time {
@@ -431,7 +455,7 @@ func signBuiltDisk(
 	ctrlTrue := true
 	cm := &corev1.ConfigMap{
 		Name: cmName, Namespace: cfg.Namespace,
-		Labels: map[string]string{componentLabel: componentDiskBuilder},
+		Labels: cfg.objectLabels(componentDiskBuilder),
 		// The Job owns the ConfigMap, so it goes with the Job.
 		OwnerReferences: []metav1.OwnerReference{{
 			APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &ctrlTrue,
@@ -652,12 +676,12 @@ func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string,
 	return &batchv1.Job{
 		Name:      jobName,
 		Namespace: cfg.Namespace,
-		Labels:    map[string]string{componentLabel: component},
+		Labels:    cfg.objectLabels(component),
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
-				Labels: map[string]string{componentLabel: component},
+				Labels: cfg.objectLabels(component),
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					ServiceAccountName:           cfg.ServiceAccount,

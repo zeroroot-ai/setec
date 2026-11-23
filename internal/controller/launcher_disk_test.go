@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -1039,5 +1040,42 @@ func TestValidatePushIdentity(t *testing.T) {
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%s: err = %v; want one that holds %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+// TestBuilderJobs_LabelsNameTheOperatorAndTheRelease: each Job and Pod that the
+// operator makes for the disk builder says who made it and for which release,
+// so a check of the namespace finds a manager for each. The Pod has no
+// app.kubernetes.io/name label: a Service of the chart selects Pods by name and
+// instance, and no Job Pod may match it.
+func TestBuilderJobs_LabelsNameTheOperatorAndTheRelease(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
+	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed", Instance: "setec"}
+	for name, tc := range map[string]struct {
+		job       *batchv1.Job
+		component string
+	}{
+		"disk":   {diskJob(cfg, "r", "b", image, testDiskKeyID), componentDiskBuilder},
+		"verify": {verifyJob(cfg, "v", cls, image), componentImageVerify},
+	} {
+		for where, got := range map[string]map[string]string{"Job": tc.job.Labels, "Pod": tc.job.Spec.Template.Labels} {
+			want := map[string]string{
+				componentLabel:                 tc.component,
+				"app.kubernetes.io/managed-by": "setec-operator",
+				"app.kubernetes.io/part-of":    "setec",
+				"app.kubernetes.io/instance":   "setec",
+			}
+			if !maps.Equal(got, want) {
+				t.Fatalf("the %s %s labels = %v; want %v", name, where, got, want)
+			}
+		}
+	}
+	// With no instance, the label is left out.
+	cfg.Instance = ""
+	if _, ok := diskJob(cfg, "r", "b", image, testDiskKeyID).Labels["app.kubernetes.io/instance"]; ok {
+		t.Fatal("the Job has an instance label with no instance name")
 	}
 }

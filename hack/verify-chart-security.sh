@@ -1424,6 +1424,15 @@ disk_push_refused "an empty push audience" "other than sts.amazonaws.com" "${PUS
 disk_push_refused "a push role with no ServiceAccount" "needs a named ServiceAccount" "${PUSH[@]}" \
 	--set launcher.diskBuilder.serviceAccount.create=false
 
+# ---------------------------------------------------------------------------
+# The release name reaches the operator, which puts it on each disk Job, Pod
+# and ConfigMap as app.kubernetes.io/instance (the unit tests of
+# internal/controller check the labels).
+# ---------------------------------------------------------------------------
+note "disk Job labels"
+render "$workdir/instance.yaml" --show-only templates/deployment.yaml
+assert_contains "$workdir/instance.yaml" "the operator gets the release name for the labels of its Jobs" "--instance-name=setec"
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2
