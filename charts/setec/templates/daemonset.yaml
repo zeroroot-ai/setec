@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/component: node-agent
     spec:
       serviceAccountName: {{ include "setec.fullname" . }}-node-agent
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       # The agent calls no Kubernetes API: the operator reaches it over
       # gRPC, and it reads the launcher Pods on the host. So it has no
       # token and no RBAC.

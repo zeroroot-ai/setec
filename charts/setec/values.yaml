@@ -7,8 +7,15 @@ image:
   # -- Image pull policy. One of Always, Never, IfNotPresent.
   pullPolicy: IfNotPresent
 
-# -- imagePullSecrets is a list of Secret references the Pod uses when pulling
-# the operator image from a private registry. Leave empty for public images.
+# -- imagePullSecrets is a list of Secret references that each Pod of the
+# chart uses when it pulls an image from a private registry: the operator, the
+# frontend, the node agent, the device plugin, and the disk Jobs that the
+# operator makes. Each Secret is in the release namespace. Leave empty for
+# public images, or when the nodes hold the registry credential (for example
+# the credential provider of the kubelet for Amazon ECR). The launcher Pods run
+# in the Sandbox namespaces. A Secret cannot cross a namespace, so the
+# ServiceAccount of each Sandbox namespace names the pull Secret of the
+# launcher image.
 imagePullSecrets: []
 
 # -- kubectl configures the kubectl image used by the pre-upgrade hook Job.

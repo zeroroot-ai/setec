@@ -170,7 +170,7 @@ kubectl delete namespace setec-system
 | `image.repository` | `ghcr.io/zeroroot-ai/setec` | Container image repository. |
 | `image.tag` | `"0.1.0"` | Image tag; falls back to `.Chart.AppVersion` when empty. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `imagePullSecrets` | `[]` | Pull secrets for private registries. |
+| `imagePullSecrets` | `[]` | Pull Secrets (names in the release namespace) for the images of the operator, frontend, node agent, device plugin and disk Jobs. A launcher Pod runs in a Sandbox namespace, so the ServiceAccount of that namespace names its pull Secret. |
 | `nameOverride` | `""` | Override the chart name in generated resource names. |
 | `fullnameOverride` | `""` | Override the full resource name prefix. |
 | `createNamespace` | `false` | If true, the chart renders the target Namespace. |

@@ -1455,6 +1455,35 @@ for d in yaml.safe_load_all(open(sys.argv[1])):
         if got != want:
             sys.exit(f"got {got}, want {want}")
 PY
+# Pull Secrets of the images of the chart. Each Pod that the chart
+# runs pulls its image with imagePullSecrets, not the operator alone. The disk
+# Jobs get the same names from the operator flag --image-pull-secret.
+# ---------------------------------------------------------------------------
+note "image pull Secrets reach each workload"
+render "$workdir/ips-default.yaml" "${FE[@]}" --set nodeAgent.enabled=true
+assert_absent "$workdir/ips-default.yaml" "no pull Secret by default" "imagePullSecrets"
+assert_absent "$workdir/ips-default.yaml" "no pull Secret flag by default" "--image-pull-secret"
+render "$workdir/ips-set.yaml" "${FE[@]}" --set nodeAgent.enabled=true \
+	--set 'imagePullSecrets[0].name=registry-a' --set 'imagePullSecrets[1].name=registry-b'
+python3 - "$workdir/ips-set.yaml" >"$workdir/ips-set.out" 2>&1 <<'PY' && pass "the operator, frontend, node agent and device plugin name the pull Secrets" || fail "pull Secrets: $(cat "$workdir/ips-set.out")"
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if isinstance(d, dict)]
+want = [{"name": "registry-a"}, {"name": "registry-b"}]
+seen = set()
+for d in docs:
+    if d.get("kind") not in ("Deployment", "DaemonSet"):
+        continue
+    comp = d["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/component"]
+    got = d["spec"]["template"]["spec"].get("imagePullSecrets")
+    if got != want:
+        sys.exit(f"{comp}: imagePullSecrets = {got}")
+    seen.add(comp)
+need = {"operator", "frontend", "node-agent", "device-plugin"}
+if seen != need:
+    sys.exit(f"workloads with pull Secrets {sorted(seen)}, want {sorted(need)}")
+PY
+assert_contains "$workdir/ips-set.yaml" "the operator gets the names for the disk Job Pods" \
+	"--image-pull-secret=registry-a" "--image-pull-secret=registry-b"
 
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
