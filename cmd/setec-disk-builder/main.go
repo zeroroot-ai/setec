@@ -11,8 +11,10 @@
 //
 // check looks up the disk with the push credential and leaves the marker
 // file "exists" in the work directory when the registry holds it. build
-// pulls the image and makes the disk in the work directory; it has no
-// credential. publish waits for the signature of the operator at
+// pulls the image and makes the disk in the work directory; it has no push
+// credential. It reads a private registry with the pull Secret of its docker
+// config (DOCKER_CONFIG), or with the identity of the Job through each
+// --registry-auth provider (internal/diskbuilder/registryauth). publish waits for the signature of the operator at
 // --signature-file and pushes the disk and the signature. Each step writes
 // its JSON report to stdout and to --result-file, the termination message
 // that the operator reads.
@@ -26,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,6 +39,7 @@ import (
 
 	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/diskbuilder/imagesig"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder/registryauth"
 )
 
 func main() {
@@ -58,6 +62,10 @@ func runMain() int {
 	identity := flag.String("identity", "", "verify: the certificate identity of a keyless signature")
 	trustedRoot := flag.String("trusted-root", "",
 		"verify: a Sigstore trusted root JSON file. Empty fetches the public-good root through TUF")
+	var registryAuth stringList
+	flag.Var(&registryAuth, "registry-auth",
+		"build, verify: a cloud credential provider that reads a private registry ("+strings.Join(registryauth.Names(), ", ")+
+			"). Repeat it for each provider. check and publish refuse it: they hold the push credential")
 	flag.Parse()
 	if flag.NArg() != 2 {
 		usage()
@@ -68,14 +76,23 @@ func runMain() int {
 	image := flag.Arg(1)
 	marker := filepath.Join(*work, "exists")
 	disk := filepath.Join(*work, diskbuilder.DiskFile)
-	switch flag.Arg(0) {
+	cmdName := flag.Arg(0)
+	if err := checkRegistryAuthUse(cmdName, registryAuth); err != nil {
+		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
+		return 2
+	}
+	pull, err := pullKeychain(registryAuth)
+	if err != nil {
+		return fail(err)
+	}
+	switch cmdName {
 	case "verify":
 		// The public key of a key signature comes from the environment, so
 		// the PEM text needs no file.
 		policy := diskbuilder.SignaturePolicy{
 			Issuer: *issuer, Identity: *identity, PublicKey: []byte(os.Getenv("SETEC_VERIFY_PUBLIC_KEY")),
 		}
-		return runVerify(image, policy, *trustedRoot, *tmp)
+		return runVerify(image, policy, *trustedRoot, *tmp, pull)
 	case "check":
 		if *repo == "" || *keyID == "" {
 			usage()
@@ -96,9 +113,11 @@ func runMain() int {
 			fmt.Println("the registry holds the disk; nothing to build")
 			return 0
 		}
-		// No credential: the image registries of the class serve the
-		// image anonymously, and this container holds no secret.
-		res, err := (&diskbuilder.Builder{}).Build(ctx, image, disk)
+		// No push credential and no signing seed. The registry of the image
+		// answers to the pull Secret of DOCKER_CONFIG, to each cloud
+		// provider, or to the anonymous access.
+		builder := &diskbuilder.Builder{Options: []remote.Option{remote.WithAuthFromKeychain(pull)}}
+		res, err := builder.Build(ctx, image, disk)
 		if err != nil {
 			return fail(err)
 		}
@@ -132,13 +151,49 @@ func runMain() int {
 	}
 }
 
+// stringList is a flag that collects each value.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+
+func (l *stringList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
+}
+
+// checkRegistryAuthUse refuses a cloud provider for a command that holds the
+// push credential. The build step must not hold it, and the steps that do
+// must not read an image of a tenant with an identity of the cloud.
+func checkRegistryAuthUse(command string, names []string) error {
+	if len(names) > 0 && command != "build" && command != "verify" {
+		return fmt.Errorf("--registry-auth is for build and verify only: %s holds the push credential", command)
+	}
+	return nil
+}
+
+// pullKeychain is the keychain that reads the image registries: the docker
+// config of the container first, then each named provider.
+func pullKeychain(names []string) (authn.Keychain, error) {
+	ps := make([]registryauth.Provider, 0, len(names))
+	for _, n := range names {
+		p, err := registryauth.New(n)
+		if err != nil {
+			return nil, fmt.Errorf("--registry-auth: %w", err)
+		}
+		ps = append(ps, p)
+	}
+	return registryauth.Keychain(authn.DefaultKeychain, ps...), nil
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: setec-disk-builder --disk-repo REPO --key-id ID check IMAGE@sha256:DIGEST")
-	fmt.Fprintln(os.Stderr, "       setec-disk-builder [--work DIR] build IMAGE@sha256:DIGEST")
+	fmt.Fprintln(os.Stderr,
+		"       setec-disk-builder [--registry-auth PROVIDER]... [--work DIR] build IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr,
 		"       setec-disk-builder --disk-repo REPO --key-id ID [--work DIR] publish IMAGE@sha256:DIGEST")
 	fmt.Fprintln(os.Stderr,
-		"       setec-disk-builder [--issuer I --identity ID | (SETEC_VERIFY_PUBLIC_KEY)] verify IMAGE@sha256:DIGEST")
+		"       setec-disk-builder [--registry-auth PROVIDER]... "+
+			"[--issuer I --identity ID | (SETEC_VERIFY_PUBLIC_KEY)] verify IMAGE@sha256:DIGEST")
 }
 
 func fail(err error) int {
@@ -187,7 +242,7 @@ func waitForSignature(ctx context.Context, path string, wait time.Duration) (dis
 
 // runVerify checks the cosign signature of image against policy. It exits
 // 0 when the image verifies, 1 when it does not, and 2 on a bad policy.
-func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp string) int {
+func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp string, pull authn.Keychain) int {
 	if err := policy.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
 		return 2
@@ -207,7 +262,7 @@ func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tm
 			return 1
 		}
 	}
-	err := imagesig.VerifyImage(ctx, image, policy, trusted, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	err := imagesig.VerifyImage(ctx, image, policy, trusted, remote.WithAuthFromKeychain(pull))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
 		return 1

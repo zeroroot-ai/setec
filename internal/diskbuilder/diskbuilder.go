@@ -34,6 +34,13 @@ import (
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 )
 
+// PullProviders are the names of the cloud credential providers that the build
+// and image verify containers accept in --registry-auth, to read a private
+// registry. The operator checks a name against this list at startup without
+// linking the clients of a cloud. internal/diskbuilder/registryauth has the
+// provider of each name, and its test keeps both lists equal.
+var PullProviders = []string{"ecr"}
+
 // ImageConfigPath is where the disk holds the image config.
 const ImageConfigPath = ".setec/image.json"
 

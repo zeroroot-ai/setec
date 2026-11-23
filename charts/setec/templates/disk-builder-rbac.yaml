@@ -49,4 +49,27 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "setec.serviceAccountName" $ }}
     namespace: {{ $.Values.namespace }}
+{{- with .diskBuilder.serviceAccount }}
+{{- if .create }}
+---
+{{- /*
+The ServiceAccount of the disk Job Pods. It has no Role and no token: a Pod
+of the Job reads no Kubernetes API. It exists so that an identity of the cloud
+can name it (IAM roles for service accounts, EKS Pod Identity).
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "setec.diskBuilderServiceAccountName" $ }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: disk-builder
+  {{- with .annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}
+{{- end }}
 {{- end }}

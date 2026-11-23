@@ -11,6 +11,7 @@ real manifest (validate.yaml) so render failures surface during
 {{- include "setec.validateSandboxClasses" . -}}
 {{- include "setec.validateOperatorSelector" . -}}
 {{- include "setec.validateSystemPolicy" . -}}
+{{- include "setec.validateDiskBuilderPull" . -}}
 {{- end -}}
 
 {{/*
@@ -112,5 +113,28 @@ error, so the mistake is caught before it reaches a cluster.
 {{- end -}}
 {{- if and .Values.snapshots.enabled (not $s.authorizedIDs.nodeAgentServers) -}}
 {{- fail "credentials.spiffe.authorizedIDs.nodeAgentServers must not be empty with snapshots.enabled=true: the operator's node-agent dialer refuses an empty allow-list" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Disk builder pull access (setec#379). A provider name must be one that the
+builder knows, and a role needs the provider that uses it, so a typo fails the
+render and not the first disk build.
+*/}}
+{{- define "setec.validateDiskBuilderPull" -}}
+{{- $pull := .Values.launcher.diskBuilder.pull -}}
+{{- range $p := $pull.providers -}}
+{{- if not (has $p (list "ecr")) -}}
+{{- fail (printf "launcher.diskBuilder.pull.providers: %q is not a known provider. Use \"ecr\"." $p) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $pull.aws.roleArn (not (has "ecr" $pull.providers)) -}}
+{{- fail "launcher.diskBuilder.pull.aws.roleArn needs launcher.diskBuilder.pull.providers to hold \"ecr\": the provider uses the role." -}}
+{{- end -}}
+{{- if and $pull.aws.roleArn (not (hasPrefix "arn:" $pull.aws.roleArn)) -}}
+{{- fail (printf "launcher.diskBuilder.pull.aws.roleArn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>), got %q" $pull.aws.roleArn) -}}
+{{- end -}}
+{{- if and $pull.aws.roleArn (not (include "setec.diskBuilderServiceAccountName" .)) -}}
+{{- fail "launcher.diskBuilder.pull.aws.roleArn needs a named ServiceAccount for the disk Jobs: the token that the role trusts belongs to it. Set launcher.diskBuilder.serviceAccount.create=true or give it a name." -}}
 {{- end -}}
 {{- end -}}

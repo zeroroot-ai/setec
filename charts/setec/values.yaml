@@ -101,8 +101,58 @@ launcher:
     # each disk. Required. The install makes it.
     signingSecret: ""
     # -- registrySecret is an optional kubernetes.io/dockerconfigjson Secret
-    # with the push credentials of diskRepo.
+    # with the push credentials of diskRepo. Only the check and publish
+    # containers of the disk Job mount it.
     registrySecret: ""
+    # -- pull gives the container that reads the launcher image the means to
+    # read a private registry. That container is the build container of the
+    # disk Job, and the image verify Job. It never holds the push credential
+    # (registrySecret) or the signing seed. The check and publish containers
+    # get none of pull. With nothing set, the registry is read with no
+    # credential, as before.
+    pull:
+      # -- secret is an optional kubernetes.io/dockerconfigjson Secret in the
+      # release namespace with a credential to read the image registries
+      # (launcher.imageSources). It is a different Secret from registrySecret.
+      secret: ""
+      # -- providers name the clouds that give a short-lived registry token by
+      # the identity of the Job, with no static Secret. One is known:
+      # "ecr" (Amazon ECR, any way that a Pod gets an AWS identity). The
+      # builder asks the provider for a token of each ECR host. A pull
+      # Secret that names the host answers first. Add the hosts of the
+      # provider to launcher.imageSources[].hosts: the ECR API, the STS
+      # endpoint of the region, the registry and the S3 hosts that serve its
+      # blobs. See the chart README, "Reading a private registry".
+      providers: []
+      aws:
+        # -- roleArn is an IAM role for the provider "ecr". The operator
+        # projects a token of the Job ServiceAccount for the audience
+        # sts.amazonaws.com into the build container and the image verify
+        # container only, and the builder assumes the role with it. The
+        # check and publish containers get no token. The trust policy of the
+        # role names the ServiceAccount of serviceAccount below. The role
+        # grants ecr:GetAuthorizationToken and the pull rights of the
+        # repositories, and no push right. Leave empty to use the identity
+        # that the cluster gives to the Pod: EKS Pod Identity of the
+        # ServiceAccount, or the role of the node. Those identities reach
+        # each container of the Job Pod, so they too must grant pull only.
+        roleArn: ""
+    # -- serviceAccount is the ServiceAccount of the disk Job Pods. The Pods
+    # have no API token. A cloud identity that is bound to a ServiceAccount
+    # (IAM roles for service accounts, EKS Pod Identity) needs this named
+    # account.
+    serviceAccount:
+      # -- create renders the ServiceAccount. With false and an empty name,
+      # the Pods use the default ServiceAccount of the namespace.
+      create: true
+      # -- name defaults to "<fullname>-disk-builder".
+      name: ""
+      # -- annotations of the ServiceAccount, for example
+      # eks.amazonaws.com/role-arn for IAM roles for service accounts with the
+      # webhook of EKS. That webhook gives the token to each container of the
+      # Pod. Use pull.aws.roleArn instead, which gives it to the build
+      # container only.
+      annotations: {}
     # -- publicKeys are the base64 ed25519 public keys of signingSecret. Each
     # launcher refuses a disk that none of them signed. List two while the
     # signing key rotates. Required.
@@ -379,6 +429,18 @@ systemPolicy:
     - namespace: monitoring
       podLabels:
         app.kubernetes.io/name: prometheus
+  # credentialEndpoints are the addresses that the disk Jobs reach to get a
+  # registry token from the cloud (launcher.diskBuilder.pull.providers). A
+  # name such as the STS endpoint goes in launcher.imageSources[].hosts (the
+  # cilium engine) or in networkPolicy.egress.imageSources (the networkpolicy
+  # engine). An address that has no name goes here. Each entry is a cidr and
+  # its ports. The disk Job pod reaches them in both engines, and the check
+  # and publish containers share its network. Empty by default.
+  #   - cidr: 169.254.170.23/32   # the agent of EKS Pod Identity
+  #     ports: [80]
+  #   - cidr: 169.254.169.254/32  # the instance metadata service, for the node role
+  #     ports: [80]
+  credentialEndpoints: []
   # sigstoreHosts are the hosts of the Sigstore trust root that the image
   # verify Job reads (the public-good TUF repository). The Job reaches them
   # and the hosts of launcher.imageSources, and nothing else. Only the

@@ -206,6 +206,91 @@ assert_absent "$workdir/devplugin.stripped.yaml" "the default device plugin has 
 assert_absent "$workdir/devplugin.stripped.yaml" "the default device plugin has no extra selector key" "setec.zeroroot.ai/pool"
 
 # ---------------------------------------------------------------------------
+# Pull access of the disk Jobs (setec#379). The build container reads a
+# private registry with a pull Secret, a web identity or a cloud provider. The
+# push Secret and the signing seed stay out of it. The Job is made by the
+# operator, so the chart renders its flags and its ServiceAccount, and the
+# unit tests of internal/controller check the Job.
+# ---------------------------------------------------------------------------
+note "disk Job pull access (setec#379)"
+render "$workdir/pull-default.yaml" --show-only templates/deployment.yaml
+assert_absent "$workdir/pull-default.yaml" "no pull flag by default" "--disk-pull-"
+assert_contains "$workdir/pull-default.yaml" "the disk Jobs have their own ServiceAccount by default" \
+	"--disk-service-account=setec-disk-builder"
+render "$workdir/pull-set.yaml" --show-only templates/deployment.yaml \
+	--set launcher.diskBuilder.pull.secret=image-pull \
+	--set 'launcher.diskBuilder.pull.providers={ecr}' \
+	--set launcher.diskBuilder.pull.aws.roleArn=arn:aws:iam::123456789012:role/setec-pull
+assert_contains "$workdir/pull-set.yaml" "the operator gets the pull Secret, the provider and the role" \
+	"--disk-pull-secret=image-pull" \
+	"--disk-pull-provider=ecr" \
+	"--disk-pull-aws-role-arn=arn:aws:iam::123456789012:role/setec-pull"
+assert_absent "$workdir/pull-set.yaml" "the pull Secret is not the push Secret" "--disk-registry-secret=image-pull"
+render "$workdir/pull-sa.yaml" --show-only templates/disk-builder-rbac.yaml \
+	--set 'launcher.diskBuilder.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/x'
+assert_contains "$workdir/pull-sa.yaml" "the disk Job ServiceAccount is rendered, with its annotation and no token" \
+	"name: setec-disk-builder" "kind: ServiceAccount" "automountServiceAccountToken: false" \
+	"eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/x"
+render "$workdir/pull-nosa.yaml" --set launcher.diskBuilder.serviceAccount.create=false
+assert_absent "$workdir/pull-nosa.yaml" "no ServiceAccount flag when the chart makes none and the install names none" \
+	"--disk-service-account="
+disk_pull_refused() {
+	local desc="$1" want="$2"
+	shift 2
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		--set "sandboxNamespaces={${NS_A}}" "$@" >/dev/null 2>"$workdir/pull-refused.err"; then
+		fail "$desc must fail the render"
+	elif grep -qF -- "$want" "$workdir/pull-refused.err"; then
+		pass "$desc fails the render"
+	else
+		fail "$desc failed with another message: $(tail -n1 "$workdir/pull-refused.err")"
+	fi
+}
+# An address of the cloud that has no name (the agent of EKS Pod Identity) goes
+# to both disk Jobs in both engines, and to no other Pod.
+CRED=(--set 'systemPolicy.credentialEndpoints[0].cidr=169.254.170.23/32'
+	--set 'systemPolicy.credentialEndpoints[0].ports={80}')
+render "$workdir/cred-cilium.yaml" "${CRED[@]}"
+"$HELM" template setec "$CHART_DIR" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+	--set "sandboxNamespaces={${NS_A}}" --set systemPolicy.engine=networkpolicy "${CRED[@]}" \
+	--set 'systemPolicy.networkPolicy.apiServer.cidrs={192.0.2.10/32}' \
+	--set 'systemPolicy.networkPolicy.egress.imageSources.cidrs={198.51.100.0/24}' \
+	--set 'systemPolicy.networkPolicy.egress.diskRegistry.cidrs={203.0.113.5/32}' >"$workdir/cred-np.yaml"
+for engine in cilium np; do
+	if python3 - "$workdir/cred-$engine.yaml" >"$workdir/cred-$engine.out" 2>&1 <<'PY'
+import sys, yaml
+want = {"-disk-builder", "-image-verify"}
+got = set()
+for d in yaml.safe_load_all(open(sys.argv[1])):
+    if not isinstance(d, dict) or d.get("kind") not in ("CiliumNetworkPolicy", "NetworkPolicy"):
+        continue
+    text = yaml.safe_dump(d["spec"])
+    if "169.254.170.23/32" in text:
+        got.add(next(s for s in ("-disk-builder", "-image-verify", "-operator", "-frontend", "-node-agent", "-default-deny") if d["metadata"]["name"].endswith(s)))
+if got != want:
+    sys.exit(f"the credential endpoint reaches {sorted(got)}, want {sorted(want)}")
+PY
+	then
+		pass "a credential endpoint reaches the two disk Jobs only, with the $engine engine"
+	else
+		fail "credential endpoint with the $engine engine: $(cat "$workdir/cred-$engine.out")"
+	fi
+done
+disk_pull_refused "a credential endpoint that is not a CIDR" "is not a CIDR" \
+	--set 'systemPolicy.credentialEndpoints[0].cidr=169.254.170.23' --set 'systemPolicy.credentialEndpoints[0].ports={80}'
+disk_pull_refused "a credential endpoint with no port" "must list at least one port" \
+	--set 'systemPolicy.credentialEndpoints[0].cidr=169.254.170.23/32'
+disk_pull_refused "an unknown pull provider" "is not a known provider" \
+	--set 'launcher.diskBuilder.pull.providers={gcr}'
+disk_pull_refused "a pull role with no provider" "needs launcher.diskBuilder.pull.providers" \
+	--set launcher.diskBuilder.pull.aws.roleArn=arn:aws:iam::123456789012:role/x
+disk_pull_refused "a pull role that is not an ARN" "must be an IAM role ARN" \
+	--set 'launcher.diskBuilder.pull.providers={ecr}' --set launcher.diskBuilder.pull.aws.roleArn=setec-pull
+disk_pull_refused "a pull role with no named ServiceAccount" "needs a named ServiceAccount" \
+	--set 'launcher.diskBuilder.pull.providers={ecr}' --set launcher.diskBuilder.pull.aws.roleArn=arn:aws:iam::123456789012:role/x \
+	--set launcher.diskBuilder.serviceAccount.create=false
+
+# ---------------------------------------------------------------------------
 # The node agent has no Kubernetes credentials (setec#198).
 #
 # The agent is root and privileged: it reads and writes the work volumes of

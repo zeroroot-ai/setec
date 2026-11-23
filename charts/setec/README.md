@@ -373,6 +373,49 @@ launcher:
 
 `webhookSourceCIDRs` depends on the network plugin. Check it before you rely on it: a webhook call that the policy drops rejects each Sandbox when `webhook.failurePolicy` is `Fail`.
 
+### Reading a private registry
+
+The disk build Job reads the launcher image of a Sandbox, and the image verify Job reads an image and its signature. A private registry needs a credential for both. The Job pod has three containers: check, build and publish. Check and publish hold the push credential of `launcher.diskRepo`. The build container reads the image of a tenant, so it never holds the push credential or the signing seed. The values under `launcher.diskBuilder.pull` reach the build container and the image verify container only.
+
+Pick one of these ways. A pull Secret answers first when it names the registry.
+
+| Way | Values | What the build container gets |
+|---|---|---|
+| Pull Secret | `pull.secret` | A `kubernetes.io/dockerconfigjson` Secret, mounted read-only, as `DOCKER_CONFIG` |
+| IAM role for a service account (ECR) | `pull.providers: [ecr]`, `pull.aws.roleArn` | A token of the Job ServiceAccount for the audience `sts.amazonaws.com`. The builder assumes the role and asks ECR for a token. |
+| EKS Pod Identity (ECR) | `pull.providers: [ecr]`, a Pod Identity association of `serviceAccount.name` | The container credentials that the cluster gives to the Pod |
+| Node role (ECR) | `pull.providers: [ecr]` | The instance role of the node |
+
+With `pull.aws.roleArn`, only the build container and the image verify container get the token. With the other two cloud ways, the cluster gives the identity to each container of the Job pod, so the identity must grant pull rights only. Give the push credential to check and publish with `launcher.diskBuilder.registrySecret`. An identity that can push to the disk repository must not reach the Job pod.
+
+#### Amazon ECR
+
+1. Create an IAM role with `ecr:GetAuthorizationToken`, and `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` and `ecr:BatchCheckLayerAvailability` on the repositories of the launcher images. Add no push right.
+2. Trust the OIDC provider of the cluster for the ServiceAccount of the disk Jobs, `<namespace>:<fullname>-disk-builder`, with the audience `sts.amazonaws.com`.
+3. Set the values:
+
+   ```yaml
+   launcher:
+     imageSources:
+       - registry: 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+         # The hosts are for systemPolicy.engine=cilium. List the registry,
+         # the ECR API, the STS endpoint and the S3 host that serves the blobs.
+         hosts:
+           - 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+           - api.ecr.eu-west-1.amazonaws.com
+           - sts.eu-west-1.amazonaws.com
+           - "*.s3.eu-west-1.amazonaws.com"
+     diskBuilder:
+       pull:
+         providers: [ecr]
+         aws:
+           roleArn: arn:aws:iam::123456789012:role/setec-image-pull
+   ```
+
+The ECR provider reads the account and the region from the registry host, so one install reads registries of more than one account and region. The token lasts twelve hours, and the builder asks again before it ends. Another cloud adds a provider in `internal/diskbuilder/registryauth` and a name in `diskbuilder.PullProviders`. The values and the Job stay the same.
+
+The system namespace policy still limits the Job pod to the registries of `launcher.imageSources`. The Job needs these destinations to get a token: the ECR API and the STS endpoint for a web identity, the Pod Identity agent for Pod Identity, and the instance metadata service for the node role. Give the first as hosts under the `cilium` engine, or as CIDRs in `systemPolicy.networkPolicy.egress.imageSources` under the `networkpolicy` engine. The last two have no host name. Give them in `systemPolicy.credentialEndpoints` as a CIDR and its ports: `169.254.170.23/32` on port 80 for the Pod Identity agent, and `169.254.169.254/32` on port 80 for the instance metadata service. Both engines read this value. The check and publish containers share the network of the Job pod, so they reach these addresses too.
+
 ### Sandbox egress posture
 
 `netpol.reservedCIDRs` is the address space no Sandbox may reach. It is

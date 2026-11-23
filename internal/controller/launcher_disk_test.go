@@ -362,6 +362,137 @@ func TestBuilderJobs_NoJobMountsTheSeed(t *testing.T) {
 	}
 }
 
+// mountsOf returns the volumes that container c mounts, as the objects of the
+// Job.
+func mountsOf(job *batchv1.Job, c corev1.Container) []corev1.Volume {
+	vols := map[string]corev1.Volume{}
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		vols[v.Name] = v
+	}
+	out := make([]corev1.Volume, 0, len(c.VolumeMounts))
+	for _, m := range c.VolumeMounts {
+		out = append(out, vols[m.Name])
+	}
+	return out
+}
+
+func envOf(c corev1.Container, name string) string {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+// checkNoPullAccess fails when a container that holds the push credential
+// gets pull access of the cloud or of a pull Secret.
+func checkNoPullAccess(t *testing.T, j *batchv1.Job, containers ...corev1.Container) {
+	t.Helper()
+	for _, c := range containers {
+		for _, v := range mountsOf(j, c) {
+			if v.Name == pullVolume || v.Name == awsTokenVolume || v.Projected != nil {
+				t.Fatalf("the container %s mounts the pull access %s", c.Name, v.Name)
+			}
+		}
+		if envOf(c, "AWS_ROLE_ARN") != "" || slices.Contains(c.Args, "--registry-auth") {
+			t.Fatalf("the container %s gets the cloud pull access: %v %v", c.Name, c.Args, c.Env)
+		}
+		if envOf(c, "DOCKER_CONFIG") != registryDir {
+			t.Fatalf("the container %s DOCKER_CONFIG = %q; want the push directory", c.Name, envOf(c, "DOCKER_CONFIG"))
+		}
+	}
+}
+
+// checkBuildPullAccess checks that the build container gets the pull Secret,
+// one token and the provider, and no push credential.
+func checkBuildPullAccess(t *testing.T, j *batchv1.Job, build corev1.Container, cfg DiskBuilderConfig) {
+	t.Helper()
+	var secrets []string
+	var tokens int
+	for _, v := range mountsOf(j, build) {
+		if v.Secret != nil {
+			secrets = append(secrets, v.Secret.SecretName)
+		}
+		if v.Projected != nil {
+			tokens++
+			src := v.Projected.Sources[0].ServiceAccountToken
+			if src == nil || src.Audience != awsTokenAudience {
+				t.Fatalf("the projected volume of the build container = %+v; want a token for %s", v.Projected, awsTokenAudience)
+			}
+		}
+	}
+	if !slices.Equal(secrets, []string{"image-pull"}) || tokens != 1 {
+		t.Fatalf("the build container mounts the Secrets %v and %d tokens; want only the pull Secret and one token", secrets, tokens)
+	}
+	if envOf(build, "DOCKER_CONFIG") != pullDir || envOf(build, "AWS_ROLE_ARN") != cfg.PullAWSRoleARN ||
+		envOf(build, "AWS_WEB_IDENTITY_TOKEN_FILE") != awsTokenDir+"/token" {
+		t.Fatalf("the build container env = %v", build.Env)
+	}
+	if !slices.Equal(build.Args[:2], []string{"--registry-auth", "ecr"}) || build.Args[len(build.Args)-2] != "build" {
+		t.Fatalf("the build container args = %v; want --registry-auth ecr first and the build command", build.Args)
+	}
+	for _, e := range build.Env {
+		if e.Name == "DOCKER_CONFIG" && e.Value == registryDir {
+			t.Fatalf("the build container reads the push credential directory")
+		}
+	}
+}
+
+// TestBuilderJobs_PullAccessReachesOnlyTheContainerThatReadsTheImage is
+// setec#379. The build container reads a private registry with a pull
+// Secret, a web identity token and a cloud provider, and still holds neither
+// the push credential nor the signing seed. The check and publish containers,
+// which hold the push credential, get none of the pull access.
+func TestBuilderJobs_PullAccessReachesOnlyTheContainerThatReadsTheImage(t *testing.T) {
+	t.Parallel()
+	cfg := DiskBuilderConfig{
+		Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed", RegistrySecret: "disk-push",
+		PullSecret: "image-pull", PullProviders: []string{"ecr"},
+		PullAWSRoleARN: "arn:aws:iam::123456789012:role/setec-pull", ServiceAccount: "setec-disk-builder",
+	}
+	image := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/tool@sha256:" + strings.Repeat("ab", 32)
+	j := diskJob(cfg, "r", "b", image, testDiskKeyID)
+	spec := j.Spec.Template.Spec
+	if spec.ServiceAccountName != "setec-disk-builder" || *spec.AutomountServiceAccountToken {
+		t.Fatalf("the Job pod service account = %q, automount %t", spec.ServiceAccountName, *spec.AutomountServiceAccountToken)
+	}
+	noSeed(t, j, cfg.SigningSecret)
+
+	check, build, publish := spec.InitContainers[0], spec.InitContainers[1], spec.Containers[0]
+	checkBuildPullAccess(t, j, build, cfg)
+
+	checkNoPullAccess(t, j, check, publish)
+
+	// The image verify Job reads an image too, and gets the same access.
+	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
+	v := verifyJob(cfg, "v", cls, image)
+	vc := v.Spec.Template.Spec.Containers[0]
+	if envOf(vc, "DOCKER_CONFIG") != pullDir || vc.Args[0] != "--registry-auth" || v.Spec.Template.Spec.ServiceAccountName != "setec-disk-builder" {
+		t.Fatalf("the verify container = %v %v", vc.Args, vc.Env)
+	}
+	for _, vol := range mountsOf(v, vc) {
+		if vol.Secret != nil && vol.Secret.SecretName != "image-pull" {
+			t.Fatalf("the verify container mounts the Secret %s", vol.Secret.SecretName)
+		}
+	}
+}
+
+// With no pull value, the Job is as before: the build container holds no
+// secret and no token.
+func TestBuilderJobs_NoPullAccessByDefault(t *testing.T) {
+	t.Parallel()
+	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed", RegistrySecret: "disk-push"}
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	j := diskJob(cfg, "r", "b", image, testDiskKeyID)
+	build := j.Spec.Template.Spec.InitContainers[1]
+	noSecretIn(t, j, build)
+	if slices.Contains(build.Args, "--registry-auth") || envOf(build, "DOCKER_CONFIG") != "" || j.Spec.Template.Spec.ServiceAccountName != "" {
+		t.Fatalf("the build container = %v %v", build.Args, build.Env)
+	}
+}
+
 func TestEnsureLauncherDisk_BadImage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

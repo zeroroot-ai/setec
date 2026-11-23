@@ -91,6 +91,18 @@ spec:
             {{- with .diskBuilder.registrySecret }}
             - --disk-registry-secret={{ . }}
             {{- end }}
+            {{- with .diskBuilder.pull.secret }}
+            - --disk-pull-secret={{ . }}
+            {{- end }}
+            {{- range .diskBuilder.pull.providers }}
+            - --disk-pull-provider={{ . }}
+            {{- end }}
+            {{- with .diskBuilder.pull.aws.roleArn }}
+            - --disk-pull-aws-role-arn={{ . }}
+            {{- end }}
+            {{- with (include "setec.diskBuilderServiceAccountName" $) }}
+            - --disk-service-account={{ . }}
+            {{- end }}
             - --operator-namespace={{ $.Values.namespace }}
             {{- range .imageSources }}
             - --image-registry={{ .registry }}

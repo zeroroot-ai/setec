@@ -49,8 +49,33 @@ type DiskBuilderConfig struct {
 	// another registry, so no build waits on a host that it cannot reach.
 	ImageRegistries []string
 	// RegistrySecret, when set, is a kubernetes.io/dockerconfigjson Secret
-	// with the push credentials of the disk repository.
+	// with the push credentials of the disk repository. Only the check and
+	// publish containers mount it.
 	RegistrySecret string
+	// PullSecret, when set, is a kubernetes.io/dockerconfigjson Secret with
+	// a credential to read the launcher image from a private registry. Only
+	// the build container and the image verify container mount it. It is a
+	// different Secret from RegistrySecret, so the container that reads the
+	// image never holds the push credential.
+	PullSecret string
+	// PullProviders name the cloud credential providers that the build and
+	// image verify containers use to read a private registry, such as "ecr"
+	// (internal/diskbuilder/registryauth). The provider uses the identity of
+	// the Job: the web identity token of PullAWSRoleARN, the Pod Identity
+	// agent, or the role of the node.
+	PullProviders []string
+	// PullAWSRoleARN, when set, is an IAM role that the build and image
+	// verify containers assume with a web identity token. The operator
+	// projects a token of the Job ServiceAccount for the audience
+	// sts.amazonaws.com into those containers only. The role must grant pull
+	// rights and no push right: the Job ServiceAccount is the same for each
+	// container, and the check and publish containers hold no token.
+	PullAWSRoleARN string
+	// ServiceAccount is the ServiceAccount of the Job Pods. Empty means the
+	// default of the namespace. The Pod has no API token. An identity that
+	// the cloud binds to a ServiceAccount (IAM roles for service accounts,
+	// EKS Pod Identity) needs a named one.
+	ServiceAccount string
 	// Reader reads the Jobs straight from the API server. The cache of the
 	// manager would need list and watch on Jobs in every namespace; the
 	// operator holds get and create in its own namespace only.
@@ -59,9 +84,9 @@ type DiskBuilderConfig struct {
 	Now func() time.Time
 }
 
-func (c DiskBuilderConfig) now() time.Time {
-	if c.Now != nil {
-		return c.Now()
+func (cfg DiskBuilderConfig) now() time.Time {
+	if cfg.Now != nil {
+		return cfg.Now()
 	}
 	return time.Now()
 }
@@ -99,6 +124,15 @@ const (
 	workVolume     = "work"
 	registryVolume = "registry"
 	registryDir    = "/etc/setec/registry"
+	// The pull credential of the build and image verify containers. These
+	// are names of volumes and paths, not credentials.
+	pullVolume = "pull-registry"            //nolint:gosec // a volume name
+	pullDir    = "/etc/setec/pull-registry" //nolint:gosec // a path
+	// The web identity token of the build and image verify containers.
+	awsTokenVolume   = "aws-pull-token"             //nolint:gosec // a volume name
+	awsTokenDir      = "/var/run/secrets/setec/aws" //nolint:gosec // a path
+	awsTokenAudience = "sts.amazonaws.com"          //nolint:gosec // the audience of a token
+	awsTokenSeconds  = 3600
 	// builderWorkDir is the emptyDir of a disk builder Job.
 	builderWorkDir   = "/work"
 	diskBuildRequeue = 5 * time.Second
@@ -443,10 +477,45 @@ func (e *diskBuildError) Error() string {
 	return fmt.Sprintf("the disk Job %s failed: %s", e.job, e.msg)
 }
 
+// grantPull gives container c the means to read a private registry: the pull
+// Secret, the web identity token, and the providers that ask the cloud. The
+// container is the one that reads an image, so it gets no more than that. It
+// never gets the push Secret or the signing seed: those have their own
+// mounts, in the other containers.
+func (cfg DiskBuilderConfig) grantPull(spec *corev1.PodSpec, c *corev1.Container) {
+	args := make([]string, 0, 2*len(cfg.PullProviders)+len(c.Args))
+	for _, p := range cfg.PullProviders {
+		args = append(args, "--registry-auth", p)
+	}
+	c.Args = append(args, c.Args...)
+	if cfg.PullSecret != "" {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: pullVolume, Secret: &corev1.SecretVolumeSource{
+			SecretName: cfg.PullSecret,
+			Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
+		}})
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: pullVolume, MountPath: pullDir, ReadOnly: true})
+		c.Env = append(c.Env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: pullDir})
+	}
+	if cfg.PullAWSRoleARN != "" {
+		seconds := int64(awsTokenSeconds)
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: awsTokenVolume, Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+				Audience: awsTokenAudience, ExpirationSeconds: &seconds, Path: "token",
+			}}},
+		}})
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: awsTokenVolume, MountPath: awsTokenDir, ReadOnly: true})
+		c.Env = append(c.Env,
+			corev1.EnvVar{Name: "AWS_ROLE_ARN", Value: cfg.PullAWSRoleARN},
+			corev1.EnvVar{Name: "AWS_WEB_IDENTITY_TOKEN_FILE", Value: awsTokenDir + "/token"},
+			corev1.EnvVar{Name: "AWS_ROLE_SESSION_NAME", Value: "setec-disk-builder"})
+	}
+}
+
 // diskJob is the Job that makes the disk of image for the key keyID. The
 // containers share the work volume. Only check and publish mount the push
 // credential, and only publish mounts the signature. The build container,
-// the one that reads the image, mounts neither.
+// the one that reads the image, mounts neither. It mounts the pull
+// credential, when the install has one (grantPull).
 func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *batchv1.Job {
 	job := builderJob(cfg, jobName, componentDiskBuilder, nil, nil)
 	spec := &job.Spec.Template.Spec
@@ -472,9 +541,11 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *bat
 		c.VolumeMounts = append([]corev1.VolumeMount{work}, mounts...)
 		return c
 	}
+	build := container(builderContainer, []string{"--work", builderWorkDir, "build", image}, nil, nil)
+	cfg.grantPull(spec, &build)
 	spec.InitContainers = []corev1.Container{
 		container(checkContainer, []string{"--disk-repo", diskRepo, "--key-id", keyID, "check", image}, pushMounts, pushEnv),
-		container(builderContainer, []string{"--work", builderWorkDir, "build", image}, nil, nil),
+		build,
 	}
 	pubMounts := append(append([]corev1.VolumeMount{}, pushMounts...),
 		corev1.VolumeMount{Name: "signature", MountPath: signatureDir, ReadOnly: true})
@@ -505,6 +576,7 @@ func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string,
 				Labels: map[string]string{componentLabel: component},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
+					ServiceAccountName:           cfg.ServiceAccount,
 					AutomountServiceAccountToken: new(false),
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: new(true), RunAsUser: new(int64(65532)), RunAsGroup: new(int64(65532)),
