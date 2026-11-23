@@ -42,7 +42,8 @@ const (
 )
 
 var (
-	// ErrUnsigned is the result for an image with no signature bundle.
+	// ErrUnsigned is the result for an image with no signature that the
+	// policy can read.
 	ErrUnsigned = errors.New("the image has no signature")
 	// ErrNotVerified is the result for an image whose signatures all fail
 	// the policy.
@@ -52,8 +53,10 @@ var (
 // SignaturePolicy is the signer that an image must have.
 type SignaturePolicy = diskbuilder.SignaturePolicy
 
-// VerifyImage checks that the image, by digest, has a Sigstore signature
-// that matches p. trusted holds the Sigstore roots of a keyless policy, and
+// VerifyImage checks that the image, by digest, has a signature that matches
+// p. A Sigstore bundle (the referrer of cosign v3) fits any policy. A
+// signature of the simple signing format (the ".sig" tag, with no transparency
+// log entry, as a KMS key signs it) fits a policy with a public key. trusted holds the Sigstore roots of a keyless policy, and
 // is not used with a key. It returns ErrUnsigned or ErrNotVerified, wrapped
 // with the cause, when the image does not verify.
 func VerifyImage(ctx context.Context, image string, p SignaturePolicy, trusted root.TrustedMaterial, opts ...remote.Option) error {
@@ -72,12 +75,28 @@ func VerifyImage(ctx context.Context, image string, p SignaturePolicy, trusted r
 	if err != nil {
 		return err
 	}
-	if len(entities) == 0 {
-		return fmt.Errorf("%s: %w", image, ErrUnsigned)
+	// A policy with a public key also reads the simple signing format of
+	// cosign (the ".sig" tag), which has no transparency log entry. A keyless
+	// policy cannot use it: it needs the certificate and the log entry.
+	var simple []simpleSignature
+	looked := "a Sigstore bundle as a referrer of the image"
+	if len(p.PublicKey) > 0 {
+		if simple, err = simpleSignatures(ctx, ref, digest, opts...); err != nil {
+			return err
+		}
+		looked += " and a signature at the tag " + simpleSigningTag(ref.Context(), digest).TagStr()
+	}
+	if len(entities) == 0 && len(simple) == 0 {
+		return fmt.Errorf("%s: %w. It looked for %s", image, ErrUnsigned, looked)
 	}
 	var last error
 	for _, e := range entities {
 		if last = verifyEntity(e, digest, p, trusted); last == nil {
+			return nil
+		}
+	}
+	for _, s := range simple {
+		if last = verifySimpleSignature(s, digest, p.PublicKey); last == nil {
 			return nil
 		}
 	}

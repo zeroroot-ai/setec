@@ -93,7 +93,7 @@ func runMain() int {
 		policy := diskbuilder.SignaturePolicy{
 			Issuer: *issuer, Identity: *identity, PublicKey: []byte(os.Getenv("SETEC_VERIFY_PUBLIC_KEY")),
 		}
-		return runVerify(image, policy, *trustedRoot, *tmp, pull)
+		return runVerify(image, policy, *trustedRoot, *tmp, *resultFile, pull)
 	case "check":
 		if *repo == "" || *keyID == "" {
 			usage()
@@ -284,9 +284,27 @@ func waitForSignature(ctx context.Context, path string, wait time.Duration) (dis
 	}
 }
 
+// verifyFailed prints the reason that an image did not verify, and writes it to
+// the termination message, so that the operator can put it in the status of the
+// class. The message says which check failed: no signature found, a signature
+// that does not match, or a registry that did not answer.
+func verifyFailed(resultFile string, err error) int {
+	fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
+	if resultFile != "" {
+		msg := err.Error()
+		if len(msg) > 2000 {
+			msg = msg[:2000]
+		}
+		_ = os.WriteFile(resultFile, []byte(msg), 0o600)
+	}
+	return 1
+}
+
 // runVerify checks the cosign signature of image against policy. It exits
 // 0 when the image verifies, 1 when it does not, and 2 on a bad policy.
-func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp string, pull authn.Keychain) int {
+func runVerify(
+	image string, policy diskbuilder.SignaturePolicy, trustedRoot, tmp, resultFile string, pull authn.Keychain,
+) int {
 	if err := policy.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
 		return 2
@@ -302,14 +320,12 @@ func runVerify(image string, policy diskbuilder.SignaturePolicy, trustedRoot, tm
 			trusted, err = root.FetchTrustedRootWithOptions(tuf.DefaultOptions().WithCachePath(filepath.Join(tmp, "tuf")))
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "setec-disk-builder: the Sigstore trusted root:", err)
-			return 1
+			return verifyFailed(resultFile, fmt.Errorf("the Sigstore trusted root: %w", err))
 		}
 	}
 	err := imagesig.VerifyImage(ctx, image, policy, trusted, remote.WithAuthFromKeychain(pull))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "setec-disk-builder:", err)
-		return 1
+		return verifyFailed(resultFile, err)
 	}
 	fmt.Println("verified", image)
 	return 0

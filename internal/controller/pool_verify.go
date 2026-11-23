@@ -106,11 +106,32 @@ func (r *WarmPoolReconciler) ensureImageVerified(
 		case batchv1.JobComplete:
 			return verifyPassed, "", nil
 		case batchv1.JobFailed:
-			return verifyFailed, fmt.Sprintf("the image check Job %s failed: %s", name, c.Message), nil
+			return verifyFailed, fmt.Sprintf("the image check Job %s failed: %s", name,
+				verifyCause(ctx, reader, cfg.Namespace, name, c.Message)), nil
 		case batchv1.JobSuspended, batchv1.JobFailureTarget, batchv1.JobSuccessCriteriaMet:
 		}
 	}
 	return verifyPending, "", nil
+}
+
+// verifyCause is the reason that the verify container gave in its termination
+// message: no signature found, a signature that does not match the signer, or
+// a registry that did not answer. It falls back to the message of the Job
+// condition when the Pod is gone or says nothing.
+func verifyCause(ctx context.Context, reader client.Reader, namespace, jobName, fallback string) string {
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods, client.InNamespace(namespace),
+		client.MatchingLabels{batchv1.JobNameLabel: jobName}); err != nil {
+		return fallback
+	}
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && strings.TrimSpace(t.Message) != "" {
+				return strings.TrimSpace(t.Message)
+			}
+		}
+	}
+	return fallback
 }
 
 // setImageCondition writes the ImageNotVerified condition of cls.
