@@ -23,6 +23,7 @@ enforces it.
                      containers hold the push credential and read no image.
                    - image-verify: the same sources and
                      systemPolicy.sigstoreHosts.
+                   Both Jobs also reach systemPolicy.credentialEndpoints.
                    The operator holds the seed and signs between the build
                    and the publish container; it has no registry egress.
 
@@ -68,6 +69,16 @@ missing.
     - ports:
         - port: "443"
           protocol: TCP
+{{- end }}
+{{- range $e := .endpoints }}
+- toCIDR:
+    - {{ $e.cidr | quote }}
+  toPorts:
+    - ports:
+        {{- range $e.ports }}
+        - port: {{ . | quote }}
+          protocol: TCP
+        {{- end }}
 {{- end }}
 {{- /* A source at an IPv4 address serves its own blobs, so its address and
 port are the whole allow. The disk registry has its own rule, so it is not
@@ -333,7 +344,7 @@ spec:
     matchLabels:
       app.kubernetes.io/component: disk-builder
   egress:
-    {{- include "setec.imageSourceEgress" (dict "sources" $sources "diskRegistry" $registry) | nindent 4 }}
+    {{- include "setec.imageSourceEgress" (dict "sources" $sources "diskRegistry" $registry "endpoints" $sp.credentialEndpoints) | nindent 4 }}
     {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}
 ---
 apiVersion: cilium.io/v2
@@ -349,7 +360,7 @@ spec:
     matchLabels:
       app.kubernetes.io/component: image-verify
   egress:
-    {{- include "setec.imageSourceEgress" (dict "sources" $sources "diskRegistry" $registry) | nindent 4 }}
+    {{- include "setec.imageSourceEgress" (dict "sources" $sources "diskRegistry" $registry "endpoints" $sp.credentialEndpoints) | nindent 4 }}
     {{- range $src := $sources }}
     {{- if eq $src.registry $registry }}
     {{- include "setec.diskRegistryEgress" $disk | nindent 4 }}

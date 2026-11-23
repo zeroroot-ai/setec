@@ -75,6 +75,21 @@ is true and no explicit name is given, fall back to the full chart name.
 {{- end -}}
 
 {{/*
+setec.diskBuilderServiceAccountName is the ServiceAccount of the disk Job
+Pods: the given name, else "<fullname>-disk-builder" when the chart creates it.
+It is empty when the chart creates none and the install names none, so the
+Pods use the default ServiceAccount of the namespace.
+*/}}
+{{- define "setec.diskBuilderServiceAccountName" -}}
+{{- $sa := .Values.launcher.diskBuilder.serviceAccount -}}
+{{- if $sa.name -}}
+{{- $sa.name -}}
+{{- else if $sa.create -}}
+{{- printf "%s-disk-builder" (include "setec.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate snapshots.entropyReseed (setec#72): only "require" (fail-closed
 active reseed on restore) and "off" (explicit opt-out, passive
 virtio-rng only) are meaningful; anything else would silently change

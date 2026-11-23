@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -38,6 +39,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/class"
 	"github.com/zeroroot-ai/setec/internal/controller"
 	"github.com/zeroroot-ai/setec/internal/credentials"
+	"github.com/zeroroot-ai/setec/internal/diskbuilder"
 	"github.com/zeroroot-ai/setec/internal/errwrap"
 	"github.com/zeroroot-ai/setec/internal/metrics"
 	"github.com/zeroroot-ai/setec/internal/netpol"
@@ -104,6 +106,10 @@ func runMain() int {
 		diskBuilderImage    string
 		diskSigningSecret   string
 		diskRegistrySecret  string
+		diskPullSecret      string
+		diskPullProviders   []string
+		diskPullAWSRoleARN  string
+		diskServiceAccount  string
 		operatorNamespace   string
 		warmPoolNamespace   string
 		keptPinnedLimit     string
@@ -150,6 +156,18 @@ func runMain() int {
 		"Secret in the operator namespace with the ed25519 seed (key \"seed\") that signs each disk.")
 	pflag.StringVar(&diskRegistrySecret, "disk-registry-secret", "",
 		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
+	pflag.StringVar(&diskPullSecret, "disk-pull-secret", "",
+		"Optional dockerconfigjson Secret in the operator namespace with a credential to read the launcher image "+
+			"from a private registry. Only the build container of the disk Job and the image verify Job mount it. "+
+			"It is not the push credential.")
+	pflag.StringArrayVar(&diskPullProviders, "disk-pull-provider", nil,
+		"A cloud credential provider that the build container and the image verify Job use to read a private registry "+
+			"("+strings.Join(diskbuilder.PullProviders, ", ")+"). Repeat it for each provider.")
+	pflag.StringVar(&diskPullAWSRoleARN, "disk-pull-aws-role-arn", "",
+		"Optional IAM role that the build container and the image verify Job assume with a web identity token of the "+
+			"Job ServiceAccount, to read Amazon ECR. The role grants pull rights only. Needs --disk-pull-provider=ecr.")
+	pflag.StringVar(&diskServiceAccount, "disk-service-account", "",
+		"Optional ServiceAccount of the disk Job Pods. An identity that the cloud binds to a ServiceAccount needs one.")
 	pflag.StringArrayVar(&diskPublicKeys, "disk-public-key", nil,
 		"A base64 ed25519 public key that may sign an image disk. Repeat it to rotate the signing key.")
 	pflag.StringArrayVar(&imageRegistries, "image-registry", nil,
@@ -258,6 +276,17 @@ func runMain() int {
 		len(diskPublicKeys) == 0 || len(imageRegistries) == 0 {
 		setupLog.Error(nil, "--launcher-image, --disk-repo, --disk-builder-image, --disk-signing-secret, "+
 			"--disk-public-key, --image-registry and --operator-namespace are required")
+		return 1
+	}
+
+	for _, p := range diskPullProviders {
+		if !slices.Contains(diskbuilder.PullProviders, p) {
+			setupLog.Error(nil, "--disk-pull-provider is not valid", "provider", p, "known", diskbuilder.PullProviders)
+			return 1
+		}
+	}
+	if diskPullAWSRoleARN != "" && !slices.Contains(diskPullProviders, "ecr") {
+		setupLog.Error(nil, "--disk-pull-aws-role-arn needs --disk-pull-provider=ecr: the role is used by that provider")
 		return 1
 	}
 
@@ -408,6 +437,8 @@ func runMain() int {
 	diskBuilderCfg := controller.DiskBuilderConfig{
 		Image: diskBuilderImage, Namespace: operatorNamespace,
 		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
+		PullSecret: diskPullSecret, PullProviders: diskPullProviders, PullAWSRoleARN: diskPullAWSRoleARN,
+		ServiceAccount:  diskServiceAccount,
 		ImageRegistries: imageRegistries,
 		Reader:          mgr.GetAPIReader(),
 	}

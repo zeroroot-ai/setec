@@ -65,7 +65,11 @@ func verifyJob(cfg DiskBuilderConfig, name string, cls *setecv1alpha1.SandboxCla
 		args = append(args, "--issuer", sig.Issuer, "--identity", sig.Identity)
 	}
 	args = append(args, "verify", image)
-	return builderJob(cfg, name, componentImageVerify, args, env)
+	job := builderJob(cfg, name, componentImageVerify, args, env)
+	// The verify container reads the image and its signature, so it gets the
+	// pull access of the build container, and nothing else.
+	cfg.grantPull(&job.Spec.Template.Spec, &job.Spec.Template.Spec.Containers[0])
+	return job
 }
 
 // ensureImageVerified starts or reads the signature check of a pool image

@@ -57,6 +57,12 @@ that the engine of the install needs.
 {{- if and .Values.frontend.enabled .Values.frontend.clients (not $sp.frontendCallers) -}}
 {{- fail "systemPolicy.frontendCallers must not be empty when frontend.enabled=true: the namespace policy allows the frontend gRPC port only from these Pods. Name the namespace and the Pod labels of each caller (the Gibson daemon)." -}}
 {{- end -}}
+{{- range $i, $e := $sp.credentialEndpoints -}}
+{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]+$" (toString $e.cidr)) -}}
+{{- fail (printf "systemPolicy.credentialEndpoints[%d].cidr: %q is not a CIDR. Write an address and a prefix length, such as 169.254.170.23/32." $i $e.cidr) -}}
+{{- end -}}
+{{- include "setec.validateNetworkPolicyPorts" (dict "name" (printf "systemPolicy.credentialEndpoints[%d].ports" $i) "ports" $e.ports) -}}
+{{- end -}}
 {{- if eq $engine "cilium" -}}
 {{- /* An object of a kind that the API server does not know cannot be
 applied. Stop here, and say what to do. helm install and helm upgrade read

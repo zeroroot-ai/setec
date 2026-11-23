@@ -123,6 +123,9 @@ only when it is an image source, and also reaches the Sigstore trust root.
 {{ include "setec.npEgressRule" (dict "cidrs" (list (printf "%s/32" $addr.host)) "ports" (list $addr.port) "reserved" $reserved) }}
 {{- end }}
 {{- end }}
+{{- range $e := $root.Values.systemPolicy.credentialEndpoints }}
+{{ include "setec.npEgressRule" (dict "cidrs" (list $e.cidr) "ports" $e.ports "reserved" $reserved) }}
+{{- end }}
 {{- if or (not .verify) $diskIsSource }}
 {{- $cidrs := $np.egress.diskRegistry.cidrs | default list }}
 {{- if $disk.isIP }}
