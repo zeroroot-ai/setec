@@ -107,6 +107,7 @@ spec:
             - --disk-push-aws-role-arn={{ . }}
             - --disk-push-aws-audience={{ $.Values.launcher.diskBuilder.push.aws.audience }}
             {{- end }}
+            - --instance-name={{ $.Release.Name }}
             {{- with (include "setec.diskBuilderServiceAccountName" $) }}
             - --disk-service-account={{ . }}
             {{- end }}
