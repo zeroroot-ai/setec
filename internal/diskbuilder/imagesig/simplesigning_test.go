@@ -85,7 +85,7 @@ func pushSimpleSignature(t *testing.T, ref name.Digest, key simpleKey, text, sig
 // registry for a nil handler, and returns its reference by digest.
 func signedImage(t *testing.T, wrap func(http.Handler) http.Handler) name.Digest {
 	t.Helper()
-	h := http.Handler(registry.New())
+	h := registry.New()
 	if wrap != nil {
 		h = wrap(h)
 	}
