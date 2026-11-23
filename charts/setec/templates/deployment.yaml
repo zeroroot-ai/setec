@@ -91,6 +91,9 @@ spec:
             {{- with .diskBuilder.registrySecret }}
             - --disk-registry-secret={{ . }}
             {{- end }}
+            {{- range $.Values.imagePullSecrets }}
+            - --image-pull-secret={{ .name }}
+            {{- end }}
             {{- with .diskBuilder.pull.secret }}
             - --disk-pull-secret={{ . }}
             {{- end }}

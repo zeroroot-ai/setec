@@ -107,6 +107,7 @@ func runMain() int {
 		diskSigningSecret   string
 		diskRegistrySecret  string
 		diskPullSecret      string
+		imagePullSecrets    []string
 		diskPullProviders   []string
 		diskPullAWSRoleARN  string
 		diskPushProviders   []string
@@ -161,6 +162,9 @@ func runMain() int {
 		"Secret in the operator namespace with the ed25519 seed (key \"seed\") that signs each disk.")
 	pflag.StringVar(&diskRegistrySecret, "disk-registry-secret", "",
 		"Optional dockerconfigjson Secret in the operator namespace with the push credentials of --disk-repo.")
+	pflag.StringArrayVar(&imagePullSecrets, "image-pull-secret", nil,
+		"A Secret in the operator namespace that the disk Job Pods use to pull the setec-disk-builder image "+
+			"from a private registry. Repeat it for each Secret.")
 	pflag.StringVar(&diskPullSecret, "disk-pull-secret", "",
 		"Optional dockerconfigjson Secret in the operator namespace with a credential to read the launcher image "+
 			"from a private registry. Only the build container of the disk Job and the image verify Job mount it. "+
@@ -471,11 +475,12 @@ func runMain() int {
 		SigningSecret: diskSigningSecret, RegistrySecret: diskRegistrySecret,
 		PullSecret: diskPullSecret, PullProviders: diskPullProviders, PullAWSRoleARN: diskPullAWSRoleARN,
 		PushProviders: diskPushProviders, PushAWSRoleARN: diskPushAWSRoleARN, PushAWSAudience: diskPushAWSAudience,
-		ServiceAccount:  diskServiceAccount,
-		Instance:        instanceName,
-		Placement:       placement,
-		ImageRegistries: imageRegistries,
-		Reader:          mgr.GetAPIReader(),
+		ServiceAccount:   diskServiceAccount,
+		Instance:         instanceName,
+		Placement:        placement,
+		ImagePullSecrets: imagePullSecrets,
+		ImageRegistries:  imageRegistries,
+		Reader:           mgr.GetAPIReader(),
 	}
 	sandboxRecorder := mgr.GetEventRecorder("sandbox-controller")
 	if err := (&controller.SandboxReconciler{

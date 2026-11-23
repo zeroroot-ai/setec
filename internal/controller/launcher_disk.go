@@ -97,6 +97,9 @@ type DiskBuilderConfig struct {
 	// Placement says where the Job Pods may run. The zero value keeps the
 	// default scheduling, with the fixed architecture selector.
 	Placement DiskJobPlacement
+	// ImagePullSecrets are Secrets of the operator namespace that the Job
+	// Pods use to pull the image of the disk builder from a private registry.
+	ImagePullSecrets []string
 	// ServiceAccount is the ServiceAccount of the Job Pods. Empty means the
 	// default of the namespace. The Pod has no API token. An identity that
 	// the cloud binds to a ServiceAccount (IAM roles for service accounts,
@@ -706,6 +709,19 @@ func diskJob(cfg DiskBuilderConfig, diskRepo, jobName, image, keyID string) *bat
 	return job
 }
 
+// pullSecretRefs turns Secret names into the references of a Pod. It returns
+// nil for no name, so a Pod with no pull Secret has no field.
+func pullSecretRefs(names []string) []corev1.LocalObjectReference {
+	if len(names) == 0 {
+		return nil
+	}
+	refs := make([]corev1.LocalObjectReference, 0, len(names))
+	for _, n := range names {
+		refs = append(refs, corev1.LocalObjectReference{Name: n})
+	}
+	return refs
+}
+
 // builderJob is a Job of the setec-disk-builder image with args, one
 // container and the work volume. It mounts no Secret: diskJob adds the push
 // credential to the containers that need it. The Job runs as a user that is
@@ -727,6 +743,7 @@ func builderJob(cfg DiskBuilderConfig, jobName, component string, args []string,
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					ServiceAccountName:           cfg.ServiceAccount,
+					ImagePullSecrets:             pullSecretRefs(cfg.ImagePullSecrets),
 					AutomountServiceAccountToken: new(false),
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: new(true), RunAsUser: new(int64(65532)), RunAsGroup: new(int64(65532)),

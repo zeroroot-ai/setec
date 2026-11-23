@@ -1131,3 +1131,32 @@ func TestParseDiskJobPlacement(t *testing.T) {
 		}
 	}
 }
+
+// TestBuilderJobs_ImagePullSecrets: the Pods of the disk Jobs pull the image
+// of the disk builder with the Secrets of the install. With none set, the Pods
+// have no pull Secret.
+func TestBuilderJobs_ImagePullSecrets(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	cfg := DiskBuilderConfig{Image: "b:v1", Namespace: "setec-system", SigningSecret: "disk-seed"}
+	cls := &setecv1alpha1.SandboxClass{Name: "pool"}
+	cls.Spec.PreWarmImageSignature = &setecv1alpha1.ImageSignature{PublicKey: "k"}
+	for name, job := range map[string]*batchv1.Job{
+		"disk":   diskJob(cfg, "r", "b", image, testDiskKeyID),
+		"verify": verifyJob(cfg, "v", cls, image),
+	} {
+		if got := job.Spec.Template.Spec.ImagePullSecrets; got != nil {
+			t.Fatalf("the %s Job has the pull Secrets %v with none set", name, got)
+		}
+	}
+	cfg.ImagePullSecrets = []string{"registry-a", "registry-b"}
+	want := []corev1.LocalObjectReference{{Name: "registry-a"}, {Name: "registry-b"}}
+	for name, job := range map[string]*batchv1.Job{
+		"disk":   diskJob(cfg, "r", "b", image, testDiskKeyID),
+		"verify": verifyJob(cfg, "v", cls, image),
+	} {
+		if got := job.Spec.Template.Spec.ImagePullSecrets; !slices.Equal(got, want) {
+			t.Fatalf("the %s Job pull Secrets = %v; want %v", name, got, want)
+		}
+	}
+}
