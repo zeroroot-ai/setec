@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.131.0](https://github.com/zeroroot-ai/setec/compare/v0.130.1...v0.131.0) (2026-11-23)
+
+
+### Features
+
+* **chart:** add placement values for the device plugin, node agent and frontend ([#384](https://github.com/zeroroot-ai/setec/issues/384)) ([fee675d](https://github.com/zeroroot-ai/setec/commit/fee675daff45de26271b3d01b37ebbaa5c105ce8)), closes [#382](https://github.com/zeroroot-ai/setec/issues/382)
+* **chart:** add systemPolicy.engine for a cluster with no Cilium ([#389](https://github.com/zeroroot-ai/setec/issues/389)) ([a73f5e7](https://github.com/zeroroot-ai/setec/commit/a73f5e7830c858dcd8872cd0d3264b09cdec5b55)), closes [#378](https://github.com/zeroroot-ai/setec/issues/378)
+* **disk-builder:** let the build container read a private registry ([#394](https://github.com/zeroroot-ai/setec/issues/394)) ([caa9be7](https://github.com/zeroroot-ai/setec/commit/caa9be7bffa001fe8bfbee20405b3c324510b989)), closes [#379](https://github.com/zeroroot-ai/setec/issues/379)
+
+
+### Bug Fixes
+
+* **chart:** let any image source at an IP address list no hosts ([#386](https://github.com/zeroroot-ai/setec/issues/386)) ([09cbbbb](https://github.com/zeroroot-ai/setec/commit/09cbbbb830a69a9062e37862b4751b2aa1d345a5)), closes [#381](https://github.com/zeroroot-ai/setec/issues/381)
+* **chart:** select only the operator Pods in the operator Deployment ([#385](https://github.com/zeroroot-ai/setec/issues/385)) ([e827017](https://github.com/zeroroot-ai/setec/commit/e8270170a744be63213fe752d1bc6f9c71e7f8be)), closes [#383](https://github.com/zeroroot-ai/setec/issues/383)
+* **controller:** start a new disk build after a failed one, with a bound ([#387](https://github.com/zeroroot-ai/setec/issues/387)) ([b01c8c7](https://github.com/zeroroot-ai/setec/commit/b01c8c7aa0d5a4de01e5c5cf7bf64992d7b8a705))
+
 ## [0.130.1](https://github.com/zeroroot-ai/setec/compare/v0.130.0...v0.130.1) (2026-11-23)
 
 
