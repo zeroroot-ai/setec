@@ -74,14 +74,16 @@ launcher:
   diskRepo: ""
   # -- imageSources are the registries that a launcher image may come from.
   # The operator refuses an image of another registry (--image-registry).
-  # The disk build Job and the image verify Job reach only the hosts of
-  # these entries, by name (systemPolicy, D76). hosts lists the registry
-  # host and each host that serves its blobs: a registry often sends a
-  # blob download to another host. A host that starts with "*." matches
-  # one more name level. A registry at an IPv4 address (a pull-through
-  # mirror or a local registry) lists no hosts. It serves its own blobs, so
-  # the policy lets the disk Jobs reach that address and its port (443 when
-  # the registry names none), and no other new destination.
+  # The disk build Job and the image verify Job reach only these registries.
+  # The cilium engine allows them by host name, and the networkpolicy engine
+  # by the CIDRs of systemPolicy.networkPolicy.egress. hosts is for the
+  # cilium engine: it lists the registry host and each host that serves its
+  # blobs, because a registry often sends a blob download to another host. A
+  # host that starts with "*." matches one more name level. A registry at an
+  # IPv4 address (a pull-through mirror or a local registry) lists no hosts.
+  # It serves its own blobs, so both engines let the disk Jobs reach that
+  # address and its port (443 when the registry names none), and no other
+  # new destination.
   imageSources:
     - registry: ghcr.io
       hosts:
@@ -255,19 +257,99 @@ observability:
     # root CAs.
     caSecretName: ""
 
-# systemPolicy is the network policy of the setec namespace itself
-# (templates/system-namespace-policy.yaml). Cilium enforces it: one
-# CiliumClusterwideNetworkPolicy denies all traffic of every Pod in the
-# namespace, with DNS to kube-dns, and one CiliumNetworkPolicy for each
-# component allows only the traffic setec uses:
+# systemPolicy is the network policy of the setec namespace itself. Each Pod
+# of the namespace denies all traffic, with DNS allowed. One policy for each
+# component then allows only the traffic setec uses:
 #   operator       the API server (watch, write, webhook calls in), the
 #                  node agent gRPC when snapshots are on, metrics in
 #   frontend       the gRPC callers below in, the API server out, metrics in
 #   device-plugin  nothing: it talks to the kubelet over a unix socket
 #   node-agent     the operator in, metrics in, the snapshot store out
+#   disk Jobs      the image registries and the disk registry out
 # The launcher Pods run in the Sandbox namespaces, under the policy of
-# sandbox-namespace-baseline-netpol.yaml.
+# sandbox-namespace-baseline-netpol.yaml. That policy is a plain NetworkPolicy
+# under both engines. docs/design/network-policy.md says what each engine
+# enforces.
 systemPolicy:
+  # engine selects the objects that carry the policy above.
+  #   cilium         CiliumClusterwideNetworkPolicy and CiliumNetworkPolicy
+  #                  objects. The cluster needs Cilium as its network plugin.
+  #                  The chart refuses to render them when the Cilium CRDs
+  #                  are absent. Cilium names the API server by entity and the
+  #                  registries by host name (launcher.imageSources[].hosts,
+  #                  sigstoreHosts).
+  #   networkpolicy  plain networking.k8s.io/v1 NetworkPolicy objects, for a
+  #                  cluster whose network plugin enforces them (Calico,
+  #                  kube-router, flannel with a policy controller, the
+  #                  Amazon VPC CNI with network policy). A NetworkPolicy
+  #                  cannot name a host or the API server, so networkPolicy
+  #                  below gives each destination as CIDRs and ports. The
+  #                  render fails when one that the install needs is missing.
+  engine: cilium
+  # networkPolicy is read only when engine is networkpolicy. Each list of
+  # CIDRs names the addresses that the component reaches, and nothing else.
+  # Use the narrowest range of the destination. A whole-family block (0.0.0.0/0
+  # or ::/0) means "each public address": the chart leaves out the ranges of
+  # netpol.reservedCIDRs, so a Job cannot reach the cluster networks. That
+  # is the widest choice, for a registry that has no stable address range.
+  networkPolicy:
+    # dns is where the Pods of the namespace resolve names. The default is
+    # CoreDNS or kube-dns of kube-system. Set cidrs for a resolver that is not
+    # a Pod, such as a node-local cache. namespace and podLabels go together.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      cidrs: []
+    # apiServer is the API server, which the operator and the frontend
+    # reach. Required. cidrs are the addresses of its endpoints
+    # (kubectl get endpoints kubernetes -n default), not the address of the
+    # kubernetes Service: a network plugin sees the address after the Service
+    # translated it. The operator also takes webhook calls from these
+    # addresses.
+    apiServer:
+      cidrs: []
+      ports:
+        - 443
+        - 6443
+    # webhookSourceCIDRs are further addresses that the API server calls the
+    # admission webhook from, when they differ from apiServer.cidrs. For
+    # example, the API server runs on a node and the network plugin shows the
+    # call from the address of that node, or from the gateway of the Pod
+    # network of the node. With webhook.failurePolicy Fail, a webhook call
+    # that the policy drops rejects each Sandbox.
+    webhookSourceCIDRs: []
+    # egress gives the destinations of the Pods that a NetworkPolicy cannot
+    # name by host. Cilium takes the same from the host lists of
+    # launcher.imageSources and sigstoreHosts.
+    egress:
+      # imageSources are the registries of launcher.imageSources, and the
+      # hosts that serve their blobs. Required when an entry names a host.
+      # An entry at an IPv4 address needs none: its address and port are
+      # derived. The disk Jobs reach these CIDRs on ports.
+      imageSources:
+        cidrs: []
+        ports:
+          - 443
+      # diskRegistry is the registry of launcher.diskRepo. Required when it
+      # names a host. A disk repository at an IPv4 address needs none. Empty
+      # ports means the port of launcher.diskRepo, or 443.
+      diskRegistry:
+        cidrs: []
+        ports: []
+      # sigstore is the Sigstore trust root that the image verify Job reads
+      # for a keyless signature. Optional: with no CIDRs the verify Job cannot
+      # fetch it, and only a signature by public key verifies.
+      sigstore:
+        cidrs: []
+        ports:
+          - 443
+      # snapshotStore is the S3 endpoint of the node agent. Required when
+      # snapshots.s3.enabled is true and the endpoint is not an IPv4 address.
+      # Empty ports means the port of snapshots.s3.endpoint, or 443.
+      snapshotStore:
+        cidrs: []
+        ports: []
   # frontendCallers are the callers that may reach the frontend gRPC port.
   # Each entry is a namespace and the labels of its Pods (a Gibson daemon in
   # this cluster), or a cidr (a Gibson cluster elsewhere, which reaches the
@@ -299,7 +381,9 @@ systemPolicy:
         app.kubernetes.io/name: prometheus
   # sigstoreHosts are the hosts of the Sigstore trust root that the image
   # verify Job reads (the public-good TUF repository). The Job reaches them
-  # and the hosts of launcher.imageSources, and nothing else.
+  # and the hosts of launcher.imageSources, and nothing else. Only the
+  # cilium engine reads them. The networkpolicy engine reads
+  # networkPolicy.egress.sigstore.
   sigstoreHosts:
     - tuf-repo-cdn.sigstore.dev
 

@@ -13,9 +13,9 @@
 # The gate is on by default from Kubernetes 1.35. The line below keeps it on
 # for an older node image.
 #
-# Cilium replaces kindnet. It is the network plugin of every cluster that
-# runs setec (D76): the chart renders CiliumNetworkPolicy objects for its own
-# namespace, and the egress scenarios assert that a Sandbox cannot reach what
+# Cilium replaces kindnet. It is the network plugin of this test cluster, and
+# the default policy engine of the chart (docs/design/network-policy.md): the
+# chart renders CiliumNetworkPolicy objects for its own namespace, and the egress scenarios assert that a Sandbox cannot reach what
 # its NetworkPolicy denies. With kindnet, a Sandbox under mode=none still
 # reached 1.1.1.1:443 (setec#22). The workflow installs Cilium from the pinned
 # chart, with the pod CIDRs of the nodes (ipam mode kubernetes).

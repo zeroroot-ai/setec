@@ -335,7 +335,43 @@ The chart denies all traffic of each Pod in its own namespace by default, with D
 - Each metrics port admits the Pods of `systemPolicy.metricsScrapers`. Each entry names the namespace and the Pod labels of one scraper.
 - The disk build Job and the image verify Job reach the `hosts` of each `launcher.imageSources` entry, and the disk registry. An entry whose `registry` is an IPv4 address, such as a pull-through mirror in the cluster, lists no `hosts`. The policy then allows that address and port (443 when the registry names none) and no other destination.
 
-The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. Cilium is the network plugin of every cluster that runs setec, so the chart always renders these objects. `development/k3s` installs Cilium for the local cluster.
+The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. That policy is a plain NetworkPolicy, so it works under both engines below.
+
+`systemPolicy.engine` selects the objects that carry the policy of the setec namespace. `docs/design/network-policy.md` says what each engine enforces.
+
+- `cilium` is the default. The chart renders `CiliumClusterwideNetworkPolicy` and `CiliumNetworkPolicy` objects. It stops with a message when the cluster has no Cilium CRDs. Give `helm template` the flags `--api-versions cilium.io/v2/CiliumNetworkPolicy --api-versions cilium.io/v2/CiliumClusterwideNetworkPolicy`, because it reads no cluster. Cilium limits the disk Jobs to the host names of `launcher.imageSources`.
+- `networkpolicy` renders plain `NetworkPolicy` objects, for a cluster whose network plugin enforces them. A NetworkPolicy cannot name a host or the API server. The install gives the destinations as CIDRs and ports in `systemPolicy.networkPolicy`. The render fails with the name of the value when one is missing. The disk Jobs then reach the listed CIDRs on the listed ports, not named hosts.
+
+#### A cluster with flannel and Amazon ECR
+
+k3s with flannel enforces NetworkPolicy through its own controller, and has no Cilium. The values below install Setec there. The disk repository and the launcher image are in ECR.
+
+```yaml
+systemPolicy:
+  engine: networkpolicy
+  networkPolicy:
+    apiServer:
+      # kubectl get endpoints kubernetes -n default
+      cidrs: ["192.0.2.10/32"]
+      ports: [6443]
+    # The node address and the gateway of the Pod network of the node.
+    webhookSourceCIDRs: ["192.0.2.10/32", "10.42.0.0/24"]
+    egress:
+      imageSources:
+        # The ECR API, the STS endpoint, the ECR registry and its S3 blob store.
+        cidrs: ["0.0.0.0/0"]
+        ports: [443]
+      diskRegistry:
+        cidrs: ["0.0.0.0/0"]
+launcher:
+  diskRepo: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/setec-disks
+  imageSources:
+    - registry: 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+```
+
+`0.0.0.0/0` here means each public address. The chart leaves out `netpol.reservedCIDRs`, so a Job cannot reach the cluster networks. It is the widest choice. ECR and the S3 store behind it have no stable address range. Use narrower ranges where the registry has them.
+
+`webhookSourceCIDRs` depends on the network plugin. Check it before you rely on it: a webhook call that the policy drops rejects each Sandbox when `webhook.failurePolicy` is `Fail`.
 
 ### Sandbox egress posture
 

@@ -22,6 +22,11 @@ func renderFederation(t *testing.T, sets ...string) (string, error) {
 	args := make([]string, 0, 17+2*len(sets))
 	args = append(args, "template", "setec", filepath.Join("..", "..", "charts", "setec"),
 		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
+		// The default policy engine is cilium, and the chart refuses to render
+		// Cilium objects on a cluster with no Cilium CRDs. helm template reads
+		// no cluster, so it gets the kinds from these flags.
+		"--api-versions", "cilium.io/v2/CiliumNetworkPolicy",
+		"--api-versions", "cilium.io/v2/CiliumClusterwideNetworkPolicy",
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "frontend.enabled=true",
 		"--set", "credentials.spiffe.trustDomain=fleet.test",

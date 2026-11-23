@@ -1,0 +1,352 @@
+{{- /*
+The network policy of the setec namespace, as plain Kubernetes NetworkPolicy
+objects (systemPolicy.engine=networkpolicy). It is the same plan as
+templates/system-namespace-policy.yaml, in the terms that a NetworkPolicy can
+state. docs/design/network-policy.md says what each engine enforces.
+
+  1. default deny  One policy selects each Pod of the namespace. It denies all
+                   ingress. It allows egress to DNS and nothing else.
+  2. operator      the API server out, the webhook port from the API server
+                   addresses, systemPolicy.networkPolicy.webhookSourceCIDRs and
+                   systemPolicy.webhookCallers, the node agent gRPC out when
+                   snapshots are on, and its metrics port from the scrapers.
+  3. frontend      its gRPC port from systemPolicy.frontendCallers only, the
+                   API server out, and its metrics port from the scrapers.
+  4. node-agent    its gRPC port from the operator when snapshots are on, the
+                   snapshot store out, and its metrics port from the scrapers.
+  5. disk jobs     the Jobs of the operator, each by its component label. Each
+                   Job reaches the CIDRs and ports of its destinations only:
+                   - disk-builder: the image sources, the disk registry.
+                   - image-verify: the image sources, the disk registry when it
+                     is an image source, and the Sigstore trust root.
+
+A NetworkPolicy cannot name a host or the API server. The install gives each
+of these as CIDRs and ports in systemPolicy.networkPolicy, and the render
+fails when one that the install needs is missing. A peer that is a Pod needs
+its namespace and its labels. The namespace is pinned with the label
+kubernetes.io/metadata.name, which the API server sets on each namespace.
+
+The device plugin gets no allow: it talks to the kubelet over a unix socket.
+hack/check-system-policy.py renders this file and fails when a Pod of the
+namespace has no allow it needs, or when the default deny is missing.
+*/ -}}
+{{- /*
+setec.npPorts renders the ports of a rule. Call it with a list of numbers.
+*/ -}}
+{{- define "setec.npPorts" -}}
+{{- range $p := . }}
+- port: {{ int $p }}
+  protocol: TCP
+{{- end }}
+{{- end }}
+{{- /*
+setec.npCIDRs renders the ipBlock peers of a list of CIDRs. Call it with
+(dict "cidrs" <list> "reserved" <netpol.reservedCIDRs>). A block of a whole
+address family (0.0.0.0/0 or ::/0) leaves out the reserved ranges of that
+family, so it means "the public addresses". A CIDR that is narrower is taken
+as written: the install names that range on purpose.
+*/ -}}
+{{- define "setec.npCIDRs" -}}
+{{- $reserved := .reserved -}}
+{{- range $c := .cidrs }}
+- ipBlock:
+    cidr: {{ $c | quote }}
+    {{- $except := list }}
+    {{- if eq $c "0.0.0.0/0" }}
+    {{- range $r := $reserved }}{{ if not (contains ":" $r) }}{{ $except = append $except $r }}{{ end }}{{ end }}
+    {{- else if eq $c "::/0" }}
+    {{- range $r := $reserved }}{{ if contains ":" $r }}{{ $except = append $except $r }}{{ end }}{{ end }}
+    {{- end }}
+    {{- if $except }}
+    except:
+      {{- range $except }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- /*
+setec.npPodPeers renders the Pod peers of a list of {namespace, podLabels}
+entries. The namespace is pinned by label, so a Pod of another namespace that
+wears the same labels does not match.
+*/ -}}
+{{- define "setec.npPodPeers" -}}
+{{- range $c := . }}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ $c.namespace | quote }}
+  podSelector:
+    matchLabels:
+      {{- toYaml (omit $c.podLabels "k8s:io.kubernetes.pod.namespace") | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- /*
+setec.npEgressRule renders one egress rule: peers and ports. Call it with
+(dict "cidrs" <list> "ports" <list> "reserved" <list>).
+*/ -}}
+{{- define "setec.npEgressRule" -}}
+{{- if not .cidrs -}}
+{{- fail "an egress rule of the setec namespace policy has no CIDR, and a rule with no destination allows every destination. This is a chart defect." -}}
+{{- end -}}
+- to:
+    {{- include "setec.npCIDRs" (dict "cidrs" .cidrs "reserved" .reserved) | nindent 4 }}
+  ports:
+    {{- include "setec.npPorts" .ports | nindent 4 }}
+{{- end }}
+{{- /*
+setec.npDiskEgress renders the egress rules of a disk Job. Call it with
+(dict "root" $ "verify" <bool>). Both Jobs reach the image sources. The build
+Job also reaches the disk registry. The verify Job reaches the disk registry
+only when it is an image source, and also reaches the Sigstore trust root.
+*/ -}}
+{{- define "setec.npDiskEgress" -}}
+{{- $root := .root -}}
+{{- $np := $root.Values.systemPolicy.networkPolicy -}}
+{{- $reserved := $root.Values.netpol.reservedCIDRs -}}
+{{- $diskRepo := $root.Values.launcher.diskRepo -}}
+{{- $disk := include "setec.registryAddress" $diskRepo | fromJson -}}
+{{- $diskRegistry := first (splitList "/" $diskRepo) -}}
+{{- $named := list -}}
+{{- $diskIsSource := false -}}
+{{- range $src := $root.Values.launcher.imageSources -}}
+{{- $addr := include "setec.registryAddress" $src.registry | fromJson -}}
+{{- if eq $src.registry $diskRegistry -}}
+{{- $diskIsSource = true -}}
+{{- end -}}
+{{- end -}}
+{{- if $np.egress.imageSources.cidrs }}
+{{ include "setec.npEgressRule" (dict "cidrs" $np.egress.imageSources.cidrs "ports" $np.egress.imageSources.ports "reserved" $reserved) }}
+{{- end }}
+{{- range $src := $root.Values.launcher.imageSources }}
+{{- $addr := include "setec.registryAddress" $src.registry | fromJson }}
+{{- if and $addr.isIP (ne $src.registry $diskRegistry) }}
+{{ include "setec.npEgressRule" (dict "cidrs" (list (printf "%s/32" $addr.host)) "ports" (list $addr.port) "reserved" $reserved) }}
+{{- end }}
+{{- end }}
+{{- if or (not .verify) $diskIsSource }}
+{{- $cidrs := $np.egress.diskRegistry.cidrs | default list }}
+{{- if $disk.isIP }}
+{{- $cidrs = append $cidrs (printf "%s/32" $disk.host) }}
+{{- end }}
+{{- $ports := $np.egress.diskRegistry.ports | default (list $disk.port) }}
+{{ include "setec.npEgressRule" (dict "cidrs" $cidrs "ports" $ports "reserved" $reserved) }}
+{{- end }}
+{{- if and .verify $np.egress.sigstore.cidrs }}
+{{ include "setec.npEgressRule" (dict "cidrs" $np.egress.sigstore.cidrs "ports" $np.egress.sigstore.ports "reserved" $reserved) }}
+{{- end }}
+{{- end }}
+{{- if eq (include "setec.systemPolicyEngine" .) "networkpolicy" }}
+{{- $ns := .Values.namespace }}
+{{- $fn := include "setec.fullname" . }}
+{{- $sp := .Values.systemPolicy }}
+{{- $np := $sp.networkPolicy }}
+{{- $reserved := .Values.netpol.reservedCIDRs }}
+{{- $apiRule := dict "cidrs" $np.apiServer.cidrs "ports" $np.apiServer.ports "reserved" $reserved }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-default-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  # Each Pod of the namespace denies all traffic, except DNS.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - to:
+        {{- if $np.dns.podLabels }}
+        {{- include "setec.npPodPeers" (list (dict "namespace" $np.dns.namespace "podLabels" $np.dns.podLabels)) | nindent 8 }}
+        {{- end }}
+        {{- if $np.dns.cidrs }}
+        {{- include "setec.npCIDRs" (dict "cidrs" $np.dns.cidrs "reserved" $reserved) | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-operator
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  # The operator reaches the API server and the node agents, and takes webhook calls and scrapes.
+  podSelector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    {{- include "setec.npEgressRule" $apiRule | nindent 4 }}
+    {{- if .Values.snapshots.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "setec.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: node-agent
+      ports:
+        - port: 50052
+          protocol: TCP
+    {{- end }}
+  ingress:
+    - from:
+        {{- include "setec.npCIDRs" (dict "cidrs" (concat $np.apiServer.cidrs $np.webhookSourceCIDRs) "reserved" $reserved) | nindent 8 }}
+        {{- include "setec.npPodPeers" $sp.webhookCallers | nindent 8 }}
+      ports:
+        - port: 9443
+          protocol: TCP
+    {{- if $sp.metricsScrapers }}
+    - from:
+        {{- include "setec.npPodPeers" $sp.metricsScrapers | nindent 8 }}
+      ports:
+        - port: {{ .Values.metricsPort }}
+          protocol: TCP
+    {{- end }}
+{{- if .Values.frontend.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-frontend
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  # The frontend takes gRPC from its callers only and reaches the API server.
+  podSelector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    {{- include "setec.npEgressRule" $apiRule | nindent 4 }}
+  {{- $grpcPort := regexReplaceAll "^.*:" (toString .Values.frontend.listenAddr) "" }}
+  {{- $pods := list }}
+  {{- $cidrs := list }}
+  {{- range $c := $sp.frontendCallers }}
+  {{- if $c.cidr }}
+  {{- $cidrs = append $cidrs $c.cidr }}
+  {{- else }}
+  {{- $pods = append $pods (dict "namespace" (required "each systemPolicy.frontendCallers entry needs a namespace or a cidr" $c.namespace) "podLabels" (required "each systemPolicy.frontendCallers entry with a namespace needs podLabels" $c.podLabels)) }}
+  {{- end }}
+  {{- end }}
+  ingress:
+    {{- if or $pods $cidrs }}
+    - from:
+        {{- include "setec.npPodPeers" $pods | nindent 8 }}
+        {{- include "setec.npCIDRs" (dict "cidrs" $cidrs "reserved" $reserved) | nindent 8 }}
+      ports:
+        - port: {{ int $grpcPort }}
+          protocol: TCP
+    {{- end }}
+    {{- if $sp.metricsScrapers }}
+    - from:
+        {{- include "setec.npPodPeers" $sp.metricsScrapers | nindent 8 }}
+      ports:
+        - port: {{ .Values.frontend.metricsPort }}
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- if .Values.nodeAgent.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-node-agent
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" . | nindent 4 }}
+spec:
+  # The node agent takes gRPC from the operator and scrapes, and reaches the snapshot store.
+  podSelector:
+    matchLabels:
+      {{- include "setec.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node-agent
+  policyTypes:
+    - Ingress
+    {{- if and .Values.snapshots.enabled .Values.snapshots.s3.enabled }}
+    - Egress
+    {{- end }}
+  ingress:
+    {{- if .Values.snapshots.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "setec.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: operator
+      ports:
+        - port: 50052
+          protocol: TCP
+    {{- end }}
+    {{- if $sp.metricsScrapers }}
+    - from:
+        {{- include "setec.npPodPeers" $sp.metricsScrapers | nindent 8 }}
+      ports:
+        - port: 9090
+          protocol: TCP
+    {{- end }}
+  {{- if and .Values.snapshots.enabled .Values.snapshots.s3.enabled }}
+  {{- $s3 := .Values.snapshots.s3 }}
+  {{- $cidrs := $np.egress.snapshotStore.cidrs | default list }}
+  {{- $port := "443" }}
+  {{- if $s3.endpoint }}
+  {{- $u := urlParse $s3.endpoint }}
+  {{- $parts := splitList ":" $u.host }}
+  {{- $host := first $parts }}
+  {{- $port = ternary (last $parts) (ternary "80" "443" (eq $u.scheme "http")) (gt (len $parts) 1) }}
+  {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
+  {{- $cidrs = append $cidrs (printf "%s/32" $host) }}
+  {{- end }}
+  {{- end }}
+  egress:
+    {{- include "setec.npEgressRule" (dict "cidrs" $cidrs "ports" ($np.egress.snapshotStore.ports | default (list $port)) "reserved" $reserved) | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- with .Values.launcher.diskRepo }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-disk-builder
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  # The disk Job reaches the CIDRs of the image registries and of the disk registry. No container of it holds the signing seed.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: disk-builder
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "setec.npDiskEgress" (dict "root" $ "verify" false) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-image-verify
+  namespace: {{ $ns }}
+  labels:
+    {{- include "setec.labels" $ | nindent 4 }}
+spec:
+  # The image verify Job reaches the CIDRs of the image registries and of the Sigstore trust root.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: image-verify
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "setec.npDiskEgress" (dict "root" $ "verify" true) | nindent 4 }}
+{{- end }}
+{{- end }}

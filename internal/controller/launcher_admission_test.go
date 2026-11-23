@@ -34,6 +34,11 @@ func TestHostGuard_AdmitsTheLauncherAndRefusesAPrivilegedPod(t *testing.T) {
 	var out bytes.Buffer
 	cmd := exec.Command(helm, "template", "setec", filepath.Join("..", "..", "charts", "setec"), //nolint:gosec // fixed arguments
 		"-f", filepath.Join("..", "..", "hack", "chart-launcher-values.yaml"),
+		// The default policy engine is cilium, and the chart refuses to render
+		// Cilium objects on a cluster with no Cilium CRDs. helm template reads
+		// no cluster, so it gets the kinds from these flags.
+		"--api-versions", "cilium.io/v2/CiliumNetworkPolicy",
+		"--api-versions", "cilium.io/v2/CiliumClusterwideNetworkPolicy",
 		"--set", "webhook.certManager.enabled=true",
 		"--set", "sandboxNamespaces={"+ns+"}",
 		"--show-only", "templates/sandbox-namespace-host-guard.yaml")

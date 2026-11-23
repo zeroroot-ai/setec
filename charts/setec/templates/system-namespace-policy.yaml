@@ -28,10 +28,14 @@ enforces it.
 
 The device plugin gets no allow: it talks to the kubelet over a unix socket.
 
-The policy always renders. Cilium is the network plugin of every cluster that
-runs setec (D76); development/k3s installs it too.
-hack/verify-chart-security.sh renders this file and fails when a Pod of the
-namespace has no allow it needs, or when the default deny is missing.
+This file renders when systemPolicy.engine is "cilium", the default. The
+engine "networkpolicy" renders plain NetworkPolicy objects instead, from
+templates/system-namespace-networkpolicy.yaml. The chart refuses to render
+this file when the cluster has no Cilium CRDs (setec.validateSystemPolicy).
+development/k3s installs Cilium. docs/design/network-policy.md says what each
+engine enforces. hack/verify-chart-security.sh renders both files and fails
+when a Pod of the namespace has no allow it needs, or when the default deny is
+missing.
 */}}
 {{- define "setec.diskRegistryEgress" -}}
 {{- if .isIP }}
@@ -45,18 +49,6 @@ namespace has no allow it needs, or when the default deny is missing.
     - ports:
         - port: {{ .port | quote }}
           protocol: TCP
-{{- end }}
-{{- /*
-setec.registryAddress splits the registry of an image source or of the disk
-repository into its host and port. The port is 443 when the registry names
-none. isIP is true for an IPv4 address. A registry at an address needs no host
-list: the policy reaches that one address and port, and nothing else.
-*/ -}}
-{{- define "setec.registryAddress" -}}
-{{- $parts := splitList ":" (first (splitList "/" .)) -}}
-{{- $host := first $parts -}}
-{{- $port := ternary (last $parts) "443" (gt (len $parts) 1) -}}
-{{- toJson (dict "host" $host "port" $port "isIP" (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host)) -}}
 {{- end }}
 {{- define "setec.imageSourceEgress" -}}
 {{- $hosts := list }}
@@ -99,22 +91,10 @@ repeated here. */}}
     {{- toYaml (omit $c.podLabels "k8s:io.kubernetes.pod.namespace") | nindent 4 }}
 {{- end }}
 {{- end }}
+{{- if eq (include "setec.systemPolicyEngine" .) "cilium" }}
 {{- $ns := .Values.namespace }}
 {{- $fn := include "setec.fullname" . }}
 {{- $sp := .Values.systemPolicy }}
-{{- range $c := $sp.webhookCallers }}
-{{- if not (and $c.namespace $c.podLabels) }}
-{{- fail "systemPolicy.webhookCallers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the caller is pinned too." }}
-{{- end }}
-{{- end }}
-{{- range $c := $sp.metricsScrapers }}
-{{- if not (and $c.namespace $c.podLabels) }}
-{{- fail "systemPolicy.metricsScrapers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the scraper is pinned too." }}
-{{- end }}
-{{- end }}
-{{- if and .Values.frontend.enabled .Values.frontend.clients (not $sp.frontendCallers) }}
-{{- fail "systemPolicy.frontendCallers must not be empty when frontend.enabled=true: the namespace policy allows the frontend gRPC port only from these Pods. Name the namespace and the Pod labels of each caller (the Gibson daemon)." }}
-{{- end }}
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:
@@ -385,4 +365,5 @@ spec:
             - port: "443"
               protocol: TCP
     {{- end }}
+{{- end }}
 {{- end }}

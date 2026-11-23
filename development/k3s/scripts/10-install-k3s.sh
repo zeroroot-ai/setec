@@ -27,9 +27,11 @@ K3S_VERSION="${K3S_VERSION:-v1.35.9+k3s1}"
 K3S_INSTALLER_COMMIT="${K3S_INSTALLER_COMMIT:-58877f27435fe86ee292859db3d0df2ca5423991}"
 K3S_INSTALLER_SHA256="${K3S_INSTALLER_SHA256:-8598e002e61d658fed7b7542fc6d2c66d8da6eae69e088830105d2ee1ffb6d91}"
 
-# Cilium is the network plugin of every cluster that runs setec (D76): the
-# chart renders CiliumNetworkPolicy objects for its own namespace, so a
-# cluster with no Cilium cannot install it. k3s starts with no flannel, no
+# Cilium is the network plugin of this development cluster, and the default
+# policy engine of the chart (docs/design/network-policy.md): the chart
+# renders CiliumNetworkPolicy objects for its own namespace, and refuses to
+# render them on a cluster with no Cilium CRDs. A cluster with another network
+# plugin sets systemPolicy.engine=networkpolicy. k3s starts with no flannel, no
 # network policy controller and no kube-proxy, and Cilium takes all three
 # roles. The version equals the pin of the Gibson clusters (hosted
 # bootstrap/cilium/VERSION) and the values are its shared values.

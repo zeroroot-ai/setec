@@ -15,6 +15,7 @@ This page is the hub. Every doc in this directory is linked below, grouped by wh
 
 - [Architecture](./architecture.md) &mdash; the parts of `setec`, its objects, and the path of one Sandbox.
 - [Isolation](./design/isolation.md) &mdash; the Pod, the network, the namespace, and the checks on a restored Sandbox.
+- [Network policy](./design/network-policy.md) &mdash; the policy of the setec namespace, the two engines (Cilium and NetworkPolicy), and what each enforces.
 - [Lifecycles](./design/lifecycles.md) &mdash; ephemeral and session Sandboxes, idle eviction, suspend, limits, and the warm pool.
 - [Storage](./design/storage.md) &mdash; the scratch volume, the session workspace, the snapshot store, and the encryption rule of each.
 - [Files](./design/files.md) &mdash; the files that a launch places in the machine before the workload starts, their bounds, and their path into the machine.
