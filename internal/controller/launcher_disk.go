@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,11 +55,26 @@ type DiskBuilderConfig struct {
 	// manager would need list and watch on Jobs in every namespace; the
 	// operator holds get and create in its own namespace only.
 	Reader client.Reader
+	// Now is the clock of the retry backoff. Nil means time.Now.
+	Now func() time.Time
+}
+
+func (c DiskBuilderConfig) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 // Reasons of a launcher Sandbox that waits for or lost its disk.
 const (
-	ReasonDiskBuilding    = "DiskBuilding"
+	// ReasonDiskBuilding is a Sandbox that waits for a build to end.
+	ReasonDiskBuilding = "DiskBuilding"
+	// ReasonDiskBuildRetrying is a Sandbox that waits for the next build
+	// after a build failed. The Warning Event names the attempt, the cause
+	// and the time of the next attempt.
+	ReasonDiskBuildRetrying = "DiskBuildRetrying"
+	// ReasonDiskBuildFailed is a Sandbox whose image failed every attempt.
 	ReasonDiskBuildFailed = "DiskBuildFailed"
 
 	diskJobPrefix = "setec-disk-"
@@ -84,10 +100,30 @@ const (
 	registryVolume = "registry"
 	registryDir    = "/etc/setec/registry"
 	// builderWorkDir is the emptyDir of a disk builder Job.
-	builderWorkDir    = "/work"
-	diskBuildRequeue  = 5 * time.Second
+	builderWorkDir   = "/work"
+	diskBuildRequeue = 5 * time.Second
+	// diskJobTTLSeconds is how long a finished Job of an attempt that is not
+	// the last one stays. The next attempt starts before it ends: the longest
+	// backoff is shorter.
 	diskJobTTLSeconds = 600
+	// diskJobLastTTLSeconds is how long the Job of the last attempt stays. A
+	// failed one is the record that no new build starts for an image that
+	// fails each time: the next Sandbox of the image starts a new series
+	// only when this Job has expired.
+	diskJobLastTTLSeconds = 3600
+	// attemptAnnotation names the attempt of a disk Job.
+	attemptAnnotation = "setec.zeroroot.ai/disk-build-attempt"
 )
+
+// diskBuildBackoff is the wait after each failed attempt, before the next
+// one starts. A series has one attempt more than the list has entries, so a
+// build that cannot work runs four times in about eight minutes and then
+// stops for an hour (diskJobLastTTLSeconds). Each wait is shorter than
+// diskJobTTLSeconds, so the Job that records the failure is still there.
+var diskBuildBackoff = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute}
+
+// diskBuildAttempts is the number of attempts of one series.
+func diskBuildAttempts() int { return len(diskBuildBackoff) + 1 }
 
 // diskJobName names the one build Job of an image digest and a signing key.
 // A new signing seed has a new key id, so it gets a new Job and a new disk
@@ -98,6 +134,17 @@ func diskJobName(image, keyID string) (string, error) {
 		return "", fmt.Errorf("a launcher Sandbox needs an image with a digest, got %q", image)
 	}
 	return diskJobPrefix + digest[:20] + "-" + keyID, nil
+}
+
+// diskAttemptJobName names the Job of attempt n (from 1). The first attempt
+// has the name of the digest and the key. Each later attempt has its own Job,
+// so the Pods, the signature ConfigMap and the failure record of an attempt
+// never mix with another, and the operator needs no delete right.
+func diskAttemptJobName(base string, n int) string {
+	if n <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-a%d", base, n)
 }
 
 // errImageRegistryNotAllowed is a launcher image of a registry that is not
@@ -198,20 +245,28 @@ func ensureDisk(
 	if err != nil {
 		return "", false, err
 	}
-	jobName, err := diskJobName(image, keyID)
+	baseName, err := diskJobName(image, keyID)
 	if err != nil {
 		return "", false, err
 	}
-	job := &batchv1.Job{}
-	err = reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: jobName}, job)
-	if apierrors.IsNotFound(err) {
-		if err := c.Create(ctx, diskJob(cfg, diskRepo, jobName, image, keyID)); err != nil && !apierrors.IsAlreadyExists(err) {
-			return "", false, fmt.Errorf("create the disk Job %s: %w", jobName, err)
+	// The newest Job of the series is the one that counts. A Job of an
+	// earlier attempt may have expired already.
+	var job *batchv1.Job
+	attempt := 0
+	for n := diskBuildAttempts(); n >= 1; n-- {
+		got := &batchv1.Job{}
+		err := reader.Get(ctx, types.NamespacedName{Namespace: cfg.Namespace, Name: diskAttemptJobName(baseName, n)}, got)
+		if apierrors.IsNotFound(err) {
+			continue
 		}
-		return keyID, false, nil
+		if err != nil {
+			return "", false, errwrap.Wrap(err, "client.Reader.Get")
+		}
+		job, attempt = got, n
+		break
 	}
-	if err != nil {
-		return "", false, errwrap.Wrap(err, "client.Reader.Get")
+	if job == nil {
+		return keyID, false, startDiskAttempt(ctx, c, cfg, diskRepo, baseName, image, keyID, 1)
 	}
 	for _, cond := range job.Status.Conditions {
 		if cond.Status != corev1.ConditionTrue {
@@ -221,7 +276,10 @@ func ensureDisk(
 		case batchv1.JobComplete:
 			return keyID, true, nil
 		case batchv1.JobFailed:
-			return "", false, &diskBuildError{job: jobName, msg: cond.Message}
+			if err := nextDiskAttempt(ctx, c, cfg, diskRepo, baseName, image, keyID, attempt, cond); err != nil {
+				return "", false, err
+			}
+			return keyID, false, nil
 		case batchv1.JobSuspended, batchv1.JobFailureTarget, batchv1.JobSuccessCriteriaMet:
 			// Not an end: JobComplete or JobFailed follows.
 		}
@@ -230,6 +288,44 @@ func ensureDisk(
 		return "", false, err
 	}
 	return keyID, false, nil
+}
+
+// startDiskAttempt creates the Job of attempt n.
+func startDiskAttempt(
+	ctx context.Context, c client.Client, cfg DiskBuilderConfig, diskRepo, baseName, image, keyID string, n int,
+) error {
+	job := diskJob(cfg, diskRepo, diskAttemptJobName(baseName, n), image, keyID)
+	job.Annotations = map[string]string{attemptAnnotation: strconv.Itoa(n)}
+	if n >= diskBuildAttempts() {
+		ttl := int32(diskJobLastTTLSeconds)
+		job.Spec.TTLSecondsAfterFinished = &ttl
+	}
+	if err := c.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create the disk Job %s: %w", job.Name, err)
+	}
+	return nil
+}
+
+// nextDiskAttempt decides what follows a failed Job of attempt n. While the
+// backoff of the attempt runs, it returns a diskRetryError. After it, it
+// starts attempt n+1 and returns nil, so the caller waits for that build.
+// After the last attempt it returns a diskBuildError: the image fails each
+// time, and the failed Job stays for an hour before a new series can start.
+func nextDiskAttempt(
+	ctx context.Context, c client.Client, cfg DiskBuilderConfig, diskRepo, baseName, image, keyID string,
+	n int, failed batchv1.JobCondition,
+) error {
+	jobName := diskAttemptJobName(baseName, n)
+	if n >= diskBuildAttempts() {
+		return &diskBuildError{job: jobName, msg: fmt.Sprintf(
+			"the build failed %d times, the last time with %q. No new build starts for this image for about %d minutes",
+			n, failed.Message, diskJobLastTTLSeconds/60)}
+	}
+	now := cfg.now()
+	if due := failed.LastTransitionTime.Add(diskBuildBackoff[n-1]); now.Before(due) {
+		return &diskRetryError{job: jobName, attempt: n, msg: failed.Message, after: due.Sub(now)}
+	}
+	return startDiskAttempt(ctx, c, cfg, diskRepo, baseName, image, keyID, n+1)
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list
@@ -322,6 +418,20 @@ func initReports(ctx context.Context, reader client.Reader, namespace, jobName s
 		}
 	}
 	return "", "", nil
+}
+
+// diskRetryError is a build that failed with attempts left. It is not an
+// end: the next attempt starts after the backoff.
+type diskRetryError struct {
+	job     string
+	attempt int
+	msg     string
+	after   time.Duration
+}
+
+func (e *diskRetryError) Error() string {
+	return fmt.Sprintf("the disk Job %s failed (attempt %d of %d) with %q. The next attempt starts in %s",
+		e.job, e.attempt, diskBuildAttempts(), e.msg, e.after.Round(time.Second))
 }
 
 type diskBuildError struct{ job, msg string }
@@ -430,6 +540,15 @@ func (r *SandboxReconciler) waitForLauncherDisk(
 ) (keyID string, proceed bool, res ctrl.Result, err error) {
 	keyID, done, err := r.ensureLauncherDisk(ctx, sb)
 	if err != nil {
+		if retry, ok := err.(*diskRetryError); ok { //nolint:errorlint // a local type, never wrapped
+			if r.Recorder != nil {
+				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, ReasonDiskBuildRetrying, actionFinalizeSandbox, "%s", retry.Error())
+			}
+			if err := r.patchPendingStatus(ctx, sb, ReasonDiskBuildRetrying); err != nil {
+				return "", false, ctrl.Result{}, err
+			}
+			return "", false, ctrl.Result{RequeueAfter: max(retry.after, time.Second)}, nil
+		}
 		if _, failed := err.(*diskBuildError); failed { //nolint:errorlint // a local type, never wrapped
 			if r.Recorder != nil {
 				r.Recorder.Eventf(sb, nil, corev1.EventTypeWarning, ReasonDiskBuildFailed, actionFinalizeSandbox, "%s", err.Error())

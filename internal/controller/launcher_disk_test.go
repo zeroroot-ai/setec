@@ -12,14 +12,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	setecv1alpha1 "github.com/zeroroot-ai/setec/api/v1alpha1"
@@ -359,7 +362,7 @@ func TestBuilderJobs_NoJobMountsTheSeed(t *testing.T) {
 	}
 }
 
-func TestEnsureLauncherDisk_FailedJobAndBadImage(t *testing.T) {
+func TestEnsureLauncherDisk_BadImage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := diskReconciler(t)
@@ -368,29 +371,266 @@ func TestEnsureLauncherDisk_FailedJobAndBadImage(t *testing.T) {
 	if _, _, err := r.ensureLauncherDisk(ctx, sb); err == nil {
 		t.Fatal("an image with no digest was accepted")
 	}
-	sb.Spec.Image = "ghcr.io/org/tool@sha256:" + strings.Repeat("cd", 32)
-	name, _ := diskJobName(sb.Spec.Image, testDiskKeyID)
-	failed := &batchv1.Job{Name: name, Namespace: "setec-system"}
-	failed.Spec.Template.Spec.Containers = []corev1.Container{{Name: "x", Image: "x"}}
-	failed.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
-	if err := r.Create(ctx, failed); err != nil {
+}
+
+// clock is a movable time for the retry backoff.
+type clock struct{ t time.Time }
+
+func (c *clock) now() time.Time          { return c.t }
+func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// failJob marks the Job name as failed at the time of the clock.
+func failJob(t *testing.T, r *SandboxReconciler, c *clock, name, msg string) {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "setec-system", Name: name}, job); err != nil {
+		t.Fatalf("the Job %s: %v", name, err)
+	}
+	job.Status.Conditions = []batchv1.JobCondition{{
+		Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: msg, LastTransitionTime: metav1.NewTime(c.now()),
+	}}
+	if err := r.Status().Update(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "BackoffLimitExceeded"}}
-	if err := r.Status().Update(ctx, failed); err != nil {
+}
+
+func jobNames(t *testing.T, r *SandboxReconciler) []string {
+	t.Helper()
+	jobs := &batchv1.JobList{}
+	if err := r.List(context.Background(), jobs); err != nil {
 		t.Fatal(err)
 	}
+	var names []string
+	for i := range jobs.Items {
+		names = append(names, jobs.Items[i].Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// TestEnsureLauncherDisk_AFailedBuildStartsANewAttempt is setec#380: a failed
+// Job does not block its image for the life of the Job. A request in the
+// backoff waits and is told when the next attempt starts. A request after
+// the backoff starts a new Job, which the next requests share.
+func TestEnsureLauncherDisk_AFailedBuildStartsANewAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	clk := &clock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	r.DiskBuilder.Now = clk.now
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("cd", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
+	base, _ := diskJobName(image, testDiskKeyID)
+
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+		t.Fatalf("first call = %t, %v; want a new Job", done, err)
+	}
+	failJob(t, r, clk, base, "BackoffLimitExceeded")
+
+	clk.advance(10 * time.Second)
+	_, done, err := r.ensureLauncherDisk(ctx, sb)
+	var retry *diskRetryError
+	if done || !errors.As(err, &retry) {
+		t.Fatalf("in the backoff = %t, %v; want a diskRetryError", done, err)
+	}
+	if retry.attempt != 1 || retry.after != 20*time.Second || !strings.Contains(retry.Error(), "BackoffLimitExceeded") {
+		t.Fatalf("retry = %+v (%s); want attempt 1, 20s, the cause", retry, retry.Error())
+	}
+	if got := jobNames(t, r); !slices.Equal(got, []string{base}) {
+		t.Fatalf("jobs in the backoff = %v; want only the failed one", got)
+	}
+
+	clk.advance(21 * time.Second)
+	keyID, done, err := r.ensureLauncherDisk(ctx, sb)
+	if err != nil || done || keyID != testDiskKeyID {
+		t.Fatalf("after the backoff = %q, %t, %v; want a new Job and a wait", keyID, done, err)
+	}
+	second := base + "-a2"
+	if got := jobNames(t, r); !slices.Equal(got, []string{base, second}) {
+		t.Fatalf("jobs after the backoff = %v; want the failed Job and the new one", got)
+	}
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: second}, job); err != nil {
+		t.Fatal(err)
+	}
+	checkDiskJobShape(t, job, image)
+	if job.Annotations[attemptAnnotation] != "2" || *job.Spec.TTLSecondsAfterFinished != diskJobTTLSeconds {
+		t.Fatalf("attempt 2 = %v, ttl %d", job.Annotations, *job.Spec.TTLSecondsAfterFinished)
+	}
+
+	// A second Sandbox shares the new Job. The failed Job of attempt 1 can
+	// expire and the new Job still counts.
+	if err := r.Delete(ctx, &batchv1.Job{Name: base, Namespace: "setec-system"}); err != nil {
+		t.Fatal(err)
+	}
+	other := sb.DeepCopy()
+	other.Name = "b"
+	if _, done, err := r.ensureLauncherDisk(ctx, other); err != nil || done {
+		t.Fatalf("a second request = %t, %v; want a wait on attempt 2", done, err)
+	}
+	if got := jobNames(t, r); !slices.Equal(got, []string{second}) {
+		t.Fatalf("jobs = %v; want attempt 2 only", got)
+	}
+	completeJob(t, r, second)
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || !done {
+		t.Fatalf("a complete second attempt = %t, %v; want done", done, err)
+	}
+}
+
+// TestEnsureLauncherDisk_AFailedSeriesStops is the bound of setec#380: an
+// image that fails each time gets four attempts and then no more, however
+// many requests come. The Job of the last attempt stays for an hour.
+func TestEnsureLauncherDisk_AFailedSeriesStops(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	clk := &clock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	r.DiskBuilder.Now = clk.now
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("ef", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
+	base, _ := diskJobName(image, testDiskKeyID)
+
+	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n < diskBuildAttempts(); n++ {
+		failJob(t, r, clk, diskAttemptJobName(base, n), "BackoffLimitExceeded")
+		clk.advance(diskBuildBackoff[n-1] + time.Second)
+		if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+			t.Fatalf("attempt %d after its backoff = %t, %v; want the next attempt", n, done, err)
+		}
+	}
+	last := diskAttemptJobName(base, diskBuildAttempts())
+	if got := jobNames(t, r); len(got) != diskBuildAttempts() || !slices.Contains(got, last) {
+		t.Fatalf("jobs = %v; want one Job for each of %d attempts", got, diskBuildAttempts())
+	}
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: "setec-system", Name: last}, job); err != nil {
+		t.Fatal(err)
+	}
+	if *job.Spec.TTLSecondsAfterFinished != diskJobLastTTLSeconds {
+		t.Fatalf("the last attempt ttl = %d, want %d", *job.Spec.TTLSecondsAfterFinished, diskJobLastTTLSeconds)
+	}
+
+	failJob(t, r, clk, last, "BackoffLimitExceeded")
+	for range 3 {
+		clk.advance(30 * time.Minute)
+		_, done, err := r.ensureLauncherDisk(ctx, sb)
+		var dbe *diskBuildError
+		if done || !errors.As(err, &dbe) {
+			t.Fatalf("after the last attempt = %t, %v; want a diskBuildError", done, err)
+		}
+		if !strings.Contains(err.Error(), "failed 4 times") {
+			t.Fatalf("error = %q; want the number of attempts", err)
+		}
+		if got := jobNames(t, r); len(got) != diskBuildAttempts() {
+			t.Fatalf("jobs = %v; a request after the last attempt started a build", got)
+		}
+	}
+
+	// When the Jobs have expired, the next request starts a new series.
+	for _, name := range jobNames(t, r) {
+		if err := r.Delete(ctx, &batchv1.Job{Name: name, Namespace: "setec-system"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+		t.Fatalf("after the Jobs expired = %t, %v; want a new build", done, err)
+	}
+	if got := jobNames(t, r); !slices.Equal(got, []string{base}) {
+		t.Fatalf("jobs = %v; want attempt 1 of a new series", got)
+	}
+}
+
+// TestEnsureLauncherDisk_AFailedJobOf0130 is the upgrade from a release that
+// left a failed Job with the name of the digest and no attempt annotation:
+// it counts as attempt 1.
+func TestEnsureLauncherDisk_AFailedJobOf0130(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	clk := &clock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	r.DiskBuilder.Now = clk.now
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("12", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
+	base, _ := diskJobName(image, testDiskKeyID)
+	old := &batchv1.Job{Name: base, Namespace: "setec-system"}
+	old.Spec.Template.Spec.Containers = []corev1.Container{{Name: "x", Image: "x"}}
+	old.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
+	if err := r.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	failJob(t, r, clk, base, "BackoffLimitExceeded")
+	clk.advance(time.Minute)
+	if _, done, err := r.ensureLauncherDisk(ctx, sb); err != nil || done {
+		t.Fatalf("a failed Job of 0.130 = %t, %v; want a new attempt", done, err)
+	}
+	if got := jobNames(t, r); !slices.Equal(got, []string{base, base + "-a2"}) {
+		t.Fatalf("jobs = %v; want the old Job and attempt 2", got)
+	}
+}
+
+// TestWaitForLauncherDisk_SaysWhatHappened: a Sandbox in the backoff is
+// Pending with the reason DiskBuildRetrying and a Warning Event with the
+// cause and the wait. A Sandbox whose image failed every attempt is Failed
+// with DiskBuildFailed and an Event.
+func TestWaitForLauncherDisk_SaysWhatHappened(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := diskReconciler(t)
+	rec := events.NewFakeRecorder(10)
+	r.Recorder = rec
+	clk := &clock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	r.DiskBuilder.Now = clk.now
+	image := "ghcr.io/org/tool@sha256:" + strings.Repeat("34", 32)
+	sb := &setecv1alpha1.Sandbox{Name: "a", Namespace: "tenant"}
+	sb.Spec.Image = image
 	if err := r.Create(ctx, sb); err != nil {
 		t.Fatal(err)
 	}
-	_, proceed, _, err := r.waitForLauncherDisk(ctx, sb)
-	if proceed || err != nil {
-		t.Fatalf("waitForLauncherDisk = %t, %v", proceed, err)
+	base, _ := diskJobName(image, testDiskKeyID)
+	if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	failJob(t, r, clk, base, "BackoffLimitExceeded")
+
+	_, proceed, res, err := r.waitForLauncherDisk(ctx, sb)
+	if proceed || err != nil || res.RequeueAfter != diskBuildBackoff[0] {
+		t.Fatalf("in the backoff = %t, %v, %+v; want a requeue at the end of the backoff", proceed, err, res)
 	}
 	got := &setecv1alpha1.Sandbox{}
 	_ = r.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "a"}, got)
+	if got.Status.Phase != setecv1alpha1.SandboxPhasePending || got.Status.Reason != ReasonDiskBuildRetrying {
+		t.Fatalf("status = %s/%s, want Pending/%s", got.Status.Phase, got.Status.Reason, ReasonDiskBuildRetrying)
+	}
+	if ev := <-rec.Events; !strings.Contains(ev, ReasonDiskBuildRetrying) || !strings.Contains(ev, "BackoffLimitExceeded") ||
+		!strings.Contains(ev, "attempt 1 of 4") {
+		t.Fatalf("event = %q; want the reason, the cause and the attempt", ev)
+	}
+
+	for n := 1; n < diskBuildAttempts(); n++ {
+		clk.advance(diskBuildBackoff[n-1] + time.Second)
+		if _, _, err := r.ensureLauncherDisk(ctx, sb); err != nil {
+			t.Fatal(err)
+		}
+		failJob(t, r, clk, diskAttemptJobName(base, n+1), "BackoffLimitExceeded")
+	}
+	if _, proceed, _, err := r.waitForLauncherDisk(ctx, sb); proceed || err != nil {
+		t.Fatalf("after the last attempt = %t, %v", proceed, err)
+	}
+	_ = r.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "a"}, got)
 	if got.Status.Phase != setecv1alpha1.SandboxPhaseFailed || got.Status.Reason != ReasonDiskBuildFailed {
 		t.Fatalf("status = %s/%s, want Failed/%s", got.Status.Phase, got.Status.Reason, ReasonDiskBuildFailed)
+	}
+	var last string
+	for len(rec.Events) > 0 {
+		last = <-rec.Events
+	}
+	if !strings.Contains(last, ReasonDiskBuildFailed) || !strings.Contains(last, "failed 4 times") {
+		t.Fatalf("last event = %q; want the reason and the number of attempts", last)
 	}
 }
 
