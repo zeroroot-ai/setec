@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.130.1](https://github.com/zeroroot-ai/setec/compare/v0.130.0...v0.130.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **deps:** bump go-jose to v4.1.6 and x/net to v0.62.0 to clear the image gate ([#373](https://github.com/zeroroot-ai/setec/issues/373)) ([a0d47ed](https://github.com/zeroroot-ai/setec/commit/a0d47edf9766f2166ebf944ac6ab408d057817aa))
+
 ## [0.130.0](https://github.com/zeroroot-ai/setec/compare/v0.129.0...v0.130.0) (2026-11-21)
 
 
