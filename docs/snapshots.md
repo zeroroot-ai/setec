@@ -176,8 +176,13 @@ default resources.
 
 The operator builds no base from an image that it cannot check. Before
 the first base of each pool image, a Job of the disk builder checks the
-cosign signature of the image (`internal/diskbuilder/imagesig`). cosign v3 attaches
-the signature as a Sigstore bundle, an OCI referrer of the image.
+cosign signature of the image (`internal/diskbuilder/imagesig`). The check
+reads two formats. cosign v3 attaches the signature as a Sigstore bundle, an
+OCI referrer of the image. Any cosign before v3, and a KMS key (`cosign sign
+--key awskms://...`), writes the simple signing format: an image at the tag
+`sha256-<digest hex>.sig` of the same repository, with no transparency log
+entry. A policy with `publicKey` accepts both formats. A keyless policy accepts
+the bundle only, because it needs the certificate and the log entry.
 `preWarmImageSignature` names the signer in one of two ways:
 
 - `issuer` and `identity`: a keyless signature. The certificate of the
@@ -187,11 +192,14 @@ the signature as a Sigstore bundle, an OCI referrer of the image.
   reach `tuf-repo-cdn.sigstore.dev`.
 - `publicKey`: a PEM public key, for an image signed with a key. The
   check needs no outside service, so it suits an air-gapped install.
+  The key may be an ECDSA, RSA or Ed25519 key, for example the public
+  key of a KMS key (`cosign public-key --key awskms://...`).
 
 An image with no signature of the named signer gets no base, and the
 pool drops each base of it. The condition `ImageNotVerified=True` on the
-class names each such image. The check runs again when its Job expires, and when the image
-or the signer changes.
+class names each such image. The message says what the check looked for: a
+bundle, and for a key also the `.sig` tag. The check runs again when its Job
+expires, and when the image or the signer changes.
 
 ### Warm-start flow
 
