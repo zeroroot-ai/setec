@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.132.0](https://github.com/zeroroot-ai/setec/compare/v0.131.0...v0.132.0) (2026-11-23)
+
+
+### Features
+
+* **chart:** add placement values for the disk Job Pods ([#406](https://github.com/zeroroot-ai/setec/issues/406)) ([babd868](https://github.com/zeroroot-ai/setec/commit/babd86818e1e412a324e05ba2bfd6d650a623967)), closes [#403](https://github.com/zeroroot-ai/setec/issues/403)
+* **disk-builder:** push a disk to Amazon ECR with a cloud identity ([#405](https://github.com/zeroroot-ai/setec/issues/405)) ([ee2ac43](https://github.com/zeroroot-ai/setec/commit/ee2ac43d6bf8a8fa240583ab4fcc9258fb119d9d))
+
+
+### Bug Fixes
+
+* **chart:** allow the operator to reach its trace collector in the namespace policy ([#399](https://github.com/zeroroot-ai/setec/issues/399)) ([bbf2555](https://github.com/zeroroot-ai/setec/commit/bbf25552c00ec4f70fcad38c18bb101467bd06d4)), closes [#392](https://github.com/zeroroot-ai/setec/issues/392)
+* **chart:** make the kubelet directory and priority class of the device plugin values ([#398](https://github.com/zeroroot-ai/setec/issues/398)) ([ea36977](https://github.com/zeroroot-ai/setec/commit/ea36977fce10cf759f1599edf2f4428a452811ea)), closes [#391](https://github.com/zeroroot-ai/setec/issues/391)
+* **chart:** pass imagePullSecrets to each workload and to the disk Jobs ([#407](https://github.com/zeroroot-ai/setec/issues/407)) ([63e1dcc](https://github.com/zeroroot-ai/setec/commit/63e1dcce91f0ec0fd7148f7952054a7c18d35bf0))
+* **chart:** read one DNS peer in both policy engines ([#397](https://github.com/zeroroot-ai/setec/issues/397)) ([6cd5d3e](https://github.com/zeroroot-ai/setec/commit/6cd5d3e6c6c57f606fb98f91fcff961997e6180f)), closes [#390](https://github.com/zeroroot-ai/setec/issues/390)
+* **controller:** label the disk Jobs, their Pods and ConfigMaps with their manager ([#408](https://github.com/zeroroot-ai/setec/issues/408)) ([426754d](https://github.com/zeroroot-ai/setec/commit/426754d572f81429d76c3b480e9e75cd31c69887)), closes [#404](https://github.com/zeroroot-ai/setec/issues/404)
+* **disk-builder:** verify a key signature in the simple signing format ([#410](https://github.com/zeroroot-ai/setec/issues/410)) ([e2782e4](https://github.com/zeroroot-ai/setec/commit/e2782e49cc6f8bc4d1f14ed25e14af8041067027))
+
 ## [0.131.0](https://github.com/zeroroot-ai/setec/compare/v0.130.1...v0.131.0) (2026-11-23)
 
 
