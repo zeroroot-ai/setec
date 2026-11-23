@@ -334,6 +334,7 @@ The chart denies all traffic of each Pod in its own namespace by default, with D
 - The operator reaches the API server, takes webhook calls on 9443, and reaches the node agent gRPC port when snapshots are on.
 - The frontend takes gRPC only from `systemPolicy.frontendCallers` and reaches the API server. The list is required when the frontend is on.
 - The node agent takes gRPC from the operator and reaches the snapshot store.
+- With `observability.enabled=true`, the operator also reaches the collector of `observability.otlpEndpoint`, on its port, and no other new destination. See "The trace collector" below.
 - Each metrics port admits the Pods of `systemPolicy.metricsScrapers`. Each entry names the namespace and the Pod labels of one scraper.
 - The disk build Job and the image verify Job reach the `hosts` of each `launcher.imageSources` entry, and the disk registry. An entry whose `registry` is an IPv4 address, such as a pull-through mirror in the cluster, lists no `hosts`. The policy then allows that address and port (443 when the registry names none) and no other destination.
 
@@ -346,6 +347,27 @@ systemPolicy:
 ```
 
 `systemPolicy.networkPolicy.dns` (version 0.131) still works and wins when set. It is deprecated, and the next minor version drops it.
+
+#### The trace collector
+
+The operator exports traces to `observability.otlpEndpoint`. The policy allows that one destination.
+
+- A host name, such as `otel.example.com:4317`. The `cilium` engine allows the name. The `networkpolicy` engine cannot match a name, so list the addresses of the collector in `systemPolicy.networkPolicy.egress.otlp.cidrs`. The port is the port of the endpoint, or `egress.otlp.ports` when set. The render fails with the name of the value when the CIDRs are missing.
+- An IP address, such as `10.1.2.3:4317`. Both engines allow that address and port, and need no other value.
+- A collector in this cluster, such as `otel-collector.monitoring.svc:4317`. A policy by name cannot match a Service, because the network plugin sees the Pod behind it. Name the Pods in `systemPolicy.otlp` (both engines). The `cilium` engine fails the render for a Service name when this value is empty.
+
+```yaml
+observability:
+  enabled: true
+  otlpEndpoint: otel-collector.monitoring.svc:4317
+systemPolicy:
+  otlp:
+    namespace: monitoring
+    podLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+```
+
+With no port, the operator dials port 443, and so does the policy.
 
 The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. That policy is a plain NetworkPolicy, so it works under both engines below.
 

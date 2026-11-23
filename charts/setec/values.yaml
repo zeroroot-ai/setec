@@ -302,7 +302,11 @@ multiTenancy:
 observability:
   enabled: false
   # otlpEndpoint is the gRPC OTLP collector address (e.g.
-  # "otel-collector.monitoring.svc:4317"). Empty disables tracing.
+  # "otel-collector.monitoring.svc:4317"). Empty disables tracing. The
+  # network policy of the setec namespace allows the operator to reach
+  # this destination and no other new one. A collector in this cluster needs
+  # systemPolicy.otlp, and the networkpolicy engine needs
+  # systemPolicy.networkPolicy.egress.otlp for a host name.
   otlpEndpoint: ""
   # metricsEnabled leaves /metrics exposed even when tracing is off.
   metricsEnabled: true
@@ -398,6 +402,14 @@ systemPolicy:
         cidrs: []
         ports:
           - 443
+      # otlp is the collector of the traces of the operator, when
+      # observability.otlpEndpoint names a host. Required then, unless
+      # systemPolicy.otlp names the collector Pods. An endpoint at an IP
+      # address needs none: its address and port are derived. Empty ports
+      # means the port of observability.otlpEndpoint.
+      otlp:
+        cidrs: []
+        ports: []
       # snapshotStore is the S3 endpoint of the node agent. Required when
       # snapshots.s3.enabled is true and the endpoint is not an IPv4 address.
       # Empty ports means the port of snapshots.s3.endpoint, or 443.
@@ -460,6 +472,18 @@ systemPolicy:
   #   - cidr: 169.254.169.254/32  # the instance metadata service, for the node role
   #     ports: [80]
   credentialEndpoints: []
+  # otlp names the Pods of the trace collector, when the collector runs in
+  # this cluster. Both engines read it, with observability.otlpEndpoint for
+  # the port. namespace and podLabels go together. A policy by host name
+  # cannot match a Service of the cluster (<service>.<namespace>.svc), because
+  # the network plugin sees the Pod behind it, so the render fails for such an
+  # endpoint under the cilium engine unless this value names the Pods. With no
+  # value, the cilium engine allows the host name or the IP address of
+  # observability.otlpEndpoint, and the networkpolicy engine allows
+  # networkPolicy.egress.otlp.
+  otlp:
+    namespace: ""
+    podLabels: {}
   # sigstoreHosts are the hosts of the Sigstore trust root that the image
   # verify Job reads (the public-good TUF repository). The Job reaches them
   # and the hosts of launcher.imageSources, and nothing else. Only the

@@ -1217,6 +1217,128 @@ for engine in cilium networkpolicy; do
 		--set 'systemPolicy.dns.cidrs={169.254.20.10}'
 done
 
+# ---------------------------------------------------------------------------
+# The trace collector of the operator (setec#392). With tracing on, the
+# operator exports to observability.otlpEndpoint, and the policy of the
+# namespace must allow that destination and no other new one, under each
+# engine. A render with tracing on is compared with the render with tracing
+# off: the operator policy may gain exactly one egress rule.
+# ---------------------------------------------------------------------------
+note "the trace collector of the operator (setec#392)"
+# otlp_extra <engine> <base render> <render> prints the egress rules that the
+# operator policy gained, one for each line.
+otlp_extra() {
+	python3 - "$1" "$2" "$3" <<'PY'
+import sys, yaml
+engine = sys.argv[1]
+def rules(path):
+    docs = [d for d in yaml.safe_load_all(open(path)) if isinstance(d, dict)]
+    if engine == "cilium":
+        op = [d for d in docs if d.get("kind") == "CiliumNetworkPolicy" and d["metadata"]["name"].endswith("-operator")][0]
+    else:
+        op = [d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"].endswith("-operator")][0]
+    return op["spec"]["egress"]
+def describe(rule):
+    if engine == "cilium":
+        ports = ",".join(sorted({p["port"] for tp in rule.get("toPorts") or [] for p in tp["ports"]}))
+        out = []
+        for f in rule.get("toFQDNs") or []:
+            out.append(f"fqdn {f['matchName']} {ports}")
+        for c in rule.get("toCIDR") or []:
+            out.append(f"cidr {c} {ports}")
+        for e in rule.get("toEndpoints") or []:
+            labels = dict(e["matchLabels"])
+            ns = labels.pop("k8s:io.kubernetes.pod.namespace", None)
+            out.append("pod %s %s %s" % (ns, ",".join(f"{k.removeprefix('k8s:')}={v}" for k, v in sorted(labels.items())), ports))
+        for e in rule.get("toEntities") or []:
+            out.append(f"entity {e}")
+        return out
+    ports = ",".join(sorted(str(p["port"]) for p in rule.get("ports") or []))
+    out = []
+    for peer in rule.get("to") or []:
+        if "ipBlock" in peer:
+            out.append(f"cidr {peer['ipBlock']['cidr']} {ports}")
+        elif "podSelector" in peer and "namespaceSelector" in peer:
+            out.append("pod %s %s %s" % (peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
+                ",".join(f"{k}={v}" for k, v in sorted(peer["podSelector"]["matchLabels"].items())), ports))
+        else:
+            out.append("peer " + str(peer))
+    if not rule.get("to"):
+        out.append("EVERY PEER")
+    return out
+base = [d for r in rules(sys.argv[2]) for d in describe(r)]
+new = [d for r in rules(sys.argv[3]) for d in describe(r)]
+for b in base:
+    if b not in new:
+        sys.exit(f"the operator lost a destination: {b}")
+extra = [n for n in new if n not in base]
+print("\n".join(extra))
+PY
+}
+# otlp_case <engine> <name> <want> <helm args...>
+otlp_case() {
+	local engine="$1" name="$2" want="$3"
+	shift 3
+	local extra=()
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	render "$workdir/otlp-$engine-base.yaml" "${extra[@]}"
+	render "$workdir/otlp-$engine-$name.yaml" "${extra[@]}" --set observability.enabled=true "$@"
+	local got
+	got="$(otlp_extra "$engine" "$workdir/otlp-$engine-base.yaml" "$workdir/otlp-$engine-$name.yaml" 2>&1)" || {
+		fail "OTLP, $engine, $name: $got"
+		return
+	}
+	if [ "$got" = "$want" ]; then
+		pass "OTLP collector, $engine engine, $name: the operator policy gains [${want:-nothing}]"
+	else
+		fail "OTLP collector, $engine engine, $name: got [$got], want [$want]"
+	fi
+}
+otlp_case cilium host "fqdn otel.example.com 4317" --set observability.otlpEndpoint=otel.example.com:4317
+otlp_case cilium host-no-port "fqdn otel.example.com 443" --set observability.otlpEndpoint=https://otel.example.com
+otlp_case cilium ip "cidr 10.1.2.3/32 4317" --set observability.otlpEndpoint=10.1.2.3:4317
+otlp_case cilium ipv6 "cidr 2001:db8::5/128 4317" --set 'observability.otlpEndpoint=[2001:db8::5]:4317'
+otlp_case cilium pods "pod monitoring app=otel 4317" --set observability.otlpEndpoint=otel-collector.monitoring.svc:4317 \
+	--set systemPolicy.otlp.namespace=monitoring --set systemPolicy.otlp.podLabels.app=otel
+otlp_case networkpolicy host "cidr 198.51.100.0/24 4317" --set observability.otlpEndpoint=otel.example.com:4317 \
+	--set 'systemPolicy.networkPolicy.egress.otlp.cidrs={198.51.100.0/24}'
+otlp_case networkpolicy host-ports "cidr 198.51.100.0/24 4318" --set observability.otlpEndpoint=otel.example.com:4317 \
+	--set 'systemPolicy.networkPolicy.egress.otlp.cidrs={198.51.100.0/24}' --set 'systemPolicy.networkPolicy.egress.otlp.ports={4318}'
+otlp_case networkpolicy ip "cidr 10.1.2.3/32 4317" --set observability.otlpEndpoint=10.1.2.3:4317
+otlp_case networkpolicy pods "pod monitoring app=otel 4317" --set observability.otlpEndpoint=otel-collector.monitoring.svc:4317 \
+	--set systemPolicy.otlp.namespace=monitoring --set systemPolicy.otlp.podLabels.app=otel
+# With tracing off, or with no endpoint, the policy gains nothing.
+for engine in cilium networkpolicy; do
+	otlp_case "$engine" off "" --set observability.enabled=false --set observability.otlpEndpoint=otel.example.com:4317
+	otlp_case "$engine" no-endpoint ""
+done
+otlp_refused() {
+	local engine="$1" desc="$2" want="$3"
+	shift 3
+	local extra=(--set "systemPolicy.engine=$engine")
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		"${extra[@]}" --set observability.enabled=true "$@" >/dev/null 2>"$workdir/otlp-refused.err"; then
+		fail "$desc, $engine, must fail the render"
+	elif grep -qF -- "$want" "$workdir/otlp-refused.err"; then
+		pass "$desc fails the render, $engine engine"
+	else
+		fail "$desc, $engine, failed with another message: $(tail -n1 "$workdir/otlp-refused.err")"
+	fi
+}
+otlp_refused cilium "a Service name with no collector Pods" "systemPolicy.otlp" \
+	--set observability.otlpEndpoint=otel-collector.monitoring.svc:4317
+otlp_refused networkpolicy "a host with no CIDR" "systemPolicy.networkPolicy.egress.otlp.cidrs is required" \
+	--set observability.otlpEndpoint=otel.example.com:4317
+otlp_refused networkpolicy "a CIDR value that is not a CIDR" "systemPolicy.networkPolicy.egress.otlp.cidrs" \
+	--set observability.otlpEndpoint=otel.example.com:4317 --set 'systemPolicy.networkPolicy.egress.otlp.cidrs={198.51.100.7}'
+for engine in cilium networkpolicy; do
+	otlp_refused "$engine" "a collector namespace with no Pod labels" "systemPolicy.otlp: set both namespace and podLabels" \
+		--set observability.otlpEndpoint=otel.example.com:4317 --set systemPolicy.otlp.namespace=monitoring
+	otlp_refused "$engine" "an endpoint with a bad port" "observability.otlpEndpoint" \
+		--set observability.otlpEndpoint=otel.example.com:port
+done
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2
