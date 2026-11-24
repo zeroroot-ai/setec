@@ -470,7 +470,9 @@ systemPolicy:
         cidrs: []
         ports: []
       # snapshotStore is the S3 endpoint of the node agent. Required when
-      # snapshots.s3.enabled is true and the endpoint is not an IPv4 address.
+      # snapshots.s3.enabled is true and the endpoint is not an IPv4 address,
+      # unless systemPolicy.snapshotStore names the Pods of a store in this
+      # cluster.
       # Empty ports means the port of snapshots.s3.endpoint, or 443.
       snapshotStore:
         cidrs: []
@@ -541,6 +543,20 @@ systemPolicy:
   # observability.otlpEndpoint, and the networkpolicy engine allows
   # networkPolicy.egress.otlp.
   otlp:
+    namespace: ""
+    podLabels: {}
+  # snapshotStore names the Pods of the S3 store of the node agent, when the
+  # store runs in this cluster, for example MinIO at
+  # http://minio.minio.svc:9000 in snapshots.s3.endpoint. Both engines read it,
+  # with snapshots.s3.endpoint for the port. namespace and podLabels go
+  # together. A policy by host name cannot match a Service of the cluster
+  # (<service>.<namespace>.svc), because the network plugin sees the Pod behind
+  # it, so the render fails for such an endpoint under the cilium engine unless
+  # this value names the Pods. The node agent then reaches those Pods on the
+  # port of the endpoint, and no other new destination. With no value, the
+  # cilium engine allows the host name or the IP address of the endpoint, and
+  # the networkpolicy engine allows networkPolicy.egress.snapshotStore.
+  snapshotStore:
     namespace: ""
     podLabels: {}
   # sigstoreHosts are the hosts of the Sigstore trust root that the image

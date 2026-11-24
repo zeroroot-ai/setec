@@ -1498,6 +1498,118 @@ render "$workdir/scan-set.yaml" "${SP_ALL[@]}" \
 assert_contains "$workdir/scan-set.yaml" "the node agent gets one flag for each pattern" \
 	'--secret-scan-allow=secret-shaped-env-assignment=SecretKeyRef:.*' '--secret-scan-allow=TESTKEY[0-9]+'
 
+# ---------------------------------------------------------------------------
+# The snapshot store of the node agent (setec#402). The node agent writes to
+# snapshots.s3.endpoint, and the policy of the setec namespace must allow that
+# destination and no other, under each engine. A store in the cluster is a Pod
+# peer, because a policy by host name cannot match a Service. The check reads
+# the whole egress of the node agent policy and compares it with the wanted
+# destinations.
+# ---------------------------------------------------------------------------
+note "the snapshot store of the node agent (setec#402)"
+STORE_BASE=(--set nodeAgent.enabled=true --set snapshots.enabled=true
+	--set snapshots.s3.enabled=true --set snapshots.s3.bucket=setec-snapshots --set snapshots.s3.pathStyle=false
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentClients={spiffe://example.org/ns/setec/sa/setec}'
+	--set 'credentials.spiffe.authorizedIDs.nodeAgentServers={spiffe://example.org/ns/setec/sa/setec-node-agent}')
+# store_egress <engine> <render> prints the egress destinations of the node
+# agent policy, one for each line.
+store_egress() {
+	python3 - "$1" "$2" <<'PY'
+import sys, yaml
+engine, path = sys.argv[1], sys.argv[2]
+docs = [d for d in yaml.safe_load_all(open(path)) if isinstance(d, dict)]
+kind = "CiliumNetworkPolicy" if engine == "cilium" else "NetworkPolicy"
+np = [d for d in docs if d.get("kind") == kind and d["metadata"]["name"].endswith("-node-agent")][0]
+out = []
+for rule in np["spec"].get("egress") or []:
+    if engine == "cilium":
+        ports = ",".join(sorted({p["port"] for tp in rule.get("toPorts") or [] for p in tp["ports"]}))
+        for f in rule.get("toFQDNs") or []:
+            out.append(f"fqdn {f['matchName']} {ports}")
+        for c in rule.get("toCIDR") or []:
+            out.append(f"cidr {c} {ports}")
+        for e in rule.get("toEndpoints") or []:
+            labels = dict(e["matchLabels"])
+            ns = labels.pop("k8s:io.kubernetes.pod.namespace", None)
+            out.append("pod %s %s %s" % (ns, ",".join(f"{k.removeprefix('k8s:')}={v}" for k, v in sorted(labels.items())), ports))
+        for e in rule.get("toEntities") or []:
+            out.append(f"entity {e}")
+        continue
+    ports = ",".join(sorted(str(p["port"]) for p in rule.get("ports") or []))
+    for peer in rule.get("to") or []:
+        if "ipBlock" in peer:
+            out.append(f"cidr {peer['ipBlock']['cidr']} {ports}")
+        elif "podSelector" in peer and "namespaceSelector" in peer:
+            out.append("pod %s %s %s" % (peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"],
+                ",".join(f"{k}={v}" for k, v in sorted(peer["podSelector"]["matchLabels"].items())), ports))
+        else:
+            out.append("peer " + str(peer))
+    if not rule.get("to"):
+        out.append("EVERY PEER")
+print("\n".join(sorted(out)))
+PY
+}
+# store_case <engine> <name> <want> <helm args...>
+store_case() {
+	local engine="$1" name="$2" want="$3"
+	shift 3
+	local extra=()
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	render "$workdir/store-$engine-$name.yaml" "${extra[@]}" "${STORE_BASE[@]}" "$@"
+	local got
+	got="$(store_egress "$engine" "$workdir/store-$engine-$name.yaml" 2>&1)" || {
+		fail "snapshot store, $engine, $name: $got"
+		return
+	}
+	if [ "$got" = "$want" ]; then
+		pass "snapshot store, $engine engine, $name: the node agent reaches exactly [${want//$'\n'/; }]"
+	else
+		fail "snapshot store, $engine engine, $name: got [${got//$'\n'/; }], want [${want//$'\n'/; }]"
+	fi
+}
+store_case cilium host "fqdn s3.example.com 9000" --set snapshots.s3.endpoint=http://s3.example.com:9000
+store_case cilium host-no-port "fqdn s3.example.com 443" --set snapshots.s3.endpoint=https://s3.example.com
+store_case cilium host-http-no-port "fqdn s3.example.com 80" --set snapshots.s3.endpoint=http://s3.example.com
+store_case cilium ip "cidr 10.1.2.3/32 9000" --set snapshots.s3.endpoint=http://10.1.2.3:9000
+store_case cilium ipv6 "cidr 2001:db8::5/128 9000" --set 'snapshots.s3.endpoint=http://[2001:db8::5]:9000'
+store_case cilium pods "pod minio app=minio 9000" --set snapshots.s3.endpoint=http://minio.minio.svc:9000 \
+	--set systemPolicy.snapshotStore.namespace=minio --set systemPolicy.snapshotStore.podLabels.app=minio
+store_case cilium real-s3 "$(printf 'fqdn s3.us-east-1.amazonaws.com 443\nfqdn setec-snapshots.s3.us-east-1.amazonaws.com 443')"
+store_case networkpolicy host "cidr 198.51.100.0/24 9000" --set snapshots.s3.endpoint=http://s3.example.com:9000 \
+	--set 'systemPolicy.networkPolicy.egress.snapshotStore.cidrs={198.51.100.0/24}'
+store_case networkpolicy host-ports "cidr 198.51.100.0/24 9001" --set snapshots.s3.endpoint=http://s3.example.com:9000 \
+	--set 'systemPolicy.networkPolicy.egress.snapshotStore.cidrs={198.51.100.0/24}' \
+	--set 'systemPolicy.networkPolicy.egress.snapshotStore.ports={9001}'
+store_case networkpolicy ip "cidr 10.1.2.3/32 9000" --set snapshots.s3.endpoint=http://10.1.2.3:9000
+store_case networkpolicy pods "pod minio app=minio 9000" --set snapshots.s3.endpoint=http://minio.minio.svc:9000 \
+	--set systemPolicy.snapshotStore.namespace=minio --set systemPolicy.snapshotStore.podLabels.app=minio
+store_refused() {
+	local engine="$1" desc="$2" want="$3"
+	shift 3
+	local extra=(--set "systemPolicy.engine=$engine")
+	[ "$engine" = networkpolicy ] && extra=("${NP[@]}")
+	if "$HELM" template setec "$CHART_DIR" "${CILIUM_API[@]}" -f "$LAUNCHER_VALUES" --set webhook.certManager.enabled=true \
+		"${extra[@]}" "${STORE_BASE[@]}" "$@" >/dev/null 2>"$workdir/store-refused.err"; then
+		fail "$desc, $engine, must fail the render"
+	elif grep -qF -- "$want" "$workdir/store-refused.err"; then
+		pass "$desc fails the render, $engine engine"
+	else
+		fail "$desc, $engine, failed with another message: $(tail -n1 "$workdir/store-refused.err")"
+	fi
+}
+store_refused cilium "a Service name with no store Pods" "systemPolicy.snapshotStore" \
+	--set snapshots.s3.endpoint=http://minio.minio.svc:9000
+store_refused cilium "a Service name with the full cluster domain and no store Pods" "systemPolicy.snapshotStore" \
+	--set snapshots.s3.endpoint=http://minio.minio.svc.cluster.local:9000
+store_refused networkpolicy "a host with no CIDR and no Pods" "systemPolicy.networkPolicy.egress.snapshotStore.cidrs is required" \
+	--set snapshots.s3.endpoint=http://s3.example.com:9000
+for engine in cilium networkpolicy; do
+	store_refused "$engine" "a store namespace with no Pod labels" "systemPolicy.snapshotStore: set both namespace and podLabels" \
+		--set snapshots.s3.endpoint=http://s3.example.com:9000 --set systemPolicy.snapshotStore.namespace=minio
+	store_refused "$engine" "an endpoint with a bad port" "snapshots.s3.endpoint" \
+		--set snapshots.s3.endpoint=http://s3.example.com:port
+done
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2
