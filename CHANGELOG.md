@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.134.0](https://github.com/zeroroot-ai/setec/compare/v0.133.1...v0.134.0) (2026-11-24)
+
+
+### Features
+
+* **controller:** delete a finished session after the retention of its class ([#423](https://github.com/zeroroot-ai/setec/issues/423)) ([a119f3a](https://github.com/zeroroot-ai/setec/commit/a119f3a97c03ac1d12747625e8b4ec0fd0ee03a5))
+* **frontend:** limit the Sandboxes of one tenant that hold a machine ([#427](https://github.com/zeroroot-ai/setec/issues/427)) ([ca3bb16](https://github.com/zeroroot-ai/setec/commit/ca3bb16798453ecb39ea95509312683d1a2b71db))
+
+
+### Bug Fixes
+
+* **warm-pool:** make no base Pod that the pool does not want or that no node can take ([#424](https://github.com/zeroroot-ai/setec/issues/424)) ([9770806](https://github.com/zeroroot-ai/setec/commit/977080605985fc9fa5933d793a01be69fc7f159e))
+
 ## [0.133.1](https://github.com/zeroroot-ai/setec/compare/v0.133.0...v0.133.1) (2026-11-24)
 
 
