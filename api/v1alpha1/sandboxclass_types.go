@@ -419,6 +419,12 @@ type ImageSignature struct {
 // signature that matches spec.preWarmImageSignature.
 const ConditionImageNotVerified = "ImageNotVerified"
 
+// ConditionWarmBaseFailing is True on a class whose pool cannot make a base: the
+// snapshot of a base failed, for example because the secret scan found
+// secret-shaped text. The message names the cause, and the pool waits before
+// its next attempt, with a wait that doubles.
+const ConditionWarmBaseFailing = "WarmBaseFailing"
+
 // SandboxClassWarmPoolStatus is the state of the warm pool of a class.
 type SandboxClassWarmPoolStatus struct {
 	// Images is the pool of each image that a Sandbox of the class asked

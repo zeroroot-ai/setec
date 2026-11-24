@@ -29,6 +29,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/firecracker"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/grpcserver"
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -58,6 +59,7 @@ func runMain() int {
 		snapshotDEKDir       string
 		snapshotFillFraction float64
 		entropyReseedMode    string
+		secretScanAllow      []string
 
 		// Session-checkpoint (S3-compatible) flags — setec#194.
 		s3Endpoint  string
@@ -113,6 +115,9 @@ func runMain() int {
 			"the prefix will run, or the sweep aborts a live upload. It also bounds each "+
 			"checkpoint upload, and a checkpoint left partial by a dead agent blocks its id "+
 			"for this long (setec#317).")
+	flag.Var((*repeatedFlag)(&secretScanAllow), "secret-scan-allow",
+		"A pattern that the secret scan of a warm base treats as safe: \"rule=regexp\" or \"regexp\" for each rule. "+
+			"Repeat it for each pattern. The pattern is matched against the text of a finding, and the text is never logged.")
 	flag.StringVar(&entropyReseedMode, "entropy-reseed", requireMode,
 		"Entropy reseed after a restore (setec#72). 'require' (default) fails a restore closed "+
 			"unless the guest confirms fresh entropy; 'off' is an explicit opt-out, and the "+
@@ -157,7 +162,17 @@ func runMain() int {
 		endpoint: s3Endpoint, bucket: s3Bucket, region: s3Region, prefix: s3Prefix,
 		pathStyle: s3PathStyle, staleWindow: staleMultipartWindow,
 	})
+	allow := make([]secretscan.Allow, 0, len(secretScanAllow))
+	for _, e := range secretScanAllow {
+		a, err := secretscan.ParseAllow(e)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "node-agent: --secret-scan-allow: %v (rules: %s)\n", err, strings.Join(secretscan.RuleNames(), ", "))
+			return 2
+		}
+		allow = append(allow, a)
+	}
 	srv := &grpcserver.Server{
+		SecretScanAllow:    allow,
 		Storage:            backend,
 		SessionStorage:     sessionStorage,
 		FirecrackerFactory: firecracker.NewClientFromSocket,
@@ -323,4 +338,14 @@ func serveGRPC(ctx context.Context, addr string, srv *grpcserver.Server, opts ..
 		fmt.Fprintf(os.Stderr, "node-agent: grpc serve: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// repeatedFlag is a flag that collects each value.
+type repeatedFlag []string
+
+func (r *repeatedFlag) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedFlag) Set(v string) error {
+	*r = append(*r, v)
+	return nil
 }

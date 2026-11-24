@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,6 +74,8 @@ type WarmPoolReconciler struct {
 	Metrics *metrics.Collectors
 	// Now is the clock. Nil uses time.Now.
 	Now func() time.Time
+
+	failures baseBackoff
 }
 
 func (r *WarmPoolReconciler) now() time.Time {
@@ -176,11 +179,19 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// One new base Pod for each image that is short of bases, each pass.
 	for _, im := range images {
-		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want {
+		if ready[im.Key] > 0 {
+			r.failures.built(im.Key)
+		}
+		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want && !r.failures.held(im.Key, r.now()) {
 			if err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key]); err != nil {
 				logger.Error(err, "start a base", "image", im.Image)
 			}
 		}
+	}
+	r.failures.forget(keys)
+	msg := r.failures.summary(keys)
+	if err := r.setBaseCondition(ctx, cls, msg != "", msg); err != nil {
+		return ctrl.Result{}, err
 	}
 	// A base Pod of this pass may have made a base, so the count is read
 	// again.
@@ -290,6 +301,9 @@ func (r *WarmPoolReconciler) stepBasePod(
 		return true, client.IgnoreNotFound(r.Delete(ctx, p))
 	}
 	err := r.Coordinator.CreateBase(ctx, p, cls, image, key)
+	if err != nil && !errors.Is(err, snapshot.ErrNodeAgentUnavailable) {
+		r.failures.failed(key, image, err, r.now())
+	}
 	if derr := r.Delete(ctx, p); client.IgnoreNotFound(derr) != nil && err == nil {
 		err = derr
 	}

@@ -1007,6 +1007,23 @@ snapshots:
   # restored clones then rely only on the passive virtio-rng mechanism
   # (see SECURITY.md "Entropy reseed on restore" for the residual risk).
   entropyReseed: require
+  # secretScan sets the secret scan that the node agent runs on the memory,
+  # the state and the disk of a warm base before the store sees them. A base
+  # holds no per-Sandbox secret: it boots with no workload, no identity and no
+  # environment. A finding is text of the image, such as a test key in a
+  # program, or names of a program that look like a secret. The error names
+  # the rule, the file and the offset, and never the value.
+  secretScan:
+    # allow lists patterns that are known to be safe for your images. Each
+    # entry is "rule=regexp", or "regexp" for each rule. The regexp is matched
+    # against the matched text of a finding (the name and the value). The rules
+    # are pem-private-key, secret-shaped-env-assignment,
+    # secret-shaped-config-assignment and the provider key rules. An unknown
+    # rule stops the node agent at start. The list applies to each snapshot of
+    # the node agent, so keep each pattern narrow. A base that the scan refuses
+    # is not made. The class gets the condition WarmBaseFailing, and the pool
+    # waits 2 minutes, then 4, up to 30, before it tries again.
+    allow: []
   # s3 configures the S3-compatible object store session memory
   # checkpoints are written to (setec#194, docs/design/storage.md): real S3 on EKS,
   # MinIO (or any S3-compatible endpoint) when self-hosted. Disabled by
