@@ -302,27 +302,34 @@ func TestScenario4_FailureNonZeroExit(t *testing.T) {
 // Scenario 5: Timeout enforcement.
 // ---------------------------------------------------------------------------
 
-// TestScenario5_Timeout creates a Sandbox with a 1-second lifecycle
-// timeout, drives the backing Pod to Running with a start time already in
-// the past, and asserts that (a) the controller deletes the Pod and (b)
-// the Sandbox converges to Failed with reason "Timeout". This exercises
-// the timeout branch in status.Derive and the Delete(pod) step in the
+// TestScenario5_Timeout creates a Sandbox with a lifecycle timeout, drives
+// the backing Pod to Running with a start time further in the past than the
+// timeout, and asserts that (a) the controller deletes the Pod and (b) the
+// Sandbox converges to Failed with reason "Timeout". This exercises the
+// timeout branch in status.Derive and the Delete(pod) step in the
 // reconciler.
+//
+// The timeout is one minute, not one second. The same timeout also bounds a
+// Pending Sandbox from its creation, so a timeout of one second deleted the
+// Pod before the test made it Running on a slow machine (setec#372). With
+// one minute only the start time of the Running Pod can pass the timeout
+// inside the wait of the test, so the test fails if the timeout of a Running
+// Sandbox does not delete the Pod.
 func TestScenario5_Timeout(t *testing.T) {
 	g := NewWithT(t)
 	ns := newNamespace(t, "s5")
 
 	sb := newSandbox(ns, "slow", func(s *setecv1alpha1.Sandbox) {
 		s.Spec.Lifecycle = &setecv1alpha1.Lifecycle{
-			Timeout: &metav1.Duration{Duration: 1 * time.Second},
+			Timeout: &metav1.Duration{Duration: time.Minute},
 		}
 	})
 	g.Expect(testClient.Create(testCtx, sb)).To(Succeed())
 
 	pod := waitForPod(g, ns, sb.Name)
 
-	// Drive the Pod to Running with a start time 1 hour ago — well past
-	// the 1s timeout — so status.Derive's timedOut check fires on the
+	// Drive the Pod to Running with a start time 1 hour ago, well past
+	// the timeout, so the timedOut check of status.Derive fires on the
 	// next reconcile.
 	past := metav1.NewTime(time.Now().Add(-1 * time.Hour))
 	patchPodStatus(g, ns, pod.Name, func(p *corev1.Pod) {
