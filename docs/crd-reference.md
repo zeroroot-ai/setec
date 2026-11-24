@@ -187,6 +187,11 @@ Sandbox, or `Kill` on the gRPC frontend):
   `setec.zeroroot.ai/last-activity` annotation, stamped by the frontend
   on `Attach` and heartbeaten while a client stream is open — an active
   session is never idle-reaped.
+- **Finished sessions go after a retention.** When the class sets
+  `spec.finishedSessionRetention`, the operator deletes a session that
+  reached `Completed` or `Failed` that long after it ended. The
+  teardown below then removes its workspace. With no value a finished
+  session stays, with its workspace volume, until its owner deletes it.
 - **Teardown wipes the workspace.** Deleting the Sandbox triggers the
   `setec.zeroroot.ai/workspace-teardown` finalizer: the Pod is deleted,
   then the workspace PVC is deleted; the CSI driver destroys the volume

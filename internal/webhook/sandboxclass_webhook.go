@@ -102,6 +102,7 @@ func (w *SandboxClassWebhook) validate(class *setecv1alpha1.SandboxClass) (admis
 	allErrs = append(allErrs, validatePreWarm(class)...)
 	allErrs = append(allErrs, validateSessionCheckpoint(class)...)
 	allErrs = append(allErrs, validateMaxPauseDuration(class)...)
+	allErrs = append(allErrs, validateFinishedSessionRetention(class)...)
 	allErrs = append(allErrs, validateRequests(class)...)
 	allErrs = append(allErrs, validateScratch(class)...)
 	allErrs = append(allErrs, validateEgressExemptCIDRs(class)...)
@@ -338,6 +339,21 @@ func validateEgressAllowSelectors(class *setecv1alpha1.SandboxClass) field.Error
 				}
 			}
 		}
+	}
+	return errs
+}
+
+// validateFinishedSessionRetention enforces that
+// spec.finishedSessionRetention, when set, is a positive duration. Zero
+// would delete a session at the instant it ends, before its owner reads
+// the outcome. Omit the field to keep finished sessions.
+func validateFinishedSessionRetention(class *setecv1alpha1.SandboxClass) field.ErrorList {
+	var errs field.ErrorList
+	if d := class.Spec.FinishedSessionRetention; d != nil && d.Duration <= 0 {
+		errs = append(errs, field.Invalid(
+			field.NewPath("spec", "finishedSessionRetention"),
+			d.Duration.String(),
+			"must be a positive duration; omit finishedSessionRetention to keep finished sessions"))
 	}
 	return errs
 }

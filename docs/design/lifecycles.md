@@ -23,6 +23,7 @@ The class sets the policy (`api/v1alpha1/sandboxclass_types.go`):
 
 - `sessionIdleTimeout`: a session with no activity for this long is evicted (`Failed`, reason `IdleTimeout`).
 - `maxPauseDuration`: a paused Sandbox past this cap is stopped (`Failed`, reason `PauseTimeoutExceeded`).
+- `finishedSessionRetention`: a session that reached `Completed` or `Failed` is deleted this long after it ended, and its workspace volume goes with it. With no value a finished session stays until its owner deletes it, and it holds its workspace volume for all of that time. A class that sets `sessionIdleTimeout` on a node with a fixed workspace disk needs this value. `internal/controller/sandbox_controller.go`.
 - `sessionCheckpoint`: with it, a session takes periodic memory checkpoints, takes one when its node drains, and suspends instead of being evicted. A suspended session holds no microVM and resumes on the next attach, on any node. See [session checkpoints](../session-checkpoints.md).
 
 ## Limits

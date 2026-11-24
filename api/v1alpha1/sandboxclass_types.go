@@ -224,6 +224,17 @@ type SandboxClassSpec struct {
 	// +optional
 	SessionIdleTimeout *metav1.Duration `json:"sessionIdleTimeout,omitempty"`
 
+	// FinishedSessionRetention is how long a session Sandbox of this
+	// class stays after it reaches Completed or Failed. After this
+	// time the operator deletes the Sandbox, and the workspace volume
+	// goes with it. A finished session holds its workspace volume
+	// until then, so a class with sessionIdleTimeout and no retention
+	// fills the workspace disk of a node with the volumes of sessions
+	// that ended. Unset means that a finished session stays until its
+	// owner deletes it. Must be positive when set.
+	// +optional
+	FinishedSessionRetention *metav1.Duration `json:"finishedSessionRetention,omitempty"`
+
 	// SessionCheckpoint enables L2 memory checkpoints for session
 	// Sandboxes of this class (setec#194, docs/design/lifecycles.md and docs/design/storage.md): periodic
 	// checkpoints while Running, checkpoint-on-drain when the node is

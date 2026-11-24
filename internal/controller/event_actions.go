@@ -13,6 +13,7 @@ const (
 	actionResolveSandboxClass  = "ResolveSandboxClass"
 	actionReapOrphanedSandbox  = "ReapOrphanedSandbox"
 	actionReapEphemeralSandbox = "ReapEphemeralSandbox"
+	actionReapFinishedSession  = "ReapFinishedSession"
 	actionValidateConstraints  = "ValidateConstraints"
 	actionResolveRuntime       = "ResolveRuntime"
 	actionResolveSnapshot      = "ResolveSnapshot"

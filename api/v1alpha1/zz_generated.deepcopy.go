@@ -418,6 +418,11 @@ func (in *SandboxClassSpec) DeepCopyInto(out *SandboxClassSpec) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.FinishedSessionRetention != nil {
+		in, out := &in.FinishedSessionRetention, &out.FinishedSessionRetention
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.SessionCheckpoint != nil {
 		in, out := &in.SessionCheckpoint, &out.SessionCheckpoint
 		*out = new(SessionCheckpointSpec)

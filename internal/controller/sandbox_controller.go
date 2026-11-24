@@ -151,6 +151,7 @@ const (
 	eventReasonClassNotFound         = "ClassNotFound"
 	eventReasonOrphanReaped          = "OrphanedSandboxReaped"
 	eventReasonEphemeralReaped       = "EphemeralSandboxReaped"
+	eventReasonFinishedSessionReaped = "FinishedSessionReaped"
 	eventReasonConstraintViolated    = "ConstraintViolated"
 	eventReasonTenantMissing         = "TenantLabelMissing"
 	eventReasonNetworkPolicy         = "NetworkPolicyApplied"
@@ -446,6 +447,25 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.handleUnresolvableClass(ctx, logger, sb, classErr)
 	}
 
+	// (4a) A finished session of a class with finishedSessionRetention
+	// is deleted after that time, and its workspace volume goes with it
+	// (docs/design/lifecycles.md). Inside the window the reconcile
+	// continues and comes back when the window closes.
+	retainFor, reaped, err := r.reapFinishedSession(ctx, logger, sb, cls)
+	if reaped || err != nil {
+		return ctrl.Result{}, err
+	}
+	res, err := r.reconcileWithClass(ctx, logger, span, sb, cls, classResolved, prevPhase, tenantID)
+	return requeueNoLaterThan(res, retainFor), err
+}
+
+// reconcileWithClass is the reconcile of a Sandbox after its tenant and its
+// class resolved: steps (5) to (8).
+func (r *SandboxReconciler) reconcileWithClass(
+	ctx context.Context, logger logr.Logger, span trace.Span,
+	sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, classResolved bool,
+	prevPhase setecv1alpha1.SandboxPhase, tenantID string,
+) (ctrl.Result, error) {
 	// (5) Phase 2: validate the Sandbox against its class. Defense in
 	// depth — the webhook should have caught any violation, but a
 	// manually-created CR skipping admission must not silently produce a
@@ -486,6 +506,60 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("get Pod %q: %w", podName, err))
 	}
 	return r.reconcileExistingPod(ctx, span, sb, cls, pod, prevPhase, tenantID)
+}
+
+// requeueNoLaterThan returns res with a requeue that is at most d away.
+// A d of zero changes nothing.
+func requeueNoLaterThan(res ctrl.Result, d time.Duration) ctrl.Result {
+	if d > 0 && (res.RequeueAfter == 0 || d < res.RequeueAfter) {
+		res.RequeueAfter = d
+	}
+	return res
+}
+
+// reapFinishedSession deletes a session Sandbox that reached Completed or
+// Failed longer ago than the finishedSessionRetention of its class. The
+// workspace finalizer then deletes the Pod, the key of the session and the
+// workspace claim, so the volume of a session that ended does not hold disk
+// space of the node with no bound.
+//
+// It returns reaped=true when it deleted the Sandbox. Inside the window it
+// returns the time that remains, and the caller requeues for it: a terminal
+// Sandbox makes no watch events, so no other reconcile would close the
+// window. A class with no retention keeps its finished sessions.
+//
+// The window starts at status.lastTransitionTime, the instant the session
+// ended. A Sandbox with no such time is never deleted.
+func (r *SandboxReconciler) reapFinishedSession(
+	ctx context.Context,
+	logger logr.Logger,
+	sb *setecv1alpha1.Sandbox,
+	cls *setecv1alpha1.SandboxClass,
+) (remaining time.Duration, reaped bool, err error) {
+	if cls == nil || !sb.Spec.IsSession() || !isTerminalPhase(sb.Status.Phase) {
+		return 0, false, nil
+	}
+	retention := cls.Spec.FinishedSessionRetention
+	if retention == nil || retention.Duration <= 0 {
+		return 0, false, nil
+	}
+	fin := sb.Status.LastTransitionTime
+	if fin == nil || fin.IsZero() {
+		return retention.Duration, false, nil
+	}
+	if left := time.Until(fin.Add(retention.Duration)); left > 0 {
+		return max(left, time.Second), false, nil
+	}
+
+	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonFinishedSessionReaped, actionReapFinishedSession,
+		"session Sandbox reached %s (%s); deleted with its workspace %s after it finished",
+		sb.Status.Phase, sb.Status.Reason, retention.Duration)
+	logger.Info("deleting finished session Sandbox",
+		"phase", sb.Status.Phase, "reason", sb.Status.Reason, "retention", retention.Duration)
+	if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+		return 0, false, fmt.Errorf("delete finished session Sandbox: %w", err)
+	}
+	return 0, true, nil
 }
 
 // handleUnresolvableClass owns the whole lifecycle of a Sandbox whose
