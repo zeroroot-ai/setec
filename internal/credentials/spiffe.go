@@ -76,6 +76,16 @@ type SPIFFESource struct {
 	// expires — minutes or hours later, and looking like a certificate
 	// problem rather than a lost agent.
 	OnRotationError func(error)
+
+	// StartupWait bounds how long the first request for credentials waits
+	// for an X509-SVID, when the caller's context has no deadline. Zero
+	// means workloadAPITimeout.
+	//
+	// A Pod that starts before SPIRE registers it gets "no identity
+	// issued" from the Workload API until the registration entry exists.
+	// A component that can wait sets a longer bound, and the wait ends the
+	// moment the first SVID arrives.
+	StartupWait time.Duration
 }
 
 // spiffeSource is the Workload API credential source.
@@ -99,6 +109,7 @@ type spiffeSource struct {
 	authorized   []spiffeid.ID
 	trustDomains []spiffeid.TrustDomain
 	reportError  func(error)
+	startupWait  time.Duration
 
 	once      sync.Once
 	connErr   error
@@ -155,9 +166,11 @@ func newSPIFFESource(cfg SPIFFESource) (*spiffeSource, error) {
 
 	report := cfg.OnRotationError
 	if report == nil {
-		report = func(err error) {
-			fmt.Fprintf(os.Stderr, "credentials: SPIFFE Workload API failure: %v\n", err)
-		}
+		report = newWatchReporter(os.Stderr, time.Now)
+	}
+	wait := cfg.StartupWait
+	if wait <= 0 {
+		wait = workloadAPITimeout
 	}
 
 	return &spiffeSource{
@@ -165,6 +178,7 @@ func newSPIFFESource(cfg SPIFFESource) (*spiffeSource, error) {
 		authorized:   authorized,
 		trustDomains: trustDomains,
 		reportError:  report,
+		startupWait:  wait,
 		firstSVID:    make(chan struct{}),
 	}, nil
 }
@@ -185,7 +199,7 @@ func (s *spiffeSource) connect(ctx context.Context) error {
 func (s *spiffeSource) start(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, workloadAPITimeout)
+		ctx, cancel = context.WithTimeout(ctx, s.startupWait)
 		defer cancel()
 	}
 	// The client outlives the startup context: that context bounds how

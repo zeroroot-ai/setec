@@ -58,6 +58,16 @@ socket and rotate in-process. An empty allow-list is a startup error:
 there is no accept-everyone setting. A node-agent that cannot reach its
 Workload API fails to boot.
 
+A Pod can start before SPIRE registers it. The Workload API then answers
+"no identity issued". The node-agent waits for the identity, and it logs one
+line that says so, at most once every 15 seconds. The readiness probe
+(`/readyz` on the metrics port) fails during the wait, and the liveness probe
+(`/healthz`) passes, so the kubelet does not restart the agent for the wait.
+The wait ends when the identity arrives. After `--spiffe-startup-wait`
+(chart value `credentials.spiffe.startupWait`, default `5m`) the agent exits,
+and the restart tries again. The code is in `cmd/node-agent/main.go` and
+`internal/credentials/spiffe_wait.go`.
+
 The chart renders `--spiffe-socket` from
 `credentials.spiffe.socketPath` and the allow-list from
 `credentials.spiffe.authorizedIDs.nodeAgentClients` (empty fails the

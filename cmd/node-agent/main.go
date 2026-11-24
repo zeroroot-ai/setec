@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +61,7 @@ func runMain() int {
 		snapshotFillFraction float64
 		entropyReseedMode    string
 		secretScanAllow      []string
+		spiffeStartupWait    time.Duration
 
 		// Session-checkpoint (S3-compatible) flags — setec#194.
 		s3Endpoint  string
@@ -81,6 +83,10 @@ func runMain() int {
 	flag.StringVar(&creds.spiffeSocket, "spiffe-socket", "",
 		"SPIFFE Workload API socket, e.g. unix:///run/spire/agent-sockets/api.sock. "+
 			"Required: the node-agent serves its SVID and authorizes each caller by SPIFFE ID.")
+	flag.DurationVar(&spiffeStartupWait, "spiffe-startup-wait", 5*time.Minute,
+		"How long the node-agent waits at start for SPIRE to issue its identity. A Pod that starts before "+
+			"SPIRE registers it waits, and the wait ends when the identity arrives. The agent exits after "+
+			"this time, and the restart tries again. The readiness probe fails during the wait.")
 	flag.Var(&creds.spiffeAuthorizedIDs, "spiffe-authorized-id",
 		"Full SPIFFE ID allowed to call this node-agent, e.g. spiffe://example.org/ns/setec/sa/setec. "+
 			"Repeat for each caller. Required: there is no accept-everyone setting.")
@@ -135,13 +141,15 @@ func runMain() int {
 	}
 
 	reg := prometheus.NewRegistry()
-	go serveMetrics(metricsAddr, reg)
+	var ready atomic.Bool
+	go serveMetrics(metricsAddr, reg, &ready)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if grpcListenAddr == "" {
 		fmt.Fprintln(os.Stderr, "node-agent: gRPC server disabled (--grpc-listen-addr empty)")
+		ready.Store(true)
 		<-ctx.Done()
 		return 0
 	}
@@ -184,7 +192,10 @@ func runMain() int {
 		fmt.Fprintln(os.Stderr, "node-agent: entropy reseed on restore DISABLED (--entropy-reseed=off); "+
 			"the operator gate refuses each restore")
 	}
-	go serveGRPC(ctx, grpcListenAddr, srv, grpcTLS(ctx, creds))
+	creds.startupWait = spiffeStartupWait
+	opt := grpcTLS(ctx, creds)
+	ready.Store(true)
+	go serveGRPC(ctx, grpcListenAddr, srv, opt)
 	<-ctx.Done()
 	fmt.Fprintln(os.Stderr, "node-agent: shutdown signal received, exiting cleanly")
 	return 0
@@ -237,15 +248,10 @@ func s3SessionStorage(ctx context.Context, c s3Config) func(kek []byte) storage.
 // serveMetrics runs the Prometheus HTTP endpoint. It exits the process
 // on listener errors rather than trying to recover — the metrics
 // endpoint is the only long-running HTTP surface this binary owns.
-func serveMetrics(addr string, reg *prometheus.Registry) {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+func serveMetrics(addr string, reg *prometheus.Registry, ready *atomic.Bool) {
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           metricsMux(reg, ready),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -254,8 +260,29 @@ func serveMetrics(addr string, reg *prometheus.Registry) {
 	}
 }
 
+// metricsMux serves the metrics, the liveness endpoint and the readiness
+// endpoint. /healthz says the process runs, so a long wait for SPIRE does not
+// make the kubelet restart the agent. /readyz says the agent has its identity
+// and serves the gRPC calls.
+func metricsMux(reg *prometheus.Registry, ready *atomic.Bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "waiting for the SPIFFE identity", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
+}
+
 // credentialFlags carries the node-agent's credential flags.
 type credentialFlags struct {
+	startupWait         time.Duration
 	spiffeSocket        string
 	spiffeAuthorizedIDs repeatedString
 }
@@ -267,6 +294,7 @@ func (f credentialFlags) source() credentials.SPIFFESource {
 	return credentials.SPIFFESource{
 		SocketPath:    f.spiffeSocket,
 		AuthorizedIDs: f.spiffeAuthorizedIDs,
+		StartupWait:   f.startupWait,
 	}
 }
 
@@ -309,11 +337,14 @@ func serverCredentials(ctx context.Context, f credentialFlags) (grpc.ServerOptio
 // the process, so the DaemonSet surfaces the misconfiguration through
 // its restart count.
 func grpcTLS(ctx context.Context, f credentialFlags) grpc.ServerOption {
+	fmt.Fprintf(os.Stderr, "node-agent: waiting up to %s for the SPIFFE identity from %s\n",
+		f.startupWait, f.spiffeSocket)
 	opt, err := serverCredentials(ctx, f)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "node-agent: credentials: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Fprintln(os.Stderr, "node-agent: the SPIFFE identity is in place")
 	return opt
 }
 
