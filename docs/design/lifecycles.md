@@ -34,3 +34,5 @@ The class sets the policy (`api/v1alpha1/sandboxclass_types.go`):
 ## The warm pool
 
 A class keeps warm bases of each image by digest that its Sandboxes asked for in the last 7 days: full snapshots of a machine that booted the image and ran no workload (`internal/controller/warm_pool.go`, setec#238). A Sandbox of the class loads a base instead of a boot, and each loaded base gets a new identity and new randomness.
+
+The pool keeps `preWarmPoolSize` bases of each image, each on another node, so a pool of size 2 needs 2 nodes. The pool makes a base Pod only when a node can take it: a node that accepts Pods, offers the KVM device, and passes the node selector, the tolerations and the architecture rule of the class. With no such node the pool makes no Pod, and the class has the condition `WarmPoolShortOfNodes=True` until a node joins. A base Pod with no node goes when its image already has all its bases.

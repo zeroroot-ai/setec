@@ -152,7 +152,9 @@ type SandboxClassSpec struct {
 	// pool image is an image by digest that a Sandbox of the class asked
 	// for with the default resources, in the last 7 days. Zero disables
 	// the pool. When non-zero, DefaultResources must be set; the webhook
-	// enforces it.
+	// enforces it. Each base of one image is on another node, so a size
+	// above the number of nodes of the class leaves the pool short, and
+	// the class says so in the condition WarmPoolShortOfNodes.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	PreWarmPoolSize int32 `json:"preWarmPoolSize,omitempty"`
@@ -424,6 +426,12 @@ const ConditionImageNotVerified = "ImageNotVerified"
 // secret-shaped text. The message names the cause, and the pool waits before
 // its next attempt, with a wait that doubles.
 const ConditionWarmBaseFailing = "WarmBaseFailing"
+
+// ConditionWarmPoolShortOfNodes is True on a class whose pool wants more bases
+// of an image than nodes can hold. Each base of one image is on another node,
+// so a pool of size 2 needs 2 nodes. The pool makes no base Pod that no node
+// can take, and it makes the base when such a node joins.
+const ConditionWarmPoolShortOfNodes = "WarmPoolShortOfNodes"
 
 // SandboxClassWarmPoolStatus is the state of the warm pool of a class.
 type SandboxClassWarmPoolStatus struct {

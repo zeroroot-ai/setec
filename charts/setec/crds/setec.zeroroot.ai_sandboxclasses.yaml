@@ -552,7 +552,9 @@ spec:
                   pool image is an image by digest that a Sandbox of the class asked
                   for with the default resources, in the last 7 days. Zero disables
                   the pool. When non-zero, DefaultResources must be set; the webhook
-                  enforces it.
+                  enforces it. Each base of one image is on another node, so a size
+                  above the number of nodes of the class leaves the pool short, and
+                  the class says so in the condition WarmPoolShortOfNodes.
                 format: int32
                 minimum: 0
                 type: integer

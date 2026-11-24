@@ -174,15 +174,16 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	building := r.stepBasePods(ctx, cls, pods, keys, bases, nodes)
-
-	if err := r.startMissingBases(ctx, cls, images, states, ready, building, nodes, keys); err != nil {
-		return ctrl.Result{}, err
-	}
+	building := r.stepBasePods(ctx, cls, pods, keys, bases, nodes, ready, want)
 	// A base Pod of this pass may have made a base, so the count is read
-	// again.
+	// again before the pool decides to start one more. The count of the
+	// start of the pass would start a base that the pool does not want.
 	counts, err := r.readyBases(ctx, cls.Name)
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.startMissingBases(ctx, cls, images, states, counts, building, nodes, keys); err != nil {
 		return ctrl.Result{}, err
 	}
 	total := 0
@@ -205,19 +206,29 @@ func (r *WarmPoolReconciler) startMissingBases(
 	states map[string]verifyState, ready, building map[string]int, nodes map[string]map[string]bool, keys map[string]string,
 ) error {
 	want := int(cls.Spec.PreWarmPoolSize)
+	var short []string
 	for _, im := range images {
 		if ready[im.Key] > 0 {
 			r.failures.built(im.Key)
 		}
 		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want && !r.failures.held(im.Key, r.now()) {
-			if err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key]); err != nil {
+			err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key])
+			switch {
+			case errors.Is(err, errNoOtherNode):
+				short = append(short, fmt.Sprintf("the pool wants %d bases of %s, each on another node, and %d of them have a node",
+					want, im.Image, len(nodes[im.Key])))
+			case err != nil:
 				log.FromContext(ctx).Error(err, "start a base", "image", im.Image)
 			}
 		}
 	}
+	slices.Sort(short)
 	r.failures.forget(keys)
 	msg := r.failures.summary(keys)
-	return r.setBaseCondition(ctx, cls, msg != "", msg)
+	if err := r.setBaseCondition(ctx, cls, msg != "", msg); err != nil {
+		return err
+	}
+	return r.setNodeCondition(ctx, cls, strings.Join(short, "; "))
 }
 
 // pruneBases deletes a stale or failed base, and each base of an image
@@ -268,15 +279,24 @@ func addNode(nodes map[string]map[string]bool, key, node string) {
 }
 
 // stepBasePods moves each base Pod on, and adds its node to nodes. It
-// returns the count of Pods that still build a base, for each key.
+// returns the count of Pods that still build a base, for each key. ready is
+// the count of Ready bases at the start of the pass, and want is the size of
+// the pool: a Pod that has no node and whose key already has all its bases
+// goes, because the pool does not want its base.
 func (r *WarmPoolReconciler) stepBasePods(
 	ctx context.Context, cls *setecv1alpha1.SandboxClass, pods []corev1.Pod, keys map[string]string,
-	bases []setecv1alpha1.Snapshot, nodes map[string]map[string]bool,
+	bases []setecv1alpha1.Snapshot, nodes map[string]map[string]bool, ready map[string]int, want int,
 ) map[string]int {
 	building := map[string]int{}
 	for i := range pods {
 		p := &pods[i]
 		k := p.Annotations[snapshot.BaseKeyAnnotation]
+		if p.Spec.NodeName == "" && ready[k]+building[k] >= want {
+			if err := client.IgnoreNotFound(r.Delete(ctx, p)); err != nil {
+				log.FromContext(ctx).Error(err, "delete a base Pod above the pool size", "pod", p.Name)
+			}
+			continue
+		}
 		done, err := r.stepBasePod(ctx, cls, p, keys, bases)
 		if err != nil {
 			log.FromContext(ctx).Error(err, "base Pod step", "pod", p.Name)
@@ -356,7 +376,114 @@ func (r *WarmPoolReconciler) startBase(
 	}
 	pod.Spec.NodeSelector = cls.Spec.NodeSelector
 	pod.Spec.Tolerations = cls.Spec.Tolerations
+	if len(nodes) > 0 {
+		// Each further base goes to another node. With no such node the
+		// Pod would stay Pending with no end, so the pool does not make it.
+		free, err := r.hasNodeFor(ctx, pod)
+		if err != nil {
+			return err
+		}
+		if !free {
+			return errNoOtherNode
+		}
+	}
 	return errwrap.Wrap(client.IgnoreAlreadyExists(r.Create(ctx, pod)), "client.IgnoreAlreadyExists")
+}
+
+// errNoOtherNode says that each node that can run a base of an image
+// already holds one.
+var errNoOtherNode = errors.New("no other node can run a base")
+
+// hasNodeFor reports whether one node of the cluster can take pod: the node
+// accepts Pods, offers the KVM device, has the labels that the node selector
+// and the required node affinity of pod ask for, and has no taint that pod
+// does not tolerate. It reads what the scheduler reads for these rules, and
+// it does not look at free CPU or memory: a full node gets free again, and a
+// node that does not exist never does.
+func (r *WarmPoolReconciler) hasNodeFor(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	list := &corev1.NodeList{}
+	if err := r.List(ctx, list); err != nil {
+		return false, errwrap.Wrap(err, "client.Reader.List")
+	}
+	for i := range list.Items {
+		if nodeTakes(&list.Items[i], pod) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// nodeTakes reports whether n passes the placement rules of pod.
+func nodeTakes(n *corev1.Node, pod *corev1.Pod) bool {
+	if n.Spec.Unschedulable {
+		return false
+	}
+	if q, ok := n.Status.Allocatable[podspec.KVMResource]; !ok || q.IsZero() {
+		return false
+	}
+	for k, v := range pod.Spec.NodeSelector {
+		if n.Labels[k] != v {
+			return false
+		}
+	}
+	for i := range n.Spec.Taints {
+		t := &n.Spec.Taints[i]
+		if t.Effect != corev1.TaintEffectPreferNoSchedule && !tolerated(pod.Spec.Tolerations, t) {
+			return false
+		}
+	}
+	aff := pod.Spec.Affinity
+	if aff == nil || aff.NodeAffinity == nil || aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return true
+	}
+	// The terms are alternatives, and each rule of one term must hold.
+	return slices.ContainsFunc(aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+		func(term corev1.NodeSelectorTerm) bool {
+			for _, req := range term.MatchExpressions {
+				v, has := n.Labels[req.Key]
+				if !requirementHolds(req, v, has) {
+					return false
+				}
+			}
+			for _, req := range term.MatchFields {
+				if req.Key == "metadata.name" && !requirementHolds(req, n.Name, true) {
+					return false
+				}
+			}
+			return true
+		})
+}
+
+// requirementHolds reports whether the value v (has says that it exists)
+// passes req. An operator that compares numbers passes, so that a rule this
+// code does not read never holds a base back.
+func requirementHolds(req corev1.NodeSelectorRequirement, v string, has bool) bool {
+	switch req.Operator {
+	case corev1.NodeSelectorOpIn:
+		return has && slices.Contains(req.Values, v)
+	case corev1.NodeSelectorOpNotIn:
+		return !has || !slices.Contains(req.Values, v)
+	case corev1.NodeSelectorOpExists:
+		return has
+	case corev1.NodeSelectorOpDoesNotExist:
+		return !has
+	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt:
+		return true
+	}
+	return true
+}
+
+// tolerated reports whether one of the tolerations accepts the taint t.
+func tolerated(tolerations []corev1.Toleration, t *corev1.Taint) bool {
+	return slices.ContainsFunc(tolerations, func(tol corev1.Toleration) bool {
+		if tol.Effect != "" && tol.Effect != t.Effect {
+			return false
+		}
+		if tol.Operator == corev1.TolerationOpExists {
+			return tol.Key == "" || tol.Key == t.Key
+		}
+		return tol.Key == t.Key && tol.Value == t.Value
+	})
 }
 
 // list returns the bases and the base Pods of a class.
