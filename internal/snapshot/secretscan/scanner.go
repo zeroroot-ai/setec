@@ -71,6 +71,11 @@ type rule struct {
 	// valueGroup, when set, is the capture group of a value that must not
 	// have the shape of a string table (stringTableValue). 0 checks nothing.
 	valueGroup int
+	// guard, when set, makes notAnAssignment drop a match that is names next to
+	// names. colonOnly then allows no space after the colon (a config line
+	// needs one in YAML).
+	guard     bool
+	colonOnly bool
 }
 
 // formatString is a value that starts with a Go or C format verb, as the
@@ -326,10 +331,12 @@ var builtinRules = []rule{
 		// string table are not a value (stringTableValue).
 		name: "secret-shaped-env-assignment",
 		re: regexp.MustCompile(`\b([A-Za-z0-9_.-]*(?i:secret|password|passwd|key|token|credential)[A-Za-z0-9_.-]*)` +
-			`\s*[:=]\s*["']?([^\s"'\x00]{8,})`),
+			`["']?\s*[:=]\s*["']?([^\s"'\x00]{8,})`),
 		maskGroup:  2,
 		nameGroup:  1,
 		valueGroup: 2,
+		guard:      true,
+		colonOnly:  true,
 	},
 	{
 		// A line of a config file (YAML, .env, INI, TOML) whose key reads
@@ -347,6 +354,9 @@ var builtinRules = []rule{
 			`([a-z0-9_.-]*(?:secret|password|passwd|api[_-]?key|token|private[_-]?key|credentials?))` +
 			`[ \t]*[:=][ \t]*["']?([a-z0-9_\-+/=.~]{8,})(?:["'\s\x00]|$)`),
 		maskGroup: 2,
+		// The name and the value have the groups 1 and 2, as above. The guard
+		// is only for names next to names, so the keyword check stays off.
+		guard: true, colonOnly: true,
 	},
 }
 
@@ -407,7 +417,7 @@ func (s *Scanner) skip(rl rule, window []byte, m []int) bool {
 	if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
 		return true
 	}
-	if identifierTable(window, m, rl.nameGroup, rl.valueGroup) {
+	if rl.guard && notAnAssignment(window, m, rl) {
 		return true
 	}
 	return slices.ContainsFunc(s.allow, func(a Allow) bool { return a.allows(rl.name, window[m[0]:m[1]]) })

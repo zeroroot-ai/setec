@@ -208,8 +208,32 @@ per-Sandbox secret is in the machine when the node agent takes the snapshot.
 Before the store sees the files, the node agent scans the memory, the state and
 the disk for secret-shaped text (`internal/snapshot/secretscan`). The text of the
 image itself can match: a test key in a program, or the field names of a client
-library in the memory of a program (`SecretKeyRef:`). The scan skips a run of
-CamelCase field names of a program, which is not a secret.
+library in the memory of a program (`SecretKeyRef:`). The scan does not treat
+names next to names as an assignment.
+
+**What the scan catches.** It catches an assignment with a secret name and a
+value, and the known token formats (a PEM private key, cloud and Git host keys,
+JWTs). The forms `KEY=value`, `key: "value"`, `"apiToken":"value"` and a config
+line stay strict, whatever the value. They are findings in a memory image as
+they are in a file.
+
+**What it does not treat as an assignment.** A memory image holds the string
+tables, the type descriptors and the reflection data of each program in it. The
+names there sit side by side with no separator and with binary bytes in between.
+A match is dropped when all of these hold: the name is an identifier of program
+text (one word with a capital, such as `SecretName`, or camelCase, such as
+`apiToken`), a colon follows it at once, and the printable part of the value is
+made of names (long words, and numbers of one or two digits) or starts with a
+format verb. A value with a known token format, or with random content, stays a
+finding.
+
+**What it cannot catch.** A secret that is a few plain words in letters only,
+next to an identifier name and a colon with no space, such as
+`ClientSecret:correcthorsebattery`, reads as names and is not a finding. The
+same holds for a secret that the guest holds only as encrypted or encoded bytes,
+as a value split by other data, and as a value in a form that no rule names. The
+scan is a gate for the shapes of text that leak, not a proof that the memory
+holds no secret. A base holds no per-Sandbox secret by construction.
 
 A finding stops the base. The Snapshot is `Failed` with the reason
 `SecretScanFailed`, and the error names the rule (the kind), the file, the

@@ -68,31 +68,102 @@ func (a Allow) allows(rule string, text []byte) bool {
 	return (a.Rule == "" || a.Rule == rule) && a.Pattern.Match(text)
 }
 
-// identifierTable reports whether a match of an assignment rule is a run of
-// identifiers from a string table of a program, and not a secret. A Go or C
-// binary keeps the names of its fields side by side, so its memory holds
-// "SecretKeyRef:" followed by the next name, or "SecretName:%s>". The signs are
-// all of these: the name is a CamelCase identifier with no separator,
-// the colon is not followed by a space, and the value is a format string or
-// letters only. A secret with such a value has no space after its colon in a
-// config file, and it is a snake_case or a mixed name; these keep a hit.
-func identifierTable(window []byte, m []int, nameGroup, valueGroup int) bool {
-	if nameGroup == 0 || valueGroup == 0 || m[2*nameGroup] < 0 || m[2*valueGroup] < 0 {
+// idName is the name of a field or a type in program text: one word that
+// starts with a capital ("Password", "SecretName") or a lower case word with a
+// capital inside ("apiToken"). It holds no separator. A name of an environment
+// variable or of a config key ("DB_PASSWORD", "client_secret", "password") is
+// not one.
+var idName = regexp.MustCompile(`^(?:[A-Z][a-z0-9]*(?:[A-Z][a-z0-9]*)*|[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+)$`)
+
+// identifierSegment cuts a run into the parts of an identifier: a word, a
+// word with a capital, a run of capitals, or a number.
+var identifierSegment = regexp.MustCompile(`[A-Z]?[a-z]+|[A-Z]+(?:[a-z]|$)?|\d+`)
+
+// identifierLike reports whether v reads as names put side by side
+// ("integerunsignedstring", "Uint64Int32"), and not as a random token. Most
+// of its characters lie in words of three or more letters or in numbers of one or two digits. A random token has short runs.
+func identifierLike(v string) bool {
+	long := 0
+	for _, seg := range identifierSegment.FindAllString(v, -1) {
+		digits := seg[0] >= '0' && seg[0] <= '9'
+		if digits && len(seg) <= 2 || !digits && len(seg) >= 3 {
+			long += len(seg)
+		}
+	}
+	return long*10 >= len(v)*7
+}
+
+// secretLikeValue reports whether v has the content of a secret: a known
+// token format, or a run of at least 12 characters that is not made of names.
+func secretLikeValue(v string) bool {
+	for _, p := range secretPrefixes {
+		if strings.HasPrefix(v, p) {
+			return true
+		}
+	}
+	return len(v) >= 12 && !identifierLike(v)
+}
+
+// printablePrefix is the leading run of v in printable ASCII.
+func printablePrefix(v string) string {
+	for i := range len(v) {
+		if v[i] < 0x21 || v[i] > 0x7e {
+			return v[:i]
+		}
+	}
+	return v
+}
+
+// notAnAssignment reports whether a match of an assignment rule is names next
+// to names, as the string tables, the type descriptors and the reflection data
+// of a program in memory hold them ("SecretKeyRef:integerunsignedstring"), and
+// not a secret. All of these must hold:
+//
+//   - the name is an identifier of program text (idName), and
+//   - the colon follows the name at once, and the value follows the colon at
+//     once, or after one quote, or, when colonOnly is not set, after spaces or
+//     tabs, and
+//   - the printable part of the value has no secret content (secretLikeValue),
+//     or it starts with a format verb.
+//
+// A name with a separator or in one case ("DB_PASSWORD", "client_secret",
+// "password"), an equals sign, a quoted name ("apiToken":"..."), a value after
+// a space in the quoted form, and a value with a known token format or with
+// random content stay findings. The rule does not decide on the bytes that
+// follow the value: a value that ends at a non-printable byte is judged on its
+// printable part. The limit: a secret that is a few words, in letters only, in
+// a compact literal such as Config{ClientSecret:"correcthorsebattery"}, reads
+// as names and is not a finding.
+func notAnAssignment(window []byte, m []int, rl rule) bool {
+	// Both rules that carry the guard hold the name in group 1 and the value in
+	// group 2.
+	const g, v = 1, 2
+	if m[2*g] < 0 || m[2*v] < 0 {
 		return false
 	}
-	name := string(window[m[2*nameGroup]:m[2*nameGroup+1]])
-	value := string(window[m[2*valueGroup]:m[2*valueGroup+1]])
-	between := window[m[2*nameGroup+1]:m[2*valueGroup]]
-	if string(between) != ":" || !camelIdentifier.MatchString(name) {
+	name := string(window[m[2*g]:m[2*g+1]])
+	between := string(window[m[2*g+1]:m[2*v]])
+	// A quote after the colon is the start of the value in text. With no space
+	// before it, it is as likely the start of the next string of a table.
+	between = strings.TrimSuffix(strings.TrimSuffix(between, `"`), "'")
+	colon := between == ":" || !rl.colonOnly && strings.HasPrefix(between, ":") && strings.Trim(between[1:], " \t") == ""
+	if !colon {
 		return false
 	}
-	return strings.HasPrefix(value, "%") || lettersOnly.MatchString(value)
+	// A qualified name ("SecretVolumeSource.ClientSecret") is judged by its last part.
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		name = name[i+1:]
+	}
+	if !idName.MatchString(name) {
+		return false
+	}
+	value := printablePrefix(string(window[m[2*v]:m[2*v+1]]))
+	// A format verb starts a format string of a program ("%s>/etc/passwd").
+	if strings.HasPrefix(value, "%") {
+		return true
+	}
+	return !secretLikeValue(value)
 }
 
 // ruleShaped is the form of a rule name: lower case words with dashes.
 var ruleShaped = regexp.MustCompile(`^[a-z]+(?:-[a-z0-9]+)+$`)
-
-var (
-	camelIdentifier = regexp.MustCompile(`^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+$`)
-	lettersOnly     = regexp.MustCompile(`^[A-Za-z]+$`)
-)

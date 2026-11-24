@@ -37,7 +37,8 @@ func TestIdentifierTables(t *testing.T) {
 		"SecretKey=Abcdefgh1234567",
 		// A quoted value, a value with a digit and a snake_case name are not a
 		// table of identifiers.
-		`Config{ClientSecret:"abcdefghijklmnop"}`,
+		`{"apiToken":"s3cr3tTokenValue9988"}`,
+		`Config{ClientSecret:"s3cr3tTokenValue9988"}`,
 		"ApiToken:abc123def456ghi",
 		"DB_PASSWORD:abcdefghijklmnop",
 	} {
