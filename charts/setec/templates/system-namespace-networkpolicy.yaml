@@ -321,20 +321,22 @@ spec:
           protocol: TCP
     {{- end }}
   {{- if and .Values.snapshots.enabled .Values.snapshots.s3.enabled }}
-  {{- $s3 := .Values.snapshots.s3 }}
+  {{- $store := include "setec.snapshotStoreTarget" . | default "{}" | fromJson }}
   {{- $cidrs := $np.egress.snapshotStore.cidrs | default list }}
-  {{- $port := "443" }}
-  {{- if $s3.endpoint }}
-  {{- $u := urlParse $s3.endpoint }}
-  {{- $parts := splitList ":" $u.host }}
-  {{- $host := first $parts }}
-  {{- $port = ternary (last $parts) (ternary "80" "443" (eq $u.scheme "http")) (gt (len $parts) 1) }}
-  {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
-  {{- $cidrs = append $cidrs (printf "%s/32" $host) }}
-  {{- end }}
+  {{- $port := $store.port | default "443" }}
+  {{- if $store.isIP }}
+  {{- $cidrs = append $cidrs $store.cidr }}
   {{- end }}
   egress:
+    {{- if and $sp.snapshotStore $sp.snapshotStore.podLabels }}
+    {{- /* The store in this cluster: the Pods of systemPolicy.snapshotStore. */}}
+    - to:
+        {{- include "setec.npPodPeers" (list (dict "namespace" $sp.snapshotStore.namespace "podLabels" $sp.snapshotStore.podLabels)) | nindent 8 }}
+      ports:
+        {{- include "setec.npPorts" (list $port) | nindent 8 }}
+    {{- else }}
     {{- include "setec.npEgressRule" (dict "cidrs" $cidrs "ports" ($np.egress.snapshotStore.ports | default (list $port)) "reserved" $reserved) | nindent 4 }}
+    {{- end }}
   {{- end }}
 {{- end }}
 {{- with .Values.launcher.diskRepo }}

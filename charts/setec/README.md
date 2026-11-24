@@ -370,6 +370,28 @@ systemPolicy:
 
 With no port, the operator dials port 443, and so does the policy.
 
+#### The snapshot store
+
+The node agent writes snapshots to `snapshots.s3.endpoint`, or to real S3 when it is empty. The policy allows that one destination.
+
+- A host name, such as `https://s3.example.com`. The `cilium` engine allows the name. The `networkpolicy` engine cannot match a name, so list the addresses in `systemPolicy.networkPolicy.egress.snapshotStore.cidrs`.
+- An IP address, such as `http://10.1.2.3:9000`. Both engines allow that address and port.
+- A store in this cluster, such as `http://minio.minio.svc:9000`. A policy by name cannot match a Service, because the network plugin sees the Pod behind it. Name the Pods in `systemPolicy.snapshotStore` (both engines). The node agent then reaches those Pods on the port of the endpoint and no other new destination. The `cilium` engine fails the render for a Service name when this value is empty.
+
+```yaml
+snapshots:
+  enabled: true
+  s3:
+    enabled: true
+    endpoint: http://minio.minio.svc:9000
+    bucket: setec-snapshots
+systemPolicy:
+  snapshotStore:
+    namespace: minio
+    podLabels:
+      app: minio
+```
+
 The device plugin talks to the kubelet over a unix socket and gets no allow. The launcher Pods run in the Sandbox namespaces, under the policy of those namespaces. That policy is a plain NetworkPolicy, so it works under both engines below.
 
 `systemPolicy.engine` selects the objects that carry the policy of the setec namespace. `docs/design/network-policy.md` says what each engine enforces.

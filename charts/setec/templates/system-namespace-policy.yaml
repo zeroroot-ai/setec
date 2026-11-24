@@ -53,13 +53,15 @@ missing.
       - matchPattern: "*"
 {{- end }}
 {{- /*
-setec.otlpEgress renders the egress rule of the operator to the collector of
-its traces. Call it with (dict "target" <setec.otlpTarget> "peer"
-<systemPolicy.otlp>). A collector in this cluster is a Pod peer. An address is
-a CIDR. Any other name is a host name. A Service name of the cluster cannot be
-matched by host name, and the render stops for it (setec.validateOtlp).
+setec.endpointEgress renders an egress rule to one endpoint: the collector of
+the traces of the operator, or the S3 store of the node agent. Call it with
+(dict "target" <setec.endpointParts> "peer" <the namespace and podLabels of
+the endpoint, from systemPolicy.otlp or systemPolicy.snapshotStore>). An
+endpoint in this cluster is a Pod peer. An address is a CIDR. Any other name is
+a host name. A Service name of the cluster cannot be matched by host name, and
+the render stops for it (setec.validateOtlp, setec.validateSnapshotStore).
 */ -}}
-{{- define "setec.otlpEgress" -}}
+{{- define "setec.endpointEgress" -}}
 {{- $t := .target }}
 {{- $peer := .peer | default dict }}
 {{- if and $peer.namespace $peer.podLabels }}
@@ -215,7 +217,7 @@ spec:
     {{- end }}
     {{- $otlp := include "setec.otlpTarget" . | default "{}" | fromJson }}
     {{- if $otlp.host }}
-    {{- include "setec.otlpEgress" (dict "target" $otlp "peer" $sp.otlp) | nindent 4 }}
+    {{- include "setec.endpointEgress" (dict "target" $otlp "peer" $sp.otlp) | nindent 4 }}
     {{- end }}
   ingress:
     - fromEntities:
@@ -337,22 +339,11 @@ spec:
   {{- if .Values.snapshots.enabled }}
   {{- $s3 := .Values.snapshots.s3 }}
   egress:
-    {{- if $s3.endpoint }}
-    {{- $u := urlParse $s3.endpoint }}
-    {{- $parts := splitList ":" $u.host }}
-    {{- $host := first $parts }}
-    {{- $port := ternary (last $parts) (ternary "80" "443" (eq $u.scheme "http")) (gt (len $parts) 1) }}
-    {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
-    - toCIDR:
-        - {{ printf "%s/32" $host }}
-    {{- else }}
-    - toFQDNs:
-        - matchName: {{ $host | quote }}
-    {{- end }}
-      toPorts:
-        - ports:
-            - port: {{ $port | quote }}
-              protocol: TCP
+    {{- $store := include "setec.snapshotStoreTarget" . | default "{}" | fromJson }}
+    {{- if $store.host }}
+    {{- /* The store: the Pods of systemPolicy.snapshotStore, or the address of
+    an IP endpoint, or the host name. */}}
+    {{- include "setec.endpointEgress" (dict "target" $store "peer" $sp.snapshotStore) | nindent 4 }}
     {{- else }}
     - toFQDNs:
         - matchName: {{ printf "s3.%s.amazonaws.com" $s3.region | quote }}

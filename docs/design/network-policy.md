@@ -33,7 +33,7 @@ The Sandbox namespaces have their own default deny. It is a plain NetworkPolicy 
 | Disk registry | host name, or the address when it is an IP | CIDRs and ports (`egress.diskRegistry`), or the address when it is an IP |
 | Sigstore trust root | host names (`systemPolicy.sigstoreHosts`) | CIDRs and ports (`egress.sigstore`), optional |
 | Trace collector | host name, address, or the Pods of `systemPolicy.otlp` | CIDRs and ports (`egress.otlp`), the address of an IP endpoint, or the Pods of `systemPolicy.otlp` |
-| Snapshot store | host name, or the address of an IP endpoint | CIDRs and ports (`egress.snapshotStore`), or the address of an IP endpoint |
+| Snapshot store | host name, the address of an IP endpoint, or the Pods of `systemPolicy.snapshotStore` | CIDRs and ports (`egress.snapshotStore`), the address of an IP endpoint, or the Pods of `systemPolicy.snapshotStore` |
 | Webhook callers | the API server, the nodes, and `webhookCallers` | `apiServer.cidrs`, `webhookSourceCIDRs`, and `webhookCallers` |
 
 ### What the networkpolicy engine cannot state

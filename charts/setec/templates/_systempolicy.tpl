@@ -61,25 +61,27 @@ It is deprecated and the chart drops it in the next minor version.
 {{- end -}}
 
 {{/*
-setec.otlpTarget returns, as JSON, the collector that the operator exports
-traces to. The value is observability.otlpEndpoint, the same value that sets
-the flag --otlp-endpoint of the operator. The result is empty when tracing is
-off. host and port come from a host:port address, and a scheme in front is
-ignored. A port of 443 is the one that the gRPC client dials when the address
-names none. isIP is true for an IPv4 or IPv6 address, and cidr is that address
-as a CIDR. inCluster is true for the name of a Service of the cluster
-(<service>.<namespace>.svc).
+setec.endpointParts reads an endpoint address into its parts and returns them
+as JSON. Call it with (dict "raw" <address> "name" <value path> "example"
+<example> "defaultPort" <port> "httpPort" <port>). host and port come from a
+host:port address, and a scheme in front is read and left out. The port is the
+one that the address names, else httpPort for an http scheme when httpPort is
+set, else defaultPort. isIP is true for an IPv4 or IPv6 address, and cidr is
+that address as a CIDR. inCluster is true for the name of a Service of the
+cluster (<service>.<namespace>.svc). The render stops for an address that has
+no host or a port that is not a number from 1 to 65535.
 */}}
-{{- define "setec.otlpTarget" -}}
-{{- $o := .Values.observability -}}
-{{- if and $o.enabled $o.otlpEndpoint -}}
-{{- $raw := toString $o.otlpEndpoint -}}
+{{- define "setec.endpointParts" -}}
+{{- $raw := toString .raw -}}
+{{- $scheme := "" -}}
 {{- if contains "://" $raw -}}
+{{- $scheme = (urlParse $raw).scheme -}}
 {{- $raw = (urlParse $raw).host -}}
 {{- end -}}
 {{- $raw = first (splitList "/" $raw) -}}
 {{- $host := "" -}}
-{{- $port := "443" -}}
+{{- $port := .defaultPort -}}
+{{- if and .httpPort (eq $scheme "http") -}}{{- $port = .httpPort -}}{{- end -}}
 {{- if hasPrefix "[" $raw -}}
 {{- $host = trimPrefix "[" (first (splitList "]" $raw)) -}}
 {{- $rest := trimPrefix ":" (last (splitList "]" $raw)) -}}
@@ -89,12 +91,40 @@ as a CIDR. inCluster is true for the name of a Service of the cluster
 {{- $host = first $parts -}}
 {{- if gt (len $parts) 1 -}}{{- $port = last $parts -}}{{- end -}}
 {{- end -}}
-{{- if or (not $host) (not (regexMatch "^[0-9]+$" $port)) (lt (int $port) 1) (gt (int $port) 65535) -}}
-{{- fail (printf "observability.otlpEndpoint=%q is not valid. Write host:port, such as otel-collector.monitoring.svc:4317." $o.otlpEndpoint) -}}
+{{- if or (not $host) (not (regexMatch "^[0-9]+$" (toString $port))) (lt (int $port) 1) (gt (int $port) 65535) -}}
+{{- fail (printf "%s=%q is not valid. Write host:port, such as %s." .name .raw .example) -}}
 {{- end -}}
 {{- $isV4 := regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host -}}
 {{- $isV6 := contains ":" $host -}}
-{{- toJson (dict "host" $host "port" $port "isIP" (or $isV4 $isV6) "cidr" (printf "%s/%s" $host (ternary "32" "128" $isV4)) "inCluster" (regexMatch "\\.svc(\\.|$)" $host)) -}}
+{{- toJson (dict "host" $host "port" (toString $port) "isIP" (or $isV4 $isV6) "cidr" (printf "%s/%s" $host (ternary "32" "128" $isV4)) "inCluster" (regexMatch "\\.svc(\\.|$)" $host)) -}}
+{{- end -}}
+
+{{/*
+setec.otlpTarget returns, as JSON, the collector that the operator exports
+traces to. The value is observability.otlpEndpoint, the same value that sets
+the flag --otlp-endpoint of the operator. The result is empty when tracing is
+off. A port of 443 is the one that the gRPC client dials when the address
+names none. The parts are those of setec.endpointParts.
+*/}}
+{{- define "setec.otlpTarget" -}}
+{{- $o := .Values.observability -}}
+{{- if and $o.enabled $o.otlpEndpoint -}}
+{{- include "setec.endpointParts" (dict "raw" $o.otlpEndpoint "name" "observability.otlpEndpoint" "example" "otel-collector.monitoring.svc:4317" "defaultPort" "443") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+setec.snapshotStoreTarget returns, as JSON, the S3 endpoint of the node agent:
+snapshots.s3.endpoint, the value that sets the flag --s3-endpoint. The result
+is empty when snapshots are off or the endpoint is empty, which is the real S3
+of snapshots.s3.region. The port is 80
+for an http endpoint and 443 for any other that names none. The parts are those
+of setec.endpointParts.
+*/}}
+{{- define "setec.snapshotStoreTarget" -}}
+{{- $s3 := .Values.snapshots.s3 -}}
+{{- if and .Values.snapshots.enabled $s3.endpoint -}}
+{{- include "setec.endpointParts" (dict "raw" $s3.endpoint "name" "snapshots.s3.endpoint" "example" "http://minio.minio.svc:9000" "defaultPort" "443" "httpPort" "80") -}}
 {{- end -}}
 {{- end -}}
 
@@ -136,6 +166,28 @@ the export, and the operator logs a failed export only.
 {{- end -}}
 
 {{/*
+setec.validateSnapshotStore checks that the policy can name the S3 store of the
+node agent under the engine of the install. A policy that does not name it
+drops each upload, and the node agent logs a failed snapshot only. The store in
+this cluster is a Pod peer in both engines (systemPolicy.snapshotStore),
+because a policy by host name cannot match a Service.
+*/}}
+{{- define "setec.validateSnapshotStore" -}}
+{{- $t := include "setec.snapshotStoreTarget" . | default "{}" | fromJson -}}
+{{- if and $t.host .Values.snapshots.s3.enabled -}}
+{{- $peer := .Values.systemPolicy.snapshotStore | default dict -}}
+{{- if or $peer.namespace $peer.podLabels -}}
+{{- if not (and $peer.namespace $peer.podLabels) -}}
+{{- fail "systemPolicy.snapshotStore: set both namespace and podLabels, or neither" -}}
+{{- end -}}
+{{- end -}}
+{{- if and $t.inCluster (not (and $peer.namespace $peer.podLabels)) (eq (include "setec.systemPolicyEngine" .) "cilium") -}}
+{{- fail (printf "snapshots.s3.endpoint names a Service of the cluster (%s). A policy by host name cannot match a Service, because the network plugin sees the Pod behind it. Give the namespace and the Pod labels of the store in systemPolicy.snapshotStore." $t.host) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 setec.registryAddress splits the registry of an image source or of the disk
 repository into its host and port. The port is 443 when the registry names
 none. isIP is true for an IPv4 address. A registry at an address needs no host
@@ -157,6 +209,7 @@ that the engine of the install needs.
 {{- $engine := include "setec.systemPolicyEngine" . -}}
 {{- $_ := include "setec.systemDNS" . -}}
 {{- $_ := include "setec.validateOtlp" . -}}
+{{- $_ := include "setec.validateSnapshotStore" . -}}
 {{- range $c := $sp.webhookCallers -}}
 {{- if not (and $c.namespace $c.podLabels) -}}
 {{- fail "systemPolicy.webhookCallers: each entry needs a namespace and podLabels. A Pod label alone is not proof, because the person who creates a Pod chooses its labels, so the namespace of the caller is pinned too." -}}
@@ -252,8 +305,9 @@ empty would allow every port, so an empty list is refused too.
 {{- if $s3.endpoint -}}
 {{- $isIP = regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" (first (splitList ":" (urlParse $s3.endpoint).host)) -}}
 {{- end -}}
-{{- if and (not $isIP) (not $np.egress.snapshotStore.cidrs) -}}
-{{- fail "systemPolicy.networkPolicy.egress.snapshotStore.cidrs is required with systemPolicy.engine=networkpolicy when snapshots.s3.enabled=true and the store is not at an IP address. List the CIDRs of the S3 endpoint. The node agent reaches only these CIDRs." -}}
+{{- $storePeer := .Values.systemPolicy.snapshotStore | default dict -}}
+{{- if and (not $isIP) (not $np.egress.snapshotStore.cidrs) (not (and $storePeer.namespace $storePeer.podLabels)) -}}
+{{- fail "systemPolicy.networkPolicy.egress.snapshotStore.cidrs is required with systemPolicy.engine=networkpolicy when snapshots.s3.enabled=true and the store is not at an IP address. List the CIDRs of the S3 endpoint, or give the namespace and Pod labels of a store in this cluster in systemPolicy.snapshotStore. The node agent reaches only these destinations." -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
