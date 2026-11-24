@@ -606,6 +606,34 @@ netpol:
   resolvers:
     - 1.1.1.1
     - 8.8.8.8
+  # gate holds the machine of each Sandbox off the network, and the Pod not
+  # Ready, until a probe in the launcher shows that the network plugin enforces
+  # the NetworkPolicy of the Sandbox. A plugin may apply a policy some seconds
+  # after the Pod runs. In that time the policy is not in force, and an early
+  # check gives a wrong answer in both directions. The gate works for each
+  # systemPolicy.engine and for each plugin that enforces NetworkPolicy
+  # (docs/design/network-policy.md). The Sandbox gets the condition
+  # NetworkPolicyEnforced.
+  gate:
+    # enabled turns the gate off with false. A Sandbox then starts at once, with
+    # no condition NetworkPolicyEnforced.
+    enabled: true
+    # wait is how long the launcher waits for the proof. After it the Sandbox
+    # fails with the reason NetworkPolicyNotEnforced, and its machine never got
+    # network access. A Go duration, for example 60s.
+    wait: 30s
+    # blocked lists ip:port destinations that the policy must block, for the
+    # probe. A connection to each must fail. Each must accept a connection when
+    # no policy blocks it, such as a service that listens. The operator adds the
+    # Kubernetes API Service itself, when its address is in reservedCIDRs, so a
+    # cluster that keeps its Service CIDR in reservedCIDRs needs no entry. An
+    # entry such as "10.0.0.5:22" is a node that listens on port 22.
+    blocked: []
+    # allowed lists ip:port destinations that the policy must allow, for the
+    # probe. The operator adds the resolvers. The launcher waits up to 10
+    # seconds after the block is proven for one destination to answer, then goes
+    # on, so a cluster with no route to them is not stuck.
+    allowed: []
 
 # -- sandboxNamespaces names the namespaces Sandboxes run in. It is one
 # decision with three consequences, and all three are load-bearing:

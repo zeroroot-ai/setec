@@ -82,6 +82,13 @@ type Spec struct {
 	// the Sandbox (setec#235). Nil for a warm pool base, which belongs to
 	// no Sandbox.
 	Identity *IdentitySpec `json:"identity,omitempty"`
+
+	// PolicyGate, when set, holds the machine off the network, and holds the
+	// readiness of the Pod, until a probe shows that the network plugin
+	// enforces the NetworkPolicy (docs/design/network-policy.md). Nil for a
+	// warm pool base, and for a Sandbox of an operator that runs with the
+	// gate off.
+	PolicyGate *PolicyGateSpec `json:"policyGate,omitempty"`
 }
 
 // File is one file for the machine: the path in the machine, the file on
@@ -202,6 +209,11 @@ func (s *Spec) validateSource() error {
 	}
 	if err := s.validateFiles(); err != nil {
 		return err
+	}
+	if s.PolicyGate != nil {
+		if err := s.PolicyGate.validate(); err != nil {
+			return err
+		}
 	}
 	return s.validateIdentity()
 }

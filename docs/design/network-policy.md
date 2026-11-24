@@ -58,6 +58,33 @@ helm template setec charts/setec \
 
 A tool that renders for a live cluster passes the kinds of that cluster in the same way.
 
+## A Sandbox waits until the policy is in force
+
+The operator writes the NetworkPolicy of a Sandbox before its Pod exists. The network plugin applies it after the Pod runs, and the time differs for each plugin. On k3s with its policy controller the wait was a few seconds. In that time the policy is not in force. A check or a workload in that window sees open traffic where the policy denies it, or a block where the policy allows.
+
+The launcher closes the window. It holds the machine off the Pod network, and the Pod not Ready, until a probe shows that the plugin enforces the policy. The probe runs in the network namespace of the Pod, so the plugin treats it as the traffic of the machine. It starts with the Pod network and runs while the machine boots, so a plugin that is quick adds no delay.
+
+| Check | How | Must be |
+|---|---|---|
+| Block | a TCP connect to each blocked destination | a failure |
+| Allow | a DNS query to a resolver of the Pod, or a TCP connect to an allowed destination | an answer from at least one |
+
+- **Block.** The operator picks the destination. It is the Kubernetes API Service when the policy blocks it: always in mode `none`, and in the other modes when its address is in the reserved ranges of the class. The destination must accept a connection when no policy blocks it, because a plugin may answer a blocked connection with a refusal. `netpol.gate.blocked` adds destinations. The check is hard. The wait ends with a failure when a blocked destination stays reachable.
+- **Allow.** The resolvers of the Pod are allowed in each mode but `none`. The launcher waits up to 10 seconds after the block is proven for an answer. It then goes on and logs that no destination answered, because a cluster may reach no resolver for a reason that is not the policy, such as an air gap. `netpol.gate.allowed` adds destinations.
+- **No probe.** A Sandbox with no destination to check (the API Service address is outside the reserved ranges, and no entry is set) gets no gate. The condition is then absent.
+
+The result is on the Sandbox as the condition `NetworkPolicyEnforced`.
+
+| Status | Reason | Meaning |
+|---|---|---|
+| `Unknown` | `WaitingForPolicy` | the Pod runs and the launcher waits for the proof |
+| `True` | `PolicyProven` | the probe passed, and the Pod is Ready |
+| `False` | `NetworkPolicyNotEnforced` | the wait ended without proof. The machine never got network access, and the Sandbox is `Failed` with the same reason. The message names the destination that failed |
+
+`netpol.gate.wait` bounds the wait (30 seconds by default). `netpol.gate.enabled: false` turns the gate off. A Sandbox then starts at once and has no condition. The gate works with each `systemPolicy.engine` and with each plugin that enforces NetworkPolicy, because it measures the effect and reads no state of a plugin. The proof is for the destinations that it checks. It does not prove each rule of the policy.
+
+The code is in `internal/launcher/gate.go` (the probe and the marker), `internal/netpol/gate.go` (the destinations), `internal/podspec/launcher.go` (the spec and the annotation), and `internal/status/policy.go` (the condition).
+
 ## Decision
 
 Setec first required Cilium on every cluster (decision D76), and rendered the Cilium objects always. That rule failed an install on a cluster with another network plugin, and it forced such an install to remove the objects after the render. D76 is changed:
@@ -65,7 +92,7 @@ Setec first required Cilium on every cluster (decision D76), and rendered the Ci
 - Cilium stays the default and the engine of the tested path.
 - `networkpolicy` is the second supported engine. It renders the tightest policy that a NetworkPolicy can state, with the three limits above. It does not turn the policy off.
 - No engine means no policy. The chart has no setting that renders none.
-- A cluster that has neither Cilium nor a NetworkPolicy plugin has no enforcement. Its Pods are not isolated from each other, whatever the chart renders. Setec does not detect this.
+- A cluster that has neither Cilium nor a NetworkPolicy plugin has no enforcement. Its Pods are not isolated from each other, whatever the chart renders. Setec does not detect this for its own Pods. The policy gate of a Sandbox does detect it: no destination is blocked, so the Sandbox fails with the reason `NetworkPolicyNotEnforced`.
 
 ## Where the chart checks it
 

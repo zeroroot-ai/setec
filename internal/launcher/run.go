@@ -109,6 +109,11 @@ type Launcher struct {
 	// The guest agent of setec#189 applies the address there, and after a
 	// snapshot load also the time of the node. Nil does nothing.
 	AfterStart func(ctx context.Context, pn PodNet, start Start) error
+	// Gate, when set, proves that the network plugin enforces the policy of
+	// the Pod. Run starts it with the Pod network, so its wait overlaps with
+	// the start of the machine, and the machine gets no network access and no
+	// workload before it passes. Nil waits for nothing.
+	Gate *Gate
 }
 
 // Run starts the machine, waits for the exit report of the guest, stops
@@ -153,6 +158,8 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	}
 	defer stopIdentity()
 
+	gateDone, stopGate := l.startGate(ctx)
+	defer stopGate()
 	configFile, err := l.writeBootConfig(pn)
 	if err != nil {
 		return LaunchFailedExit, err
@@ -169,6 +176,11 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 	}
 	defer stop()
 
+	// The machine has no network access, and no workload, before the policy
+	// is proven in force.
+	if err := <-gateDone; err != nil {
+		return LaunchFailedExit, l.failRestore(err)
+	}
 	if snap == nil {
 		// A booted machine has nothing to hide: it joins the Pod network
 		// before the guest agent configures it.
@@ -187,6 +199,19 @@ func (l *Launcher) Run(ctx context.Context) (code int, err error) {
 		return LaunchFailedExit, err
 	}
 	return l.waitExit(ctx, exitL, stop, func() { stopped = true })
+}
+
+// startGate starts the policy gate and returns the channel of its result and a
+// function that ends the wait. With no gate the channel holds nil.
+func (l *Launcher) startGate(ctx context.Context) (<-chan error, context.CancelFunc) {
+	done := make(chan error, 1)
+	if l.Gate == nil {
+		done <- nil
+		return done, func() {}
+	}
+	gctx, cancel := context.WithCancel(ctx)
+	go func() { done <- l.Gate.Wait(gctx) }()
+	return done, cancel
 }
 
 // prepare checks the spec, makes the work directory and checks the image
