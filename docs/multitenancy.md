@@ -74,6 +74,18 @@ The quota stops a tenant that starts many. Add
 `requests.ephemeral-storage` and `limits.ephemeral-storage` to the quota
 to bound the disk of the namespace.
 
+### The limit of Sandboxes of a tenant at the frontend
+
+A `ResourceQuota` counts each Sandbox object, also a finished one. The
+frontend has its own limit for the Sandboxes that hold a machine:
+`frontend.maxSandboxesPerTenant` (the flag `--max-sandboxes-per-tenant`).
+`Launch` and `Fork` refuse to pass it with `RESOURCE_EXHAUSTED`, and the
+message names the count and the limit. A Sandbox that is `Completed`,
+`Failed` or `Suspended` has no place in the count. Another tenant is not
+affected. The count is exact for one frontend replica: two replicas can
+each admit one launch at the same instant. `0` sets no limit
+(`internal/frontend/tenant_limit.go`).
+
 ## Network policies
 
 Every Sandbox gets a NetworkPolicy, and the operator writes it **before**

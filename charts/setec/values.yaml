@@ -840,6 +840,12 @@ frontend:
   servicePort: 50051
   # metricsPort is the HTTP Prometheus port.
   metricsPort: 9091
+  # maxSandboxesPerTenant is the most Sandboxes of one tenant that hold a
+  # machine. Launch and Fork refuse to pass it with RESOURCE_EXHAUSTED. A Sandbox
+  # that is Completed, Failed or Suspended has no place in the count. The
+  # count is exact for one frontend replica: two replicas can each admit
+  # one launch at the same instant. 0 sets no limit.
+  maxSandboxesPerTenant: 0
   # clients enrolls each Gibson cluster that may call the frontend
   # (docs/design/isolation.md). Renders one --client=<name>=<spiffeID> for each entry.
   # REQUIRED when frontend.enabled=true: the frontend refuses a caller

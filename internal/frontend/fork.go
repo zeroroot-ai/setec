@@ -69,6 +69,11 @@ func (s *Service) Fork(ctx context.Context, req *setecv1grpc.ForkRequest) (*sete
 		return nil, err
 	}
 	resp := &setecv1grpc.ForkResponse{Snapshot: snapName}
+	admitted, err := s.admitLaunch(ctx, ns, count)
+	if err != nil {
+		return resp, err
+	}
+	defer admitted()
 	for range count {
 		fork := forkOf(src, snapName, req.GetNetwork())
 		if err := s.Client.Create(ctx, fork); err != nil {
