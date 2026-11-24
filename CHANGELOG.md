@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.133.1](https://github.com/zeroroot-ai/setec/compare/v0.133.0...v0.133.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **snapshot:** treat names next to names in memory as no assignment ([#419](https://github.com/zeroroot-ai/setec/issues/419)) ([21b15e9](https://github.com/zeroroot-ai/setec/commit/21b15e9d9aede9f2a4bd3997edf67093e4b041f7))
+
 ## [0.133.0](https://github.com/zeroroot-ai/setec/compare/v0.132.0...v0.133.0) (2026-11-24)
 
 
