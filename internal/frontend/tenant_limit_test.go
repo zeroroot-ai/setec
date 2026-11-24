@@ -23,9 +23,9 @@ func launchReq() *setecv1grpc.LaunchRequest {
 	}
 }
 
-func limited(t *testing.T, ns string, limit int) *Service {
+func limited(t *testing.T, limit int) *Service {
 	t.Helper()
-	return &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: ns, MaxSandboxesPerTenant: limit}
+	return &Service{Client: newClient(t), AuthDisabled: true, DefaultNamespace: "team-a", MaxSandboxesPerTenant: limit}
 }
 
 func setPhase(t *testing.T, c client.Client, ns string, phase setecv1alpha1.SandboxPhase) {
@@ -48,7 +48,7 @@ func setPhase(t *testing.T, c client.Client, ns string, phase setecv1alpha1.Sand
 func TestLaunch_RefusesAboveTheTenantLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := limited(t, "team-a", 2)
+	s := limited(t, 2)
 	for range 2 {
 		if _, err := s.Launch(ctx, launchReq()); err != nil {
 			t.Fatalf("a launch under the limit: %v", err)
@@ -78,7 +78,7 @@ func TestLaunch_AFinishedOrSuspendedSandboxHasNoPlace(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			s := limited(t, "team-a", 1)
+			s := limited(t, 1)
 			if _, err := s.Launch(ctx, launchReq()); err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestLaunch_AFinishedOrSuspendedSandboxHasNoPlace(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			s := limited(t, "team-a", 1)
+			s := limited(t, 1)
 			if _, err := s.Launch(ctx, launchReq()); err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestLaunch_AFinishedOrSuspendedSandboxHasNoPlace(t *testing.T) {
 func TestLaunch_LaunchesAtTheSameTimeDoNotPassTheLimit(t *testing.T) {
 	t.Parallel()
 	const limit, calls = 3, 12
-	s := limited(t, "team-a", limit)
+	s := limited(t, limit)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	passed, refused := 0, 0
@@ -140,7 +140,7 @@ func TestLaunch_LaunchesAtTheSameTimeDoNotPassTheLimit(t *testing.T) {
 // TestLaunch_NoLimitReadsNothing proves that the default sets no limit.
 func TestLaunch_NoLimitReadsNothing(t *testing.T) {
 	t.Parallel()
-	s := limited(t, "team-a", 0)
+	s := limited(t, 0)
 	for range 5 {
 		if _, err := s.Launch(context.Background(), launchReq()); err != nil {
 			t.Fatal(err)
