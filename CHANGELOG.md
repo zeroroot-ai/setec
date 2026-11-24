@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.133.0](https://github.com/zeroroot-ai/setec/compare/v0.132.0...v0.133.0) (2026-11-24)
+
+
+### Features
+
+* **launcher:** hold the machine off the network until the policy is in force ([#417](https://github.com/zeroroot-ai/setec/issues/417)) ([505f2ad](https://github.com/zeroroot-ai/setec/commit/505f2ad0554cad5d431e5eb9e27c15a1bb28bc86))
+
+
+### Bug Fixes
+
+* **chart:** allow the node agent to reach a snapshot store in the cluster ([#418](https://github.com/zeroroot-ai/setec/issues/418)) ([310f511](https://github.com/zeroroot-ai/setec/commit/310f51151d943816c77699e4c8731d32338e0b16)), closes [#402](https://github.com/zeroroot-ai/setec/issues/402)
+* **node-agent:** wait for the SPIFFE identity and report ready after it arrives ([#415](https://github.com/zeroroot-ai/setec/issues/415)) ([72c5e6f](https://github.com/zeroroot-ai/setec/commit/72c5e6f7da31d28c17c3b826aa2340d67c3d4169))
+* **snapshot:** make a base that the secret scan refuses explain itself and back off ([#413](https://github.com/zeroroot-ai/setec/issues/413)) ([3bcc63e](https://github.com/zeroroot-ai/setec/commit/3bcc63edb727c758839a332faa8dd377fe6b270e))
+
 ## [0.132.0](https://github.com/zeroroot-ai/setec/compare/v0.131.0...v0.132.0) (2026-11-23)
 
 
