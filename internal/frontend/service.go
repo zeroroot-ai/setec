@@ -83,6 +83,13 @@ type Service struct {
 	// one namespace. Required unless AuthDisabled is true.
 	Resolver PairResolver
 
+	// MaxSandboxesPerTenant bounds the Sandboxes of one tenant that hold
+	// a machine. Launch and Fork refuse to pass it, with
+	// ResourceExhausted. Zero sets no limit.
+	MaxSandboxesPerTenant int
+
+	gate tenantGate
+
 	// AuthDisabled, when true, skips TLS peer cert extraction and uses
 	// DefaultNamespace for every call. Exists SOLELY for unit-test
 	// convenience — the production frontend binary never sets this
@@ -155,6 +162,11 @@ func (s *Service) Launch(ctx context.Context, req *setecv1grpc.LaunchRequest) (*
 	if err := refuseFilesOnSnapshot(req); err != nil {
 		return nil, err
 	}
+	admitted, err := s.admitLaunch(ctx, ns, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer admitted()
 	if req.GetFromSnapshot() != "" {
 		return s.launchFromSnapshot(ctx, ns, pair, req)
 	}

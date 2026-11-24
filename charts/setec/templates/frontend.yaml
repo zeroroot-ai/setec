@@ -62,6 +62,9 @@ spec:
             - --pair-namespace-grant={{ include "setec.fullname" . }}-sandbox-namespace={{ .Values.namespace }}/{{ include "setec.serviceAccountName" . }}
             - --pair-namespace-grant={{ include "setec.fullname" . }}-frontend-exec={{ .Values.namespace }}/{{ include "setec.fullname" . }}-frontend
             - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            {{- with .Values.frontend.maxSandboxesPerTenant }}
+            - --max-sandboxes-per-tenant={{ int . }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: 50051

@@ -45,6 +45,7 @@ func main() {
 		grants            repeatedString
 		metricsAddr       string
 		shutdownGraceTime time.Duration
+		maxPerTenant      int
 	)
 	flag.StringVar(&listenAddr, "listen-addr", ":50051", "gRPC server listen address.")
 	flag.StringVar(&spiffeSocket, "spiffe-socket", "",
@@ -58,6 +59,8 @@ func main() {
 	flag.Var(&grants, "pair-namespace-grant",
 		"A RoleBinding that each new pair namespace gets, as <cluster-role>=<sa-namespace>/<sa-name>. "+
 			"Repeat for each: the operator needs its Pod-write role and the frontend its exec role there.")
+	flag.IntVar(&maxPerTenant, "max-sandboxes-per-tenant", 0,
+		"The most Sandboxes of one tenant that hold a machine. Launch and Fork refuse to pass it. 0 sets no limit.")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":9091", "HTTP address for /metrics (Prometheus scraping).")
 	flag.DurationVar(&shutdownGraceTime, "shutdown-grace", 30*time.Second,
 		"Maximum time to wait for in-flight RPCs during graceful shutdown.")
@@ -107,6 +110,8 @@ func main() {
 		RESTConfig: cfg,
 		Enrollment: enrollment,
 		Resolver:   resolver,
+
+		MaxSandboxesPerTenant: maxPerTenant,
 	}
 
 	// mTLS is mandatory, and the SPIFFE Workload API is the one

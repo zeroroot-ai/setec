@@ -548,6 +548,8 @@ Kubernetes enforces via `ResourceQuota` and API server throttling. For
 public-facing endpoints, put the frontend behind an ingress that
 enforces per-tenant request rate limits.
 
+The frontend limits the Sandboxes of one tenant when `frontend.maxSandboxesPerTenant` is set. `Launch` and `Fork` then answer `RESOURCE_EXHAUSTED` at the limit. See [multi-tenancy](multitenancy.md).
+
 ## Current limitations
 
 - JWT auth is not implemented; mTLS is the only supported authentication
