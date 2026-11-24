@@ -48,10 +48,10 @@ func newWatchReporter(w io.Writer, now func() time.Time) func(error) {
 			return
 		}
 		if wait {
-			fmt.Fprintf(w, "credentials: waiting for SPIRE to issue an identity to this workload "+
+			_, _ = fmt.Fprintf(w, "credentials: waiting for SPIRE to issue an identity to this workload "+
 				"(no registration entry matches it yet). The wait ends when SPIRE registers the Pod: %v\n", err)
 			return
 		}
-		fmt.Fprintf(w, "credentials: SPIFFE Workload API failure: %v\n", err)
+		_, _ = fmt.Fprintf(w, "credentials: SPIFFE Workload API failure: %v\n", err)
 	}
 }

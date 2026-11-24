@@ -20,7 +20,7 @@ func TestReadinessFollowsTheIdentity(t *testing.T) {
 	mux := metricsMux(prometheus.NewRegistry(), &ready)
 	code := func(path string) int {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 		return rec.Code
 	}
 	if got := code("/healthz"); got != http.StatusOK {
