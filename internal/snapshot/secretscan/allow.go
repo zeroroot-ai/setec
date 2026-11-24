@@ -77,7 +77,7 @@ var idName = regexp.MustCompile(`^(?:[A-Z][a-z0-9]*(?:[A-Z][a-z0-9]*)*|[a-z][a-z
 
 // identifierSegment cuts a run into the parts of an identifier: a word, a
 // word with a capital, a run of capitals, or a number.
-var identifierSegment = regexp.MustCompile(`[A-Z]?[a-z]+|[A-Z]+(?:[a-z]|$)?|[0-9]+`)
+var identifierSegment = regexp.MustCompile(`[A-Z]?[a-z]+|[A-Z]+(?:[a-z]|$)?|\d+`)
 
 // identifierLike reports whether v reads as names put side by side
 // ("integerunsignedstring", "Uint64Int32"), and not as a random token. Most
@@ -106,7 +106,7 @@ func secretLikeValue(v string) bool {
 
 // printablePrefix is the leading run of v in printable ASCII.
 func printablePrefix(v string) string {
-	for i := 0; i < len(v); i++ {
+	for i := range len(v) {
 		if v[i] < 0x21 || v[i] > 0x7e {
 			return v[:i]
 		}
