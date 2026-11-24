@@ -35,6 +35,11 @@ func TestIdentifierTables(t *testing.T) {
 		"client_secret:abcdefghijklmnop",
 		"SecretKey: abcdefghijklmnop",
 		"SecretKey=Abcdefgh1234567",
+		// A quoted value, a value with a digit and a snake_case name are not a
+		// table of identifiers.
+		`Config{ClientSecret:"abcdefghijklmnop"}`,
+		"ApiToken:abc123def456ghi",
+		"DB_PASSWORD:abcdefghijklmnop",
 	} {
 		if got := scanText(t, New(), text); len(got) == 0 {
 			t.Errorf("%q: no finding; want one", text)
