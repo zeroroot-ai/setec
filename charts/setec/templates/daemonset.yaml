@@ -54,6 +54,9 @@ spec:
             - --snapshot-dek-dir={{ .Values.snapshots.keysDir }}/dek
             - --snapshot-fill-threshold={{ .Values.snapshots.localDisk.fillThreshold }}
             - --entropy-reseed={{ .Values.snapshots.entropyReseed }}
+            {{- range .Values.snapshots.secretScan.allow }}
+            - {{ printf "--secret-scan-allow=%s" . | quote }}
+            {{- end }}
             {{- if .Values.snapshots.s3.enabled }}
             - --s3-endpoint={{ .Values.snapshots.s3.endpoint }}
             - --s3-bucket={{ required "snapshots.s3.bucket is required when snapshots.s3.enabled" .Values.snapshots.s3.bucket }}

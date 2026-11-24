@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -355,6 +356,27 @@ type Scanner struct {
 	rules []rule
 	// maxExcerpt bounds the length of redacted context retained per finding.
 	maxExcerpt int
+	// allow drops the findings that an operator stated as safe.
+	allow []Allow
+	// limit stops the scan after this many findings, so a memory image full of
+	// matches fails at once. Zero means no limit.
+	limit int
+}
+
+// WithAllow returns a Scanner that drops the findings that match an allow
+// entry.
+func (s *Scanner) WithAllow(allow []Allow) *Scanner {
+	c := *s
+	c.allow = allow
+	return &c
+}
+
+// WithLimit returns a Scanner that stops after n findings. The scan then
+// returns the findings so far, and the caller knows there may be more.
+func (s *Scanner) WithLimit(n int) *Scanner {
+	c := *s
+	c.limit = n
+	return &c
 }
 
 // New returns a Scanner using the builtin detector set.
@@ -375,6 +397,22 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // can match; 512 bytes comfortably covers JWTs and PEM headers.
 const windowOverlap = 512
 
+// skip reports whether match m of rule rl is not a finding: the name is not a
+// secret name, the value is a string table, the text is a table of field names
+// of a program, or an operator stated it as safe.
+func (s *Scanner) skip(rl rule, window []byte, m []int) bool {
+	if g := rl.nameGroup; g > 0 && !acceptName(window, m, g, rl.valueGroup) {
+		return true
+	}
+	if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
+		return true
+	}
+	if identifierTable(window, m, rl.nameGroup, rl.valueGroup) {
+		return true
+	}
+	return slices.ContainsFunc(s.allow, func(a Allow) bool { return a.allows(rl.name, window[m[0]:m[1]]) })
+}
+
 // Scan reads r to completion and returns every secret-shaped finding. It is
 // stream-oriented and memory-bounded: it never buffers more than
 // maxLineBytes + windowOverlap at once. Findings are de-duplicated by
@@ -392,16 +430,15 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	emit := func(window []byte, base int64) {
 		for _, rl := range s.rules {
 			for _, m := range rl.re.FindAllSubmatchIndex(window, -1) {
-				if g := rl.nameGroup; g > 0 && !acceptName(window, m, g, rl.valueGroup) {
+				if s.skip(rl, window, m) {
 					continue
 				}
-				if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
-					continue
+				if s.limit > 0 && len(findings) >= s.limit {
+					return
 				}
-				start := int64(m[0]) + base
 				f := Finding{
 					Rule:    rl.name,
-					Offset:  start,
+					Offset:  int64(m[0]) + base,
 					Excerpt: redact(window, m, rl.maskGroup, s.maxExcerpt),
 				}
 				key := f.Rule + "\x00" + f.Excerpt
@@ -424,6 +461,9 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 			// base is the stream offset of window[0].
 			base := offset - int64(len(carry))
 			emit(window, base)
+			if s.limit > 0 && len(findings) >= s.limit {
+				break
+			}
 
 			offset += int64(n)
 
@@ -468,6 +508,12 @@ func redact(window []byte, m []int, maskGroup, maxExcerpt int) string {
 	ctx := 12
 	lo := max(matchStart-ctx, 0)
 	hi := min(matchEnd+ctx, len(window))
+	// A rule that masks its whole match matches a header, such as the first line
+	// of a PEM key, and the text after it is the secret body. Keep no text
+	// after such a match.
+	if maskGroup == 0 {
+		hi = matchEnd
+	}
 
 	var b strings.Builder
 	for i := lo; i < hi; i++ {

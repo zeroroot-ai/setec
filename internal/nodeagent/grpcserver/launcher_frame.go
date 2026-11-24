@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -332,7 +333,7 @@ func writeExtents(r io.Reader, path string, fresh bool) error {
 // scanSparseFiles scans the data extents of each file for secret-shaped
 // material. A hole holds no data, so a sparse writable layer of 10 GiB
 // costs only its data. Any finding is an error.
-func scanSparseFiles(paths []string) error {
+func scanSparseFiles(paths []string, allow []secretscan.Allow) error {
 	for _, p := range paths {
 		f, err := os.Open(p) //nolint:gosec // a path of the node agent
 		if err != nil {
@@ -352,25 +353,38 @@ func scanSparseFiles(paths []string) error {
 		for _, e := range exts {
 			readers = append(readers, io.NewSectionReader(f, e.off, e.n))
 		}
-		findings, err := secretscan.New().Scan(io.MultiReader(readers...))
+		findings, err := secretscan.New().WithAllow(allow).WithLimit(scanFindingLimit).Scan(io.MultiReader(readers...))
 		_ = f.Close()
 		if err != nil {
 			return fmt.Errorf("%s: %w", filepath.Base(p), err)
 		}
 		if len(findings) > 0 {
-			return fmt.Errorf("%s: %w (%d findings: %s)", filepath.Base(p), secretscan.ErrSecretsFound,
-				len(findings), describeFindings(findings))
+			return fmt.Errorf("%s: %w. %s", filepath.Base(p), secretscan.ErrSecretsFound, describeFindings(findings))
 		}
 	}
 	return nil
 }
 
-// describeFindings names the rule, the offset and the redacted excerpt of the
-// first findings. The excerpt masks the secret body, so the text is safe in an
-// error and a log: the finding of a base is only fixed when someone sees what
-// matched.
+// scanFindingLimit stops the scan of a file after this many findings. A memory
+// image with so many is not a clean base, and the scan of a few gigabytes then
+// ends at once and not after minutes.
+const scanFindingLimit = 64
+
+// describeFindings says what the scan found and where, and how to accept a
+// known-safe pattern. It names the kind (the rule) and the offset in the data of
+// the file, and the redacted excerpt, which masks the secret body, so the text is
+// safe in an error and a log. It never holds a value.
 func describeFindings(findings []secretscan.Finding) string {
 	const shown = 3
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[f.Rule]++
+	}
+	kinds := make([]string, 0, len(counts))
+	for rule, n := range counts {
+		kinds = append(kinds, fmt.Sprintf("%d %s", n, rule))
+	}
+	slices.Sort(kinds)
 	parts := make([]string, 0, shown)
 	for i, f := range findings {
 		if i == shown {
@@ -378,7 +392,13 @@ func describeFindings(findings []secretscan.Finding) string {
 		}
 		parts = append(parts, f.String())
 	}
-	return strings.Join(parts, "; ")
+	more := ""
+	if len(findings) >= scanFindingLimit {
+		more = fmt.Sprintf(" (the scan stopped at %d findings)", scanFindingLimit)
+	}
+	return fmt.Sprintf("%d findings%s: %s. First: %s. If the text is known to be safe for the image, state a pattern "+
+		"in snapshots.secretScan.allow (node agent flag --secret-scan-allow)", len(findings), more,
+		strings.Join(kinds, ", "), strings.Join(parts, "; "))
 }
 
 // writeN copies n bytes of r to a new file at path.

@@ -24,6 +24,7 @@ import (
 	"github.com/zeroroot-ai/setec/internal/nodeagent/launchersandbox"
 	"github.com/zeroroot-ai/setec/internal/podspec"
 	"github.com/zeroroot-ai/setec/internal/snapshot/atrest"
+	"github.com/zeroroot-ai/setec/internal/snapshot/secretscan"
 	"github.com/zeroroot-ai/setec/internal/snapshot/storage"
 )
 
@@ -47,6 +48,10 @@ type Server struct {
 	// API socket path. Tests inject a mock here; production wires
 	// firecracker.NewClientFromSocket.
 	FirecrackerFactory func(sockPath string) firecracker.Client
+
+	// SecretScanAllow are patterns that an operator stated as safe for the
+	// secret scan of a base (--secret-scan-allow).
+	SecretScanAllow []secretscan.Allow
 
 	// Machines finds the Firecracker files of a launcher Pod on this
 	// node from the Pod UID.
@@ -200,7 +205,7 @@ func (s *Server) CreateSnapshot(ctx context.Context, in *setecgrpcv1.CreateSnaps
 	clean := false
 	if in.GetScanForSecrets() {
 		files := []string{statePath, memPath, diskPath}
-		if err := scanSparseFiles(files); err != nil {
+		if err := scanSparseFiles(files, s.SecretScanAllow); err != nil {
 			return nil, status.Errorf(codes.FailedPrecondition, "secret scan: %v", err)
 		}
 		clean = true

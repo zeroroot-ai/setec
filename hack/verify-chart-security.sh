@@ -1485,6 +1485,19 @@ PY
 assert_contains "$workdir/ips-set.yaml" "the operator gets the names for the disk Job Pods" \
 	"--image-pull-secret=registry-a" "--image-pull-secret=registry-b"
 
+
+# ---------------------------------------------------------------------------
+# The secret scan of a warm base (setec#412). The node agent takes the patterns
+# that an operator states as safe, one flag for each.
+# ---------------------------------------------------------------------------
+note "secret scan allow list"
+render "$workdir/scan-default.yaml" "${SP_ALL[@]}"
+assert_absent "$workdir/scan-default.yaml" "no allow flag by default" "--secret-scan-allow"
+render "$workdir/scan-set.yaml" "${SP_ALL[@]}" \
+	--set 'snapshots.secretScan.allow={secret-shaped-env-assignment=SecretKeyRef:.*,TESTKEY[0-9]+}'
+assert_contains "$workdir/scan-set.yaml" "the node agent gets one flag for each pattern" \
+	'--secret-scan-allow=secret-shaped-env-assignment=SecretKeyRef:.*' '--secret-scan-allow=TESTKEY[0-9]+'
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

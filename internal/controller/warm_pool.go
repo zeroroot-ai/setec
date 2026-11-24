@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,6 +74,8 @@ type WarmPoolReconciler struct {
 	Metrics *metrics.Collectors
 	// Now is the clock. Nil uses time.Now.
 	Now func() time.Time
+
+	failures baseBackoff
 }
 
 func (r *WarmPoolReconciler) now() time.Time {
@@ -133,7 +136,6 @@ func (r *WarmPoolReconciler) poolImages(cls *setecv1alpha1.SandboxClass, now tim
 
 // Reconcile keeps the pool of one class.
 func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx).WithValues("class", req.Name)
 	cls := &setecv1alpha1.SandboxClass{}
 	if err := r.Get(ctx, req.NamespacedName, cls); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -174,13 +176,8 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	building := r.stepBasePods(ctx, cls, pods, keys, bases, nodes)
 
-	// One new base Pod for each image that is short of bases, each pass.
-	for _, im := range images {
-		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want {
-			if err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key]); err != nil {
-				logger.Error(err, "start a base", "image", im.Image)
-			}
-		}
+	if err := r.startMissingBases(ctx, cls, images, states, ready, building, nodes, keys); err != nil {
+		return ctrl.Result{}, err
 	}
 	// A base Pod of this pass may have made a base, so the count is read
 	// again.
@@ -198,6 +195,29 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: warmPoolRequeue}, nil
+}
+
+// startMissingBases starts one new base Pod for each image that is short of
+// bases, each pass, except for a key that waits after a failure. It then writes
+// the condition that says why a base fails.
+func (r *WarmPoolReconciler) startMissingBases(
+	ctx context.Context, cls *setecv1alpha1.SandboxClass, images []setecv1alpha1.SandboxClassWarmPoolImage,
+	states map[string]verifyState, ready, building map[string]int, nodes map[string]map[string]bool, keys map[string]string,
+) error {
+	want := int(cls.Spec.PreWarmPoolSize)
+	for _, im := range images {
+		if ready[im.Key] > 0 {
+			r.failures.built(im.Key)
+		}
+		if states[im.Image] == verifyPassed && ready[im.Key]+building[im.Key] < want && !r.failures.held(im.Key, r.now()) {
+			if err := r.startBase(ctx, cls, im.Image, im.Key, nodes[im.Key]); err != nil {
+				log.FromContext(ctx).Error(err, "start a base", "image", im.Image)
+			}
+		}
+	}
+	r.failures.forget(keys)
+	msg := r.failures.summary(keys)
+	return r.setBaseCondition(ctx, cls, msg != "", msg)
 }
 
 // pruneBases deletes a stale or failed base, and each base of an image
@@ -290,6 +310,9 @@ func (r *WarmPoolReconciler) stepBasePod(
 		return true, client.IgnoreNotFound(r.Delete(ctx, p))
 	}
 	err := r.Coordinator.CreateBase(ctx, p, cls, image, key)
+	if err != nil && !errors.Is(err, snapshot.ErrNodeAgentUnavailable) {
+		r.failures.failed(key, image, err, r.now())
+	}
 	if derr := r.Delete(ctx, p); client.IgnoreNotFound(derr) != nil && err == nil {
 		err = derr
 	}

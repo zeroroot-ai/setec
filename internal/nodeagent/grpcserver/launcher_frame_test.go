@@ -201,17 +201,34 @@ func TestScanSparseFiles_FindsASecretInADataExtent(t *testing.T) {
 	dir := t.TempDir()
 	clean := filepath.Join(dir, "clean")
 	sparseFile(t, clean, 256<<20, map[int64][]byte{4096: []byte("nothing to see")})
-	if err := scanSparseFiles([]string{clean}); err != nil {
+	if err := scanSparseFiles([]string{clean}, nil); err != nil {
 		t.Fatalf("a clean file: %v", err)
 	}
 	dirty := filepath.Join(dir, "dirty")
 	sparseFile(t, dirty, 256<<20, map[int64][]byte{200 << 20: []byte("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n")})
-	err := scanSparseFiles([]string{clean, dirty})
+	err := scanSparseFiles([]string{clean, dirty}, nil)
 	if !errors.Is(err, secretscan.ErrSecretsFound) {
 		t.Fatalf("a key in a data extent = %v, want ErrSecretsFound", err)
 	}
 	// The error names the rule, so a failed base says what matched.
 	if !strings.Contains(err.Error(), "pem-private-key") {
 		t.Fatalf("the error does not name the rule: %v", err)
+	}
+	// It names the file, never the body, and says how to accept a pattern.
+	for _, want := range []string{"dirty", "offset", "snapshots.secretScan.allow"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error does not hold %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "MIIabc") {
+		t.Fatalf("the error holds the secret body: %v", err)
+	}
+	// An operator may state the pattern as safe.
+	allow, perr := secretscan.ParseAllow("pem-private-key=BEGIN RSA PRIVATE KEY")
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if err := scanSparseFiles([]string{dirty}, []secretscan.Allow{allow}); err != nil {
+		t.Fatalf("an allowed pattern: %v", err)
 	}
 }

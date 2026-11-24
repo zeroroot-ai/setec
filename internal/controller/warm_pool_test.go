@@ -5,11 +5,14 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -433,5 +436,84 @@ func TestVerifyCause(t *testing.T) {
 	}
 	if got := verifyCause(context.Background(), c, "setec-system", "other", "BackoffLimitExceeded"); got != "BackoffLimitExceeded" {
 		t.Fatalf("cause with no Pod = %q; want the fallback", got)
+	}
+}
+
+// TestWarmPool_ABaseThatCannotBeMadeBacksOff: the secret scan refuses the
+// snapshot of a base. The Snapshot is Failed with the reason SecretScanFailed,
+// the pool starts no new base Pod until the wait ends, the class says why, and
+// the wait doubles (setec#412).
+func TestWarmPool_ABaseThatCannotBeMadeBacksOff(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	scanErr := status.Error(codes.FailedPrecondition, "secret scan: memory.bin: secretscan: found. 26 findings")
+	na := &fakeNodeAgentClient{CreateErr: scanErr}
+	r := poolReconciler(t, na, poolClass())
+	clk := &clock{t: time.Now()}
+	r.Now = clk.now
+
+	reconcileClass(t, r)
+	finishVerifyJob(t, r, true)
+	reconcileClass(t, r)
+	completeDiskJob(t, r)
+	reconcileClass(t, r)
+	pods := basePods(t, r)
+	if len(pods) != 1 {
+		t.Fatalf("base Pods = %d, want 1", len(pods))
+	}
+	p := pods[0]
+	markBasePodReady(t, r, &p, "node-a")
+	reconcileClass(t, r)
+	snap := &setecv1alpha1.Snapshot{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: poolNS, Name: p.Name}, snap); err != nil {
+		t.Fatalf("the base Snapshot: %v", err)
+	}
+	if snap.Status.Phase != setecv1alpha1.SnapshotPhaseFailed || snap.Status.Reason != snapshotpkg.ReasonSecretScanFailed {
+		t.Fatalf("base Snapshot = %+v; want Failed with SecretScanFailed", snap.Status)
+	}
+	cls := &setecv1alpha1.SandboxClass{}
+	_ = r.Get(ctx, types.NamespacedName{Name: "tools"}, cls)
+	c := meta.FindStatusCondition(cls.Status.Conditions, setecv1alpha1.ConditionWarmBaseFailing)
+	if c == nil || c.Status != metav1.ConditionTrue || !strings.Contains(c.Message, "26 findings") {
+		t.Fatalf("condition = %+v; want WarmBaseFailing True with the cause", c)
+	}
+	// No new base Pod during the wait, however often the pool runs.
+	for range 3 {
+		reconcileClass(t, r)
+		clk.advance(30 * time.Second)
+	}
+	if n := len(basePods(t, r)); n != 0 {
+		t.Fatalf("base Pods during the wait = %d, want 0", n)
+	}
+	// After the wait, one more attempt.
+	clk.advance(baseRetryFirst)
+	reconcileClass(t, r)
+	if n := len(basePods(t, r)); n != 1 {
+		t.Fatalf("base Pods after the wait = %d, want 1", n)
+	}
+}
+
+func TestBaseBackoff_DoublesAndClears(t *testing.T) {
+	t.Parallel()
+	var b baseBackoff
+	now := time.Now()
+	err := errors.New("scan")
+	b.failed("k", "img", err, now)
+	if !b.held("k", now.Add(baseRetryFirst-time.Second)) || b.held("k", now.Add(baseRetryFirst)) {
+		t.Fatal("the first wait is not the first interval")
+	}
+	b.failed("k", "img", err, now)
+	if !b.held("k", now.Add(2*baseRetryFirst-time.Second)) || b.held("k", now.Add(2*baseRetryFirst)) {
+		t.Fatal("the second wait does not double")
+	}
+	for range 20 {
+		b.failed("k", "img", err, now)
+	}
+	if b.held("k", now.Add(baseRetryMax)) {
+		t.Fatal("the wait exceeds its cap")
+	}
+	b.built("k")
+	if b.held("k", now) {
+		t.Fatal("a built base keeps its wait")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,6 +40,10 @@ const (
 	// found nothing in the base.
 	CleanBaseAnnotation = "setec.zeroroot.ai/clean-base"
 )
+
+// ReasonSecretScanFailed is the reason of a base Snapshot that the secret scan
+// of the node agent refused.
+const ReasonSecretScanFailed = "SecretScanFailed"
 
 // ErrBaseNotClean is returned when the node agent did not confirm a clean
 // secret scan of a base.
@@ -106,7 +111,13 @@ func (c *Coordinator) CreateBase(
 		if nodeAgentUnavailable(err) {
 			return c.abandonSnapshot(ctx, snap, err)
 		}
-		c.failSnapshot(ctx, snap, EventReasonSnapshotCreateFailed, err)
+		reason := EventReasonSnapshotCreateFailed
+		if strings.Contains(err.Error(), "secret scan:") {
+			// The scan found secret-shaped text. The Snapshot says so at once, and the
+			// message of the error names the rule, the file and the offset.
+			reason = ReasonSecretScanFailed
+		}
+		c.failSnapshot(ctx, snap, reason, err)
 		return fmt.Errorf("coordinator: base CreateSnapshot RPC: %w", err)
 	}
 	if !resp.GetCleanBaseVerified() {

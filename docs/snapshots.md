@@ -201,6 +201,29 @@ class names each such image. The message says what the check looked for: a
 bundle, and for a key also the `.sig` tag. The check runs again when its Job
 expires, and when the image or the signer changes.
 
+### The secret scan of a base
+
+A base boots with no workload, no identity and no environment, so no
+per-Sandbox secret is in the machine when the node agent takes the snapshot.
+Before the store sees the files, the node agent scans the memory, the state and
+the disk for secret-shaped text (`internal/snapshot/secretscan`). The text of the
+image itself can match: a test key in a program, or the field names of a client
+library in the memory of a program (`SecretKeyRef:`). The scan skips a run of
+CamelCase field names of a program, which is not a secret.
+
+A finding stops the base. The Snapshot is `Failed` with the reason
+`SecretScanFailed`, and the error names the rule (the kind), the file, the
+offset in the data of the file, and a masked excerpt. It never holds the value.
+The scan stops after 64 findings, so a memory image full of matches fails at
+once. The class gets the condition `WarmBaseFailing=True` with the cause, and
+the pool waits 2 minutes, then 4, up to 30, before the next base Pod. A Ready
+base clears the condition.
+
+To accept text that is known to be safe for your images, set
+`snapshots.secretScan.allow` in the chart. Each entry is `rule=regexp`, or
+`regexp` for each rule, matched against the matched text of a finding. Keep each
+pattern narrow: the list applies to each snapshot of the node agent.
+
 ### Warm-start flow
 
 A Sandbox can warm start when its class keeps a pool, it asks for an
