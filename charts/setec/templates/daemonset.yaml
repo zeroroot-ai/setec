@@ -65,6 +65,7 @@ spec:
             - --s3-path-style={{ .Values.snapshots.s3.pathStyle }}
             {{- end }}
             - --spiffe-socket={{ .Values.credentials.spiffe.socketPath }}
+            - --spiffe-startup-wait={{ .Values.credentials.spiffe.startupWait }}
             {{- range .Values.credentials.spiffe.authorizedIDs.nodeAgentClients }}
             - --spiffe-authorized-id={{ . }}
             {{- end }}
@@ -128,6 +129,13 @@ spec:
               port: metrics
             initialDelaySeconds: 10
             periodSeconds: 30
+          # The agent is ready when it holds its SPIFFE identity. A Pod that
+          # starts before SPIRE registers it waits, and it is not ready then.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
       volumes:
         {{- if .Values.snapshots.enabled }}
         - name: kubelet-pods

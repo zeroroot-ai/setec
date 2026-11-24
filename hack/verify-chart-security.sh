@@ -1630,6 +1630,18 @@ render "$workdir/gate-off.yaml" "${SP_ALL[@]}" --set netpol.gate.enabled=false
 assert_contains "$workdir/gate-off.yaml" "the gate can be turned off" "--policy-gate=false"
 assert_absent "$workdir/gate-off.yaml" "a gate that is off has no wait" "--policy-gate-wait"
 
+# ---------------------------------------------------------------------------
+# The node agent waits for its SPIFFE identity at start (setec#412). It gets a
+# bound for the wait and a readiness probe, so a Pod that starts before SPIRE
+# registers it is not Ready, and the kubelet does not restart it for that wait.
+# ---------------------------------------------------------------------------
+note "node agent waits for its SPIFFE identity"
+render "$workdir/spire-wait-default.yaml" "${SP_ALL[@]}"
+assert_contains "$workdir/spire-wait-default.yaml" "the node agent gets the default wait" \
+	"--spiffe-startup-wait=5m" "path: /readyz"
+render "$workdir/spire-wait-set.yaml" "${SP_ALL[@]}" --set credentials.spiffe.startupWait=12m
+assert_contains "$workdir/spire-wait-set.yaml" "the wait is a value" "--spiffe-startup-wait=12m"
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

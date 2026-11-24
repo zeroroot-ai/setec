@@ -734,6 +734,12 @@ credentials:
     # The directory containing it is hostPath-mounted read-only into each
     # component at the same path.
     socketPath: /run/spire/agent-sockets/api.sock
+    # startupWait is how long the node-agent waits at start for SPIRE to
+    # issue its identity. A Pod that starts before SPIRE registers it waits
+    # and is not Ready, and the wait ends when the identity arrives. The
+    # agent exits after this time, and the restart tries again. A Go
+    # duration, for example 10m.
+    startupWait: 5m
     # trustDomain is the SPIFFE trust domain of this fleet, e.g.
     # example.org. Each install has its own (ADR-0164). REQUIRED with
     # frontend.enabled=true. An enrolled client in a different
