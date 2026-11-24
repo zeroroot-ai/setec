@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,6 +54,12 @@ const ReasonPolicyNotEnforced Reason = "NetworkPolicyNotEnforced"
 // the gate has passed. The readiness probe of the launcher container needs it,
 // so the Pod is not Ready, and the Sandbox is not Running, before the proof.
 const GateMarkerFile = "policy-enforced"
+
+// The schemes of a probe.
+const (
+	schemeTCP = "tcp"
+	schemeDNS = "dns"
+)
 
 // DefaultAllowGrace is the default of Gate.AllowGrace.
 const DefaultAllowGrace = 10 * time.Second
@@ -195,7 +202,7 @@ func (g *Gate) round(ctx context.Context) (denyOK, allowOK bool, failed []string
 	for _, p := range g.Spec.Blocked {
 		if g.reachable(ctx, p) {
 			denyOK = false
-			failed = append(failed, fmt.Sprintf("%s is reachable and the policy must block it", p))
+			failed = append(failed, p+" is reachable and the policy must block it")
 		}
 	}
 	allowOK = len(g.Spec.Allowed) == 0
@@ -217,7 +224,7 @@ func (g *Gate) reachable(ctx context.Context, p string) bool {
 	scheme, addr, _ := splitProbe(p)
 	ctx, cancel := context.WithTimeout(ctx, g.probeTimeout())
 	defer cancel()
-	if scheme == "dns" {
+	if scheme == schemeDNS {
 		q := g.Query
 		if q == nil {
 			q = queryDNS
@@ -228,7 +235,7 @@ func (g *Gate) reachable(ctx context.Context, p string) bool {
 	if dial == nil {
 		dial = func(ctx context.Context, address string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, "tcp", address)
+			return d.DialContext(ctx, schemeTCP, address)
 		}
 	}
 	c, err := dial(ctx, addr)
@@ -249,26 +256,17 @@ func (g PolicyGateSpec) validate() error {
 		if err != nil {
 			return err
 		}
-		if scheme == "dns" && contains(g.Blocked, p) {
+		if scheme == schemeDNS && slices.Contains(g.Blocked, p) {
 			return fmt.Errorf("launcher: policyGate: %q is a dns probe, and a blocked destination is a tcp probe", p)
 		}
 	}
 	return nil
 }
 
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 // splitProbe reads a probe URL into its scheme and its host:port address.
 func splitProbe(p string) (scheme, addr string, err error) {
 	u, err := url.Parse(p)
-	if err != nil || (u.Scheme != "tcp" && u.Scheme != "dns") || u.Host == "" || u.Port() == "" {
+	if err != nil || (u.Scheme != schemeTCP && u.Scheme != schemeDNS) || u.Host == "" || u.Port() == "" {
 		return "", "", fmt.Errorf("launcher: policyGate probe %q is not tcp://host:port or dns://host:port", p)
 	}
 	return u.Scheme, u.Host, nil

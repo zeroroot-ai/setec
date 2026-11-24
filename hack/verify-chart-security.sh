@@ -1610,6 +1610,7 @@ for engine in cilium networkpolicy; do
 		--set snapshots.s3.endpoint=http://s3.example.com:port
 done
 
+# ---------------------------------------------------------------------------
 # The policy gate (setec#411). The launcher holds the machine off the network
 # until a probe shows that the network plugin enforces the policy. The operator
 # gets the setting, and the gate is on by default.
