@@ -129,7 +129,7 @@ func TestWarmPool_BuildsABaseFromAReadyBasePod(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	na := &fakeNodeAgentClient{CreateResp: &setecgrpcv1.CreateSnapshotResponse{StorageRef: "ref", CleanBaseVerified: true}}
-	r := poolReconciler(t, na, poolClass())
+	r := poolReconciler(t, na, poolClass(), poolNode("node-a"), poolNode("node-b"))
 
 	reconcileClass(t, r)
 	finishVerifyJob(t, r, true)
@@ -189,7 +189,11 @@ func markBasePodReady(t *testing.T, r *WarmPoolReconciler, p *corev1.Pod, node s
 // next base Pod avoids node.
 func assertNextBasePods(t *testing.T, r *WarmPoolReconciler, done, node string) {
 	t.Helper()
-	for _, q := range basePods(t, r) {
+	next := basePods(t, r)
+	if len(next) != 1 {
+		t.Fatalf("base Pods after the first base = %d, want 1 for the second base", len(next))
+	}
+	for _, q := range next {
 		if q.Name == done {
 			t.Fatal("the base Pod stays after its snapshot")
 		}

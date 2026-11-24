@@ -26,6 +26,10 @@ const (
 	// WarmBaseFailing.
 	reasonBaseFailing = "BaseSnapshotFailed"
 	reasonBaseBuilt   = "BaseBuilt"
+	// reasonNoOtherNode and reasonNodesSuffice are the reasons of the
+	// condition WarmPoolShortOfNodes.
+	reasonNoOtherNode  = "NoOtherNode"
+	reasonNodesSuffice = "NodesSuffice"
 )
 
 // baseFailure is the record of the bases of one key that failed in a row.
@@ -120,6 +124,27 @@ func (r *WarmPoolReconciler) setBaseCondition(ctx context.Context, cls *setecv1a
 	orig := cls.DeepCopy()
 	if !meta.SetStatusCondition(&cls.Status.Conditions, metav1.Condition{
 		Type: setecv1alpha1.ConditionWarmBaseFailing, Status: status, Reason: reason, Message: msg,
+		ObservedGeneration: cls.Generation,
+	}) {
+		return nil
+	}
+	return errwrap.Wrap(r.Status().Patch(ctx, cls, client.MergeFrom(orig)), "client.SubResourceWriter.Patch")
+}
+
+// setNodeCondition writes the condition WarmPoolShortOfNodes of cls. msg says
+// which image has fewer nodes than the pool wants bases, or is "" when each
+// base has a node.
+func (r *WarmPoolReconciler) setNodeCondition(ctx context.Context, cls *setecv1alpha1.SandboxClass, msg string) error {
+	status, reason := metav1.ConditionTrue, reasonNoOtherNode
+	if msg == "" {
+		if meta.FindStatusCondition(cls.Status.Conditions, setecv1alpha1.ConditionWarmPoolShortOfNodes) == nil {
+			return nil
+		}
+		status, reason, msg = metav1.ConditionFalse, reasonNodesSuffice, "each base of the pool has a node"
+	}
+	orig := cls.DeepCopy()
+	if !meta.SetStatusCondition(&cls.Status.Conditions, metav1.Condition{
+		Type: setecv1alpha1.ConditionWarmPoolShortOfNodes, Status: status, Reason: reason, Message: msg,
 		ObservedGeneration: cls.Generation,
 	}) {
 		return nil
