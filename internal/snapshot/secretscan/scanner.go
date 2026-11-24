@@ -397,6 +397,22 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // can match; 512 bytes comfortably covers JWTs and PEM headers.
 const windowOverlap = 512
 
+// skip reports whether match m of rule rl is not a finding: the name is not a
+// secret name, the value is a string table, the text is a table of field names
+// of a program, or an operator stated it as safe.
+func (s *Scanner) skip(rl rule, window []byte, m []int) bool {
+	if g := rl.nameGroup; g > 0 && !acceptName(window, m, g, rl.valueGroup) {
+		return true
+	}
+	if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
+		return true
+	}
+	if identifierTable(window, m, rl.nameGroup, rl.valueGroup) {
+		return true
+	}
+	return slices.ContainsFunc(s.allow, func(a Allow) bool { return a.allows(rl.name, window[m[0]:m[1]]) })
+}
+
 // Scan reads r to completion and returns every secret-shaped finding. It is
 // stream-oriented and memory-bounded: it never buffers more than
 // maxLineBytes + windowOverlap at once. Findings are de-duplicated by
@@ -414,25 +430,15 @@ func (s *Scanner) Scan(r io.Reader) ([]Finding, error) {
 	emit := func(window []byte, base int64) {
 		for _, rl := range s.rules {
 			for _, m := range rl.re.FindAllSubmatchIndex(window, -1) {
-				if g := rl.nameGroup; g > 0 && !acceptName(window, m, g, rl.valueGroup) {
-					continue
-				}
-				if g := rl.valueGroup; g > 0 && m[2*g] >= 0 && stringTableValue(string(window[m[2*g]:m[2*g+1]])) {
-					continue
-				}
-				if identifierTable(window, m, rl.nameGroup, rl.valueGroup) {
-					continue
-				}
-				if slices.ContainsFunc(s.allow, func(a Allow) bool { return a.allows(rl.name, window[m[0]:m[1]]) }) {
+				if s.skip(rl, window, m) {
 					continue
 				}
 				if s.limit > 0 && len(findings) >= s.limit {
 					return
 				}
-				start := int64(m[0]) + base
 				f := Finding{
 					Rule:    rl.name,
-					Offset:  start,
+					Offset:  int64(m[0]) + base,
 					Excerpt: redact(window, m, rl.maskGroup, s.maxExcerpt),
 				}
 				key := f.Rule + "\x00" + f.Excerpt

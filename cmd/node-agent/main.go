@@ -166,7 +166,8 @@ func runMain() int {
 	for _, e := range secretScanAllow {
 		a, err := secretscan.ParseAllow(e)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "node-agent: --secret-scan-allow: %v (rules: %s)\n", err, strings.Join(secretscan.RuleNames(), ", "))
+			fmt.Fprintf(os.Stderr, "node-agent: --secret-scan-allow: %v (rules: %s)\n",
+				err, strings.Join(secretscan.RuleNames(), ", "))
 			return 2
 		}
 		allow = append(allow, a)
