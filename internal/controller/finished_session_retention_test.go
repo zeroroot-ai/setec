@@ -46,72 +46,69 @@ func TestReapFinishedSession(t *testing.T) {
 	long := time.Now().Add(-2 * time.Hour)
 	short := time.Now().Add(-10 * time.Minute)
 
-	tests := []struct {
+	type reapCase struct {
 		name       string
 		sb         *setecv1alpha1.Sandbox
 		cls        *setecv1alpha1.SandboxClass
 		wantReaped bool
 		wantRemain time.Duration
-	}{
-		{
-			name:       "a Failed session past the retention is deleted",
-			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
-			cls:        classWithRetention(hour),
-			wantReaped: true,
-		},
-		{
-			name:       "a Completed session past the retention is deleted",
-			sb:         finishedSession(setecv1alpha1.SandboxPhaseCompleted, &long),
-			cls:        classWithRetention(hour),
-			wantReaped: true,
-		},
-		{
-			name:       "a session inside the retention stays and the time that remains comes back",
-			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, &short),
-			cls:        classWithRetention(hour),
-			wantRemain: 50 * time.Minute,
-		},
-		{
-			name: "a class with no retention keeps a finished session",
-			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
-			cls:  classWithRetention(nil),
-		},
-		{
-			name: "a retention of zero keeps a finished session",
-			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
-			cls:  classWithRetention(&metav1.Duration{}),
-		},
-		{
-			name: "no class keeps a finished session",
-			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
-		},
-		{
-			name:       "a session with no finish time is never deleted",
-			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, nil),
-			cls:        classWithRetention(hour),
-			wantRemain: time.Hour,
-		},
-		{
-			name: "an ephemeral Sandbox is not in scope",
-			sb:   terminalEphemeral("ended", setecv1alpha1.SandboxPhaseFailed, &long),
-			cls:  classWithRetention(hour),
-		},
 	}
-	for _, phase := range []setecv1alpha1.SandboxPhase{
+	live := []setecv1alpha1.SandboxPhase{
 		setecv1alpha1.SandboxPhaseRunning,
 		setecv1alpha1.SandboxPhasePending,
 		setecv1alpha1.SandboxPhasePaused,
 		setecv1alpha1.SandboxPhaseSuspended,
 		setecv1alpha1.SandboxPhaseSnapshotting,
 		setecv1alpha1.SandboxPhaseRestoring,
-	} {
-		tests = append(tests, struct {
-			name       string
-			sb         *setecv1alpha1.Sandbox
-			cls        *setecv1alpha1.SandboxClass
-			wantReaped bool
-			wantRemain time.Duration
-		}{
+	}
+	tests := make([]reapCase, 0, 8+len(live))
+	tests = append(tests,
+		reapCase{
+			name:       "a Failed session past the retention is deleted",
+			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
+			cls:        classWithRetention(hour),
+			wantReaped: true,
+		},
+		reapCase{
+			name:       "a Completed session past the retention is deleted",
+			sb:         finishedSession(setecv1alpha1.SandboxPhaseCompleted, &long),
+			cls:        classWithRetention(hour),
+			wantReaped: true,
+		},
+		reapCase{
+			name:       "a session inside the retention stays and the time that remains comes back",
+			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, &short),
+			cls:        classWithRetention(hour),
+			wantRemain: 50 * time.Minute,
+		},
+		reapCase{
+			name: "a class with no retention keeps a finished session",
+			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
+			cls:  classWithRetention(nil),
+		},
+		reapCase{
+			name: "a retention of zero keeps a finished session",
+			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
+			cls:  classWithRetention(&metav1.Duration{}),
+		},
+		reapCase{
+			name: "no class keeps a finished session",
+			sb:   finishedSession(setecv1alpha1.SandboxPhaseFailed, &long),
+		},
+		reapCase{
+			name:       "a session with no finish time is never deleted",
+			sb:         finishedSession(setecv1alpha1.SandboxPhaseFailed, nil),
+			cls:        classWithRetention(hour),
+			wantRemain: time.Hour,
+		},
+		reapCase{
+			name: "an ephemeral Sandbox is not in scope",
+			sb:   terminalEphemeral("ended", setecv1alpha1.SandboxPhaseFailed, &long),
+			cls:  classWithRetention(hour),
+		},
+	)
+	for _, phase := range live {
+		tests = append(tests, reapCase{
 			name: "a " + string(phase) + " session is never deleted",
 			sb:   finishedSession(phase, &long),
 			cls:  classWithRetention(hour),

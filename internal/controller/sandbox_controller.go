@@ -455,7 +455,17 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if reaped || err != nil {
 		return ctrl.Result{}, err
 	}
+	res, err := r.reconcileWithClass(ctx, logger, span, sb, cls, classResolved, prevPhase, tenantID)
+	return requeueNoLaterThan(res, retainFor), err
+}
 
+// reconcileWithClass is the reconcile of a Sandbox after its tenant and its
+// class resolved: steps (5) to (8).
+func (r *SandboxReconciler) reconcileWithClass(
+	ctx context.Context, logger logr.Logger, span trace.Span,
+	sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass, classResolved bool,
+	prevPhase setecv1alpha1.SandboxPhase, tenantID string,
+) (ctrl.Result, error) {
 	// (5) Phase 2: validate the Sandbox against its class. Defense in
 	// depth — the webhook should have caught any violation, but a
 	// manually-created CR skipping admission must not silently produce a
@@ -490,14 +500,12 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	pod := &corev1.Pod{}
 	err = r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: podName}, pod)
 	if apierrors.IsNotFound(err) {
-		res, err = r.handleMissingPod(ctx, logger, sb, cls, pinnedNode)
-		return requeueNoLaterThan(res, retainFor), err
+		return r.handleMissingPod(ctx, logger, sb, cls, pinnedNode)
 	}
 	if err != nil {
 		return r.recordAndReturnErr(sb, eventReasonReconcileError, fmt.Errorf("get Pod %q: %w", podName, err))
 	}
-	res, err = r.reconcileExistingPod(ctx, span, sb, cls, pod, prevPhase, tenantID)
-	return requeueNoLaterThan(res, retainFor), err
+	return r.reconcileExistingPod(ctx, span, sb, cls, pod, prevPhase, tenantID)
 }
 
 // requeueNoLaterThan returns res with a requeue that is at most d away.
@@ -539,7 +547,7 @@ func (r *SandboxReconciler) reapFinishedSession(
 	if fin == nil || fin.IsZero() {
 		return retention.Duration, false, nil
 	}
-	if left := fin.Add(retention.Duration).Sub(time.Now()); left > 0 {
+	if left := time.Until(fin.Add(retention.Duration)); left > 0 {
 		return max(left, time.Second), false, nil
 	}
 
