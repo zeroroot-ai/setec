@@ -292,6 +292,12 @@ type SandboxReconciler struct {
 	// --sandbox-resolvers flags, which are validated at startup.
 	NetPol netpol.Config
 
+	// PolicyGate is the setting of the policy gate: whether the launcher of
+	// each Sandbox waits for a probe to show that the network plugin enforces
+	// the policy, how long, and the destinations of the probes
+	// (docs/design/network-policy.md). The zero value turns the gate off.
+	PolicyGate netpol.GateConfig
+
 	// NamespaceBaselineDeny, when true, makes the reconciler ensure a
 	// namespace-wide default-deny NetworkPolicy (podSelector: {}) in the
 	// namespace of every Sandbox it reconciles, before that Sandbox's
@@ -1501,8 +1507,13 @@ func (r *SandboxReconciler) createPod(
 	if ferr := r.ensureFiles(ctx, sb); ferr != nil {
 		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the files of the Sandbox: %w", ferr))
 	}
+	gate, gerr := r.policyGate(sb, cls)
+	if gerr != nil {
+		return r.recordAndReturnErr(sb, eventReasonPodCreateFailed, fmt.Errorf("the policy gate: %w", gerr))
+	}
 	pod, err := podspec.BuildLauncher(sb, podspec.LauncherOptions{
-		Identity: identity,
+		PolicyGate: gate,
+		Identity:   identity,
 		// The scratch size resolves with the class: the Sandbox's own
 		// value, else the class default, else 10 GiB (setec#172).
 		Scratch:  limits.EffectiveScratch(sb, cls),
@@ -1541,6 +1552,16 @@ func (r *SandboxReconciler) createPod(
 	r.Recorder.Eventf(sb, nil, corev1.EventTypeNormal, eventReasonPodCreated, actionCreateSandboxPod,
 		"Created Pod %q for Sandbox", pod.Name)
 	return ctrl.Result{}, nil
+}
+
+// policyGate returns the policy gate of the launcher Pod of sb, or nil when the
+// gate is off or has no probe.
+func (r *SandboxReconciler) policyGate(sb *setecv1alpha1.Sandbox, cls *setecv1alpha1.SandboxClass) (*podspec.LauncherPolicyGate, error) {
+	g, err := r.NetPol.GateFor(r.PolicyGate, sb, cls)
+	if err != nil || g == nil {
+		return nil, errwrap.Wrap(err, "netpol.Config.GateFor")
+	}
+	return &podspec.LauncherPolicyGate{Wait: g.Wait, Blocked: g.Blocked, Allowed: g.Allowed}, nil
 }
 
 // applyClassScheduling adds the NodeSelector and the Tolerations of cls to

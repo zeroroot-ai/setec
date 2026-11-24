@@ -607,7 +607,37 @@ type SandboxStatus struct {
 	// token against both.
 	// +optional
 	Identity *SandboxIdentityStatus `json:"identity,omitempty"`
+
+	// Conditions are the facts about the Sandbox that its phase does not
+	// carry. NetworkPolicyEnforced says whether the launcher proved that the
+	// network plugin enforces the NetworkPolicy of the Sandbox before the
+	// machine got network access (docs/design/network-policy.md).
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+// ConditionNetworkPolicyEnforced is the condition of a Sandbox whose
+// launcher holds the machine off the network until a probe shows that the
+// network plugin enforces the policy. True: the probe passed. Unknown: the
+// launcher still waits. False: the wait ended without proof, the machine
+// never got network access, and the Sandbox is Failed with the reason
+// ReasonNetworkPolicyNotEnforced. A Sandbox that runs with the gate off has
+// no such condition.
+const ConditionNetworkPolicyEnforced = "NetworkPolicyEnforced"
+
+// The reasons of the condition NetworkPolicyEnforced.
+const (
+	// ReasonNetworkPolicyProven is the reason when the probe passed.
+	ReasonNetworkPolicyProven = "PolicyProven"
+	// ReasonNetworkPolicyWaiting is the reason while the launcher waits.
+	ReasonNetworkPolicyWaiting = "WaitingForPolicy"
+	// ReasonNetworkPolicyNotEnforced is the reason, and the Failed reason of
+	// the Sandbox, when the wait ended without proof. The launcher writes it
+	// as the first word of its termination message.
+	ReasonNetworkPolicyNotEnforced = "NetworkPolicyNotEnforced"
+)
 
 // SandboxIdentityStatus is the identity of a Sandbox. The private key is
 // in the Secret <name>-identity, which only the launcher container of the

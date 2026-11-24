@@ -102,3 +102,20 @@ func waitForOK(url string) error {
 	}
 	return last
 }
+
+func TestAPIServerAddress(t *testing.T) {
+	for name, tc := range map[string]struct{ host, port, want string }{
+		"ipv4":        {"10.43.0.1", "443", "10.43.0.1:443"},
+		"ipv6":        {"fd00::1", "443", "[fd00::1]:443"},
+		"a name":      {"kubernetes.default", "443", ""},
+		"no port":     {"10.43.0.1", "", ""},
+		"unset":       {"", "", ""},
+		"bad address": {"10.43.0", "443", ""},
+	} {
+		t.Setenv("KUBERNETES_SERVICE_HOST", tc.host)
+		t.Setenv("KUBERNETES_SERVICE_PORT", tc.port)
+		if got := apiServerAddress(); got != tc.want {
+			t.Errorf("%s: apiServerAddress = %q, want %q", name, got, tc.want)
+		}
+	}
+}

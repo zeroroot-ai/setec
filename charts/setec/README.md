@@ -530,6 +530,22 @@ enumerate in-cluster Services by name. A resolver that sits inside
 Sandboxes of a class whose `egressAllowSelectors` grant port 53. Every
 other class is pointed at the public resolvers alone.
 
+#### Wait for the policy (`netpol.gate`)
+
+A network plugin may apply the policy of a Sandbox some seconds after its Pod runs. The launcher holds the machine off the network, and the Pod not Ready, until a probe shows that the policy is in force. The Sandbox then has the condition `NetworkPolicyEnforced`. The Sandbox is Pending until the proof comes. `docs/design/network-policy.md` says how the probe works.
+
+```yaml
+netpol:
+  gate:
+    enabled: true     # false: no wait, no condition
+    wait: 60s         # after this the Sandbox fails with NetworkPolicyNotEnforced
+    blocked:          # more destinations that the policy must block (ip:port that listens)
+      - 10.0.0.5:22
+    allowed: []       # more destinations that the policy must allow
+```
+
+The operator checks the Kubernetes API Service as the blocked destination. It does so when the address of the Service is in `netpol.reservedCIDRs`, or when the mode is `none`. A plugin evaluates the endpoint of the Service after kube-proxy translates it, and the endpoints of an API server are usually in private ranges too. When the endpoints are public, the gate cannot prove a block with the Service. Add a `blocked` destination that is in the reserved ranges, or turn the gate off. A cluster whose plugin does not enforce NetworkPolicy fails each Sandbox with `NetworkPolicyNotEnforced`. That is the intended result.
+
 `sandboxClasses.classes[].spec.egressAllowSelectors` is how a class
 reaches an in-cluster Service (setec#76). The CNI evaluates egress after
 kube-proxy translates the ClusterIP to a backend Pod, so an `ipBlock` for

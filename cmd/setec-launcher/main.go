@@ -63,6 +63,7 @@ func run(specPath, fcBinary string, grace time.Duration, termLog string) int {
 		Console:          os.Stdout,
 		Grace:            grace,
 		AfterStart:       guest.AfterStart(spec.Workload),
+		Gate:             launcher.NewGate(spec),
 		CheckCPUTemplate: launcher.CheckCPUTemplate,
 		CheckDisk: func(s *launcher.Spec) (string, error) {
 			keys, err := diskbuilder.ParsePublicKeys(s.DiskKeys)
@@ -126,6 +127,12 @@ func guestReady(specPath string) int {
 	spec, err := launcher.ReadSpec(specPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "setec-launcher ready:", err)
+		return 1
+	}
+	// The Pod is not ready before the policy gate passed, so no exec reaches a
+	// machine whose network policy is not yet proven.
+	if !launcher.GatePassed(spec) {
+		fmt.Fprintln(os.Stderr, "setec-launcher ready: the network policy is not yet proven in force")
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

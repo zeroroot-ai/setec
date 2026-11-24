@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -184,7 +185,25 @@ type LauncherOptions struct {
 	// a file of the launcher image. Empty shows the guest the CPU of the
 	// node.
 	CPUTemplate string
+	// PolicyGate, when set, makes the launcher hold the machine off the
+	// network, and hold the readiness of the Pod, until the probes show that
+	// the network plugin enforces the policy (docs/design/network-policy.md).
+	PolicyGate *LauncherPolicyGate
 }
+
+// LauncherPolicyGate is the policy gate of a launcher Pod.
+type LauncherPolicyGate struct {
+	// Wait bounds the wait of the launcher, rounded up to whole seconds.
+	Wait time.Duration
+	// Blocked and Allowed are probe URLs, tcp://ip:port or dns://ip:port.
+	Blocked []string
+	Allowed []string
+}
+
+// PolicyGateAnnotation marks a Pod whose launcher runs a policy gate. The
+// status of the Sandbox reads it to tell a Pod that waits for the proof from
+// a Pod that has no gate.
+const PolicyGateAnnotation = "setec.zeroroot.ai/policy-gate"
 
 // LauncherWorkspaceDevice is the raw block device of the session workspace
 // in a launcher Pod.
@@ -244,6 +263,14 @@ type launcherSpec struct {
 	Source          launcherSource        `json:"source"`
 	Workload        *launcherProcess      `json:"workload,omitempty"`
 	FilesManifest   string                `json:"filesManifest,omitempty"`
+	PolicyGate      *launcherPolicyGate   `json:"policyGate,omitempty"`
+}
+
+// launcherPolicyGate is the JSON of internal/launcher.PolicyGateSpec.
+type launcherPolicyGate struct {
+	WaitSeconds int      `json:"waitSeconds"`
+	Blocked     []string `json:"blocked,omitempty"`
+	Allowed     []string `json:"allowed,omitempty"`
 }
 
 type launcherSource struct {
@@ -381,6 +408,9 @@ func BuildLauncher(sb *setecv1alpha1.Sandbox, opts LauncherOptions) (*corev1.Pod
 		},
 	}
 	term := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
+	if spec.PolicyGate != nil {
+		pod.Annotations = map[string]string{PolicyGateAnnotation: "true"}
+	}
 	if spec.Identity != nil {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: launcherIdentityVolume,
@@ -512,6 +542,12 @@ func buildLauncherSpec(sb *setecv1alpha1.Sandbox, opts LauncherOptions, work res
 		}
 	}
 	spec.Base = opts.Base
+	if g := opts.PolicyGate; g != nil && !opts.Base {
+		spec.PolicyGate = &launcherPolicyGate{
+			WaitSeconds: int((g.Wait + time.Second - 1) / time.Second),
+			Blocked:     g.Blocked, Allowed: g.Allowed,
+		}
+	}
 	if opts.Identity != nil && !opts.Base {
 		spec.Identity = &launcherIdentitySpec{
 			SandboxID: opts.Identity.SandboxID, Client: opts.Identity.Client, Tenant: opts.Identity.Tenant,

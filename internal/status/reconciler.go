@@ -83,6 +83,15 @@ func Derive(
 	pod *corev1.Pod,
 	now time.Time,
 ) setecv1alpha1.SandboxStatus {
+	return applyPolicyCondition(sb, pod, derive(sb, pod, now), now)
+}
+
+// derive is Derive without the condition NetworkPolicyEnforced.
+func derive(
+	sb *setecv1alpha1.Sandbox,
+	pod *corev1.Pod,
+	now time.Time,
+) setecv1alpha1.SandboxStatus {
 	// Start from the previous status. We copy by value so callers cannot
 	// observe our intermediate mutations.
 	out := sb.Status

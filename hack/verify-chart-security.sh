@@ -1610,6 +1610,26 @@ for engine in cilium networkpolicy; do
 		--set snapshots.s3.endpoint=http://s3.example.com:port
 done
 
+# ---------------------------------------------------------------------------
+# The policy gate (setec#411). The launcher holds the machine off the network
+# until a probe shows that the network plugin enforces the policy. The operator
+# gets the setting, and the gate is on by default.
+# ---------------------------------------------------------------------------
+note "policy gate"
+render "$workdir/gate-default.yaml" "${SP_ALL[@]}"
+assert_contains "$workdir/gate-default.yaml" "the gate is on by default with a bound" \
+	"--policy-gate=true" "--policy-gate-wait=30s"
+assert_absent "$workdir/gate-default.yaml" "no extra blocked destination by default" "--policy-gate-blocked"
+assert_absent "$workdir/gate-default.yaml" "no extra allowed destination by default" "--policy-gate-allowed"
+render "$workdir/gate-set.yaml" "${SP_ALL[@]}" \
+	--set netpol.gate.wait=90s \
+	--set 'netpol.gate.blocked={10.0.0.5:22}' --set 'netpol.gate.allowed={192.0.2.9:443}'
+assert_contains "$workdir/gate-set.yaml" "the operator gets the wait and each probe destination" \
+	"--policy-gate-wait=90s" "--policy-gate-blocked=10.0.0.5:22" "--policy-gate-allowed=192.0.2.9:443"
+render "$workdir/gate-off.yaml" "${SP_ALL[@]}" --set netpol.gate.enabled=false
+assert_contains "$workdir/gate-off.yaml" "the gate can be turned off" "--policy-gate=false"
+assert_absent "$workdir/gate-off.yaml" "a gate that is off has no wait" "--policy-gate-wait"
+
 printf '\n'
 if [ "$fail_count" -ne 0 ]; then
 	printf 'verify-chart-security: %d assertion(s) failed\n' "$fail_count" >&2

@@ -15,7 +15,9 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -70,6 +72,18 @@ func init() {
 // because those vary per cluster and are usually carved out of RFC1918
 // anyway. A cluster whose Service CIDR sits outside these ranges must add
 // it explicitly via --reserved-cidrs.
+// apiServerAddress is host:port of the Kubernetes API Service, which the
+// kubelet puts in the environment of each Pod. The policy gate uses it as a
+// destination that the policy must block. It returns "" when the environment
+// does not hold an IP address and a port.
+func apiServerAddress() string {
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	if _, err := netip.ParseAddr(host); err != nil || port == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func defaultReservedCIDRs() []string {
 	return []string{
 		"10.0.0.0/8",
@@ -134,6 +148,7 @@ func runMain() int {
 		reservedCIDRs    []string
 		nsBaselineDeny   bool
 		sandboxResolvers []string
+		policyGate       netpol.GateConfig
 		egressHostTTL    time.Duration
 		egressHostGrace  time.Duration
 
@@ -237,6 +252,18 @@ func runMain() int {
 		"DNS servers Sandboxes resolve through. Written into each Sandbox Pod's dnsConfig and into "+
 			"the generated NetworkPolicy's port-53 rule, so Sandboxes never query cluster DNS and "+
 			"cannot enumerate in-cluster Services by name. May not be empty.")
+
+	pflag.BoolVar(&policyGate.Enabled, "policy-gate", true,
+		"Hold the machine of each Sandbox off the network, and the Pod not Ready, until a probe in the launcher "+
+			"shows that the network plugin enforces the NetworkPolicy of the Sandbox "+
+			"(docs/design/network-policy.md). The Sandbox then has the condition NetworkPolicyEnforced.")
+	pflag.DurationVar(&policyGate.Wait, "policy-gate-wait", netpol.DefaultGateWait,
+		"How long the launcher waits for the proof. After it, the Sandbox fails with the reason NetworkPolicyNotEnforced.")
+	pflag.StringSliceVar(&policyGate.ExtraBlocked, "policy-gate-blocked", nil,
+		"ip:port of a destination that the policy must block, for the probe of the launcher. It must accept "+
+			"a connection when no policy blocks it. May repeat. The operator adds the Kubernetes API Service itself.")
+	pflag.StringSliceVar(&policyGate.ExtraAllowed, "policy-gate-allowed", nil,
+		"ip:port of a destination that the policy must allow, for the probe of the launcher. May repeat.")
 
 	pflag.DurationVar(&egressHostTTL, "egress-host-resolve-ttl", netpol.DefaultResolveTTL,
 		"How long a resolved egress-allow-list host is reused before it is looked up again. This "+
@@ -344,6 +371,11 @@ func runMain() int {
 	if err := netpolCfg.Validate(); err != nil {
 		setupLog.Error(err, "invalid sandbox egress configuration; "+
 			"check --reserved-cidrs and --sandbox-resolvers")
+		return 1
+	}
+	policyGate.APIServer = apiServerAddress()
+	if err := policyGate.Validate(); err != nil {
+		setupLog.Error(err, "invalid policy gate configuration; check --policy-gate-blocked and --policy-gate-allowed")
 		return 1
 	}
 	setupLog.Info("sandbox egress posture configured",
@@ -495,6 +527,7 @@ func runMain() int {
 		TenantLabelKey:        tenantLabelKey,
 		Coordinator:           coordinator,
 		NetPol:                netpolCfg,
+		PolicyGate:            policyGate,
 		NamespaceBaselineDeny: nsBaselineDeny,
 		LauncherImage:         launcherImage,
 		DiskRepo:              diskRepo,

@@ -74,6 +74,18 @@ spec:
             {{- end }}
             - --reserved-cidrs={{ join "," .Values.netpol.reservedCIDRs }}
             - --sandbox-resolvers={{ join "," .Values.netpol.resolvers }}
+            {{- with .Values.netpol.gate }}
+            - --policy-gate={{ .enabled }}
+            {{- if .enabled }}
+            - --policy-gate-wait={{ .wait }}
+            {{- range .blocked }}
+            - --policy-gate-blocked={{ . }}
+            {{- end }}
+            {{- range .allowed }}
+            - --policy-gate-allowed={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.launcher }}
             {{- if not .diskRepo }}
             {{- fail "launcher.diskRepo is required: each launcher machine boots the signed disk of its image from there" }}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -618,5 +619,34 @@ func TestBuildLauncher_NoFilesNoVolume(t *testing.T) {
 	}
 	if strings.Contains(pod.Spec.Containers[0].Env[0].Value, "filesManifest") {
 		t.Fatal("the spec names a files manifest")
+	}
+}
+
+// TestBuildLauncher_PolicyGateReachesTheLauncher: the gate of the operator is
+// the gate that the launcher reads, the Pod is marked, and a base Pod has none.
+func TestBuildLauncher_PolicyGateReachesTheLauncher(t *testing.T) {
+	opts := launcherOpts()
+	opts.PolicyGate = &LauncherPolicyGate{
+		Wait:    1500 * time.Millisecond,
+		Blocked: []string{"tcp://10.43.0.1:443"}, Allowed: []string{"dns://10.0.0.2:53"},
+	}
+	pod, err := BuildLauncher(launcherSandbox(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod.Annotations[PolicyGateAnnotation] != "true" {
+		t.Errorf("the Pod has no gate annotation: %v", pod.Annotations)
+	}
+	t.Setenv(launcher.SpecEnv, pod.Spec.Containers[0].Env[0].Value)
+	s, err := launcher.ReadSpec("")
+	if err != nil {
+		t.Fatalf("the launcher refuses the spec: %v", err)
+	}
+	g := s.PolicyGate
+	if g == nil || g.WaitSeconds != 2 || len(g.Blocked) != 1 || len(g.Allowed) != 1 {
+		t.Fatalf("the launcher read the gate %+v; want 2 s, one blocked, one allowed", g)
+	}
+	if got := launcherOrFatal(t); got.Annotations[PolicyGateAnnotation] != "" {
+		t.Error("a Pod with no gate carries the annotation")
 	}
 }
