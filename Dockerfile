@@ -74,7 +74,7 @@ RUN set -eux; \
 # Mirror-sourced + digest-pinned (mirror dest: distroless-static, the Debian 13
 # base). The Debian 12 base still carries a tzdata with an open advisory
 # (setec#97). gibson pins the same digest.
-FROM ghcr.io/zeroroot-ai/mirror/distroless-static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
+FROM ghcr.io/zeroroot-ai/mirror/distroless-static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 ARG CMD=manager
 
 WORKDIR /
